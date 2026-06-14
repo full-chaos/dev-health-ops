@@ -8,7 +8,10 @@ from typing import Any
 
 from sqlalchemy import select
 
-from dev_health_ops.db import get_postgres_session_sync
+from dev_health_ops.db import (
+    get_postgres_session_sync,
+    get_postgres_session_sync_for_uri,
+)
 from dev_health_ops.models.settings import IdentityMapping, TeamMapping
 from dev_health_ops.storage.clickhouse import ClickHouseStore
 
@@ -68,21 +71,28 @@ def _parse_json_array(value: Any) -> list[str]:
     return []
 
 
-def _clickhouse_uri() -> str:
-    uri = (
-        os.getenv("CLICKHOUSE_URI")
-        or os.getenv("DATABASE_URI")
-        or os.getenv("DATABASE_URL")
-    )
+def _clickhouse_uri(db_url: str | None = None) -> str:
+    if db_url:
+        return db_url
+    uri = os.getenv("CLICKHOUSE_URI")
     if not uri:
-        raise RuntimeError("Missing CLICKHOUSE_URI or DATABASE_URI for team bridge")
+        raise RuntimeError("Missing CLICKHOUSE_URI for team bridge")
     return uri
 
 
-def bridge_teams_to_clickhouse(org_id: str | None = None) -> int:
+def bridge_teams_to_clickhouse(
+    org_id: str | None = None,
+    db_url: str | None = None,
+    postgres_db_url: str | None = None,
+) -> int:
     teams_payload: list[dict[str, Any]] = []
 
-    with get_postgres_session_sync() as session:
+    session_context = (
+        get_postgres_session_sync_for_uri(postgres_db_url)
+        if postgres_db_url
+        else get_postgres_session_sync()
+    )
+    with session_context as session:
         mappings = (
             session.execute(
                 select(TeamMapping).where(
@@ -128,7 +138,7 @@ def bridge_teams_to_clickhouse(org_id: str | None = None) -> int:
             )
 
     async def _run() -> None:
-        async with ClickHouseStore(_clickhouse_uri()) as store:
+        async with ClickHouseStore(_clickhouse_uri(db_url)) as store:
             await store.insert_teams(teams_payload)
 
     asyncio.run(_run())

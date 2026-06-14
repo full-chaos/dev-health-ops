@@ -283,8 +283,29 @@ def _get_sync_postgres_uri() -> str | None:
     return None
 
 
-def get_postgres_sync_engine() -> Engine:
+def _ensure_sync_postgres(uri: str) -> str:
+    if uri.startswith("postgresql+asyncpg://"):
+        return uri.replace("postgresql+asyncpg://", "postgresql://", 1)
+    if uri.startswith("sqlite+aiosqlite://"):
+        return uri.replace("sqlite+aiosqlite://", "sqlite://", 1)
+    return uri
+
+
+def get_postgres_sync_engine(uri: str | None = None) -> Engine:
     global _postgres_sync_engine
+    if uri is not None:
+        sync_uri = _ensure_sync_postgres(uri)
+        if _pgbouncer_transaction_mode():
+            return create_engine(sync_uri, poolclass=NullPool)
+        if not sync_uri.startswith("postgresql"):
+            return create_engine(sync_uri)
+        pool_size, max_overflow = _pg_pool_size()
+        return create_engine(
+            sync_uri,
+            pool_pre_ping=True,
+            pool_size=pool_size,
+            max_overflow=max_overflow,
+        )
     if _postgres_sync_engine is None:
         uri = _get_sync_postgres_uri()
         if not uri:
@@ -319,3 +340,19 @@ def get_postgres_session_sync() -> Generator[Session, None, None]:
         raise
     finally:
         session.close()
+
+
+@contextmanager
+def get_postgres_session_sync_for_uri(uri: str) -> Generator[Session, None, None]:
+    engine = get_postgres_sync_engine(uri)
+    SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+    session = SessionLocal()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+        engine.dispose()

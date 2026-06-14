@@ -6,9 +6,9 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from dev_health_ops.db import require_clickhouse_uri
 from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
-from dev_health_ops.workers.task_utils import _get_db_url
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +53,13 @@ async def _discover_and_sync_all(org_id: str | None) -> dict:
     from dev_health_ops.db import get_postgres_session
 
     effective_org_id = org_id or ""
-    providers = ("github", "gitlab", "jira")
+
+    # Capability registry: all org-scoped providers that support drift discovery.
+    # Entries are ordered; the set is the single source of truth for which
+    # providers the worker covers. Adding a provider here is sufficient to
+    # include it in Phase 1 credential lookup, Phase 2 concurrent discovery,
+    # and Phase 3 drift persistence.
+    providers = ("github", "gitlab", "jira", "linear", "ms-teams")
 
     # Phase 1: read + decrypt credentials in one short-lived session. These are
     # fast local reads; the connection is released before any network I/O.
@@ -109,6 +115,26 @@ async def _discover_and_sync_all(org_id: str | None) -> dict:
                 # Truncation is logged server-side by the discovery walk;
                 # drift sync only consumes the (possibly partial) teams.
                 teams = gitlab_result.teams
+            elif provider == "linear":
+                api_key = decrypted.get("api_key") or decrypted.get("token")
+                if not isinstance(api_key, str) or not api_key:
+                    return {"provider": provider, "skipped": "missing_config"}
+                teams = await discovery_svc.discover_linear(api_key=api_key)
+            elif provider == "ms-teams":
+                tenant_id = decrypted.get("tenant_id")
+                client_id_val = decrypted.get("client_id")
+                client_secret = decrypted.get("client_secret")
+                if not isinstance(tenant_id, str) or not tenant_id:
+                    return {"provider": provider, "skipped": "missing_config"}
+                if not isinstance(client_id_val, str) or not client_id_val:
+                    return {"provider": provider, "skipped": "missing_config"}
+                if not isinstance(client_secret, str) or not client_secret:
+                    return {"provider": provider, "skipped": "missing_config"}
+                teams = await discovery_svc.discover_ms_teams(
+                    tenant_id=tenant_id,
+                    client_id=client_id_val,
+                    client_secret=client_secret,
+                )
             else:
                 email = decrypted.get("email")
                 api_token = decrypted.get("api_token") or decrypted.get("token")
@@ -202,14 +228,14 @@ def reconcile_team_members(self, org_id: str | None = None) -> dict:
         from dev_health_ops.models.teams import Team
         from dev_health_ops.storage.clickhouse import ClickHouseStore
 
-        db_url = _get_db_url()
-        if not db_url:
-            raise ValueError(
-                "Missing CLICKHOUSE_URI or DATABASE_URI for reconciliation"
-            )
-
-        async with ClickHouseStore(db_url) as store:
+        async with ClickHouseStore(require_clickhouse_uri()) as store:
             teams = await store.get_all_teams()
+            if org_id is not None:
+                teams = [
+                    team
+                    for team in teams
+                    if str(getattr(team, "org_id", "") or "") == str(org_id)
+                ]
             now = datetime.now(timezone.utc)
             updated_teams = [
                 Team(
@@ -219,6 +245,7 @@ def reconcile_team_members(self, org_id: str | None = None) -> dict:
                     description=_string_or_none(team.description),
                     members=sorted(team_members.get(str(team.id), set())),
                     updated_at=now,
+                    org_id=str(getattr(team, "org_id", "") or ""),
                 )
                 for team in teams
             ]

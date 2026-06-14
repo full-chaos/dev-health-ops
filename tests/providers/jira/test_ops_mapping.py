@@ -19,6 +19,7 @@ def test_sync_teams_jira_ops():
     ns.analytics_db = None
     ns.provider = "jira-ops"
     ns.path = None
+    ns.org = None
 
     # Mock data from library
     mock_project = CanonicalProjectWithOpsgenieTeams(

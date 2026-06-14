@@ -300,6 +300,7 @@ class OrganizationService:
             description=description,
             settings=settings or {},
             tier=tier,
+            managed_by="manual" if tier != "community" else "stripe",
             is_active=True,
             created_at=datetime.now(timezone.utc),
             updated_at=datetime.now(timezone.utc),
@@ -337,8 +338,10 @@ class OrganizationService:
         if settings is not None:
             org.settings = settings
         if tier is not None:
-            org.tier = tier
-            await self._sync_license_tier(uuid.UUID(org_id), tier)
+            if str(org.tier) != tier:
+                org.tier = tier
+                org.managed_by = "manual" if tier != "community" else "stripe"
+                await self._sync_license_tier(uuid.UUID(org_id), tier)
         if is_active is not None:
             org.is_active = is_active
 
@@ -354,6 +357,10 @@ class OrganizationService:
         update a pre-existing license row or the org would keep being enforced
         at the old tier (CHAOS-2256 review). When no row exists, resolution
         falls back to Organization.tier — nothing to sync.
+
+        Paid admin grants are marked managed_by='manual' so Stripe webhook
+        events cannot clobber them. Admin downgrades to community remain
+        Stripe-manageable so a later checkout can restore paid entitlements.
         """
         from sqlalchemy.exc import OperationalError
 
@@ -370,8 +377,10 @@ class OrganizationService:
                 org_id,
             )
             return
-        if org_license is not None and str(org_license.tier) != tier:
-            org_license.tier = tier
+        if org_license is not None:
+            if str(org_license.tier) != tier:
+                org_license.tier = tier
+            org_license.managed_by = "manual" if tier != "community" else "stripe"
             org_license.updated_at = datetime.now(timezone.utc)
 
     async def delete(self, org_id: str) -> bool:

@@ -251,6 +251,44 @@ class TeamDiscoveryService:
 
         return await asyncio.to_thread(_discover)
 
+    async def discover_ms_teams(
+        self,
+        tenant_id: str,
+        client_id: str,
+        client_secret: str,
+    ) -> list[DiscoveredTeam]:
+        """Discover teams from Microsoft Teams (Microsoft Graph API)."""
+
+        async def _discover() -> list[DiscoveredTeam]:
+            from dev_health_ops.connectors.teams import TeamsConnector
+
+            DiscoveredTeam = _get_discovered_team_cls()
+            connector = TeamsConnector(
+                tenant_id=tenant_id,
+                client_id=client_id,
+                client_secret=client_secret,
+            )
+            try:
+                ms_teams = await connector.list_teams()
+                teams: list[Any] = []
+                for t in ms_teams:
+                    teams.append(
+                        DiscoveredTeam(
+                            provider_type="ms-teams",
+                            provider_team_id=t.id,
+                            name=t.display_name,
+                            description=t.description,
+                            associations={
+                                "provider_org": tenant_id,
+                            },
+                        )
+                    )
+                return teams
+            finally:
+                await connector.close()
+
+        return await _discover()
+
     async def import_teams(
         self,
         teams: list[DiscoveredTeam],
@@ -270,6 +308,8 @@ class TeamDiscoveryService:
                 team_id = f"gh:{team.provider_team_id}"
             elif team.provider_type == "gitlab":
                 team_id = f"gl:{team.provider_team_id}"
+            elif team.provider_type == "ms-teams":
+                team_id = f"ms-teams:{team.provider_team_id}"
             else:
                 team_id = team.provider_team_id
 

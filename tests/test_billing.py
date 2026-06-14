@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any, Protocol, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,6 +14,12 @@ from httpx import ASGITransport, AsyncClient
 from dev_health_ops.api.billing.router import SignatureVerificationError, router
 from dev_health_ops.api.billing.stripe_client import reset_price_tier_map
 from tests._helpers import tables_of
+
+
+class _CallableCeleryTask(Protocol):
+    def __call__(self, email_type: str, org_id: str, **kwargs: Any) -> dict: ...
+    def push_request(self, **kwargs: Any) -> None: ...
+    def pop_request(self) -> None: ...
 
 
 @pytest.fixture(autouse=True)
@@ -1239,6 +1246,74 @@ async def test_subscription_update_does_not_duplicate_license(bridge_db):
 
 
 @pytest.mark.asyncio
+async def test_subscription_sync_preserves_manually_managed_license(bridge_db):
+    import uuid
+
+    from sqlalchemy import select
+
+    from dev_health_ops.api.billing.subscription_service import SubscriptionService
+    from dev_health_ops.models.licensing import OrgLicense
+    from dev_health_ops.models.users import Organization
+
+    org_id = uuid.uuid4()
+    plan_id = uuid.uuid4()
+    price_id = uuid.uuid4()
+    bundle_id = uuid.uuid4()
+    stripe_price_id = "price_manual_guard"
+
+    async with bridge_db() as session:
+        from sqlalchemy import select as sa_select
+
+        from dev_health_ops.models.billing import BillingPrice
+
+        await _seed_enterprise_plan(session, plan_id, price_id, bundle_id)
+        price_row = (
+            await session.execute(
+                sa_select(BillingPrice).where(BillingPrice.id == price_id)
+            )
+        ).scalar_one()
+        price_row.stripe_price_id = stripe_price_id
+
+        org = Organization(
+            id=org_id, slug=f"manual-org-{org_id.hex[:8]}", name="Manual Org"
+        )
+        org.tier = "enterprise"
+        org.managed_by = "manual"
+        session.add(org)
+        session.add(
+            OrgLicense(
+                org_id=org_id,
+                tier="enterprise",
+                license_type="saas",
+                managed_by="manual",
+                customer_id="cus_manual",
+            )
+        )
+        await session.commit()
+
+    stripe_sub = _make_stripe_sub("sub_manual_guard", stripe_price_id, org_id)
+
+    async with bridge_db() as session:
+        svc = SubscriptionService(session)
+        await svc.upsert_from_stripe(stripe_sub, org_id)
+        await session.commit()
+
+    async with bridge_db() as session:
+        org_row = (
+            await session.execute(select(Organization).where(Organization.id == org_id))
+        ).scalar_one()
+        lic = (
+            await session.execute(select(OrgLicense).where(OrgLicense.org_id == org_id))
+        ).scalar_one()
+
+    assert org_row.tier == "enterprise"
+    assert org_row.managed_by == "manual"
+    assert lic.tier == "enterprise"
+    assert lic.managed_by == "manual"
+    assert lic.customer_id == "cus_manual"
+
+
+@pytest.mark.asyncio
 async def test_subscription_cancellation_downgrades_license(bridge_db):
     """Cancelled subscription downgrades OrgLicense to community; row survives."""
     import uuid
@@ -1617,7 +1692,7 @@ class TestInvalidOrgIdGuards:
         fixture ids like 'org-abc')."""
         from dev_health_ops.workers.system_ops import send_billing_notification
 
-        task = send_billing_notification
+        task = cast(_CallableCeleryTask, send_billing_notification)
         task.push_request(id="billing-bad-org", retries=0)
         try:
             result = task("subscription_cancelled", "org-abc", tier="team")

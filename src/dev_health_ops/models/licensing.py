@@ -337,6 +337,13 @@ class OrgLicense(Base):
         nullable=True,
         comment="External customer ID (Stripe, etc.)",
     )
+    managed_by: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="stripe",
+        server_default="stripe",
+        comment="Who manages this tier: 'stripe' (webhook-controlled) or 'manual' (admin-granted, immune to Stripe events)",
+    )
     features_override: Mapped[dict[str, Any] | None] = mapped_column(
         JSON,
         nullable=True,
@@ -375,6 +382,7 @@ class OrgLicense(Base):
         expires_at: datetime | None = None,
         license_type: str = "saas",
         customer_id: str | None = None,
+        managed_by: str = "stripe",
         features_override: dict[str, Any] | None = None,
         limits_override: dict[str, Any] | None = None,
     ) -> None:
@@ -389,6 +397,7 @@ class OrgLicense(Base):
         self.is_valid = True
         self.license_type = license_type
         self.customer_id = customer_id
+        self.managed_by = managed_by
         self.features_override = features_override or {}
         self.limits_override = limits_override or {}
         self.created_at = datetime.now(timezone.utc)

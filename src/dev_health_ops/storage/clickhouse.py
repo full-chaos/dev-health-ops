@@ -1577,6 +1577,7 @@ class ClickHouseStore:
                         "ops_team_name": item.get("ops_team_name"),
                         "updated_at": self._normalize_datetime(item.get("updated_at")),
                         "last_synced": synced_at,
+                        "org_id": item.get("org_id") or self.org_id or "",
                     }
                 )
             else:
@@ -1588,6 +1589,7 @@ class ClickHouseStore:
                         "ops_team_name": item.ops_team_name,
                         "updated_at": self._normalize_datetime(item.updated_at),
                         "last_synced": synced_at,
+                        "org_id": getattr(item, "org_id", None) or self.org_id or "",
                     }
                 )
 
@@ -1600,6 +1602,7 @@ class ClickHouseStore:
                 "ops_team_name",
                 "updated_at",
                 "last_synced",
+                "org_id",
             ],
             rows,
         )

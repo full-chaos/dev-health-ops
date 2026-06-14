@@ -34,6 +34,14 @@ from dev_health_ops.workers.task_utils import (
     _resolve_env_credentials,
 )
 
+# DORA (deployment frequency, lead time, change-failure-rate, MTTR) is computed
+# from synced deployments/CI/incidents in ClickHouse. These targets can be
+# scheduled independently of git/prs (e.g. a deployments-only sync config), so a
+# post-sync DORA recompute must fire on any of them, not only on git (CHAOS-2399
+# — without this a deployments-only sync lagged DORA up to a day until the daily
+# beat). Defined here next to its sole consumer (_dispatch_post_sync_tasks).
+_DORA_TARGETS = {"deployments", "cicd", "incidents"}
+
 logger = logging.getLogger(__name__)
 
 
@@ -300,6 +308,7 @@ def _dispatch_post_sync_tasks(
     target_set = set(sync_targets)
     has_git = bool(target_set & _GIT_TARGETS)
     has_work_items = bool(target_set & _WORK_ITEM_TARGETS)
+    has_dora = bool(target_set & _DORA_TARGETS)
     dispatched: list[str] = []
 
     if has_git:
@@ -346,10 +355,14 @@ def _dispatch_post_sync_tasks(
         dispatched.append("run_work_graph_build")
         dispatched.append("run_investment_materialize")
 
-    if has_git:
+    if has_git or has_dora:
         # CHAOS-2382: DORA is provider-agnostic — computed from synced
         # deployments/incidents in ClickHouse, which both GitHub and GitLab
         # populate. Dispatch for every git-syncing org, not just GitLab.
+        # CHAOS-2399: also dispatch after a deployments/cicd/incidents sync.
+        # Those targets can be scheduled without git (a deployments-only sync
+        # config), and they are exactly the inputs DORA reads — so gating on
+        # git alone left DORA stale until the daily beat after such a sync.
         celery_app.send_task(
             "dev_health_ops.workers.tasks.run_dora_metrics",
             kwargs={"org_id": org_id},

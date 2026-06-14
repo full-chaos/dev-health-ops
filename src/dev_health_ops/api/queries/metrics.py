@@ -28,7 +28,14 @@ _DEDUP_BY_COMPUTED_AT: dict[str, tuple[str, ...]] = {
 }
 
 
-def _metric_from_clause(*, table: str, column: str, scope_filter: str) -> str:
+def _metric_from_clause(
+    *,
+    table: str,
+    column: str,
+    scope_filter: str,
+    start_param: str = "start_day",
+    end_param: str = "end_day",
+) -> str:
     """Return the FROM source for a metric read.
 
     For most tables this is just the raw table name. For ReplacingMergeTree-by-
@@ -36,6 +43,10 @@ def _metric_from_clause(*, table: str, column: str, scope_filter: str) -> str:
     is wrapped in a subquery that collapses to the latest ``computed_at`` per
     natural key — so a top-level ``sum(column)`` counts each key once instead of
     once per re-run. ``org_id`` stays filtered in the inner ``WHERE``.
+
+    ``start_param`` / ``end_param`` name the bound query params so a single
+    subquery shape can serve both the current and comparison windows (the
+    driver-delta CTE pair reuses this with ``compare_start`` / ``compare_end``).
     """
     natural_key = _DEDUP_BY_COMPUTED_AT.get(table)
     if natural_key is None:
@@ -46,7 +57,7 @@ def _metric_from_clause(*, table: str, column: str, scope_filter: str) -> str:
                 {key_columns},
                 argMax({column}, computed_at) AS {column}
             FROM {table}
-            WHERE day >= %(start_day)s AND day < %(end_day)s
+            WHERE day >= %({start_param})s AND day < %({end_param})s
             {scope_filter}
               AND org_id = %(org_id)s
             GROUP BY {", ".join(natural_key)}

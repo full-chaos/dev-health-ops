@@ -23,7 +23,7 @@ from typing import Any, cast
 import pytest
 
 import dev_health_ops.connectors  # noqa: F401  # break providers<->connectors cycle
-from dev_health_ops.api.queries import aggregated_flame, metrics, sankey
+from dev_health_ops.api.queries import aggregated_flame, explain, metrics, sankey
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 _NATURAL_KEY_GROUP_BY = "GROUP BY day, provider, work_scope_id, team_id, status"
@@ -234,3 +234,163 @@ async def test_fetch_metric_value_leaves_other_tables_flat(
     assert "argMax" not in normalized
     assert _NATURAL_KEY_GROUP_BY not in normalized
     assert "FROM work_item_metrics_daily WHERE" in normalized
+
+
+# --- /explain root-cause readers (CHAOS-2377 re-review) ----------------------
+#
+# Codex flagged that build_explain_response ALSO calls fetch_metric_driver_delta
+# and fetch_metric_contributors (and the home summary path calls the driver
+# reader for the top metric). Those SQL builders read FROM {table} directly with
+# no dedup, so after a rerun/backfill the blocked_work drivers/contributors are
+# averaged over stale + latest duplicate rows -> misleading root-cause guidance.
+# These tests pin the same per-key argMax(..., computed_at) dedup on both.
+
+
+def _assert_driver_avg_dedup(query: str) -> None:
+    """Both driver CTEs (current + previous) must dedup before the avg()."""
+    normalized = " ".join(query.split())
+    # Dedup subquery emits the deduped column per natural key.
+    assert "argMax(duration_hours, computed_at)" in normalized
+    # Two dedup subqueries (one per window) -> two natural-key GROUP BYs.
+    assert normalized.count(_NATURAL_KEY_GROUP_BY) == 2, (
+        "both current and previous windows must dedup"
+    )
+    # org_id stays filtered inside each dedup subquery, before the GROUP BY.
+    assert "org_id = %(org_id)s" in normalized
+    first_key_pos = normalized.index(_NATURAL_KEY_GROUP_BY)
+    first_org_pos = normalized.index("org_id = %(org_id)s")
+    assert first_org_pos < first_key_pos, "org_id filter must sit inside the subquery"
+    # The current window binds start_day/end_day; the previous window binds the
+    # compare_start/compare_end params (param-name override on _metric_from_clause).
+    assert "day >= %(start_day)s AND day < %(end_day)s" in normalized
+    assert "day >= %(compare_start)s AND day < %(compare_end)s" in normalized
+    # The outer driver avg() runs over the deduped alias, not the raw table.
+    assert "avg(duration_hours)" in normalized
+
+
+@pytest.mark.asyncio
+async def test_fetch_metric_driver_delta_dedups_state_durations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, str] = {}
+
+    async def fake_query_dicts(_client: Any, query: str, _params: Any) -> list[Any]:
+        captured["query"] = query
+        return []
+
+    monkeypatch.setattr(explain, "query_dicts", fake_query_dicts)
+
+    await explain.fetch_metric_driver_delta(
+        cast(BaseMetricsSink, object()),
+        table="work_item_state_durations_daily",
+        column="duration_hours",
+        group_by="team_id",
+        start_day=date(2026, 5, 8),
+        end_day=date(2026, 5, 15),
+        compare_start=date(2026, 5, 1),
+        compare_end=date(2026, 5, 8),
+        scope_filter=" AND team_id IN %(team_ids)s",
+        scope_params={"team_ids": ["core"]},
+        org_id="org-a",
+    )
+
+    _assert_driver_avg_dedup(captured["query"])
+
+
+@pytest.mark.asyncio
+async def test_fetch_metric_contributors_dedups_state_durations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, str] = {}
+
+    async def fake_query_dicts(_client: Any, query: str, _params: Any) -> list[Any]:
+        captured["query"] = query
+        return []
+
+    monkeypatch.setattr(explain, "query_dicts", fake_query_dicts)
+
+    await explain.fetch_metric_contributors(
+        cast(BaseMetricsSink, object()),
+        table="work_item_state_durations_daily",
+        column="duration_hours",
+        group_by="team_id",
+        start_day=date(2026, 5, 1),
+        end_day=date(2026, 5, 2),
+        scope_filter=" AND team_id IN %(team_ids)s",
+        scope_params={"team_ids": ["core"]},
+        org_id="org-a",
+    )
+
+    normalized = " ".join(captured["query"].split())
+    assert "argMax(duration_hours, computed_at)" in normalized
+    assert _NATURAL_KEY_GROUP_BY in normalized
+    # Table read inside the dedup subquery, contributor avg() over the alias.
+    table_pos = normalized.index("work_item_state_durations_daily")
+    inner_group_pos = normalized.index(_NATURAL_KEY_GROUP_BY)
+    assert inner_group_pos > table_pos, "dedup GROUP BY must follow the table read"
+    org_pos = normalized.index("org_id = %(org_id)s")
+    assert org_pos < inner_group_pos, "org_id filter must sit inside the subquery"
+    assert "avg(duration_hours)" in normalized
+
+
+@pytest.mark.asyncio
+async def test_fetch_metric_driver_delta_leaves_other_tables_flat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The driver reader must NOT add argMax dedup for unaffected tables.
+    captured: dict[str, str] = {}
+
+    async def fake_query_dicts(_client: Any, query: str, _params: Any) -> list[Any]:
+        captured["query"] = query
+        return []
+
+    monkeypatch.setattr(explain, "query_dicts", fake_query_dicts)
+
+    await explain.fetch_metric_driver_delta(
+        cast(BaseMetricsSink, object()),
+        table="repo_metrics_daily",
+        column="change_failure_rate",
+        group_by="repo_id",
+        start_day=date(2026, 5, 8),
+        end_day=date(2026, 5, 15),
+        compare_start=date(2026, 5, 1),
+        compare_end=date(2026, 5, 8),
+        scope_filter=" AND repo_id IN %(repo_ids)s",
+        scope_params={"repo_ids": ["r1"]},
+        org_id="org-a",
+    )
+
+    normalized = " ".join(captured["query"].split())
+    assert "argMax" not in normalized
+    assert _NATURAL_KEY_GROUP_BY not in normalized
+    assert "FROM repo_metrics_daily WHERE" in normalized
+
+
+@pytest.mark.asyncio
+async def test_fetch_metric_contributors_leaves_other_tables_flat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, str] = {}
+
+    async def fake_query_dicts(_client: Any, query: str, _params: Any) -> list[Any]:
+        captured["query"] = query
+        return []
+
+    monkeypatch.setattr(explain, "query_dicts", fake_query_dicts)
+
+    await explain.fetch_metric_contributors(
+        cast(BaseMetricsSink, object()),
+        table="repo_metrics_daily",
+        column="change_failure_rate",
+        group_by="repo_id",
+        start_day=date(2026, 5, 1),
+        end_day=date(2026, 5, 2),
+        scope_filter=" AND repo_id IN %(repo_ids)s",
+        scope_params={"repo_ids": ["r1"]},
+        org_id="org-a",
+    )
+
+    normalized = " ".join(captured["query"].split())
+    assert "argMax" not in normalized
+    assert _NATURAL_KEY_GROUP_BY not in normalized
+    assert "FROM repo_metrics_daily WHERE" in normalized

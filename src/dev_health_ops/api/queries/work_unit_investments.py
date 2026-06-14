@@ -56,7 +56,7 @@ async def fetch_work_unit_investments(
             max(work_unit_investments.computed_at) AS computed_at
         FROM work_unit_investments
         WHERE {where_sql}
-        GROUP BY work_unit_id
+        GROUP BY org_id, work_unit_id
         ORDER BY effort_value DESC
         LIMIT %(limit)s
     """

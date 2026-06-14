@@ -105,6 +105,7 @@ def run_investment_materialize(
     llm_provider: str = "auto",
     llm_model: str | None = None,
     force: bool = False,
+    org_id: str = "",
 ) -> dict:
     """Materialize investment distributions from work graph.
 
@@ -118,6 +119,7 @@ def run_investment_materialize(
         llm_provider: LLM provider (auto|openai|anthropic)
         llm_model: Optional specific LLM model
         force: Force recomputation even if cached
+        org_id: Organization scope for work-graph/investment queries
 
     Returns:
         dict with materialization status and stats
@@ -170,6 +172,7 @@ def run_investment_materialize(
             llm_model=llm_model,
             team_ids=team_ids,
             force=force,
+            org_id=org_id or None,
         )
         stats = run_async(materialize_investments(config))
         return {"status": "success", "stats": stats}

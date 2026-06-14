@@ -17,6 +17,7 @@ from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.org_guard import organization_exists_sync
 from dev_health_ops.workers.task_utils import (
+    _DORA_TARGETS,
     _GIT_TARGETS,
     _WORK_ITEM_TARGETS,
     _as_dict,
@@ -300,6 +301,7 @@ def _dispatch_post_sync_tasks(
     target_set = set(sync_targets)
     has_git = bool(target_set & _GIT_TARGETS)
     has_work_items = bool(target_set & _WORK_ITEM_TARGETS)
+    has_dora = bool(target_set & _DORA_TARGETS)
     dispatched: list[str] = []
 
     if has_git:
@@ -346,10 +348,14 @@ def _dispatch_post_sync_tasks(
         dispatched.append("run_work_graph_build")
         dispatched.append("run_investment_materialize")
 
-    if has_git:
+    if has_git or has_dora:
         # CHAOS-2382: DORA is provider-agnostic — computed from synced
         # deployments/incidents in ClickHouse, which both GitHub and GitLab
         # populate. Dispatch for every git-syncing org, not just GitLab.
+        # CHAOS-2399: also dispatch after a deployments/cicd/incidents sync.
+        # Those targets can be scheduled without git (a deployments-only sync
+        # config), and they are exactly the inputs DORA reads — so gating on
+        # git alone left DORA stale until the daily beat after such a sync.
         celery_app.send_task(
             "dev_health_ops.workers.tasks.run_dora_metrics",
             kwargs={"org_id": org_id},

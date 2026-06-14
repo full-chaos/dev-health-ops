@@ -197,6 +197,13 @@ def _as_dict(value: object | None) -> dict[str, Any]:
 
 _GIT_TARGETS = {"git", "prs"}
 _WORK_ITEM_TARGETS = {"work-items"}
+# DORA (deployment frequency, lead time, change-failure-rate, MTTR) is computed
+# from synced deployments/CI/incidents in ClickHouse. These targets can be
+# scheduled independently of git/prs (e.g. a deployments-only sync config), so a
+# post-sync DORA recompute must fire on any of them, not only on git (CHAOS-2399
+# — without this a deployments-only sync lagged DORA up to a day until the daily
+# beat).
+_DORA_TARGETS = {"deployments", "cicd", "incidents"}
 _WORK_ITEM_PROVIDERS = {"github", "gitlab", "jira", "linear"}
 
 

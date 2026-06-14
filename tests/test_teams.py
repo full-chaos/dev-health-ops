@@ -96,6 +96,7 @@ async def test_clickhouse_store_teams():
         mock_result.result_rows = [
             (
                 "t1",
+                "org-1",
                 str(uuid.uuid4()),
                 "Team 1",
                 "Desc",
@@ -386,4 +387,65 @@ def test_cli_sync_teams_org_bridge_failure_exits_one(tmp_path):
 
         result = _cmd_sync_teams(ns)
 
+    assert result == 1
+
+
+def test_cli_sync_teams_org_stale_global_row_does_not_mask(tmp_path):
+    """An org-scoped run must not count a stale row from another org as
+    persisted: the org-scoped read-back filters by the store's org_id."""
+    from types import SimpleNamespace
+
+    import yaml
+
+    from dev_health_ops.providers.teams import sync_teams as _cmd_sync_teams
+
+    config_file = tmp_path / "teams.yaml"
+    config_file.write_text(
+        yaml.dump({"teams": [{"team_id": "team-a", "team_name": "Team A"}]})
+    )
+
+    class FakeStore:
+        # Store is scoped to org-1.
+        org_id = "org-1"
+
+        async def ensure_tables(self):
+            return None
+
+        async def insert_teams(self, teams):
+            # Simulate the org-1 analytics write not landing.
+            return None
+
+        async def get_all_teams(self):
+            # A pre-existing row for the SAME id but a DIFFERENT org.
+            return [SimpleNamespace(id="team-a", org_id="other-org")]
+
+    async def fake_run_with_store(_db_uri, _db_type, handler, org_id=None):
+        assert org_id == "org-1"
+        return await handler(FakeStore())
+
+    with (
+        patch("dev_health_ops.storage.run_with_store", new=fake_run_with_store),
+        patch("dev_health_ops.providers.teams.validate_sink"),
+        patch(
+            "dev_health_ops.providers.teams.resolve_sink_uri",
+            return_value="clickhouse://localhost:8123/default",
+        ),
+        patch(
+            "dev_health_ops.providers.teams.detect_db_type", return_value="clickhouse"
+        ),
+        patch(
+            "dev_health_ops.providers.teams._bridge_teams_to_postgres",
+            return_value=1,
+        ),
+    ):
+        ns = MagicMock()
+        ns.provider = "config"
+        ns.path = str(config_file)
+        ns.org = "org-1"
+        ns.allow_empty = False
+
+        result = _cmd_sync_teams(ns)
+
+    # Stale cross-org row is filtered out -> primary persisted count is 0 -> exit 1,
+    # even though the Postgres bridge succeeded.
     assert result == 1

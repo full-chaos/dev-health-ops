@@ -627,9 +627,14 @@ async def _count_persisted_teams(store: Any, teams_data: list) -> int:
     if not expected_ids or not hasattr(store, "get_all_teams"):
         return 0
 
+    org_id = getattr(store, "org_id", None)
     persisted = await store.get_all_teams()
     persisted_ids = {
-        str(getattr(team, "id", "") or "").strip() for team in persisted
+        str(getattr(team, "id", "") or "").strip()
+        for team in persisted
+        # When the store is org-scoped, only count rows for that org so a
+        # stale/global row from another tenant cannot mask a failed org write.
+        if not org_id or str(getattr(team, "org_id", "") or "") == str(org_id)
     } - {""}
     return len(expected_ids & persisted_ids)
 

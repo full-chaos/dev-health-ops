@@ -4,6 +4,10 @@ from typing import Any, cast
 
 import pytest
 
+# Initialize the connectors package before processors to avoid the
+# pre-existing providers._base <-> connectors circular import when this file
+# is collected in isolation (mirrors tests/test_deployment_pr_inference.py).
+import dev_health_ops.connectors  # noqa: F401
 from dev_health_ops.processors.github import _sync_github_prs_to_store
 from dev_health_ops.processors.gitlab import _sync_gitlab_mrs_to_store
 
@@ -183,6 +187,15 @@ async def test_gitlab_mr_sync_retries_on_retry_after_and_persists():
                         "author": {"username": "alice"},
                     }
                 ]
+            return []
+
+        # MR-review reconstruction (CHAOS-2378) calls these per in-window MR.
+        # This test exercises rate-limit retry on get_merge_requests, not
+        # reviews, so they return empty (the legitimate "no reviews" path).
+        def get_merge_request_approvals(self, project_id, iid):
+            return {"approved_by": []}
+
+        def get_merge_request_notes(self, project_id, iid):
             return []
 
     class _Connector:

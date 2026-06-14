@@ -3,7 +3,7 @@ import logging
 import zipfile
 from collections.abc import Iterable
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from dev_health_ops.analytics.complexity import (
     DEFAULT_COMPLEXITY_CONFIG_PATH,
@@ -249,27 +249,55 @@ def map_gitlab_mr_reviews(
     approvals: dict[str, Any] | None,
     notes: list[dict[str, Any]] | None,
     fallback_at: datetime | None = None,
-) -> list[GitPullRequestReview]:
+) -> tuple[list[GitPullRequestReview], datetime | None]:
     """Map GitLab approvals + MR notes to GitPullRequestReview rows.
 
     Mirrors the GitHub review states so downstream metrics
     (review_edges_daily, user_metrics_daily review latency,
     /ai/review-load) treat both providers identically (CHAOS-2378):
 
-    * approval (approvals.approved_by / "approved" system note) -> APPROVED
+    * approval ("approved" system note / approvals.approved_by) -> APPROVED
     * "unapproved" system note -> CHANGES_REQUESTED
     * resolvable reviewer comment (non-system note) -> COMMENTED
 
-    Rows are org-scoped via ``repo_id`` (the repo belongs to an org), exactly
-    like the GitHub path. MRs with no approvals/notes yield an empty list.
+    Approval events appear in *both* the note stream (a timestamped
+    "approved this merge request" system note) and the approvals endpoint
+    (a timestampless ``approved_by`` entry). To avoid double-counting one
+    approval and inventing a review-at-MR-creation timestamp, system notes
+    are authoritative: an approver already covered by an approval note is
+    *not* re-emitted from the approvals endpoint. The approvals endpoint only
+    backfills approvers with no corresponding note (e.g. notes truncated),
+    and those rows carry the MR-derived fallback timestamp purely so the row
+    is storable — they are excluded from ``first_review_at`` (see below).
+
+    Returns ``(reviews, first_review_at)`` where ``first_review_at`` is the
+    earliest review time derived from a *real* event timestamp only (never the
+    fallback), so pickup-latency analytics are not corrupted. Rows are
+    org-scoped via ``repo_id`` (the repo belongs to an org), exactly like the
+    GitHub path. MRs with no approvals/notes yield ``([], None)``.
     """
     reviews: list[GitPullRequestReview] = []
     seen_ids: set[str] = set()
+    # Reviewers whose approval is already captured by a timestamped note;
+    # used to dedup the timestampless approvals-endpoint entries.
+    approved_reviewers: set[str] = set()
+    # Earliest *real* (non-fallback) review timestamp, drives first_review_at.
+    first_review_at: datetime | None = None
 
-    def _add(review_id: str, reviewer: str, state: str, at: datetime | None) -> None:
+    def _add(
+        review_id: str,
+        reviewer: str,
+        state: str,
+        at: datetime | None,
+    ) -> None:
+        nonlocal first_review_at
         if not review_id or review_id in seen_ids:
             return
         seen_ids.add(review_id)
+        # Only a known event time advances first_review_at; the MR-created
+        # fallback must never imply a review happened at creation.
+        if at is not None and (first_review_at is None or at < first_review_at):
+            first_review_at = at
         reviews.append(
             GitPullRequestReview(
                 repo_id=repo_id,
@@ -281,21 +309,8 @@ def map_gitlab_mr_reviews(
             )
         )
 
-    # 1. Approvals endpoint: each approver is an APPROVED review. The endpoint
-    #    has no per-approver timestamp, so we fall back to the MR-derived time.
-    for entry in (approvals or {}).get("approved_by") or []:
-        user = entry.get("user") if isinstance(entry, dict) else None
-        if not isinstance(user, dict):
-            continue
-        username = user.get("username") or "Unknown"
-        user_id = user.get("id")
-        review_id = (
-            f"approval-{user_id}" if user_id is not None else f"approval-{username}"
-        )
-        _add(review_id, username, "APPROVED", None)
-
-    # 2. Note stream: system notes capture (un)approval events with timestamps;
-    #    non-system resolvable notes are reviewer comments.
+    # 1. Note stream FIRST (authoritative, timestamped). System notes capture
+    #    (un)approval events; non-system resolvable notes are reviewer comments.
     for note in notes or []:
         if not isinstance(note, dict):
             continue
@@ -307,6 +322,7 @@ def map_gitlab_mr_reviews(
 
         if note.get("system"):
             if body.startswith(_GITLAB_APPROVE_NOTE):
+                approved_reviewers.add(username)
                 _add(f"note-{note_id}", username, "APPROVED", created_at)
             elif body.startswith(_GITLAB_UNAPPROVE_NOTE):
                 _add(f"note-{note_id}", username, "CHANGES_REQUESTED", created_at)
@@ -316,7 +332,39 @@ def map_gitlab_mr_reviews(
         # Human review comment.
         _add(f"note-{note_id}", username, "COMMENTED", created_at)
 
-    return reviews
+    # 2. Approvals endpoint: backfill only approvers NOT already covered by a
+    #    timestamped approval note, so a single approval is counted once. These
+    #    entries have no per-approver timestamp (excluded from first_review_at).
+    for entry in (approvals or {}).get("approved_by") or []:
+        user = entry.get("user") if isinstance(entry, dict) else None
+        if not isinstance(user, dict):
+            continue
+        username = user.get("username") or "Unknown"
+        if username in approved_reviewers:
+            continue  # already emitted from the authoritative note
+        approved_reviewers.add(username)
+        user_id = user.get("id")
+        review_id = (
+            f"approval-{user_id}" if user_id is not None else f"approval-{username}"
+        )
+        _add(review_id, username, "APPROVED", None)
+
+    return reviews, first_review_at
+
+
+class _MrReviewFetch(NamedTuple):
+    """Result of one MR's review fetch.
+
+    ``known`` is False when the *authoritative* notes call failed, so the
+    caller can avoid clobbering previously-correct PR review metrics with
+    zero/null (CHAOS-2378). ``first_review_at`` is derived only from real
+    event timestamps (never the MR-created fallback).
+    """
+
+    reviews: list[GitPullRequestReview]
+    first_review_at: datetime | None
+    changes_requested_count: int
+    known: bool
 
 
 def _fetch_gitlab_mr_reviews(
@@ -325,15 +373,23 @@ def _fetch_gitlab_mr_reviews(
     mr: dict[str, Any],
     repo_id: Any,
     created_at: datetime | None,
-) -> list[GitPullRequestReview]:
+) -> _MrReviewFetch:
     """Best-effort fetch + map of one MR's reviews (approvals + notes).
 
-    Returns ``[]`` (never raises) when an MR has no approvals endpoint or the
-    calls fail, so review ingestion never blocks MR persistence (CHAOS-2378).
+    The MR notes endpoint is the authoritative, timestamped source and is
+    available on every tier; the approvals endpoint only supplements it (and
+    404s on tiers without merge-request approvals). Accordingly:
+
+    * approvals-only failure is benign (notes still give authoritative data);
+    * a notes failure means we genuinely do not know the review state, so we
+      report ``known=False`` and the caller preserves the existing PR row
+      rather than overwriting its review metrics with zero/null.
+
+    Never raises (CHAOS-2378).
     """
     iid = int(mr.get("iid") or 0)
     if iid <= 0:
-        return []
+        return _MrReviewFetch([], None, 0, known=True)
 
     approvals: dict[str, Any] | None = None
     try:
@@ -342,18 +398,33 @@ def _fetch_gitlab_mr_reviews(
         logging.debug("Failed to fetch approvals for MR !%d: %s", iid, exc)
 
     notes: list[dict[str, Any]] = []
+    notes_known = True
     try:
         notes = connector.rest_client.get_merge_request_notes(project_id, iid)
     except Exception as exc:  # noqa: BLE001 - best-effort
-        logging.debug("Failed to fetch notes for MR !%d: %s", iid, exc)
+        notes_known = False
+        logging.warning(
+            "Could not fetch notes for MR !%d (project %s); preserving existing "
+            "review metrics: %s",
+            iid,
+            project_id,
+            exc,
+        )
 
-    return map_gitlab_mr_reviews(
+    if not notes_known:
+        # Authoritative source unavailable: signal "unknown" so the caller does
+        # not persist this MR's PR row with zeroed-out review metrics.
+        return _MrReviewFetch([], None, 0, known=False)
+
+    reviews, first_review_at = map_gitlab_mr_reviews(
         repo_id=repo_id,
         number=iid,
         approvals=approvals,
         notes=notes,
         fallback_at=created_at,
     )
+    changes_requested_count = sum(1 for r in reviews if r.state == "CHANGES_REQUESTED")
+    return _MrReviewFetch(reviews, first_review_at, changes_requested_count, known=True)
 
 
 def _sync_gitlab_mrs_to_store(
@@ -453,21 +524,30 @@ def _sync_gitlab_mrs_to_store(
 
             # Reconstruct reviews (approvals + notes) so GitLab orgs populate
             # git_pull_request_reviews like GitHub does (CHAOS-2378).
-            mr_reviews = _fetch_gitlab_mr_reviews(
+            fetched = _fetch_gitlab_mr_reviews(
                 connector=connector,
                 project_id=project_id,
                 mr=mr,
                 repo_id=repo_id,
                 created_at=created_at,
             )
-            first_review_at: datetime | None = None
-            changes_requested_count = 0
-            for review in mr_reviews:
-                if first_review_at is None or review.submitted_at < first_review_at:
-                    first_review_at = review.submitted_at
-                if review.state == "CHANGES_REQUESTED":
-                    changes_requested_count += 1
-            review_batch.extend(mr_reviews)
+
+            if not fetched.known:
+                # Authoritative review source (MR notes) was unavailable for
+                # this MR. The PR row is ReplacingMergeTree-replaced on write,
+                # so persisting it now with zeroed review metrics would clobber
+                # previously-correct first_review_at / reviews_count /
+                # changes_requested_count. Skip this MR's row this cycle so the
+                # prior values are preserved; the next sync re-attempts it.
+                logging.warning(
+                    "Skipping PR row for MR !%d (project %d): review fetch "
+                    "degraded, preserving existing review metrics",
+                    int(mr.get("iid") or 0),
+                    project_id,
+                )
+                continue
+
+            review_batch.extend(fetched.reviews)
 
             batch.append(
                 build_git_pull_request(
@@ -483,9 +563,9 @@ def _sync_gitlab_mrs_to_store(
                     closed_at=closed_at,
                     head_branch=mr.get("source_branch"),
                     base_branch=mr.get("target_branch"),
-                    first_review_at=first_review_at,
-                    changes_requested_count=changes_requested_count,
-                    reviews_count=len(mr_reviews),
+                    first_review_at=fetched.first_review_at,
+                    changes_requested_count=fetched.changes_requested_count,
+                    reviews_count=len(fetched.reviews),
                     comments_count=comments_count,
                 )
             )

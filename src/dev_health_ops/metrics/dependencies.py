@@ -129,6 +129,14 @@ class GitLabClientProtocol(Protocol):
         updated_after: datetime | None = None,
     ) -> Iterable[Any]: ...
 
+    def iter_project_merge_requests(
+        self,
+        *,
+        project_id_or_path: str,
+        state: str = "all",
+        updated_after: datetime | None = None,
+    ) -> Iterable[Any]: ...
+
 
 class GitLabClientFactory(Protocol):
     def __call__(self) -> GitLabClientProtocol: ...

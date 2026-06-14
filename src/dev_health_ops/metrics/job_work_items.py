@@ -285,15 +285,17 @@ def run_work_items_sync_job(
                 transitions.extend(list(proj_tr or []))
 
         if "gitlab" in provider_set:
-            items, tr = fetch_gitlab_work_items(
+            items, tr, gl_ai_attributions = fetch_gitlab_work_items(
                 repos=discovered_repos,
                 since=since_dt,
                 status_mapping=status_mapping,
                 identity=identity,
                 include_label_events=True,
+                org_id=org_id,
             )
             work_items.extend(items)
             transitions.extend(tr)
+            ai_attributions.extend(gl_ai_attributions)
 
         if "synthetic" in provider_set:
             from dev_health_ops.metrics.work_items import fetch_synthetic_work_items

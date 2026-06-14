@@ -1,10 +1,14 @@
 """
 AIAttributionMixin — ClickHouse write methods for AI attribution records.
 
-Table: ai_attribution (ReplacingMergeTree, ORDER BY (org_id, provider, subject_type, subject_id, source))
-View:  ai_attribution_resolved (plain VIEW resolving highest-precedence record per subject)
+Table: ai_attribution (ReplacingMergeTree, ORDER BY (org_id, provider, subject_type, repo_id, subject_id, source))
+View:  ai_attribution_resolved (plain VIEW resolving highest-precedence record per
+       (org_id, subject_type, repo_id, subject_id) — repo_id is part of the key
+       because PR/MR subject ids are repo-local, see migrations 043/044)
 
 Write-time: every detected signal is persisted raw; dedup is by the ORDER BY key.
+repo_id sits in the dedup key (migration 044) so two repos in one org that share
+a bare repo-local subject_id (e.g. both have MR !1) never collapse into one row.
 Read-time:  query ai_attribution_resolved for the effective attribution.
 
 Implementation note
@@ -105,8 +109,8 @@ class AIAttributionMixin(_ClickHouseSinkBase):
         Persist AI attribution records to ClickHouse.
 
         Idempotent: re-inserting the same (org_id, provider, subject_type,
-        subject_id, source) tuple with a later computed_at will supersede the
-        previous row via ReplacingMergeTree(computed_at).
+        repo_id, subject_id, source) tuple with a later computed_at will
+        supersede the previous row via ReplacingMergeTree(computed_at).
 
         Args:
             records:    Sequence of AIAttributionRecord to persist.

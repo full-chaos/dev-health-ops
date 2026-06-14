@@ -3,7 +3,7 @@ import logging
 import zipfile
 from collections.abc import Iterable
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from dev_health_ops.analytics.complexity import (
     DEFAULT_COMPLEXITY_CONFIG_PATH,
@@ -18,6 +18,7 @@ from dev_health_ops.models.git import (
     GitCommit,
     GitCommitStat,
     GitPullRequest,
+    GitPullRequestReview,
     Incident,
     Repo,
 )
@@ -235,6 +236,357 @@ def _fetch_gitlab_mrs_sync(connector, project_id, repo_id, max_mrs):
     return pr_objects
 
 
+# GitLab system-note bodies that signal an approval state change. GitLab does
+# not expose a discrete "review" object like GitHub, so we reconstruct reviews
+# from the approvals endpoint plus the MR note stream (CHAOS-2378).
+_GITLAB_APPROVE_NOTE = "approved this merge request"
+_GITLAB_UNAPPROVE_NOTE = "unapproved this merge request"
+
+# A GitLab MR note attached to a diff position (``type == "DiffNote"``) is a
+# code-line review comment — the GitLab analogue of a GitHub review comment.
+# Plain discussion notes (``type`` null/``"DiscussionNote"``) are ordinary MR
+# chatter (author replies, status banter) and are NOT review activity, so they
+# must stay in ``comments_count`` only and never become COMMENTED review rows
+# (CHAOS-2378: counting them inflated reviews_count and corrupted
+# first_review_at / review-latency).
+_GITLAB_DIFF_NOTE_TYPE = "DiffNote"
+
+
+class PartialGitLabMrSyncError(RuntimeError):
+    """Raised when one or more MR rows were skipped due to a degraded review
+    fetch (e.g. a transient MR-notes failure).
+
+    The MR sync must NOT report overall success when it has silently skipped MR
+    rows: a successful run advances the per-target sync watermark to the run's
+    start time, so on the next incremental run those MRs fall behind ``since``
+    (``updated_at < since``) and are never retried until a full resync — a
+    permanent, silent loss of PR facts and review metrics with no failed job to
+    alert operators (CHAOS-2378).
+
+    Raising a *retryable* (non-terminal) error instead keeps the run marked
+    FAILED so the watermark is held at its prior value and the Celery task
+    retries the whole project. Rows that were fetched successfully this cycle
+    are flushed before the raise; the re-run is idempotent (PR/review rows are
+    ReplacingMergeTree-replaced), so re-writing them is harmless.
+    """
+
+    def __init__(self, skipped_iids: list[int], project_id: int) -> None:
+        self.skipped_iids = skipped_iids
+        self.project_id = project_id
+        super().__init__(
+            f"GitLab MR sync for project {project_id} skipped "
+            f"{len(skipped_iids)} MR row(s) due to degraded review fetch "
+            f"(iids={skipped_iids[:20]}); not advancing watermark"
+        )
+
+
+class BatchGitLabMrSyncError(RuntimeError):
+    """Raised by the batch/group GitLab sync when one or more projects skipped
+    MR rows due to a degraded review fetch (each surfaced as a
+    :class:`PartialGitLabMrSyncError` during per-project processing).
+
+    The batch path processes many projects and must keep flushing the good rows
+    from healthy projects, so it cannot abort the whole run the moment one
+    project degrades. Instead it *accumulates* the per-project failures and
+    raises this aggregate error after the batch summary. Raising (rather than
+    returning normally) is what stops the caller — ``sync_gitlab_target`` — from
+    reporting success: a successful sync advances the per-target watermark, so a
+    silently-skipped MR would fall behind ``since`` on the next incremental run
+    and never be retried (a permanent, silent loss of PR facts and review
+    metrics with no failed job to alert operators — the exact failure mode the
+    per-project :class:`PartialGitLabMrSyncError` exists to prevent). Because the
+    error is retryable and PR/review rows are ReplacingMergeTree-replaced, the
+    re-run is idempotent (CHAOS-2378).
+    """
+
+    def __init__(self, errors: list[PartialGitLabMrSyncError]) -> None:
+        self.errors = errors
+        project_ids = [e.project_id for e in errors]
+        total_skipped = sum(len(e.skipped_iids) for e in errors)
+        super().__init__(
+            f"GitLab batch MR sync degraded for {len(errors)} project(s) "
+            f"(project_ids={project_ids[:20]}); {total_skipped} MR row(s) "
+            f"skipped due to degraded review fetch; not reporting success so "
+            f"the run is retried"
+        )
+
+
+def map_gitlab_mr_reviews(
+    repo_id: Any,
+    number: int,
+    approvals: dict[str, Any] | None,
+    notes: list[dict[str, Any]] | None,
+    fallback_at: datetime | None = None,
+    author_username: str | None = None,
+) -> tuple[list[GitPullRequestReview], datetime | None]:
+    """Map GitLab approvals + MR notes to GitPullRequestReview rows.
+
+    Mirrors the GitHub review states so downstream metrics
+    (review_edges_daily, user_metrics_daily review latency,
+    /ai/review-load) treat both providers identically (CHAOS-2378):
+
+    * approval ("approved" system note / approvals.approved_by) -> APPROVED
+    * "unapproved" system note -> DISMISSED (revoking an approval is not an
+      explicit request for changes; it is excluded from changes_requested_count)
+    * diff-line review comment by a non-author reviewer
+      (``type == "DiffNote"``) -> COMMENTED
+
+    Only diff-line notes authored by someone other than the MR author count as
+    review activity. Generic MR discussion notes (``type`` null /
+    ``"DiscussionNote"``) and the author's own replies are ordinary chatter:
+    they stay in ``comments_count`` only and must NOT become COMMENTED rows,
+    because doing so inflated ``reviews_count`` and let non-review timestamps
+    drive ``first_review_at`` / review-latency (CHAOS-2378). Pass the MR author
+    via ``author_username`` so self-comments are excluded.
+
+    Approval events appear in *both* the note stream (a timestamped
+    "approved this merge request" system note) and the approvals endpoint
+    (a timestampless ``approved_by`` entry). To avoid double-counting one
+    approval and inventing a review-at-MR-creation timestamp, system notes
+    are authoritative: an approver already covered by an approval note is
+    *not* re-emitted from the approvals endpoint. The approvals endpoint only
+    backfills approvers with no corresponding note (e.g. notes truncated),
+    and those rows carry the MR-derived fallback timestamp purely so the row
+    is storable — they are excluded from ``first_review_at`` (see below).
+
+    Returns ``(reviews, first_review_at)`` where ``first_review_at`` is the
+    earliest review time derived from a *real* event timestamp only (never the
+    fallback), so pickup-latency analytics are not corrupted. Rows are
+    org-scoped via ``repo_id`` (the repo belongs to an org), exactly like the
+    GitHub path. MRs with no approvals/notes yield ``([], None)``.
+    """
+    reviews: list[GitPullRequestReview] = []
+    seen_ids: set[str] = set()
+    # MR author: their own comments/replies are not reviews and are excluded
+    # from COMMENTED rows (the author cannot review their own MR).
+    author = (author_username or "").strip().lower()
+    # Reviewers whose approval is already captured by a timestamped note;
+    # used to dedup the timestampless approvals-endpoint entries.
+    approved_reviewers: set[str] = set()
+    # Earliest *real* (non-fallback) review timestamp, drives first_review_at.
+    first_review_at: datetime | None = None
+
+    def _add(
+        review_id: str,
+        reviewer: str,
+        state: str,
+        at: datetime | None,
+    ) -> None:
+        nonlocal first_review_at
+        if not review_id or review_id in seen_ids:
+            return
+        seen_ids.add(review_id)
+        # Only a known event time advances first_review_at; the MR-created
+        # fallback must never imply a review happened at creation.
+        if at is not None and (first_review_at is None or at < first_review_at):
+            first_review_at = at
+        reviews.append(
+            GitPullRequestReview(
+                repo_id=repo_id,
+                number=int(number),
+                review_id=review_id,
+                reviewer=reviewer or "Unknown",
+                state=state,
+                submitted_at=at or fallback_at or datetime.now(timezone.utc),
+            )
+        )
+
+    # 1. Note stream FIRST (authoritative, timestamped). System notes capture
+    #    (un)approval events; diff-line notes by non-authors are review comments.
+    for note in notes or []:
+        if not isinstance(note, dict):
+            continue
+        note_author = note.get("author") if isinstance(note.get("author"), dict) else {}
+        username = (note_author or {}).get("username") or "Unknown"
+        created_at = safe_parse_datetime(note.get("created_at"))
+        note_id = note.get("id")
+        body = str(note.get("body") or "").strip().lower()
+
+        if note.get("system"):
+            if body.startswith(_GITLAB_APPROVE_NOTE):
+                approved_reviewers.add(username)
+                _add(f"note-{note_id}", username, "APPROVED", created_at)
+            elif body.startswith(_GITLAB_UNAPPROVE_NOTE):
+                # Revoking an approval is NOT an explicit "request changes" event.
+                # GitLab has no native request-changes action, so an unapproval
+                # is the dismissal of a prior approval, not rework pressure.
+                # Map it to GitHub's canonical DISMISSED state (shared review
+                # vocabulary) so it stays on the review timeline but is excluded
+                # from changes_requested_count / changes_requested_given — only a
+                # genuine CHANGES_REQUESTED must inflate rework/review-load
+                # signals (CHAOS-2378).
+                _add(f"note-{note_id}", username, "DISMISSED", created_at)
+            # other system notes (label/assignee/etc.) are not reviews
+            continue
+
+        # Human note. Only a diff-line comment (``type == "DiffNote"``) by a
+        # reviewer other than the MR author is review activity; generic
+        # discussion notes and the author's own comments are plain chatter
+        # (counted via comments_count, never as a COMMENTED review row).
+        if note.get("type") != _GITLAB_DIFF_NOTE_TYPE:
+            continue
+        if author and username.strip().lower() == author:
+            continue
+        _add(f"note-{note_id}", username, "COMMENTED", created_at)
+
+    # 2. Approvals endpoint: backfill only approvers NOT already covered by a
+    #    timestamped approval note, so a single approval is counted once. These
+    #    entries have no per-approver timestamp (excluded from first_review_at).
+    for entry in (approvals or {}).get("approved_by") or []:
+        user = entry.get("user") if isinstance(entry, dict) else None
+        if not isinstance(user, dict):
+            continue
+        username = user.get("username") or "Unknown"
+        if username in approved_reviewers:
+            continue  # already emitted from the authoritative note
+        approved_reviewers.add(username)
+        user_id = user.get("id")
+        review_id = (
+            f"approval-{user_id}" if user_id is not None else f"approval-{username}"
+        )
+        _add(review_id, username, "APPROVED", None)
+
+    return reviews, first_review_at
+
+
+class _MrReviewFetch(NamedTuple):
+    """Result of one MR's review fetch.
+
+    ``known`` is False when the *authoritative* notes call failed, so the
+    caller can avoid clobbering previously-correct PR review metrics with
+    zero/null (CHAOS-2378). ``first_review_at`` is derived only from real
+    event timestamps (never the MR-created fallback).
+    """
+
+    reviews: list[GitPullRequestReview]
+    first_review_at: datetime | None
+    changes_requested_count: int
+    known: bool
+
+
+def _fetch_all_mr_notes(
+    connector,
+    project_id: int,
+    iid: int,
+    gate: Any = None,
+) -> list[dict[str, Any]]:
+    """Fetch *every* page of an MR's notes, not just the first.
+
+    The notes endpoint is paginated (per_page<=100); a busy MR can carry an
+    approval / unapproval / review-comment event past page 1. Fetching only the
+    first page would silently drop those events and undercount reviews while the
+    sync still reports success (CHAOS-2378). We exhaust pages, honouring the
+    shared rate-limit gate/backoff exactly like the MR-list loop.
+
+    Raises on a non-rate-limit error so the caller can flag the MR's review
+    state as ``known=False`` (an incomplete page set is as untrustworthy as a
+    failed first page — both must avoid clobbering correct metrics).
+    """
+    per_page = int(getattr(connector, "per_page", 100) or 100)
+    all_notes: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        if gate is not None:
+            gate.wait_sync()
+        try:
+            page_notes = connector.rest_client.get_merge_request_notes(
+                project_id,
+                iid,
+                page=page,
+                per_page=per_page,
+            )
+            if gate is not None:
+                gate.reset()
+        except Exception as exc:
+            retry_after = getattr(exc, "retry_after_seconds", None)
+            if retry_after is not None and gate is not None:
+                applied = gate.penalize(retry_after)
+                logging.info(
+                    "GitLab rate limited fetching notes for MR !%d; backoff %.1fs (%s)",
+                    iid,
+                    applied,
+                    exc,
+                )
+                continue
+            raise
+        if not page_notes:
+            break
+        all_notes.extend(page_notes)
+        # Final page when the server returns fewer than a full page.
+        if len(page_notes) < per_page:
+            break
+        page += 1
+    return all_notes
+
+
+def _fetch_gitlab_mr_reviews(
+    connector,
+    project_id: int,
+    mr: dict[str, Any],
+    repo_id: Any,
+    created_at: datetime | None,
+    gate: Any = None,
+) -> _MrReviewFetch:
+    """Best-effort fetch + map of one MR's reviews (approvals + notes).
+
+    The MR notes endpoint is the authoritative, timestamped source and is
+    available on every tier; the approvals endpoint only supplements it (and
+    404s on tiers without merge-request approvals). Accordingly:
+
+    * approvals-only failure is benign (notes still give authoritative data);
+    * a notes failure (or an incomplete page set) means we genuinely do not
+      know the review state, so we report ``known=False`` and the caller
+      preserves the existing PR row rather than overwriting its review metrics
+      with zero/null.
+
+    Never raises (CHAOS-2378).
+    """
+    iid = int(mr.get("iid") or 0)
+    if iid <= 0:
+        return _MrReviewFetch([], None, 0, known=True)
+
+    approvals: dict[str, Any] | None = None
+    try:
+        approvals = connector.rest_client.get_merge_request_approvals(project_id, iid)
+    except Exception as exc:  # noqa: BLE001 - best-effort, some tiers lack approvals
+        logging.debug("Failed to fetch approvals for MR !%d: %s", iid, exc)
+
+    notes: list[dict[str, Any]] = []
+    notes_known = True
+    try:
+        notes = _fetch_all_mr_notes(connector, project_id, iid, gate=gate)
+    except Exception as exc:  # noqa: BLE001 - best-effort
+        notes_known = False
+        logging.warning(
+            "Could not fetch notes for MR !%d (project %s); preserving existing "
+            "review metrics: %s",
+            iid,
+            project_id,
+            exc,
+        )
+
+    if not notes_known:
+        # Authoritative source unavailable / incomplete: signal "unknown" so the
+        # caller does not persist this MR's PR row with zeroed-out review
+        # metrics.
+        return _MrReviewFetch([], None, 0, known=False)
+
+    author_data = mr.get("author")
+    author_username = (
+        author_data.get("username") if isinstance(author_data, dict) else None
+    )
+    reviews, first_review_at = map_gitlab_mr_reviews(
+        repo_id=repo_id,
+        number=iid,
+        approvals=approvals,
+        notes=notes,
+        fallback_at=created_at,
+        author_username=author_username,
+    )
+    changes_requested_count = sum(1 for r in reviews if r.state == "CHANGES_REQUESTED")
+    return _MrReviewFetch(reviews, first_review_at, changes_requested_count, known=True)
+
+
 def _sync_gitlab_mrs_to_store(
     connector,
     project_id: int,
@@ -255,11 +607,25 @@ def _sync_gitlab_mrs_to_store(
         project_id,
     )
     batch: list[GitPullRequest] = []
+    review_batch: list[GitPullRequestReview] = []
+    # MRs skipped this cycle because their authoritative review source (MR notes)
+    # was degraded. If non-empty at the end, we MUST NOT report success (which
+    # would advance the watermark past these MRs and strand them); we flush the
+    # good rows then raise PartialGitLabMrSyncError so the run is retried.
+    skipped_iids: list[int] = []
     total = 0
     page = 1
 
     gate = BaseGitProcessor.ensure_gate(gate)
     assert gate is not None
+
+    def _flush_reviews() -> None:
+        if review_batch:
+            BaseGitProcessor.persist_batch_threadsafe(
+                ingestion_sink.insert_git_pull_request_reviews(list(review_batch)),
+                loop,
+            )
+            review_batch.clear()
 
     while True:
         try:
@@ -321,6 +687,39 @@ def _sync_gitlab_mrs_to_store(
                 mrs = []
                 break
 
+            # Reconstruct reviews (approvals + notes) so GitLab orgs populate
+            # git_pull_request_reviews like GitHub does (CHAOS-2378).
+            fetched = _fetch_gitlab_mr_reviews(
+                connector=connector,
+                project_id=project_id,
+                mr=mr,
+                repo_id=repo_id,
+                created_at=created_at,
+                gate=gate,
+            )
+
+            if not fetched.known:
+                # Authoritative review source (MR notes) was unavailable for
+                # this MR. The PR row is ReplacingMergeTree-replaced on write,
+                # so persisting it now with zeroed review metrics would clobber
+                # previously-correct first_review_at / reviews_count /
+                # changes_requested_count. Skip this MR's row this cycle so the
+                # prior values are preserved, and record the iid so the run
+                # fails loud (no watermark advancement) and is retried — a
+                # silent skip would let the watermark move past this MR and
+                # strand it until a full resync (CHAOS-2378).
+                skipped_iid = int(mr.get("iid") or 0)
+                skipped_iids.append(skipped_iid)
+                logging.warning(
+                    "Skipping PR row for MR !%d (project %d): review fetch "
+                    "degraded; run will not advance watermark and will retry",
+                    skipped_iid,
+                    project_id,
+                )
+                continue
+
+            review_batch.extend(fetched.reviews)
+
             batch.append(
                 build_git_pull_request(
                     repo_id=repo_id,
@@ -335,8 +734,9 @@ def _sync_gitlab_mrs_to_store(
                     closed_at=closed_at,
                     head_branch=mr.get("source_branch"),
                     base_branch=mr.get("target_branch"),
-                    changes_requested_count=0,
-                    reviews_count=0,
+                    first_review_at=fetched.first_review_at,
+                    changes_requested_count=fetched.changes_requested_count,
+                    reviews_count=len(fetched.reviews),
                     comments_count=comments_count,
                 )
             )
@@ -354,6 +754,7 @@ def _sync_gitlab_mrs_to_store(
                     total,
                 )
                 batch.clear()
+                _flush_reviews()
 
         page += 1
         if not mrs:
@@ -364,12 +765,21 @@ def _sync_gitlab_mrs_to_store(
             ingestion_sink.insert_git_pull_requests(batch),
             loop,
         )
+    _flush_reviews()
 
     logging.info(
         "Fetched %d merge requests for project %d",
         total,
         project_id,
     )
+
+    if skipped_iids:
+        # Good rows are already flushed above; raising now (after the flush)
+        # preserves the work done this cycle while preventing the caller's
+        # success path from advancing the per-target watermark past the skipped
+        # MRs. The error is retryable (non-terminal), so the project re-syncs.
+        raise PartialGitLabMrSyncError(skipped_iids, project_id)
+
     return total
 
 
@@ -1471,6 +1881,11 @@ async def process_gitlab_projects_batch(
 
     all_results: list[Any] = []
     stored_count = 0
+    # Per-project degraded MR fetches accumulated across the batch. The batch
+    # keeps flushing healthy projects' rows, then raises after the summary so
+    # the overall run is marked failed/retried instead of silently succeeding
+    # while MR rows were skipped (CHAOS-2378).
+    degraded_mr_errors: list[PartialGitLabMrSyncError] = []
 
     results_queue: asyncio.Queue | None = None
     _queue_sentinel = object()
@@ -1578,6 +1993,23 @@ async def process_gitlab_projects_batch(
                         mr_gate,
                         since,
                     )
+            except PartialGitLabMrSyncError as e:
+                # Degraded review fetch skipped MR rows for this project. Keep
+                # processing the rest of the batch (so healthy projects'
+                # commits/MRs/CI still flush), but ACCUMULATE the failure: the
+                # batch raises a BatchGitLabMrSyncError after the summary so the
+                # whole run is marked failed/retried. Returning normally here
+                # would let sync_gitlab_target report success and advance the
+                # per-target watermark past the skipped MRs, stranding them
+                # behind ``since`` on the next incremental run — a permanent,
+                # silent loss with no failed job to alert operators (CHAOS-2378).
+                logging.warning(
+                    "Degraded MR review fetch for GitLab project %s: %s "
+                    "(batch continues; run will be marked failed for retry)",
+                    project_info.full_name,
+                    e,
+                )
+                degraded_mr_errors.append(e)
             except Exception as e:
                 logging.warning(
                     "Failed to fetch/store MRs for GitLab project %s: %s",
@@ -1854,9 +2286,23 @@ async def process_gitlab_projects_batch(
         logging.info(f"  Failed: {failed}")
         logging.info(f"  Total: {len(all_results)}")
         logging.info(f"  Stored: {stored_count}")
+        if degraded_mr_errors:
+            logging.warning(
+                "  Degraded MR sync: %d project(s)", len(degraded_mr_errors)
+            )
+
+        # Good rows from healthy projects are fully flushed at this point.
+        # Raise so the caller marks the run failed/retried rather than reporting
+        # success while some MR rows were silently skipped (CHAOS-2378).
+        if degraded_mr_errors:
+            raise BatchGitLabMrSyncError(degraded_mr_errors)
 
     except ConnectorException as e:
         logging.error(f"Connector error: {e}")
+        raise
+    except BatchGitLabMrSyncError:
+        # Intentional control-flow signal: healthy rows are flushed, but the run
+        # must fail so the watermark is held and the batch retries (CHAOS-2378).
         raise
     except Exception as e:
         logging.error(f"Error in batch processing: {e}")

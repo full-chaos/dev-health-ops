@@ -435,6 +435,69 @@ class GitLabRESTClient(RESTClient):
         )
         return mrs
 
+    def get_merge_request_approvals(
+        self,
+        project_id: int | str,
+        iid: int,
+    ) -> dict[str, Any]:
+        """Get the approval state for a single merge request.
+
+        GET /projects/{id}/merge_requests/{iid}/approvals returns a single
+        object whose ``approved_by`` list names the reviewers who approved
+        (CHAOS-2378). Raises APIException on 404 (MR lacks an approvals
+        endpoint on some tiers); callers handle best-effort.
+
+        :param project_id: GitLab project ID or path.
+        :param iid: Merge request internal ID (iid).
+        :return: Approval payload (``approved_by`` etc.).
+        """
+        endpoint = f"projects/{project_id}/merge_requests/{iid}/approvals"
+        logger.debug(
+            "Fetching approvals for project %s MR !%s",
+            project_id,
+            iid,
+        )
+        return self.get(endpoint)
+
+    def get_merge_request_notes(
+        self,
+        project_id: int | str,
+        iid: int,
+        page: int = 1,
+        per_page: int = 100,
+        sort: str = "asc",
+        order_by: str = "created_at",
+    ) -> list[dict[str, Any]]:
+        """Get notes (comments + system events) for a single merge request.
+
+        GET /projects/{id}/merge_requests/{iid}/notes returns reviewer
+        comments plus ``system`` notes such as "approved"/"unapproved this
+        merge request", which we map to review rows (CHAOS-2378).
+
+        :param project_id: GitLab project ID or path.
+        :param iid: Merge request internal ID (iid).
+        :param page: Page number.
+        :param per_page: Results per page.
+        :param sort: Sort direction ('asc' or 'desc').
+        :param order_by: Field to order by.
+        :return: List of note objects.
+        """
+        endpoint = f"projects/{project_id}/merge_requests/{iid}/notes"
+        params = {
+            "page": page,
+            "per_page": per_page,
+            "sort": sort,
+            "order_by": order_by,
+        }
+        logger.debug(
+            "Fetching notes for project %s MR !%s, page %s (per_page=%s)",
+            project_id,
+            iid,
+            page,
+            per_page,
+        )
+        return self.get_list(endpoint, params=params)
+
     def get_deployments(
         self,
         project_id: int,

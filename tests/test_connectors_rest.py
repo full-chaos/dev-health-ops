@@ -195,6 +195,35 @@ def test_gitlab_get_merge_requests_passes_optional_ordering(monkeypatch):
     )
 
 
+def test_gitlab_get_merge_request_approvals_hits_endpoint(monkeypatch):
+    client = GitLabRESTClient()
+    get = MagicMock(return_value={"approved_by": []})
+    monkeypatch.setattr(client, "get", get)
+
+    result = client.get_merge_request_approvals(22, 7)
+
+    assert result == {"approved_by": []}
+    get.assert_called_once_with("projects/22/merge_requests/7/approvals")
+
+
+def test_gitlab_get_merge_request_notes_hits_endpoint(monkeypatch):
+    client = GitLabRESTClient()
+    get_list = MagicMock(return_value=[])
+    monkeypatch.setattr(client, "get_list", get_list)
+
+    client.get_merge_request_notes(22, 7)
+
+    get_list.assert_called_once_with(
+        "projects/22/merge_requests/7/notes",
+        params={
+            "page": 1,
+            "per_page": 100,
+            "sort": "asc",
+            "order_by": "created_at",
+        },
+    )
+
+
 def test_gitlab_get_dora_metrics_includes_date_range(monkeypatch):
     client = GitLabRESTClient()
     get_list = MagicMock(return_value=[])

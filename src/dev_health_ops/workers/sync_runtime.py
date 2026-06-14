@@ -5,6 +5,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from celery import chain
+
 from dev_health_ops.credentials.resolver import (
     github_credentials_from_mapping,
     gitlab_credentials_from_mapping,
@@ -315,23 +317,33 @@ def _dispatch_post_sync_tasks(
         )
         dispatched.append("run_complexity_job")
 
-    if has_git and has_work_items:
-        celery_app.send_task(
+    # Work-graph build + investment materialization read org-wide persisted
+    # data (git PRs/commits + work items) that accumulate across separate sync
+    # configs, so they must fire after *either* kind of sync — not only when a
+    # single config carries both. Gating on `has_git and has_work_items` left
+    # work-items-only providers (Jira/Linear) and separately scheduled code vs
+    # work-item syncs with a permanently empty /investment view (CHAOS-2374).
+    if has_git or has_work_items:
+        # Investment distributions depend on the freshly rebuilt work graph.
+        # Enqueueing two independent tasks on the same queue only preserves
+        # publish order, not completion order: with multiple metrics workers
+        # materialization could race ahead of the build and read a stale/empty
+        # graph (CHAOS-2374). Chain them so materialize only starts after the
+        # build *succeeds*. The link is immutable (.si()) so the build's return
+        # value is not injected as a positional arg into materialize.
+        build_sig = celery_app.signature(
             "dev_health_ops.workers.tasks.run_work_graph_build",
             kwargs={"org_id": org_id},
             queue="metrics",
         )
-        dispatched.append("run_work_graph_build")
-
-        # Investment distributions depend on the work-graph build that was
-        # just enqueued; without this the work_unit_investments table is only
-        # ever populated by fixtures/CLI, so live orgs see an empty /investment
-        # view (CHAOS-2374).
-        celery_app.send_task(
+        materialize_sig = celery_app.signature(
             "dev_health_ops.workers.tasks.run_investment_materialize",
             kwargs={"org_id": org_id},
             queue="metrics",
+            immutable=True,
         )
+        chain(build_sig, materialize_sig).apply_async()
+        dispatched.append("run_work_graph_build")
         dispatched.append("run_investment_materialize")
 
     if provider == "gitlab" and has_git:

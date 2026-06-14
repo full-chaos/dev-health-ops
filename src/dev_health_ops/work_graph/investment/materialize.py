@@ -588,6 +588,7 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
                     categorization_input_hash=bundle.input_hash,
                     categorization_run_id=run_id,
                     computed_at=computed_at,
+                    org_id=config.org_id or "",
                 )
             )
 
@@ -601,6 +602,7 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
                             source_id=quote.source_id,
                             computed_at=computed_at,
                             categorization_run_id=run_id,
+                            org_id=config.org_id or "",
                         )
                     )
 

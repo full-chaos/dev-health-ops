@@ -27,3 +27,18 @@ def test_git_pull_requests_join_is_org_scoped() -> None:
     assert "pr.org_id = {org_id:String}" in join_block
     # The outer query still filters the attribution side too (defence in depth).
     assert "WHERE toString(a.org_id) = {org_id:String}" in sql
+
+
+def test_scan_and_finding_subqueries_are_org_scoped() -> None:
+    # CHAOS-2396: the ci_pipeline_runs (scan) and security_alerts (finding)
+    # enrichment subqueries aggregate by repo_id and join on a.repo_id; without
+    # an org predicate they would inherit another tenant's security_scanned /
+    # license_or_dependency_finding booleans via the duplicate-repos.id artifact.
+    sql = _ARTIFACTS_SQL
+    # Forward window from each source table to its GROUP BY (the subquery body).
+    scan_i = sql.index("FROM ci_pipeline_runs")
+    scan_block = sql[scan_i : sql.index("GROUP BY repo_id", scan_i)]
+    finding_i = sql.index("FROM security_alerts")
+    finding_block = sql[finding_i : sql.index("GROUP BY repo_id", finding_i)]
+    assert "org_id = {org_id:String}" in scan_block
+    assert "org_id = {org_id:String}" in finding_block

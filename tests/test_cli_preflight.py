@@ -122,6 +122,22 @@ def test_work_graph_build_rejects_unsupported_db_scheme_cleanly() -> None:
     assert "Only ClickHouse is supported" in result.stderr
 
 
+def test_sync_rejects_unsupported_analytics_scheme_cleanly() -> None:
+    result = _run_cli(
+        "sync",
+        "git",
+        "--provider",
+        "synthetic",
+        "--analytics-db",
+        "sqlite:///x.db",
+    )
+
+    assert result.returncode == 2, result.stderr
+    assert "Traceback" not in result.stderr
+    assert "Unknown or unsupported sink scheme 'sqlite'" in result.stderr
+    assert "Only ClickHouse is supported" in result.stderr
+
+
 def test_help_lists_requirements_in_epilog() -> None:
     result = _run_cli("metrics", "compounding-risk", "--help")
 

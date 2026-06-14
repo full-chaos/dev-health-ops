@@ -241,8 +241,23 @@ def resolve_db_uri(ns) -> str:
 def resolve_sink_uri(ns) -> str:
     uri = getattr(ns, "analytics_db", None)
     if uri:
+        _validate_sink_uri(uri, ns)
         return uri
-    return require_clickhouse_uri()
+    uri = require_clickhouse_uri()
+    _validate_sink_uri(uri, ns)
+    return uri
+
+
+def _validate_sink_uri(uri: str, ns) -> None:
+    from dev_health_ops.metrics.sinks.factory import detect_backend
+
+    try:
+        detect_backend(uri)
+    except ValueError as exc:
+        parser = getattr(ns, "_leaf_parser", None)
+        if parser is not None:
+            parser.error(str(exc))
+        raise
 
 
 _postgres_sync_engine: Engine | None = None

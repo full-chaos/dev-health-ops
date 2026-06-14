@@ -240,6 +240,7 @@ SELECT
 FROM ai_attribution_resolved AS a
 LEFT JOIN git_pull_requests AS pr
     ON a.repo_id = pr.repo_id
+    AND pr.org_id = {org_id:String}
     AND a.subject_type = 'pull_request'
     AND a.subject_id = toString(pr.number)
 LEFT JOIN (

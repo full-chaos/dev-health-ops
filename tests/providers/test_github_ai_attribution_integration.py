@@ -326,3 +326,94 @@ def test_github_work_items_sync_uses_db_app_auth_without_env_mutation(
     assert auth.private_key == private_key
     assert auth.installation_id == "67890"
     assert auth.is_app_auth is True
+
+
+@pytest.mark.usefixtures("monkeypatch")
+def test_github_attribution_subject_id_is_bare_pr_number_joins_pr_number(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Positive JOIN contract (CHAOS-2396).
+
+    The AI governance loader (``audit.ai_governance.loaders``) resolves
+    ``human_reviewed`` by joining ``ai_attribution.subject_id =
+    toString(git_pull_requests.number)`` scoped by ``repo_id``. GitHub's
+    ``git_pull_requests.number`` is the bare PR number (``int(pr.number)``),
+    exactly as GitLab writes ``int(mr.iid)``. So the live work-items sync path
+    MUST write ``subject_id == str(pr.number)`` (e.g. ``"11"``) and NEVER the
+    prefixed work-item id (``ghpr:{repo}#{n}``) — otherwise every GitHub PR
+    attribution would miss the join and the org would get zero AI
+    governance/coverage while fabricating "missing review" violations.
+    """
+    org_id = uuid.uuid4()
+    repo_id = uuid.uuid4()
+    sink = _FakeClickHouseSink("clickhouse://test")
+
+    monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: sink)
+    monkeypatch.setattr(job, "InvestmentClassifier", _Classifier)
+    monkeypatch.setattr(
+        job, "compute_work_item_metrics_daily", lambda **_kwargs: ([], [], [])
+    )
+    monkeypatch.setattr(
+        job, "compute_work_item_state_durations_daily", lambda **_kwargs: []
+    )
+    monkeypatch.setattr(job, "parse_github_projects_v2_env", lambda: [])
+    monkeypatch.setattr(
+        job,
+        "_discover_repos",
+        lambda **_kwargs: [
+            DiscoveredRepo(
+                repo_id=repo_id,
+                full_name="fullchaos/dev-health",
+                source="github",
+                settings={},
+            )
+        ],
+    )
+
+    # One PR (#11) carries an explicit AI signal via the 'ai-assisted' label;
+    # one PR (#14) is plain human work and must produce no attribution row.
+    ai_pr = _pr(11, labels=["ai-assisted"])
+    human_pr = _pr(14, body="Reviewed and implemented by a human.")
+
+    client = MagicMock()
+    client.iter_repo_milestones.return_value = []
+    client.iter_issues.return_value = []
+    client.iter_pull_requests.return_value = [ai_pr, human_pr]
+    client.iter_issue_events.return_value = []
+    client.iter_issue_comments.return_value = []
+    client.iter_pr_comments_batch.return_value = []
+
+    monkeypatch.setattr(job, "_build_github_work_client", lambda **_kwargs: client)
+
+    run_job: Any = job.run_work_items_sync_job
+    run_job(
+        db_url="clickhouse://test",
+        day=date(2026, 5, 2),
+        backfill_days=1,
+        provider="github",
+        org_id=str(org_id),
+    )
+
+    assert sink.ai_attributions
+    # The PR carrying the AI signal produced at least one attribution row.
+    ai_rows = [r for r in sink.ai_attributions if r.subject_type == "pull_request"]
+    assert ai_rows
+
+    # Producer side: git_pull_requests.number == int(pr.number) for this PR.
+    expected_subject_id = str(int(ai_pr.number))
+    assert expected_subject_id == "11"
+
+    # The loader join is `a.subject_id = toString(pr.number)` scoped by repo_id.
+    for rec in ai_rows:
+        assert rec.subject_id == expected_subject_id  # bare "11", joins pr.number
+        assert rec.org_id == org_id
+        assert rec.repo_id == repo_id  # join also scoped a.repo_id = pr.repo_id
+        assert rec.provider == "github"
+
+    # Negative guard: the prefixed work-item id shape would NOT join and must
+    # never be written as subject_id (CHAOS-2396 regression).
+    assert all(
+        rec.subject_id != "ghpr:fullchaos/dev-health#11" for rec in sink.ai_attributions
+    )
+    # The plain human PR produced no attribution row.
+    assert not any(rec.subject_id == "14" for rec in sink.ai_attributions)

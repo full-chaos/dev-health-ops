@@ -100,6 +100,55 @@ def test_load_complexity_map_for_repo_maps_rows() -> None:
     assert params["org_id"] == "acme"
     assert "argMax" in query
     assert "file_complexity_snapshots" in query
+    # Latest-by-day selection: the argMax temporal key MUST lead with as_of_day
+    # so a later-recomputed OLDER snapshot cannot clobber a newer one
+    # (CHAOS-2376 round-2). Plain `argMax(field, computed_at)` is the bug.
+    assert "(as_of_day, computed_at)" in query
+    assert "argMax(cyclomatic_total,               computed_at)" not in query
+
+
+def test_load_complexity_map_selects_latest_by_as_of_day() -> None:
+    """The complexity loader must order snapshots by (as_of_day, computed_at),
+    not computed_at alone.
+
+    Regression for CHAOS-2376 round-2: a backfill that recomputes an OLDER
+    ``as_of_day`` *after* a newer snapshot was written would, under a
+    ``argMax(field, computed_at)`` read, surface the stale older values and
+    persist bad risk_score/cyclomatic into ``file_hotspot_daily``. This asserts
+    the query argMaxes on the ``(as_of_day, computed_at)`` tuple so the newest
+    snapshot day always wins regardless of recompute order.
+    """
+    captured: dict[str, str] = {}
+
+    class _CaptureSink:
+        def query_dicts(
+            self, query: str, parameters: dict[str, Any]
+        ) -> list[dict[str, Any]]:
+            captured["query"] = query
+            return []
+
+    job_daily._load_complexity_map_for_repo(
+        primary_sink=_CaptureSink(),
+        org_id="acme",
+        repo_id=uuid.uuid4(),
+        day=DAY,
+    )
+
+    query = captured["query"]
+    # Every projected field must argMax on the (as_of_day, computed_at) tuple.
+    for field in (
+        "language",
+        "loc",
+        "functions_count",
+        "cyclomatic_total",
+        "cyclomatic_avg",
+        "high_complexity_functions",
+        "very_high_complexity_functions",
+    ):
+        assert f"AS {field}" in query
+    assert query.count("(as_of_day, computed_at)") == 7
+    # The buggy single-key form must be gone for every field.
+    assert "computed_at) AS" not in query.replace("(as_of_day, computed_at)", "")
 
 
 def test_load_complexity_map_swallows_query_failure() -> None:
@@ -223,14 +272,18 @@ def test_load_blame_map_for_repo_maps_concentration() -> None:
         ]
     )
 
-    result = job_daily._load_blame_map_for_repo(primary_sink=sink, repo_id=repo_id)
+    result = job_daily._load_blame_map_for_repo(
+        primary_sink=sink, org_id="acme", repo_id=repo_id
+    )
 
     assert result == {"app/core.py": 0.9, "app/util.py": 0.5}
-    # Scoped to the repo with a per-line argMax dedup before the share.
+    # Scoped to BOTH repo and org with a per-line argMax dedup before the share.
     query, params = sink.queries[0]
     assert params["repo_id"] == str(repo_id)
+    assert params["org_id"] == "acme"
     assert "git_blame" in query
     assert "argMax" in query
+    assert "org_id = {org_id:String}" in query
 
 
 def test_load_blame_map_swallows_query_failure() -> None:
@@ -240,9 +293,54 @@ def test_load_blame_map_swallows_query_failure() -> None:
 
     # A missing/unmigrated git_blame table must not abort the daily job.
     result = job_daily._load_blame_map_for_repo(
-        primary_sink=_Boom(), repo_id=uuid.uuid4()
+        primary_sink=_Boom(), org_id="acme", repo_id=uuid.uuid4()
     )
     assert result == {}
+
+
+def test_load_blame_map_is_org_scoped_no_cross_tenant_leak() -> None:
+    """Blame reads MUST filter by org_id so a reused repo_id under another
+    tenant (or the 'default' partition) cannot contaminate this org's
+    Ownership-risk data (CHAOS-2376 round-2 / Codex no-ship).
+
+    The sink here returns ONLY the rows whose ``org_id`` param matches, proving
+    the loader passes a discriminating org filter and that a stale row written
+    under a different org is never surfaced for ``org_id='tenant-a'``.
+    """
+    repo_id = uuid.uuid4()
+
+    # Two org partitions for the SAME repo_id with different ownership shapes.
+    rows_by_org = {
+        "tenant-a": [{"path": "shared.py", "concentration": 0.2}],
+        "tenant-b": [{"path": "shared.py", "concentration": 0.95}],
+    }
+
+    class _OrgScopedSink:
+        def __init__(self) -> None:
+            self.queries: list[tuple[str, dict[str, Any]]] = []
+
+        def query_dicts(
+            self, query: str, parameters: dict[str, Any]
+        ) -> list[dict[str, Any]]:
+            self.queries.append((query, parameters))
+            # Emulate ClickHouse honouring the WHERE org_id filter.
+            assert "org_id = {org_id:String}" in query
+            return rows_by_org.get(parameters.get("org_id", ""), [])
+
+    sink = _OrgScopedSink()
+
+    result_a = job_daily._load_blame_map_for_repo(
+        primary_sink=sink, org_id="tenant-a", repo_id=repo_id
+    )
+    result_b = job_daily._load_blame_map_for_repo(
+        primary_sink=sink, org_id="tenant-b", repo_id=repo_id
+    )
+
+    # Each tenant sees only its own ownership concentration, never the other's.
+    assert result_a == {"shared.py": 0.2}
+    assert result_b == {"shared.py": 0.95}
+    assert sink.queries[0][1]["org_id"] == "tenant-a"
+    assert sink.queries[1][1]["org_id"] == "tenant-b"
 
 
 def test_blame_concentration_flows_into_hotspot_rows() -> None:
@@ -250,6 +348,7 @@ def test_blame_concentration_flows_into_hotspot_rows() -> None:
     repo_id = uuid.uuid4()
     blame_map = job_daily._load_blame_map_for_repo(
         primary_sink=_BlameSink([{"path": "hot.py", "concentration": 0.85}]),
+        org_id="acme",
         repo_id=repo_id,
     )
 
@@ -356,6 +455,61 @@ def test_backfill_default_include_blame_is_true() -> None:
         include_blame_default = default_by_arg["include_blame"]
         assert isinstance(include_blame_default, ast.Constant)
         assert include_blame_default.value is True
+
+
+# ---------------------------------------------------------------------------
+# (b2) onboarding blame gate is org-scoped (Codex no-ship: stale-org gate)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_has_any_git_blame_is_org_scoped() -> None:
+    """``has_any_git_blame`` must scope by ``self.org_id``.
+
+    ``git_blame`` is org-partitioned (migration 027) and ``repo_id`` can be
+    reused across tenants. A repo-only existence check would let a stale/default
+    org's blame row suppress the fresh blame fetch for a newly-onboarded org,
+    leaving its Ownership-risk tab empty (CHAOS-2376 round-2 / Codex no-ship).
+    This proves the gate threads org_id into the WHERE clause and that, when a
+    row exists only under a different org, the gate reports "no blame" so the
+    backfill proceeds.
+    """
+    from dev_health_ops.storage.clickhouse import ClickHouseStore
+
+    repo_id = uuid.uuid4()
+
+    # Backing store: a blame row exists ONLY under tenant-b.
+    existing = {("tenant-b", str(repo_id))}
+
+    captured: list[dict[str, Any]] = []
+
+    def fake_query(query: str, parameters: dict[str, Any]) -> Any:
+        captured.append({"query": query, "params": parameters})
+        assert "org_id = {org_id:String}" in query
+        key = (parameters.get("org_id"), parameters.get("repo_id"))
+        result = Mock()
+        result.result_rows = [(1,)] if key in existing else []
+        return result
+
+    store = ClickHouseStore.__new__(ClickHouseStore)
+    store.client = Mock()
+    store.client.query = fake_query
+    import asyncio as _asyncio
+
+    store._lock = _asyncio.Lock()
+
+    # tenant-a has NO blame even though tenant-b does for the same repo_id ->
+    # the gate must report False so onboarding fetches fresh blame.
+    store.org_id = "tenant-a"
+    assert await store.has_any_git_blame(repo_id) is False
+
+    # tenant-b's own row is visible.
+    store.org_id = "tenant-b"
+    assert await store.has_any_git_blame(repo_id) is True
+
+    # Every query carried the discriminating org filter.
+    assert all("org_id = {org_id:String}" in c["query"] for c in captured)
+    assert {c["params"]["org_id"] for c in captured} == {"tenant-a", "tenant-b"}
 
 
 # ---------------------------------------------------------------------------

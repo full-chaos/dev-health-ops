@@ -471,7 +471,30 @@ class ClickHouseStore:
         return await self._has_any("git_commit_stats", self._normalize_uuid(repo_id))
 
     async def has_any_git_blame(self, repo_id) -> bool:
-        return await self._has_any("git_blame", self._normalize_uuid(repo_id))
+        """Whether blame exists for this repo *under the current org*.
+
+        Onboarding uses this gate to decide whether to fetch fresh blame
+        (``check_backfill_needs`` -> ``backfill``). ``git_blame`` is
+        ``org_id``-partitioned (migration 027), and ``repo_id`` can be reused
+        across tenants. A repo-only existence check would let a stale/default
+        org's blame row suppress the fresh fetch for a newly-onboarded org,
+        leaving its Ownership-risk tab empty (CHAOS-2376 round-2). Scoping by
+        ``self.org_id`` makes the gate tenant-correct; when ``org_id`` is unset
+        we fall back to the repo-only check.
+        """
+        assert self.client is not None
+        org_id = getattr(self, "org_id", None) or ""
+        query = "SELECT 1 FROM git_blame WHERE repo_id = {repo_id:UUID}"
+        params: dict[str, Any] = {"repo_id": str(self._normalize_uuid(repo_id))}
+        if org_id:
+            query += " AND org_id = {org_id:String}"
+            params["org_id"] = org_id
+        query += " LIMIT 1"
+        async with self._lock:
+            result = await asyncio.to_thread(
+                self.client.query, query, parameters=params
+            )
+        return bool(getattr(result, "result_rows", None))
 
     async def insert_git_file_data(self, file_data: list[GitFile]) -> None:
         if not file_data:

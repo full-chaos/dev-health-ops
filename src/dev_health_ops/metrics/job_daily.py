@@ -470,21 +470,27 @@ def _load_complexity_map_for_repo(
 
     ``file_complexity_snapshots`` is written by the separate complexity job
     (``metrics complexity``); this read joins that compute into the daily
-    hotspot/risk computation (CHAOS-2376). Uses ``argMax(*, computed_at)`` per
-    file to dedupe re-computes, mirroring the complexity resolver. Returns an
-    empty map (callers treat complexity as 0) on any query failure so a missing
-    or unmigrated table never aborts the daily job.
+    hotspot/risk computation (CHAOS-2376). Selects, per file, the snapshot with
+    the latest ``as_of_day`` on or before ``day`` (breaking ties by
+    ``computed_at``) via ``argMax(*, (as_of_day, computed_at))``. The temporal
+    key MUST lead with ``as_of_day`` -- keying on ``computed_at`` alone would
+    let an older ``as_of_day`` that was *backfilled/recomputed later* clobber a
+    newer snapshot and persist stale risk_score/cyclomatic into
+    ``file_hotspot_daily`` (CHAOS-2376 round-2). This mirrors the
+    ``max(as_of_day)``-first invariant in ``get_file_complexity_snapshots``.
+    Returns an empty map (callers treat complexity as 0) on any query failure so
+    a missing or unmigrated table never aborts the daily job.
     """
     query = """
         SELECT
             file_path,
-            argMax(language,                       computed_at) AS language,
-            argMax(loc,                            computed_at) AS loc,
-            argMax(functions_count,                computed_at) AS functions_count,
-            argMax(cyclomatic_total,               computed_at) AS cyclomatic_total,
-            argMax(cyclomatic_avg,                 computed_at) AS cyclomatic_avg,
-            argMax(high_complexity_functions,      computed_at) AS high_complexity_functions,
-            argMax(very_high_complexity_functions, computed_at) AS very_high_complexity_functions
+            argMax(language,                       (as_of_day, computed_at)) AS language,
+            argMax(loc,                            (as_of_day, computed_at)) AS loc,
+            argMax(functions_count,                (as_of_day, computed_at)) AS functions_count,
+            argMax(cyclomatic_total,               (as_of_day, computed_at)) AS cyclomatic_total,
+            argMax(cyclomatic_avg,                 (as_of_day, computed_at)) AS cyclomatic_avg,
+            argMax(high_complexity_functions,      (as_of_day, computed_at)) AS high_complexity_functions,
+            argMax(very_high_complexity_functions, (as_of_day, computed_at)) AS very_high_complexity_functions
         FROM file_complexity_snapshots
         WHERE repo_id = {repo_id:UUID}
           AND as_of_day <= {day:Date}
@@ -534,6 +540,7 @@ def _load_complexity_map_for_repo(
 def _load_blame_map_for_repo(
     *,
     primary_sink: Any,
+    org_id: str,
     repo_id: uuid.UUID,
 ) -> dict[str, float]:
     """Load per-file ownership concentration for ``repo_id`` from ``git_blame``.
@@ -545,13 +552,16 @@ def _load_blame_map_for_repo(
     almost all lines (bus-factor risk), near ``0`` means broad ownership.
 
     The aggregation is pushed server-side. ``git_blame`` is
-    ``ReplacingMergeTree(last_synced)`` keyed by ``(repo_id, path, line_no)``,
-    so a per-line ``argMax(author, last_synced)`` collapses re-synced lines to
-    their latest author before the per-file share is computed. Returns an empty
-    map (callers treat concentration as ``NULL``) on any query failure so a
-    missing/unmigrated table never aborts the daily job. ``git_blame`` has no
-    ``org_id`` column; the read is scoped by ``repo_id`` (repos are
-    org-partitioned upstream).
+    ``ReplacingMergeTree(last_synced)`` keyed by ``(org_id, repo_id, path,
+    line_no)`` (migration 027 prepends ``org_id`` to the sorting key and adds
+    the ``org_id`` column), so a per-line ``argMax(author, last_synced)``
+    collapses re-synced lines to their latest author before the per-file share
+    is computed. The read is scoped by BOTH ``org_id`` and ``repo_id``: blame
+    rows are tenant-partitioned, and a stale/default-org row for a reused
+    ``repo_id`` must not contaminate another tenant's ownership data
+    (CHAOS-2376 round-2: cross-org leak). Returns an empty map (callers treat
+    concentration as ``NULL``) on any query failure so a missing/unmigrated
+    table never aborts the daily job.
     """
     query = """
         SELECT
@@ -574,14 +584,18 @@ def _load_blame_map_for_repo(
                     ) AS author
                 FROM git_blame
                 WHERE repo_id = {repo_id:UUID}
-                GROUP BY path, line_no
+    """
+    params: dict[str, Any] = {"repo_id": str(repo_id)}
+    if org_id:
+        query += "                  AND org_id = {org_id:String}\n"
+        params["org_id"] = org_id
+    query += """                GROUP BY path, line_no
             )
             WHERE author != ''
             GROUP BY path, author
         )
         GROUP BY path
     """
-    params: dict[str, Any] = {"repo_id": str(repo_id)}
 
     try:
         rows = primary_sink.query_dicts(query, params)
@@ -813,6 +827,7 @@ async def run_daily_metrics_job(
             # Ownership-risk dimension is non-NULL for real orgs (CHAOS-2376).
             blame_map = _load_blame_map_for_repo(
                 primary_sink=primary_sink,
+                org_id=org_id,
                 repo_id=r_id,
             )
             file_hotspots = compute_file_risk_hotspots(

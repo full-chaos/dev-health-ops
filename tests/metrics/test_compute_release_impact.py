@@ -610,7 +610,12 @@ def test_deployments_queries_have_no_repos_subselect_in_source():
     (CHAOS-2397). Inspects the generated query strings via capturing clients.
     """
     import dev_health_ops.metrics.ff_validation as ff
-    import dev_health_ops.metrics.release_impact as ri
+    from dev_health_ops.metrics.release_impact import (
+        _concurrent_deploy_count,
+        _count_total_releases,
+        _get_deploy_timestamp,
+        _get_repo_id_for_release,
+    )
 
     captured: list[str] = []
 
@@ -627,10 +632,10 @@ def test_deployments_queries_have_no_repos_subselect_in_source():
     deploy_ts = datetime(2026, 3, 15, 10, 0, tzinfo=timezone.utc)
 
     # release_impact.py deployments readers
-    ri._count_total_releases(client, "orgZ", day)
-    ri._get_deploy_timestamp(client, "orgZ", _SHARED_REL_2397, _SHARED_ENV_2397)
-    ri._get_repo_id_for_release(client, "orgZ", _SHARED_REL_2397, _SHARED_ENV_2397)
-    ri._concurrent_deploy_count(
+    _count_total_releases(client, "orgZ", day)
+    _get_deploy_timestamp(client, "orgZ", _SHARED_REL_2397, _SHARED_ENV_2397)
+    _get_repo_id_for_release(client, "orgZ", _SHARED_REL_2397, _SHARED_ENV_2397)
+    _concurrent_deploy_count(
         client, "orgZ", _SHARED_REL_2397, _SHARED_ENV_2397, deploy_ts
     )
 

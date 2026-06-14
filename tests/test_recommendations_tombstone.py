@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -250,6 +250,133 @@ def test_newer_nofire_supersedes_older_fired_row():
         # the reader collapses to the latest window_end per (org, team, rule).
         assert _fired_rules(day2) == set(), (
             "recovered signal still visible: latest-window_end collapse failed"
+        )
+    finally:
+        sink.client.command(
+            "ALTER TABLE recommendations_daily DELETE WHERE org_id = {o:String} "
+            "SETTINGS mutations_sync=2",
+            parameters={"o": org_id},
+        )
+        sink.close()
+
+
+@pytest.mark.clickhouse
+@_live
+def test_writer_window_end_visible_same_day_via_resolver_cap(monkeypatch):
+    """Writer's ``window_end == today + 1`` is read same-day by recommendations().
+
+    Regression for the CONVENTION MISMATCH (CHAOS-2373): the scheduled writer
+    anchors ``now = as_of_day + 1`` and persists rows at ``window_end ==
+    today + 1`` (so the loader's exclusive ``day < window_end`` still reads the
+    just-finalized ``today`` partition). The GraphQL ``recommendations()``
+    resolver previously capped its read at ``window_end <= today`` and so
+    EXCLUDED those freshest rows — the surface was one finalize-day stale.
+
+    This drives the ACTUAL resolver bounds (``_window_to_dates``, patched so
+    "today" is deterministic) against live ClickHouse and asserts:
+
+    * a rule that fired this finalize cycle (``window_end = today + 1``) APPEARS
+      same-day, and
+    * a recovered rule (fired yesterday, tombstoned this cycle) is CLEARED
+      same-day — not lingering for an extra finalize-day.
+    """
+    from dev_health_ops.api.graphql.models.recommendations import (
+        WindowInput,
+        WindowUnit,
+    )
+    from dev_health_ops.api.graphql.resolvers import recommendations as resolver_mod
+    from dev_health_ops.api.graphql.resolvers.recommendations import (
+        _RECOMMENDATIONS_SQL,
+        _window_to_dates,
+    )
+    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+
+    assert CLICKHOUSE_URI is not None
+
+    # Deterministic "today" so the writer's today+1 and the resolver cap line up.
+    today = date(2026, 4, 8)
+    # Writer convention: window_end == as_of_day + 1 (as_of_day == today).
+    writer_window_end = today + timedelta(days=1)
+    assert writer_window_end == date(2026, 4, 9)  # today + 1
+
+    monkeypatch.setattr(resolver_mod, "utc_today", lambda: today)
+
+    # Sanity: the resolver now caps the read at today + 1 (inclusive), matching
+    # the writer's persisted key. If this regresses to `today`, the freshest
+    # finalized rows fall outside the cap and the asserts below fail.
+    window = WindowInput(value=2, unit=WindowUnit.WEEK)
+    res_start, res_end = _window_to_dates(window)
+    assert res_end == writer_window_end, (
+        "resolver read cap must include the writer's today+1 window_end"
+    )
+
+    org_id = f"test-chaos-2373-cap-{uuid.uuid4()}"
+    team_id = "team-cap"
+    fired_rule = "saturation"
+    recovered_rule = "thrash"
+    computed_at = datetime(2026, 4, 9, 2, 0, tzinfo=timezone.utc)
+
+    sink = ClickHouseMetricsSink(CLICKHOUSE_URI)
+    sink.ensure_schema(force=True)
+    try:
+        # Yesterday's finalize: recovered_rule fired at window_end = today
+        # (yesterday's as_of + 1). The writer convention always bumps by one.
+        sink.write_recommendations(
+            [
+                _record(
+                    team_id=team_id,
+                    org_id=org_id,
+                    rule_id=recovered_rule,
+                    window_end=today,  # yesterday's as_of + 1
+                    fired=True,
+                    computed_at=datetime(2026, 4, 8, 2, 0, tzinfo=timezone.utc),
+                )
+            ]
+        )
+
+        # Today's finalize (as_of = today): full state at window_end = today + 1.
+        #   * fired_rule fires (new signal)
+        #   * recovered_rule tombstoned (no longer fires)
+        sink.write_recommendations(
+            [
+                _record(
+                    team_id=team_id,
+                    org_id=org_id,
+                    rule_id=fired_rule,
+                    window_end=writer_window_end,
+                    fired=True,
+                    computed_at=computed_at,
+                ),
+                _record(
+                    team_id=team_id,
+                    org_id=org_id,
+                    rule_id=recovered_rule,
+                    window_end=writer_window_end,
+                    fired=False,
+                    computed_at=computed_at,
+                ),
+            ]
+        )
+
+        # Read through the resolver's OWN derived bounds (the cap under test).
+        res = sink.client.query(
+            _RECOMMENDATIONS_SQL,
+            parameters={
+                "team_id": team_id,
+                "org_id": org_id,
+                "window_start": res_start.isoformat(),
+                "window_end": res_end.isoformat(),
+            },
+        )
+        fired_now = {row[2] for row in (res.result_rows or [])}  # rule_id col
+
+        # Same-day visibility: today's finalized fired rule APPEARS immediately.
+        assert fired_rule in fired_now, (
+            "today's finalized recommendation excluded by the resolver read cap"
+        )
+        # Same-day clearance: the recovered rule is gone, not stale for a day.
+        assert recovered_rule not in fired_now, (
+            "recovered signal still visible same-day: read cap/convention mismatch"
         )
     finally:
         sink.client.command(

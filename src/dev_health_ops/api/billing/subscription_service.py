@@ -399,6 +399,30 @@ class SubscriptionService:
 
         customer_id = str(getattr(subscription, "stripe_customer_id", "") or "")
 
+        org = None
+        try:
+            from dev_health_ops.models.users import Organization
+
+            org_result = await self.db.execute(
+                select(Organization).where(Organization.id == org_id)
+            )
+            org = org_result.scalar_one_or_none()
+        except OperationalError as exc:
+            logger.warning(
+                "organizations table unavailable; skipping org tier sync (%s)", exc
+            )
+
+        org_managed_by = getattr(org, "managed_by", "stripe") if org else "stripe"
+        lic_managed_by = (
+            getattr(org_license, "managed_by", "stripe") if org_license else "stripe"
+        )
+        if org_managed_by == "manual" or lic_managed_by == "manual":
+            logger.info(
+                "Skipping Stripe org-license sync for manually-managed org_id=%s",
+                org_id,
+            )
+            return
+
         if org_license is None:
             org_license = OrgLicense(
                 org_id=org_id,
@@ -418,22 +442,8 @@ class SubscriptionService:
             if customer_id:
                 assign_attr(org_license, "customer_id", customer_id)
 
-        # Keep the denormalized Organization.tier column in lockstep so the
-        # tier-resolution fallback (resolve_org_tier) and any direct readers of
-        # Organization.tier never see a value that diverges from OrgLicense.
-        try:
-            from dev_health_ops.models.users import Organization
-
-            org_result = await self.db.execute(
-                select(Organization).where(Organization.id == org_id)
-            )
-            org = org_result.scalar_one_or_none()
-            if org is not None and str(org.tier) != tier_str:
-                assign_attr(org, "tier", tier_str)
-        except OperationalError as exc:
-            logger.warning(
-                "organizations table unavailable; skipping org tier sync (%s)", exc
-            )
+        if org is not None and str(org.tier) != tier_str:
+            assign_attr(org, "tier", tier_str)
 
         # Static literal labels keyed by tier string to break the taint chain
         # entirely (CodeQL py/clear-text-logging-sensitive-data).

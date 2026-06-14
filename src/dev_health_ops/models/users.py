@@ -171,7 +171,13 @@ class Organization(Base):
     # Billing/tier info (for SaaS)
     tier: Mapped[str | None] = mapped_column(Text, default="community", nullable=False)
     stripe_customer_id: Mapped[str | None] = mapped_column(Text, nullable=True)
-
+    managed_by: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="stripe",
+        server_default="stripe",
+        comment="Who manages this org's tier: 'stripe' or 'manual'. Mirrors org_licenses.managed_by.",
+    )
     # Status
     is_active: Mapped[bool | None] = mapped_column(
         Boolean, default=True, nullable=False

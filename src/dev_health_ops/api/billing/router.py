@@ -7,7 +7,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Annotated, Any
+from typing import Annotated, Any, Protocol, cast
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -57,6 +57,18 @@ except ModuleNotFoundError:
 
 class SignatureVerificationError(Exception):
     """Fallback export when Stripe SDK is unavailable."""
+
+
+class _BillingNotificationTask(Protocol):
+    def delay(self, email_type: str, org_id: str, **kwargs: object) -> object: ...
+
+
+def _enqueue_billing_notification(
+    email_type: str, org_id: str, **kwargs: object
+) -> object:
+    return cast(_BillingNotificationTask, send_billing_notification).delay(
+        email_type, org_id, **kwargs
+    )
 
 
 logger = logging.getLogger(__name__)
@@ -391,7 +403,7 @@ async def _handle_invoice_webhook(
             )
             return
         try:
-            send_billing_notification.delay(email_type, org_str, **kwargs)
+            _enqueue_billing_notification(email_type, org_str, **kwargs)
         except Exception:
             logger.debug(
                 "Failed to enqueue %s email for org_id=%s", email_type, org_str
@@ -490,12 +502,12 @@ async def _handle_subscription_updated(subscription: object) -> None:
         logger.exception("Failed to regenerate license for org_id=%s", org_id)
         return
 
-    await _persist_license(org_id, tier, license_key, customer_id)
+    persisted = await _persist_license(org_id, tier, license_key, customer_id)
 
     # Send subscription changed email if tier actually changed.
-    if old_tier is not None and old_tier != str(tier.value):
+    if persisted and old_tier is not None and old_tier != str(tier.value):
         try:
-            send_billing_notification.delay(
+            _enqueue_billing_notification(
                 "subscription_changed",
                 org_id,
                 old_tier=old_tier,
@@ -541,7 +553,7 @@ async def _handle_subscription_deleted(subscription: object) -> None:
         await _revoke_license(org_id)
 
         try:
-            send_billing_notification.delay(
+            _enqueue_billing_notification(
                 "subscription_cancelled",
                 org_id,
                 tier=current_tier,
@@ -592,7 +604,7 @@ async def _handle_trial_will_end(subscription: object) -> None:
     trial_end_iso = trial_end_dt.date().isoformat()
 
     try:
-        send_billing_notification.delay(
+        _enqueue_billing_notification(
             "trial_expiring",
             org_id,
             days_remaining=days_remaining,
@@ -646,7 +658,7 @@ async def _persist_license(
     tier: LicenseTier,
     license_key: str,
     customer_id: str | None,
-) -> None:
+) -> bool:
     """Persist license to OrgLicense and update Organization tier."""
     try:
         from datetime import datetime, timezone
@@ -664,19 +676,34 @@ async def _persist_license(
                 org_uuid = uuid_mod.UUID(org_id)
             except ValueError:
                 logger.warning("Invalid org_id UUID: %s", org_id)
-                return
+                return False
 
             result = await session.execute(
                 select(Organization).where(Organization.id == org_uuid)
             )
             org = result.scalar_one_or_none()
-            if org:
-                assign_attr(org, "tier", str(tier.value))
 
             license_result = await session.execute(
                 select(OrgLicense).where(OrgLicense.org_id == org_uuid)
             )
             org_license = license_result.scalar_one_or_none()
+
+            org_managed_by = getattr(org, "managed_by", "stripe") if org else "stripe"
+            lic_managed_by = (
+                getattr(org_license, "managed_by", "stripe")
+                if org_license
+                else "stripe"
+            )
+            if org_managed_by == "manual" or lic_managed_by == "manual":
+                logger.info(
+                    "Stripe license persist ignored for manually-managed org %s "
+                    "(managed_by='manual'); tier preserved.",
+                    org_id,
+                )
+                return False
+
+            if org:
+                assign_attr(org, "tier", str(tier.value))
 
             if org_license is None:
                 org_license = OrgLicense(
@@ -696,13 +723,19 @@ async def _persist_license(
             org_license.last_validated_at = datetime.now(timezone.utc)
 
             await session.commit()
+            return True
 
     except Exception:
         logger.exception("Failed to persist license for org_id=%s", org_id)
+        return False
 
 
 async def _revoke_license(org_id: str) -> None:
-    """Mark org license as invalid (subscription cancelled)."""
+    """Mark org license as invalid (subscription cancelled).
+
+    Skips orgs where managed_by='manual' — those tiers are admin-granted
+    and must not be clobbered by Stripe webhook events.
+    """
     try:
         from sqlalchemy import select
 
@@ -722,13 +755,30 @@ async def _revoke_license(org_id: str) -> None:
                 select(Organization).where(Organization.id == org_uuid)
             )
             org = result.scalar_one_or_none()
+
+            result_lic = await session.execute(
+                select(OrgLicense).where(OrgLicense.org_id == org_uuid)
+            )
+            org_license = result_lic.scalar_one_or_none()
+
+            # Guard: skip if this org's tier is manually managed.
+            org_managed_by = getattr(org, "managed_by", "stripe") if org else "stripe"
+            lic_managed_by = (
+                getattr(org_license, "managed_by", "stripe")
+                if org_license
+                else "stripe"
+            )
+            if org_managed_by == "manual" or lic_managed_by == "manual":
+                logger.info(
+                    "Stripe subscription.deleted ignored for manually-managed org %s "
+                    "(managed_by='manual'); tier preserved.",
+                    org_id,
+                )
+                return
+
             if org:
                 assign_attr(org, "tier", str(LicenseTier.COMMUNITY.value))
 
-            result = await session.execute(
-                select(OrgLicense).where(OrgLicense.org_id == org_uuid)
-            )
-            org_license = result.scalar_one_or_none()
             if org_license:
                 assign_attr(org_license, "is_valid", False)
                 assign_attr(org_license, "tier", str(LicenseTier.COMMUNITY.value))

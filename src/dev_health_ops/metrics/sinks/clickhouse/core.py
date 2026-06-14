@@ -46,6 +46,9 @@ class ClickHouseCore(BaseMetricsSink):
     `computed_at`. Queries can select the latest version via `argMax`.
     """
 
+    def query(self, query: str, parameters: dict[str, Any] | None = None) -> Any:
+        return self.client.query(query, parameters=parameters or {})
+
     def query_dicts(
         self, query: str, parameters: dict[str, Any]
     ) -> list[dict[str, Any]]:

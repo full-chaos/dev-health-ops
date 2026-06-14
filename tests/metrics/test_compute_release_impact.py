@@ -274,14 +274,15 @@ def test_compute_day_isolates_orgs_sharing_release_ref():
     # coverage_ratio would drop to 0.5).
     assert rec.coverage_ratio == pytest.approx(1.0)
 
-    # EVERY deployments read must carry the repo->org scoping predicate and the
-    # correct org_id param (orgA, never orgB).
+    # EVERY deployments read must scope directly on deployments.org_id and carry
+    # the correct org_id param (orgA, never orgB). CHAOS-2397 replaced the old
+    # leaky ``repo_id IN (SELECT id FROM repos WHERE org_id = ...)`` sub-select
+    # (which matched the duplicate-repos.id-across-orgs artifact) with a direct
+    # org_id column filter, so the sub-select must NOT reappear.
     assert client.deployments_queries, "expected at least one deployments read"
-    scoping_predicate = (
-        "repo_id IN (SELECT id FROM repos WHERE org_id = {org_id:String})"
-    )
     for q, params in client.deployments_queries:
-        assert scoping_predicate in q
+        assert "org_id = {org_id:String}" in q
+        assert "repo_id IN (SELECT id FROM repos" not in q
         assert params.get("org_id") == _ORG_A
         assert params.get("org_id") != _ORG_B
 
@@ -436,3 +437,213 @@ def test_two_releases_same_env_get_isolated_telemetry():
     # 5) Per-release completeness differs (24h vs 12h of buckets).
     assert healthy.data_completeness == pytest.approx(1.0)
     assert regressed.data_completeness == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------
+# Deployments-read isolation by deployments.org_id (CHAOS-2397)
+#
+# CHAOS-2381 originally scoped deployments reads via a
+# ``repo_id IN (SELECT id FROM repos WHERE org_id = ...)`` sub-select. That
+# sub-select is LEAKY against the real-world artifact where the same
+# ``repos.id`` UUID exists under two different orgs (duplicate-repos.id across
+# tenants): both orgs' rows match the IN-list, so orgA's compute could read
+# orgB's deployment timestamp / repo_id / inflate the release denominator.
+#
+# Migration 027 added ``org_id`` to ``deployments`` (column + sort key), so the
+# fix filters ``AND org_id = {org_id:String}`` DIRECTLY on ``deployments``.
+# That is leak-proof regardless of how repos.id collides across orgs.
+#
+# This fake models the duplicate-repos.id artifact explicitly: orgA and orgB
+# both deployed the SAME release_ref + environment under the SAME repo_id.
+# It resolves deployments reads by the deployments.org_id PARAM only — so if
+# the production query dropped that predicate (or re-introduced the repos
+# sub-select that matches the shared repo_id), orgA would see orgB's row and
+# the assertions below would fail.
+#
+# These are UNIT tests (no live ClickHouse), mirroring the sibling fake-client
+# style above. We also assert on the generated SQL text to lock the fix in:
+# the deployments reads must NOT contain the repos sub-select and MUST contain
+# ``org_id = {org_id:String}``.
+# ---------------------------------------------------------------------------
+
+_ORG_X = "orgX"
+_ORG_Y = "orgY"
+_SHARED_REL_2397 = "v3.0.0"
+_SHARED_ENV_2397 = "production"
+
+
+class _OrgScopedDeploymentsFakeClient:
+    """Fake CH client enforcing deployments.org_id scoping (CHAOS-2397).
+
+    Both orgs share release_ref + environment AND the SAME repo_id (the
+    duplicate-repos.id-across-orgs artifact). Deployment rows are keyed ONLY by
+    the deployments.org_id parameter — never by repo_id — so a query that
+    dropped the org_id predicate would surface the other org's row.
+    """
+
+    def __init__(self, shared_repo_id):
+        self._shared_repo_id = shared_repo_id
+        # deployments rows: org_id -> deploy timestamp. Distinct timestamps so a
+        # cross-tenant read of _get_deploy_timestamp is detectable.
+        self._deploy_ts = {
+            _ORG_X: datetime(2026, 3, 15, 8, 0, tzinfo=timezone.utc),
+            _ORG_Y: datetime(2026, 3, 15, 20, 0, tzinfo=timezone.utc),
+        }
+        # release_refs deployed per org on the day (denominator source).
+        self._releases = {
+            _ORG_X: {_SHARED_REL_2397},
+            _ORG_Y: {_SHARED_REL_2397, "v3.1.0"},  # orgY has an extra release
+        }
+        self.deployments_queries: list[tuple[str, dict]] = []
+
+    def query(self, query: str, parameters: dict):
+        params = parameters or {}
+        q = " ".join(query.split())
+        org_id = str(params.get("org_id") or "")
+
+        if "FROM deployments" in q:
+            self.deployments_queries.append((q, params))
+            # release-count denominator
+            if "count(DISTINCT release_ref)" in q and "AS cnt" in q:
+                cnt = len(self._releases.get(org_id, set()))
+                return FakeQueryResult(["cnt"], [[cnt]])
+            # repo_id lookup (shared id, but only returned for known orgs)
+            if "SELECT repo_id" in q:
+                if org_id in self._deploy_ts:
+                    return FakeQueryResult(["repo_id"], [[str(self._shared_repo_id)]])
+                return FakeQueryResult(["repo_id"], [])
+            # deploy timestamp — org-specific
+            if "AS deploy_ts" in q:
+                ts = self._deploy_ts.get(org_id)
+                rows: list[list[Any]] = [[ts]] if ts is not None else []
+                return FakeQueryResult(["deploy_ts"], rows)
+            # concurrent deploy count
+            return FakeQueryResult(["cnt"], [[0]])
+
+        if "SELECT DISTINCT release_ref, environment" in q:
+            return FakeQueryResult(
+                ["release_ref", "environment"],
+                [[_SHARED_REL_2397, _SHARED_ENV_2397]],
+            )
+        if "total_signals" in q and "total_sessions" in q:
+            return FakeQueryResult(["total_signals", "total_sessions"], [[5, 400]])
+        if "first_friction_ts" in q:
+            return FakeQueryResult(["first_friction_ts"], [])
+        if "bucket_hours" in q:
+            return FakeQueryResult(["bucket_hours"], [[24]])
+        return FakeQueryResult([], [])
+
+
+def test_count_total_releases_scoped_by_deployments_org_id():
+    """_count_total_releases reads ONLY this org's deployments (CHAOS-2397)."""
+    from dev_health_ops.metrics.release_impact import _count_total_releases
+
+    shared_repo = uuid4()
+    client = _OrgScopedDeploymentsFakeClient(shared_repo)
+    day = date(2026, 3, 15)
+
+    # orgX deployed exactly one release_ref; orgY deployed two. If orgY's
+    # deployments leaked into orgX's denominator the count would be 2.
+    assert _count_total_releases(client, _ORG_X, day) == 1
+    assert _count_total_releases(client, _ORG_Y, day) == 2
+
+    # Every deployments read carried org_id = {org_id:String} directly and never
+    # the leaky repos sub-select.
+    assert client.deployments_queries
+    for q, params in client.deployments_queries:
+        assert "org_id = {org_id:String}" in q
+        assert "repo_id IN (SELECT id FROM repos" not in q
+        assert params.get("org_id") in (_ORG_X, _ORG_Y)
+
+
+def test_get_deploy_timestamp_scoped_by_deployments_org_id():
+    """_get_deploy_timestamp never returns another org's deploy (CHAOS-2397).
+
+    orgX and orgY share release_ref + environment + repo_id (the duplicate-
+    repos.id artifact) but have distinct deploy timestamps. Each org must read
+    only its own.
+    """
+    from dev_health_ops.metrics.release_impact import _get_deploy_timestamp
+
+    shared_repo = uuid4()
+    client = _OrgScopedDeploymentsFakeClient(shared_repo)
+
+    ts_x = _get_deploy_timestamp(client, _ORG_X, _SHARED_REL_2397, _SHARED_ENV_2397)
+    ts_y = _get_deploy_timestamp(client, _ORG_Y, _SHARED_REL_2397, _SHARED_ENV_2397)
+
+    assert ts_x == datetime(2026, 3, 15, 8, 0, tzinfo=timezone.utc)
+    assert ts_y == datetime(2026, 3, 15, 20, 0, tzinfo=timezone.utc)
+    # No cross-tenant bleed: shared release_ref/env/repo_id did not merge them.
+    assert ts_x != ts_y
+
+
+def test_compute_day_orgX_excludes_orgY_sharing_release_and_repo():
+    """End-to-end: orgX compute sees only orgX deployment data (CHAOS-2397)."""
+    shared_repo = uuid4()
+    client = _OrgScopedDeploymentsFakeClient(shared_repo)
+
+    records = _compute_day(
+        client, _ORG_X, date(2026, 3, 15), datetime.now(tz=timezone.utc)
+    )
+
+    assert len(records) == 1
+    rec = records[0]
+    assert rec.org_id == _ORG_X
+    assert rec.repo_id == shared_repo
+    # orgX has 1 covered / 1 total release; orgY's extra release_ref must NOT
+    # inflate the denominator (which would drop coverage_ratio to 0.5).
+    assert rec.coverage_ratio == pytest.approx(1.0)
+
+    # All deployments reads scoped directly on deployments.org_id, no repos
+    # sub-select, and only ever orgX's id.
+    assert client.deployments_queries
+    for q, params in client.deployments_queries:
+        assert "org_id = {org_id:String}" in q
+        assert "repo_id IN (SELECT id FROM repos" not in q
+        assert params.get("org_id") == _ORG_X
+        assert params.get("org_id") != _ORG_Y
+
+
+def test_deployments_queries_have_no_repos_subselect_in_source():
+    """SQL guard: every deployments read in release_impact + ff_validation
+    filters deployments.org_id directly and never the leaky repos sub-select
+    (CHAOS-2397). Inspects the generated query strings via capturing clients.
+    """
+    import dev_health_ops.metrics.ff_validation as ff
+    from dev_health_ops.metrics.release_impact import (
+        _concurrent_deploy_count,
+        _count_total_releases,
+        _get_deploy_timestamp,
+        _get_repo_id_for_release,
+    )
+
+    captured: list[str] = []
+
+    class _CaptureClient:
+        def query(self, query: str, parameters: dict | None = None):
+            q = " ".join(query.split())
+            if "FROM deployments" in q:
+                captured.append(q)
+            # Return a benign empty-ish result so callers don't crash.
+            return FakeQueryResult([], [])
+
+    client = _CaptureClient()
+    day = date(2026, 3, 15)
+    deploy_ts = datetime(2026, 3, 15, 10, 0, tzinfo=timezone.utc)
+
+    # release_impact.py deployments readers
+    _count_total_releases(client, "orgZ", day)
+    _get_deploy_timestamp(client, "orgZ", _SHARED_REL_2397, _SHARED_ENV_2397)
+    _get_repo_id_for_release(client, "orgZ", _SHARED_REL_2397, _SHARED_ENV_2397)
+    _concurrent_deploy_count(
+        client, "orgZ", _SHARED_REL_2397, _SHARED_ENV_2397, deploy_ts
+    )
+
+    # ff_validation.py deployments readers (coverage + join_integrity CTEs)
+    ff.check_coverage(client, "orgZ")
+    ff.check_join_integrity(client, "orgZ")
+
+    assert captured, "expected captured deployments queries"
+    for q in captured:
+        assert "repo_id IN (SELECT id FROM repos" not in q, q
+        assert "org_id = {org_id:String}" in q, q

@@ -109,7 +109,7 @@ def check_coverage(client: Any, org_id: str, lookback_days: int = 30) -> CheckRe
             SELECT DISTINCT release_ref
             FROM deployments
             WHERE release_ref != ''
-              AND repo_id IN (SELECT id FROM repos WHERE org_id = {org_id:String})
+              AND org_id = {org_id:String}
               AND toDate(coalesce(deployed_at, started_at))
                   >= today() - {lookback:UInt32}
         ),
@@ -386,9 +386,7 @@ def check_join_integrity(
                 SELECT DISTINCT release_ref, environment
                 FROM deployments
                 WHERE release_ref != ''
-                  AND repo_id IN (
-                      SELECT id FROM repos WHERE org_id = {org_id:String}
-                  )
+                  AND org_id = {org_id:String}
             ) AS d
             ON i.release_ref = d.release_ref
                AND i.environment = d.environment

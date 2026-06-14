@@ -140,17 +140,19 @@ def _find_release_env_pairs(
 def _count_total_releases(client: Any, org_id: str, day: date) -> int:
     """Count total distinct release_refs deployed on this day.
 
-    Scoped to the current org's repos: ``deployments`` has no ``org_id``
-    column, so we restrict ``repo_id`` to this org's repos (``repos.id``)
-    to avoid mixing other tenants' deployments into the coverage_ratio
-    denominator (CHAOS-2381).
+    Scoped to ``deployments.org_id`` so other tenants' deployments never enter
+    the coverage_ratio denominator (CHAOS-2381). Filtering the org_id column
+    directly (added to deployments + its sort key in migration 027) is also
+    leak-proof against the duplicate-``repos.id``-across-orgs artifact that a
+    ``repo_id IN (SELECT id FROM repos WHERE org_id=...)`` sub-select would
+    match (CHAOS-2397).
     """
     query = """
         SELECT count(DISTINCT release_ref) AS cnt
         FROM deployments
         WHERE release_ref != ''
           AND toDate(coalesce(deployed_at, started_at)) = {day:Date}
-          AND repo_id IN (SELECT id FROM repos WHERE org_id = {org_id:String})
+          AND org_id = {org_id:String}
     """
     params: dict[str, Any] = {"day": str(day), "org_id": org_id}
     rows = _query_dicts(client, query, params)
@@ -164,16 +166,16 @@ def _get_deploy_timestamp(
 ) -> datetime | None:
     """Get the deploy timestamp for a release_ref + environment.
 
-    Scoped to the current org's repos (``repos.id``): ``release_ref`` +
-    ``environment`` is not globally unique, so an unscoped read could pick
-    another tenant's deployment timestamp (CHAOS-2381).
+    Scoped to ``deployments.org_id``: ``release_ref`` + ``environment`` is not
+    globally unique, so an unscoped read could pick another tenant's deployment
+    timestamp (CHAOS-2381 / CHAOS-2397).
     """
     query = """
         SELECT coalesce(deployed_at, started_at) AS deploy_ts
         FROM deployments
         WHERE release_ref = {release_ref:String}
           AND environment = {environment:String}
-          AND repo_id IN (SELECT id FROM repos WHERE org_id = {org_id:String})
+          AND org_id = {org_id:String}
         ORDER BY deploy_ts DESC
         LIMIT 1
     """
@@ -360,9 +362,9 @@ def _concurrent_deploy_count(
 ) -> int:
     """Count other releases in same environment within 24h window.
 
-    Scoped to the current org's repos (``repos.id``) so concurrent-deploy
-    confounding only counts this tenant's deployments, not other orgs that
-    happen to share the same ``environment`` label (CHAOS-2381).
+    Scoped to ``deployments.org_id`` so concurrent-deploy confounding only
+    counts this tenant's deployments, not other orgs that happen to share the
+    same ``environment`` label (CHAOS-2381 / CHAOS-2397).
     """
     window_start = deploy_ts - timedelta(hours=24)
     window_end = deploy_ts + timedelta(hours=24)
@@ -374,7 +376,7 @@ def _concurrent_deploy_count(
           AND release_ref != ''
           AND coalesce(deployed_at, started_at) >= {window_start:DateTime64(3)}
           AND coalesce(deployed_at, started_at) <= {window_end:DateTime64(3)}
-          AND repo_id IN (SELECT id FROM repos WHERE org_id = {org_id:String})
+          AND org_id = {org_id:String}
     """
     rows = _query_dicts(
         client,
@@ -576,17 +578,17 @@ def _get_repo_id_for_release(
 ) -> UUID | None:
     """Look up repo_id from deployments for a release_ref.
 
-    Scoped to the current org's repos (``repos.id``): without this scope an
-    unscoped read could write ANOTHER tenant's ``repo_id`` into this org's
-    surface-readable ``release_impact_daily`` row, since ``release_ref`` +
-    ``environment`` is not globally unique (CHAOS-2381).
+    Scoped to ``deployments.org_id``: without this scope an unscoped read could
+    write ANOTHER tenant's ``repo_id`` into this org's surface-readable
+    ``release_impact_daily`` row, since ``release_ref`` + ``environment`` is not
+    globally unique (CHAOS-2381 / CHAOS-2397).
     """
     query = """
         SELECT repo_id
         FROM deployments
         WHERE release_ref = {release_ref:String}
           AND environment = {environment:String}
-          AND repo_id IN (SELECT id FROM repos WHERE org_id = {org_id:String})
+          AND org_id = {org_id:String}
         ORDER BY coalesce(deployed_at, started_at) DESC
         LIMIT 1
     """

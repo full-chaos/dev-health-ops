@@ -54,37 +54,55 @@ GITHUB_PLAIN_REF_PATTERN = re.compile(r"(?<!\w)#(\d+)\b")
 # GitLab uses same patterns but also supports cross-project refs like "group/project#123"
 GITLAB_CROSS_PROJECT_PATTERN = re.compile(r"([\w\-\.]+/[\w\-\.]+)#(\d+)")
 
-# Pull-request references embedded in commit messages by GitHub/GitLab when a
-# PR/MR is merged or squashed. These are deliberately PR/MR-specific forms only:
-# a bare "#123" or "!45" is NOT accepted because it overwhelmingly denotes an
-# ordinary issue reference (e.g. "Fixes #7"), not a PR/MR, and treating it as a
-# PR->commit link corrupts the work graph with false high-confidence edges.
-# - Merge commits:  "Merge pull request #123 from ..." (GitHub)
-#                   "See merge request grp/proj!45"     (GitLab)
-# - Squash commits: "Some change (#123)"                (GitHub squash-and-merge)
+# Pull-request references embedded in commit messages by GitHub/GitLab *only*
+# via their explicit merge-keyword conventions. These forms are PR/MR-specific
+# by construction -- the literal words "pull request" / "merge request" cannot
+# appear in an ordinary issue reference -- so they are safe to promote into
+# PR->commit links:
+# - GitHub merge commit: "Merge pull request #123 from ..."
+# - GitLab merge commit:  "See merge request grp/proj!45"
+#
+# The bare squash form "Some change (#123)" is deliberately NOT recognized.
+# GitHub's squash-and-merge produces "<subject> (#N)", but that is positionally
+# and lexically identical to a hand-authored issue reference such as
+# "Fix parser edge case (#42)". Because git_pull_requests carries no persisted
+# merge_commit_sha (or any merge metadata) to corroborate the link, a bare
+# "(#N)" is indistinguishable from an issue mention. Promoting it would attach a
+# commit to an unrelated PR whenever an issue number happens to collide with a
+# real PR number in the same repo -- durable corruption of work_graph_pr_commit
+# and every downstream file/AI-impact metric that reads it. See CHAOS-2375
+# round-2 review: only unambiguous merge/MR-keyword evidence is accepted.
 GITHUB_MERGE_PR_PATTERN = re.compile(r"merge\s+pull\s+request\s+#(\d+)", re.IGNORECASE)
 GITLAB_MERGE_MR_PATTERN = re.compile(
     r"(?:merge\s+request|see\s+merge\s+request)\b[^!\n]*!(\d+)", re.IGNORECASE
 )
-SQUASH_PR_PATTERN = re.compile(r"\(#(\d+)\)")
 
 
 def extract_pr_refs(text: str) -> list[int]:
     """
     Extract pull/merge-request numbers referenced in a commit message.
 
-    Only the native, PR/MR-specific conventions that GitHub and GitLab embed in
-    commit messages when a PR/MR is merged or squashed are recognized:
+    Only the explicit, unambiguous merge-keyword conventions that GitHub and
+    GitLab embed in *merge* commit messages are recognized:
 
     - "Merge pull request #123 from ..."   (GitHub merge commit)
     - "See merge request group/proj!45"    (GitLab merge commit)
-    - "Implement feature (#123)"            (GitHub squash-and-merge commit)
 
-    Bare ``#123``/``!45`` mentions are intentionally **not** treated as PR/MR
-    evidence: in commit messages they almost always denote an ordinary issue
-    reference (e.g. "Fixes #7" or "Closes #500"), and promoting them into
-    PR->commit links would persist false high-confidence edges into the work
-    graph and downstream file/AI-impact metrics.
+    The literal "pull request" / "merge request" wording guarantees these denote
+    a PR/MR rather than an issue, so the derived ``work_graph_pr_commit`` links
+    are trustworthy.
+
+    Bare forms are intentionally **not** treated as PR/MR evidence:
+
+    - ``#123`` / ``!45``  -- almost always an ordinary issue reference
+      (e.g. "Fixes #7", "Closes #500").
+    - ``(#123)``          -- GitHub's squash-and-merge subject suffix, but it is
+      indistinguishable from a hand-authored parenthetical issue reference like
+      "Fix parser edge case (#42)". With no persisted merge metadata to
+      corroborate it, accepting this would persist false high-confidence
+      PR->commit edges (a commit attached to an unrelated PR whenever an issue
+      number collides with a real PR number), corrupting the work graph and
+      downstream file/AI-impact metrics.
 
     Args:
         text: Commit message to search.
@@ -107,7 +125,6 @@ def extract_pr_refs(text: str) -> list[int]:
     for pattern in (
         GITHUB_MERGE_PR_PATTERN,
         GITLAB_MERGE_MR_PATTERN,
-        SQUASH_PR_PATTERN,
     ):
         for match in pattern.finditer(text):
             _add(match.group(1))

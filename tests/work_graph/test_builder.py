@@ -277,14 +277,16 @@ class TestDerivePRCommitLinks:
         fake_sink.write_work_graph_pr_commit = MagicMock()
         return fake_sink
 
-    def test_derives_links_from_merge_and_squash_commits(self):
-        """Merge/squash commit messages referencing known PRs yield links."""
+    def test_derives_links_from_merge_keyword_commits(self):
+        """GitHub/GitLab merge-keyword commit messages referencing known PRs yield
+        links; the ambiguous squash ``(#N)`` form does NOT."""
         repo_id = uuid.uuid4()
         base_time = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
 
         pr_rows = [
             {"repo_id": repo_id, "number": 42},
             {"repo_id": repo_id, "number": 7},
+            {"repo_id": repo_id, "number": 45},
         ]
         commit_rows = [
             {
@@ -295,7 +297,15 @@ class TestDerivePRCommitLinks:
             },
             {
                 "repo_id": repo_id,
+                "hash": "ggg777",
+                "message": "See merge request grp/proj!45",
+                "author_when": base_time,
+            },
+            {
+                "repo_id": repo_id,
                 "hash": "bbb222",
+                # Squash form is ambiguous with an issue ref -> must be ignored,
+                # even though PR #7 exists in this repo.
                 "message": "Add retry logic (#7)",
                 "author_when": base_time,
             },
@@ -314,10 +324,11 @@ class TestDerivePRCommitLinks:
         records = fake_sink.write_work_graph_pr_commit.call_args[0][0]
         assert len(records) == 2
         by_commit = {r.commit_hash: r for r in records}
-        # Correct columns + org scoping on the produced records.
+        # Only the two unambiguous merge-keyword commits are linked.
         assert by_commit["aaa111"].pr_number == 42
         assert by_commit["aaa111"].repo_id == repo_id
-        assert by_commit["bbb222"].pr_number == 7
+        assert by_commit["ggg777"].pr_number == 45
+        assert "bbb222" not in by_commit
         for record in records:
             assert record.provenance == "explicit_text"
             assert record.confidence == 0.9
@@ -332,7 +343,7 @@ class TestDerivePRCommitLinks:
             {
                 "repo_id": repo_id,
                 "hash": "ccc333",
-                "message": "Fix flake (#99)",
+                "message": "Merge pull request #99 from fix/flake",
                 "author_when": datetime(2024, 1, 1, tzinfo=timezone.utc),
             },
         ]
@@ -413,6 +424,38 @@ class TestDerivePRCommitLinks:
         assert count == 0
         fake_sink.write_work_graph_pr_commit.assert_not_called()
 
+    def test_squash_paren_ref_colliding_with_pr_number_is_not_linked(self):
+        """A parenthetical ``(#N)`` issue ref must NOT be linked to PR #N.
+
+        Primary CHAOS-2375 round-2 corruption case: "Fix parser edge case (#42)"
+        is a hand-authored issue reference, but the squash convention produces the
+        identical "<subject> (#42)" shape. With PR #42 present in the same repo,
+        the old ``SQUASH_PR_PATTERN`` would have attached this unrelated commit to
+        PR #42. The fix drops the squash form, so no link is written.
+        """
+        repo_id = uuid.uuid4()
+        pr_rows = [{"repo_id": repo_id, "number": 42}]
+        commit_rows = [
+            {
+                "repo_id": repo_id,
+                "hash": "f00d42",
+                "message": "Fix parser edge case (#42)",
+                "author_when": datetime(2024, 1, 1, tzinfo=timezone.utc),
+            },
+        ]
+        fake_sink = self._build_sink(pr_rows, commit_rows)
+
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default")
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            count = builder._derive_pr_commit_links()
+            builder.close()
+
+        assert count == 0
+        fake_sink.write_work_graph_pr_commit.assert_not_called()
+
     def test_build_invokes_derivation_before_fast_path(self):
         """build() must derive PR->commit links so the fast path is non-empty."""
         repo_id = uuid.uuid4()
@@ -421,7 +464,7 @@ class TestDerivePRCommitLinks:
             {
                 "repo_id": repo_id,
                 "hash": "eee555",
-                "message": "Ship it (#3)",
+                "message": "Merge pull request #3 from team/ship-it",
                 "author_when": datetime(2024, 1, 1, tzinfo=timezone.utc),
             },
         ]

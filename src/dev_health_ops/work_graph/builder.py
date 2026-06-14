@@ -1334,11 +1334,16 @@ class WorkGraphBuilder:
         ``git_pull_requests`` and ``git_commits`` but never populates
         ``work_graph_pr_commit`` (only fixtures did), so the ``CONTAINS`` edges
         built by :meth:`_build_pr_commit_edges_from_fast_path` were empty for real
-        orgs. Here we parse merge/squash commit messages for the PR/MR numbers
-        GitHub and GitLab embed (``Merge pull request #N``, ``(#N)``, ``!N``) and,
-        when the referenced number matches a known PR in the same repo, persist a
-        ``WorkGraphPRCommit`` link. Re-running is idempotent: ``work_graph_pr_commit``
-        is a ReplacingMergeTree keyed on (org_id, repo_id, pr_number, commit_hash).
+        orgs. Here we parse merge commit messages for the PR/MR numbers GitHub and
+        GitLab embed via their explicit merge-keyword conventions
+        (``Merge pull request #N``, ``See merge request grp/proj!N``) and, when the
+        referenced number matches a known PR in the same repo, persist a
+        ``WorkGraphPRCommit`` link. Bare ``#N`` and squash ``(#N)`` forms are
+        deliberately *not* accepted: they are indistinguishable from ordinary issue
+        references and, with no persisted merge metadata to corroborate them, would
+        attach commits to unrelated PRs (see :func:`extract_pr_refs`). Re-running is
+        idempotent: ``work_graph_pr_commit`` is a ReplacingMergeTree keyed on
+        (org_id, repo_id, pr_number, commit_hash).
 
         Returns:
             Number of PR->commit links written.

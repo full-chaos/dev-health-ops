@@ -20,11 +20,19 @@ class TestExtractPRRefs:
     def test_github_merge_commit(self):
         assert extract_pr_refs("Merge pull request #123 from feat/x") == [123]
 
-    def test_squash_commit(self):
-        assert extract_pr_refs("Add retry logic (#42)") == [42]
-
     def test_gitlab_merge_request(self):
         assert extract_pr_refs("See merge request group/proj!45") == [45]
+
+    def test_squash_paren_form_is_not_a_pr_ref(self):
+        """GitHub squash ``(#N)`` is indistinguishable from a hand-authored issue
+        reference, so it must NOT be promoted into a PR/MR link.
+
+        Regression guard for CHAOS-2375 round-2: "Fix parser edge case (#42)" is
+        an ordinary parenthetical issue mention; treating it as PR #42 evidence
+        attaches the commit to an unrelated PR and corrupts the work graph.
+        """
+        assert extract_pr_refs("Add retry logic (#42)") == []
+        assert extract_pr_refs("Fix parser edge case (#42)") == []
 
     def test_plain_hash_mention_is_not_a_pr_ref(self):
         """A bare '#N' is an issue reference, not a PR/MR -- must be ignored."""
@@ -38,11 +46,21 @@ class TestExtractPRRefs:
         assert extract_pr_refs("!45 standalone") == []
 
     def test_dedupes_in_first_seen_order(self):
-        # Only PR/MR-specific forms count: "Merge pull request #9" and "(#9)"
-        # both reference PR 9; the trailing bare "#3" is an issue ref and dropped.
+        # Only explicit merge-keyword forms count. "Merge pull request #9"
+        # references PR 9; the squash "(#9)" and trailing bare "#3" are ambiguous
+        # issue-style refs and are dropped.
         assert extract_pr_refs("Merge pull request #9\nfollow-up to (#9) and #3") == [
             9,
         ]
+
+    def test_only_merge_keyword_forms_in_mixed_message(self):
+        """A message mixing a real merge ref with squash/issue noise yields only
+        the merge-keyword PR number."""
+        msg = (
+            "Merge pull request #88 from team/feature\n\n"
+            "Implements thing (#42)\nCloses #7\nSee merge request grp/proj!12"
+        )
+        assert extract_pr_refs(msg) == [88, 12]
 
     def test_empty(self):
         assert extract_pr_refs("") == []

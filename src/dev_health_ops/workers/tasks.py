@@ -12,6 +12,7 @@ from dev_health_ops.workers.product_tasks import (
     sync_teams_to_analytics,
 )
 from dev_health_ops.workers.queue_monitor import monitor_queue_depths
+from dev_health_ops.workers.recommendations_tasks import run_recommendations_job
 from dev_health_ops.workers.report_scheduler import dispatch_scheduled_reports
 from dev_health_ops.workers.report_task import execute_saved_report
 from dev_health_ops.workers.sync_batch import (
@@ -82,6 +83,7 @@ __all__ = [
     "run_ingest_consumer",
     "run_investment_materialize",
     "run_product_telemetry_consumer",
+    "run_recommendations_job",
     "run_sync_config",
     "run_work_graph_build",
     "run_work_items_sync",

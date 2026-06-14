@@ -80,6 +80,14 @@ beat_schedule = {
         "schedule": crontab(hour=1, minute=0),
         "options": {"queue": "default"},
     },
+    # Runs after run-daily-metrics so recommendations evaluate against the
+    # freshly-computed daily signals (CHAOS-2373). Without this the live path
+    # for recommendations_daily never fires for real orgs.
+    "run-recommendations": {
+        "task": "dev_health_ops.workers.tasks.run_recommendations_job",
+        "schedule": crontab(hour=2, minute=0),
+        "options": {"queue": "metrics"},
+    },
     "sync-team-drift": {
         "task": "dev_health_ops.workers.tasks.sync_team_drift",
         "schedule": crontab(hour=2, minute=30),

@@ -13,7 +13,9 @@ Coverage:
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import MagicMock
 from uuid import UUID, uuid4
 
@@ -284,39 +286,97 @@ class TestAIAttributionMixin:
 
 
 # ---------------------------------------------------------------------------
-# 4. Deduplication: same natural key → idempotent re-insert
+# 4. Deduplication: ReplacingMergeTree ORDER-BY (dedup) key
+#
+# The base table is ReplacingMergeTree(computed_at) with ORDER BY
+#   (org_id, provider, subject_type, repo_id, subject_id, source)
+# (migration 044 added repo_id BEFORE subject_id). These tests model the
+# *dedup key* itself — which tuples collapse and which survive — rather than
+# only asserting the sink forwarded rows. A row survives a server-side merge
+# iff it has a UNIQUE dedup tuple. The live counterpart that actually runs
+# OPTIMIZE FINAL is tests/storage/test_ai_attribution_repo_dedup_live.py.
 # ---------------------------------------------------------------------------
 
+#: Column subset that makes up the ReplacingMergeTree ORDER BY (dedup) key.
+_DEDUP_KEY_COLUMNS = (
+    "org_id",
+    "provider",
+    "subject_type",
+    "repo_id",
+    "subject_id",
+    "source",
+)
 
-class TestDeduplication:
-    def test_same_source_two_inserts_both_sent_to_client(self) -> None:
-        """
-        The sink sends both rows; ReplacingMergeTree(computed_at) handles
-        dedup server-side — latest computed_at survives after OPTIMIZE.
-        """
-        sink = _FakeSink()
+
+def _dedup_key(record: AIAttributionRecord) -> tuple[object, ...]:
+    """Project a record onto the ai_attribution ReplacingMergeTree ORDER BY.
+
+    Two records collapse into one under ReplacingMergeTree iff this tuple is
+    equal. Derived from the inserted row (via _to_row) so it stays honest about
+    the actual persisted values, including repo_id.
+    """
+    d = _row_as_dict(_to_row(record))
+    return tuple(d[col] for col in _DEDUP_KEY_COLUMNS)
+
+
+class TestDeduplicationKey:
+    """Model the ReplacingMergeTree dedup key, not just the sink forwarding."""
+
+    def test_same_everything_same_source_collapses(self) -> None:
+        # Identical (org, provider, subject_type, repo, subject_id, source) →
+        # one dedup key → ReplacingMergeTree keeps only the latest row.
         rec1 = _make_record(confidence=0.7)
-        rec2 = _make_record(confidence=0.9)  # same subject_id, same source
-        sink.write_ai_attribution([rec1, rec2])
+        rec2 = _make_record(confidence=0.9)  # only computed_at/confidence differ
+        assert _dedup_key(rec1) == _dedup_key(rec2)
 
-        _, matrix = sink.client.insert.call_args.args
-        assert len(matrix) == 2
-        # Both rows share the same natural key components
-        d1, d2 = _row_as_dict(matrix[0]), _row_as_dict(matrix[1])
-        assert d1["subject_id"] == d2["subject_id"]
-        assert d1["source"] == d2["source"]
+    def test_different_sources_same_subject_are_distinct_keys(self) -> None:
+        # Different source → different dedup key → both rows survive (the view
+        # then resolves cross-source precedence at read time).
+        keys = {
+            _dedup_key(_make_record(source=s))
+            for s in (
+                AIAttributionSource.PR_LABEL,
+                AIAttributionSource.COMMIT_TRAILER,
+                AIAttributionSource.BOT_AUTHOR,
+            )
+        }
+        assert len(keys) == 3
 
-    def test_different_sources_same_subject_all_persisted(self) -> None:
-        sink = _FakeSink()
-        records = [
-            _make_record(source=AIAttributionSource.PR_LABEL),
-            _make_record(source=AIAttributionSource.COMMIT_TRAILER),
-            _make_record(source=AIAttributionSource.BOT_AUTHOR),
-        ]
-        sink.write_ai_attribution(records)
-        _, matrix = sink.client.insert.call_args.args
-        sources = {_row_as_dict(row)["source"] for row in matrix}
-        assert sources == {"pr_label", "commit_trailer", "bot_author"}
+    def test_different_repo_same_subject_same_source_are_distinct_keys(self) -> None:
+        """CHAOS-2379 regression (the exact lossy case), modeled on the key.
+
+        Same org + same bare repo-local subject_id + SAME source, only repo_id
+        differs. BEFORE migration 044 (repo_id absent from ORDER BY) these two
+        rows shared a dedup key and one was permanently collapsed by
+        ReplacingMergeTree, silently dropping one repo's AI attribution. With
+        repo_id in the key, the tuples differ and BOTH survive.
+        """
+        repo_a = uuid4()
+        repo_b = uuid4()
+        rec_a = _make_record(source=AIAttributionSource.PR_LABEL, subject_id="1")
+        rec_a.repo_id = repo_a
+        rec_b = _make_record(source=AIAttributionSource.PR_LABEL, subject_id="1")
+        rec_b.repo_id = repo_b
+
+        key_a, key_b = _dedup_key(rec_a), _dedup_key(rec_b)
+        assert key_a != key_b, (
+            "two repos sharing org+subject_id+source must have DISTINCT dedup "
+            "keys so ReplacingMergeTree keeps both rows (CHAOS-2379)"
+        )
+        # repo_id is the discriminator and it precedes subject_id in the key.
+        assert _DEDUP_KEY_COLUMNS.index("repo_id") < _DEDUP_KEY_COLUMNS.index(
+            "subject_id"
+        )
+
+    def test_repo_pinned_vs_repo_less_are_distinct_keys(self) -> None:
+        # repo_id NULL (work-item-level) vs a concrete repo_id are different
+        # keys, so a repo-less row never collapses a repo-pinned one sharing a
+        # subject_id (and vice versa).
+        pinned = _make_record(source=AIAttributionSource.PR_LABEL, subject_id="1")
+        pinned.repo_id = uuid4()
+        repo_less = _make_record(source=AIAttributionSource.PR_LABEL, subject_id="1")
+        repo_less.repo_id = None
+        assert _dedup_key(pinned) != _dedup_key(repo_less)
 
 
 # ---------------------------------------------------------------------------
@@ -373,9 +433,13 @@ def _resolve_effective(records: list[AIAttributionRecord]) -> AIAttributionRecor
 
     Mirrors the SQL:
         QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY org_id, subject_type, subject_id
+            PARTITION BY org_id, subject_type, repo_id, subject_id
             ORDER BY _source_priority ASC, confidence DESC
         ) = 1
+
+    These callers pass records that all share a single resolution partition,
+    so this returns the single winner. Use :func:`_resolve_all` to simulate the
+    full per-partition view output (CHAOS-2379 repo-scope, migration 043).
     """
     active = [r for r in records if r.superseded_by is None]
     if not active:
@@ -384,6 +448,27 @@ def _resolve_effective(records: list[AIAttributionRecord]) -> AIAttributionRecor
         active,
         key=lambda r: (SOURCE_PRECEDENCE.get(r.source, 99), -r.confidence),
     )
+
+
+def _resolve_all(
+    records: list[AIAttributionRecord],
+) -> list[AIAttributionRecord]:
+    """Per-partition resolution mirroring migration 043's view.
+
+    Partition key: (org_id, subject_type, repo_id, subject_id). `repo_id` is
+    part of the key because PR/MR subject ids are repo-local — two repos that
+    share a subject id must each surface their own winning row, never collapse
+    into one.
+    """
+    active = [r for r in records if r.superseded_by is None]
+    partitions: dict[tuple[object, str, object, str], list[AIAttributionRecord]] = {}
+    for r in active:
+        key = (r.org_id, r.subject_type, r.repo_id, r.subject_id)
+        partitions.setdefault(key, []).append(r)
+    return [
+        min(rows, key=lambda r: (SOURCE_PRECEDENCE.get(r.source, 99), -r.confidence))
+        for rows in partitions.values()
+    ]
 
 
 class TestResolvedViewPrecedence:
@@ -450,3 +535,231 @@ class TestResolvedViewPrecedence:
     def test_precedence_values_are_unique(self) -> None:
         values = list(SOURCE_PRECEDENCE.values())
         assert len(values) == len(set(values)), "Duplicate precedence values found"
+
+
+# ---------------------------------------------------------------------------
+# 7. Repo-scoped resolution — cross-repo subject_id collision (CHAOS-2379)
+# ---------------------------------------------------------------------------
+
+
+class TestResolvedViewRepoScope:
+    """Migration 043: PR/MR subject ids are repo-local, so two repos in one org
+    that share the same subject_id (e.g. both have PR/MR #1) must each surface
+    their own resolved row. The pre-043 partition (org, subject_type,
+    subject_id) collapsed them to ONE, silently dropping the second repo's AI
+    MR from governance coverage and impact. This simulates the view's partition
+    key and proves both repos survive.
+    """
+
+    def test_two_repos_same_subject_id_both_survive(self) -> None:
+        repo_a = uuid4()
+        repo_b = uuid4()
+        # Two GitLab repos in the SAME org both have MR !1 attributed as AI.
+        rec_a = AIAttributionRecord(
+            org_id=ORG,
+            provider="gitlab",
+            subject_type="pull_request",
+            subject_id="1",
+            repo_id=repo_a,
+            kind=AIAttributionKind.AI_ASSISTED,
+            source=AIAttributionSource.PR_LABEL,
+            confidence=0.9,
+            actor=None,
+            evidence={"label": "ai-assisted"},
+            observed_at=NOW,
+        )
+        rec_b = AIAttributionRecord(
+            org_id=ORG,
+            provider="gitlab",
+            subject_type="pull_request",
+            subject_id="1",
+            repo_id=repo_b,
+            kind=AIAttributionKind.AGENT_CREATED,
+            source=AIAttributionSource.BOT_AUTHOR,
+            confidence=0.85,
+            actor="claude-code[bot]",
+            evidence={"login": "claude-code[bot]"},
+            observed_at=NOW,
+        )
+        resolved = _resolve_all([rec_a, rec_b])
+        # BOTH repos' attribution rows survive — neither is collapsed away.
+        survivors = {(r.repo_id, r.subject_id) for r in resolved}
+        assert survivors == {(repo_a, "1"), (repo_b, "1")}
+        assert len(resolved) == 2
+
+    def test_same_repo_same_subject_still_resolves_to_one(self) -> None:
+        # Within ONE repo, cross-source precedence still collapses to a single
+        # winner — repo-scoping does NOT weaken intra-repo dedup.
+        repo = uuid4()
+        weak = AIAttributionRecord(
+            org_id=ORG,
+            provider="gitlab",
+            subject_type="pull_request",
+            subject_id="1",
+            repo_id=repo,
+            kind=AIAttributionKind.AI_ASSISTED,
+            source=AIAttributionSource.PR_BODY,
+            confidence=0.95,
+            actor=None,
+            evidence={},
+            observed_at=NOW,
+        )
+        strong = AIAttributionRecord(
+            org_id=ORG,
+            provider="gitlab",
+            subject_type="pull_request",
+            subject_id="1",
+            repo_id=repo,
+            kind=AIAttributionKind.AI_ASSISTED,
+            source=AIAttributionSource.PR_LABEL,
+            confidence=0.5,
+            actor=None,
+            evidence={"label": "ai-assisted"},
+            observed_at=NOW,
+        )
+        resolved = _resolve_all([weak, strong])
+        assert len(resolved) == 1
+        assert resolved[0].source == AIAttributionSource.PR_LABEL
+
+    def test_repo_pinned_and_repo_less_do_not_collapse(self) -> None:
+        # A repo-less (work-item-level) attribution and a repo-pinned one that
+        # share a subject_id are DIFFERENT partitions (repo_id NULL vs a UUID),
+        # so neither suppresses the other.
+        repo = uuid4()
+        pinned = AIAttributionRecord(
+            org_id=ORG,
+            provider="github",
+            subject_type="pull_request",
+            subject_id="1",
+            repo_id=repo,
+            kind=AIAttributionKind.AI_ASSISTED,
+            source=AIAttributionSource.PR_LABEL,
+            confidence=0.9,
+            actor=None,
+            evidence={},
+            observed_at=NOW,
+        )
+        repo_less = AIAttributionRecord(
+            org_id=ORG,
+            provider="github",
+            subject_type="pull_request",
+            subject_id="1",
+            repo_id=None,
+            kind=AIAttributionKind.AI_ASSISTED,
+            source=AIAttributionSource.MANUAL,
+            confidence=0.99,
+            actor=None,
+            evidence={},
+            observed_at=NOW,
+        )
+        resolved = _resolve_all([pinned, repo_less])
+        repo_ids = {r.repo_id for r in resolved}
+        assert repo_ids == {repo, None}
+        assert len(resolved) == 2
+
+
+# ---------------------------------------------------------------------------
+# 8. Migration-shape assertions — base-table dedup key (CHAOS-2379, migration 044)
+#
+# These read the actual migration SQL the runner applies and assert the
+# ai_attribution ReplacingMergeTree ORDER BY puts repo_id BEFORE subject_id.
+# Migration 035 keyed only on (org_id, provider, subject_type, subject_id,
+# source); migration 044 must add repo_id so two repos sharing a bare
+# repo-local subject_id do not collapse at the base table.
+# ---------------------------------------------------------------------------
+
+# The runner resolves migrations as parents[1] of storage/clickhouse.py, i.e.
+# src/dev_health_ops/migrations/clickhouse — mirror that here so the test reads
+# the SAME files the runner executes (not a stale top-level copy).
+_MIGRATIONS_DIR = (
+    Path(__file__).resolve().parents[2]
+    / "src"
+    / "dev_health_ops"
+    / "migrations"
+    / "clickhouse"
+)
+
+
+def _strip_sql_comments(sql: str) -> str:
+    """Drop '--' line comments so ORDER BY parsing ignores documentation."""
+    return "\n".join(line.split("--", 1)[0] for line in sql.splitlines())
+
+
+class TestAiAttributionMigrationShape:
+    def test_migration_044_exists(self) -> None:
+        matches = list(_MIGRATIONS_DIR.glob("044_*.sql"))
+        assert matches, (
+            f"expected an 044_*.sql migration in {_MIGRATIONS_DIR} "
+            "(CHAOS-2379 base-table dedup key fix)"
+        )
+
+    def test_order_by_has_repo_id_before_subject_id(self) -> None:
+        matches = list(_MIGRATIONS_DIR.glob("044_*.sql"))
+        assert matches
+        sql = _strip_sql_comments(matches[0].read_text(encoding="utf-8"))
+
+        # The rebuild creates ai_attribution_new with the corrected ORDER BY.
+        m = re.search(r"ORDER BY\s*\(([^)]*)\)", sql, flags=re.IGNORECASE)
+        assert m, "migration 044 must declare an ORDER BY tuple for the rebuild"
+        cols = [c.strip() for c in m.group(1).split(",")]
+
+        assert "repo_id" in cols, f"repo_id missing from ORDER BY: {cols}"
+        assert "subject_id" in cols, f"subject_id missing from ORDER BY: {cols}"
+        assert cols.index("repo_id") < cols.index("subject_id"), (
+            f"repo_id must precede subject_id in the dedup key, got {cols}"
+        )
+        # Full expected key for the rebuilt base table.
+        assert cols == [
+            "org_id",
+            "provider",
+            "subject_type",
+            "repo_id",
+            "subject_id",
+            "source",
+        ], f"unexpected ai_attribution dedup key: {cols}"
+
+    def test_nullable_repo_id_key_requires_allow_nullable_key(self) -> None:
+        # repo_id is Nullable(UUID) and now in the ORDER BY. ClickHouse rejects
+        # a Nullable sorting-key column unless allow_nullable_key = 1, so the
+        # rebuilt CREATE TABLE must set it or the migration fails at apply time.
+        matches = list(_MIGRATIONS_DIR.glob("044_*.sql"))
+        assert matches
+        sql = _strip_sql_comments(matches[0].read_text(encoding="utf-8"))
+        assert re.search(r"allow_nullable_key\s*=\s*1", sql, flags=re.IGNORECASE), (
+            "migration 044 puts Nullable repo_id in the ORDER BY, so the "
+            "rebuilt table MUST set allow_nullable_key = 1 or ClickHouse "
+            "rejects the CREATE"
+        )
+
+    def test_rebuild_swaps_atomically_and_drops_temp(self) -> None:
+        matches = list(_MIGRATIONS_DIR.glob("044_*.sql"))
+        assert matches
+        sql = _strip_sql_comments(matches[0].read_text(encoding="utf-8"))
+        upper = sql.upper()
+        # Atomic swap via EXCHANGE TABLES, then drop the parked old table.
+        assert "EXCHANGE TABLES" in upper, (
+            "migration 044 must swap the rebuilt table in atomically "
+            "(EXCHANGE TABLES) so readers never see a missing ai_attribution"
+        )
+        assert "AI_ATTRIBUTION_NEW" in upper, (
+            "migration 044 should build into a _new table then swap"
+        )
+        assert "DROP TABLE" in upper, (
+            "migration 044 should drop the parked old table after the swap"
+        )
+
+    def test_no_semicolons_inside_comments(self) -> None:
+        # The runner splits on ';'; a ';' inside a '--' comment would create a
+        # spurious statement chunk. Assert every ';' sits outside comments.
+        matches = list(_MIGRATIONS_DIR.glob("044_*.sql"))
+        assert matches
+        raw = matches[0].read_text(encoding="utf-8")
+        for i, line in enumerate(raw.splitlines(), start=1):
+            comment_idx = line.find("--")
+            if comment_idx == -1:
+                continue
+            comment = line[comment_idx:]
+            assert ";" not in comment, (
+                f"semicolon inside a comment on line {i} would break the "
+                f"migration runner's ';' split: {line.strip()!r}"
+            )

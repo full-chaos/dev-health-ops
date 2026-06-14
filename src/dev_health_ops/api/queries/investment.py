@@ -7,6 +7,14 @@ from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 from .client import query_dicts
 
+# NOTE: This CTE MUST stay tenant-scoped. The ReplacingMergeTree dedup key for
+# work_unit_investments is (org_id, work_unit_id) (migration 027), so org_id is
+# part of the row identity. We filter org_id BEFORE aggregating and group by
+# (org_id, work_unit_id); otherwise two tenants sharing a provider-native
+# work_unit_id collapse into a single argMax row and the outer
+# `WHERE org_id = %(org_id)s` drops the losing tenant's data entirely
+# (cross-org leak / undercount — CHAOS-2374). Every consumer of this CTE already
+# supplies the `org_id` query param.
 LATEST_WORK_UNIT_INVESTMENTS_CTE = """
         latest_work_unit_investments AS (
             SELECT
@@ -26,10 +34,11 @@ LATEST_WORK_UNIT_INVESTMENTS_CTE = """
                 argMax(evidence_quality_band, computed_at) AS evidence_quality_band,
                 argMax(categorization_status, computed_at) AS categorization_status,
                 argMax(categorization_run_id, computed_at) AS categorization_run_id,
-                argMax(org_id, computed_at) AS org_id,
+                org_id,
                 max(computed_at) AS computed_at
             FROM work_unit_investments
-            GROUP BY work_unit_id
+            WHERE org_id = %(org_id)s
+            GROUP BY org_id, work_unit_id
         )
 """.rstrip()
 

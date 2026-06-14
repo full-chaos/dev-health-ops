@@ -10,7 +10,106 @@ from dev_health_ops.work_graph.extractors.text_parser import (
     extract_github_issue_refs,
     extract_gitlab_issue_refs,
     extract_jira_keys,
+    extract_pr_refs,
 )
+
+
+class TestExtractPRRefs:
+    """Tests for PR/MR number extraction from commit messages."""
+
+    def test_github_merge_commit(self):
+        assert extract_pr_refs("Merge pull request #123 from feat/x") == [123]
+
+    def test_gitlab_merge_request(self):
+        assert extract_pr_refs("See merge request group/proj!45") == [45]
+
+    def test_squash_paren_form_is_not_a_pr_ref(self):
+        """GitHub squash ``(#N)`` is indistinguishable from a hand-authored issue
+        reference, so it must NOT be promoted into a PR/MR link.
+
+        Regression guard for CHAOS-2375 round-2: "Fix parser edge case (#42)" is
+        an ordinary parenthetical issue mention; treating it as PR #42 evidence
+        attaches the commit to an unrelated PR and corrupts the work graph.
+        """
+        assert extract_pr_refs("Add retry logic (#42)") == []
+        assert extract_pr_refs("Fix parser edge case (#42)") == []
+
+    def test_plain_hash_mention_is_not_a_pr_ref(self):
+        """A bare '#N' is an issue reference, not a PR/MR -- must be ignored."""
+        assert extract_pr_refs("Relates to #7") == []
+        assert extract_pr_refs("Fixes #7") == []
+        assert extract_pr_refs("Closes issue #500, unrelated to any PR") == []
+
+    def test_bare_bang_mention_is_not_a_pr_ref(self):
+        """A bare '!N' without merge-request context must be ignored."""
+        assert extract_pr_refs("yikes! 5 things broke") == []
+        assert extract_pr_refs("!45 standalone") == []
+
+    def test_dedupes_in_first_seen_order(self):
+        # Only explicit merge-keyword forms count. "Merge pull request #9"
+        # references PR 9; the squash "(#9)" and trailing bare "#3" are ambiguous
+        # issue-style refs and are dropped.
+        assert extract_pr_refs("Merge pull request #9\nfollow-up to (#9) and #3") == [
+            9,
+        ]
+
+    def test_only_merge_keyword_forms_in_mixed_message(self):
+        """A message mixing a real merge ref with squash/issue noise yields only
+        the merge-keyword PR number."""
+        msg = (
+            "Merge pull request #88 from team/feature\n\n"
+            "Implements thing (#42)\nCloses #7\nSee merge request grp/proj!12"
+        )
+        assert extract_pr_refs(msg) == [88, 12]
+
+    def test_github_revert_commit_is_not_a_pr_ref(self):
+        """A revert of a GitHub merge commit must yield no PR refs.
+
+        Regression guard for CHAOS-2375 round-3: ``Revert "Merge pull request
+        #42 ..."`` quotes the reverted PR's merge subject verbatim but is a later
+        *undo* commit, not a commit contained by PR #42. Promoting it would
+        attribute the revert's changes back to the original PR.
+        """
+        assert extract_pr_refs('Revert "Merge pull request #42 from team/x"') == []
+        assert (
+            extract_pr_refs(
+                'Revert "Merge pull request #42 from team/x"\n\n'
+                "This reverts commit 0123abcd."
+            )
+            == []
+        )
+
+    def test_gitlab_revert_commit_is_not_a_pr_ref(self):
+        """A revert of a GitLab merge commit must yield no MR refs."""
+        assert extract_pr_refs('Revert "See merge request grp/proj!45"') == []
+        assert (
+            extract_pr_refs("Undo the change\n\nThis reverts merge request !45") == []
+        )
+
+    def test_revert_body_marker_without_revert_subject(self):
+        """A body carrying git's ``This reverts commit`` marker is a revert even
+        if the subject was hand-edited to mention the merge."""
+        msg = (
+            "Roll back flaky feature\n\n"
+            "This reverts commit deadbeef.\n"
+            "Originally landed via Merge pull request #88 from team/feature"
+        )
+        assert extract_pr_refs(msg) == []
+
+    def test_word_revert_inside_merge_subject_still_links(self):
+        """A real merge whose branch/subject merely contains the word 'revert'
+        must still link -- the guard is anchored to revert *commit* shapes, not
+        any occurrence of the word."""
+        assert extract_pr_refs(
+            "Merge pull request #5 from team/revert-flag-default"
+        ) == [5]
+
+    def test_revert_with_leading_whitespace_is_rejected(self):
+        assert extract_pr_refs('   Revert "Merge pull request #42 from team/x"') == []
+
+    def test_empty(self):
+        assert extract_pr_refs("") == []
+        assert extract_pr_refs("no refs here") == []
 
 
 class TestExtractJiraKeys:

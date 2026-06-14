@@ -125,10 +125,7 @@ def _cmd_recommendations_compute(ns: argparse.Namespace) -> int:
     from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
     from dev_health_ops.recommendations import registry as recommendations_registry
     from dev_health_ops.recommendations.engine import RuleEngine
-    from dev_health_ops.recommendations.loader import (
-        ClickHouseMetricsLoader,
-        recommendation_to_record,
-    )
+    from dev_health_ops.recommendations.loader import ClickHouseMetricsLoader
 
     analytics_db = getattr(ns, "analytics_db", None) or os.getenv("CLICKHOUSE_URI", "")
     if not analytics_db:
@@ -157,33 +154,33 @@ def _cmd_recommendations_compute(ns: argparse.Namespace) -> int:
     engine = RuleEngine(registry=recommendations_registry, loader=loader, now=now)
 
     try:
-        recommendations = engine.evaluate_all(
-            team_id=team_id, window=window, org_id=org_id
-        )
+        # Full state: fired recommendations AND explicit fired=False tombstones
+        # so a recovered signal is cleared, not left lingering (CHAOS-2373).
+        records = engine.evaluate_state(team_id=team_id, window=window, org_id=org_id)
     except Exception as exc:
         logging.getLogger(__name__).error(
             "Recommendations evaluation failed for team=%r: %s", team_id, exc
         )
         return 1
 
-    sink.write_recommendations(
-        [recommendation_to_record(rec) for rec in recommendations]
-    )
+    sink.write_recommendations(records)
     sink.close()
 
+    fired = [r for r in records if r.fired]
     log = logging.getLogger(__name__)
     log.info(
-        "recommendations compute: team=%r window=%s fired=%d",
+        "recommendations compute: team=%r window=%s fired=%d rows=%d",
         team_id,
         window,
-        len(recommendations),
+        len(fired),
+        len(records),
     )
     if getattr(ns, "output_json", False):
         import sys
         from dataclasses import asdict
 
         print(
-            json.dumps([asdict(r) for r in recommendations], default=str),
+            json.dumps([asdict(r) for r in fired], default=str),
             file=sys.stdout,
         )
     return 0
@@ -327,6 +324,220 @@ def _should_resolve_org(ns: argparse.Namespace) -> bool:
         and getattr(ns, "migrate_command", None) == "clickhouse"
         and getattr(ns, "ch_command", None) == "repair"
     )
+
+
+# ---------------------------------------------------------------------------
+# Preflight requirement checks
+# ---------------------------------------------------------------------------
+# Many subcommands need a database connection (ClickHouse and/or PostgreSQL)
+# and/or an organization id that are supplied via *global* flags or env vars
+# (``--analytics-db``/``CLICKHOUSE_URI``, ``--db``/``POSTGRES_URI``,
+# ``--org``/``ORG_ID``). Because these are global+env, individual subparsers
+# cannot mark them ``required=True``. Without a preflight, such commands fail
+# deep inside their handler with a logged error or a raw traceback (exit 1)
+# instead of a fast argparse-style usage error (exit 2).
+#
+# Each leaf command declares the inputs it needs in ``_COMMAND_REQUIREMENTS``;
+# ``run_preflight_checks`` resolves them the same way the handlers do and calls
+# ``parser.error(...)`` so the user gets a usage message naming exactly what is
+# missing. The same requirements are appended to each command's ``--help``.
+_REQ_CLICKHOUSE = "clickhouse"
+_REQ_POSTGRES = "postgres"
+_REQ_ORG = "org"
+# ClickHouse supplied via a command's own ``--db`` flag (not the global
+# ``--analytics-db``). Used by commands like ``investment materialize`` whose
+# ``--db`` carries the ClickHouse DSN (default: CLICKHOUSE_URI).
+_REQ_SINK_DB = "sink_db"
+
+# Stable display order for messages/epilogs.
+_REQUIREMENT_ORDER: tuple[str, ...] = (
+    _REQ_CLICKHOUSE,
+    _REQ_POSTGRES,
+    _REQ_ORG,
+    _REQ_SINK_DB,
+)
+
+_COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
+    # --- metrics (ClickHouse analytics store) ---
+    ("metrics", "daily"): frozenset({_REQ_CLICKHOUSE}),
+    ("metrics", "dora"): frozenset({_REQ_CLICKHOUSE}),
+    ("metrics", "complexity"): frozenset({_REQ_CLICKHOUSE}),
+    ("metrics", "release-impact"): frozenset({_REQ_CLICKHOUSE}),
+    ("metrics", "validate-flags"): frozenset({_REQ_CLICKHOUSE}),
+    ("metrics", "rebuild"): frozenset({_REQ_CLICKHOUSE}),
+    ("metrics", "compounding-risk"): frozenset({_REQ_CLICKHOUSE, _REQ_ORG}),
+    # capacity takes its ClickHouse DSN via its own required --db flag.
+    ("metrics", "capacity"): frozenset({_REQ_SINK_DB}),
+    # --- sync (persist to ClickHouse analytics store) ---
+    ("sync", "git"): frozenset({_REQ_CLICKHOUSE}),
+    ("sync", "prs"): frozenset({_REQ_CLICKHOUSE}),
+    ("sync", "blame"): frozenset({_REQ_CLICKHOUSE}),
+    ("sync", "cicd"): frozenset({_REQ_CLICKHOUSE}),
+    ("sync", "deployments"): frozenset({_REQ_CLICKHOUSE}),
+    ("sync", "incidents"): frozenset({_REQ_CLICKHOUSE}),
+    ("sync", "security"): frozenset({_REQ_CLICKHOUSE}),
+    ("sync", "tests"): frozenset({_REQ_CLICKHOUSE}),
+    ("sync", "work-items"): frozenset({_REQ_CLICKHOUSE}),
+    ("sync", "teams"): frozenset({_REQ_CLICKHOUSE}),
+    # --- audit (read ClickHouse analytics store) ---
+    ("audit", "perf"): frozenset({_REQ_CLICKHOUSE}),
+    ("audit", "schema"): frozenset({_REQ_CLICKHOUSE}),
+    # --- other ClickHouse-backed commands ---
+    ("recommendations", "compute"): frozenset({_REQ_CLICKHOUSE}),
+    ("investment", "materialize"): frozenset({_REQ_SINK_DB}),
+    ("ai", "allowlist", "list"): frozenset({_REQ_CLICKHOUSE, _REQ_ORG}),
+    ("ai", "allowlist", "set"): frozenset({_REQ_CLICKHOUSE, _REQ_ORG}),
+    # --- PostgreSQL semantic store ---
+    ("admin", "users", "create"): frozenset({_REQ_POSTGRES}),
+    ("admin", "users", "list"): frozenset({_REQ_POSTGRES}),
+    ("admin", "users", "update"): frozenset({_REQ_POSTGRES}),
+    ("admin", "orgs", "create"): frozenset({_REQ_POSTGRES}),
+    ("admin", "orgs", "delete"): frozenset({_REQ_POSTGRES}),
+    ("admin", "orgs", "list"): frozenset({_REQ_POSTGRES}),
+    ("admin", "features", "seed"): frozenset({_REQ_POSTGRES}),
+    ("admin", "billing", "seed"): frozenset({_REQ_POSTGRES}),
+    ("admin", "billing", "list"): frozenset({_REQ_POSTGRES}),
+    ("admin", "billing", "pull-stripe"): frozenset({_REQ_POSTGRES}),
+    ("admin", "billing", "sync-stripe"): frozenset({_REQ_POSTGRES}),
+    ("admin", "bundles", "create"): frozenset({_REQ_POSTGRES}),
+    ("admin", "bundles", "list"): frozenset({_REQ_POSTGRES}),
+    ("admin", "bundles", "assign-plan"): frozenset({_REQ_POSTGRES}),
+    ("admin", "bundles", "assign-org"): frozenset({_REQ_POSTGRES}),
+    ("billing", "reconcile"): frozenset({_REQ_POSTGRES}),
+    ("backfill", "run"): frozenset({_REQ_ORG}),
+    # --- migrations that connect to a live database ---
+    ("migrate", "clickhouse", "upgrade"): frozenset({_REQ_CLICKHOUSE}),
+    ("migrate", "clickhouse", "status"): frozenset({_REQ_CLICKHOUSE}),
+    ("migrate", "clickhouse", "repair"): frozenset({_REQ_CLICKHOUSE}),
+    ("migrate", "postgres", "upgrade"): frozenset({_REQ_POSTGRES}),
+    ("migrate", "postgres", "downgrade"): frozenset({_REQ_POSTGRES}),
+    ("migrate", "postgres", "current"): frozenset({_REQ_POSTGRES}),
+    ("migrate", "upgrade"): frozenset({_REQ_POSTGRES}),
+    ("migrate", "downgrade"): frozenset({_REQ_POSTGRES}),
+    ("migrate", "current"): frozenset({_REQ_POSTGRES}),
+    # Bare ``migrate postgres`` / ``migrate clickhouse`` default to upgrade.
+    ("migrate", "postgres"): frozenset({_REQ_POSTGRES}),
+    ("migrate", "clickhouse"): frozenset({_REQ_CLICKHOUSE}),
+}
+
+_REQUIREMENT_MESSAGES: dict[str, str] = {
+    _REQ_CLICKHOUSE: (
+        "ClickHouse analytics database \u2014 pass --analytics-db or set CLICKHOUSE_URI "
+        "(e.g. clickhouse://ch:ch@localhost:8123/default)"
+    ),
+    _REQ_POSTGRES: (
+        "PostgreSQL semantic database \u2014 pass --db or set POSTGRES_URI/DATABASE_URI "
+        "(e.g. postgresql+asyncpg://user:pass@localhost:5432/devhealth)"
+    ),
+    _REQ_ORG: (
+        "organization id \u2014 pass --org or set ORG_ID "
+        "(could not auto-resolve one from the database)"
+    ),
+    _REQ_SINK_DB: (
+        "ClickHouse analytics database \u2014 pass --db or set CLICKHOUSE_URI "
+        "(e.g. clickhouse://ch:ch@localhost:8123/default)"
+    ),
+}
+
+_REQUIREMENT_HELP_LABELS: dict[str, str] = {
+    _REQ_CLICKHOUSE: "ClickHouse (--analytics-db / CLICKHOUSE_URI)",
+    _REQ_POSTGRES: "PostgreSQL (--db / POSTGRES_URI)",
+    _REQ_ORG: "organization (--org / ORG_ID)",
+    _REQ_SINK_DB: "ClickHouse (--db / CLICKHOUSE_URI)",
+}
+
+
+def _clickhouse_present(ns: argparse.Namespace) -> bool:
+    return bool(getattr(ns, "analytics_db", None) or os.getenv("CLICKHOUSE_URI"))
+
+
+def _clickhouse_value(ns: argparse.Namespace) -> str | None:
+    return getattr(ns, "analytics_db", None) or os.getenv("CLICKHOUSE_URI")
+
+
+def _postgres_present(ns: argparse.Namespace) -> bool:
+    return bool(
+        getattr(ns, "db", None)
+        or os.getenv("POSTGRES_URI")
+        or os.getenv("DATABASE_URI")
+        or os.getenv("DATABASE_URL")
+    )
+
+
+def _org_present(ns: argparse.Namespace) -> bool:
+    return bool(getattr(ns, "org", None) or os.getenv("ORG_ID"))
+
+
+def _sink_db_present(ns: argparse.Namespace) -> bool:
+    return bool(getattr(ns, "db", None) or os.getenv("CLICKHOUSE_URI"))
+
+
+def _sink_db_value(ns: argparse.Namespace) -> str | None:
+    return getattr(ns, "db", None) or os.getenv("CLICKHOUSE_URI")
+
+
+_REQUIREMENT_PRESENCE = {
+    _REQ_CLICKHOUSE: _clickhouse_present,
+    _REQ_POSTGRES: _postgres_present,
+    _REQ_ORG: _org_present,
+    _REQ_SINK_DB: _sink_db_present,
+}
+
+
+def missing_requirements(ns: argparse.Namespace) -> list[str]:
+    """Return human-readable messages for each unmet requirement of ``ns``."""
+    requires = getattr(ns, "_requires", None) or frozenset()
+    missing: list[str] = []
+    for token in _REQUIREMENT_ORDER:
+        if token in requires and not _REQUIREMENT_PRESENCE[token](ns):
+            missing.append(_REQUIREMENT_MESSAGES[token])
+    return missing
+
+
+def run_preflight_checks(
+    root_parser: argparse.ArgumentParser, ns: argparse.Namespace
+) -> None:
+    """Fast-fail with a usage error if the chosen command's inputs are missing."""
+    missing = missing_requirements(ns)
+    leaf = getattr(ns, "_leaf_parser", None) or root_parser
+    if missing:
+        leaf.error("missing required input(s):\n  - " + "\n  - ".join(missing))
+
+    requires = getattr(ns, "_requires", None) or frozenset()
+    from dev_health_ops.db import validate_sink_uri_scheme
+
+    try:
+        if _REQ_CLICKHOUSE in requires and (uri := _clickhouse_value(ns)):
+            validate_sink_uri_scheme(uri)
+        if _REQ_SINK_DB in requires and (uri := _sink_db_value(ns)):
+            validate_sink_uri_scheme(uri)
+    except ValueError as exc:
+        leaf.error(str(exc))
+
+
+def _attach_preflight_metadata(parser: argparse.ArgumentParser) -> None:
+    """Attach ``_leaf_parser``/``_requires`` defaults and a help epilog per leaf."""
+
+    def walk(p: argparse.ArgumentParser, path: tuple[str, ...]) -> None:
+        # Attach to any *dispatchable* parser (one that has a handler). This
+        # includes leaf commands and intermediate parsers that set a default
+        # ``func`` (e.g. bare ``migrate postgres`` -> upgrade), so those forms
+        # are guarded too. Always recurse so more-specific child commands can
+        # override the metadata on the same namespace.
+        if p.get_default("func") is not None:
+            requires = _COMMAND_REQUIREMENTS.get(path, frozenset())
+            p.set_defaults(_leaf_parser=p, _requires=requires)
+            labels = [
+                _REQUIREMENT_HELP_LABELS[t] for t in _REQUIREMENT_ORDER if t in requires
+            ]
+            if labels:
+                note = "Requires: " + ", ".join(labels) + "."
+                p.epilog = f"{p.epilog}\n\n{note}" if p.epilog else note
+        for sa in (a for a in p._actions if isinstance(a, argparse._SubParsersAction)):
+            for name, child in sa.choices.items():
+                walk(child, path + (name,))
+
+    walk(parser, ())
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -475,6 +686,7 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup_all_parser.set_defaults(func=_cmd_maintenance_cleanup_all)
 
     _propagate_global_args_to_subparsers(parser)
+    _attach_preflight_metadata(parser)
     return parser
 
 
@@ -496,6 +708,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if _should_resolve_org(ns):
         ns.org = _resolve_first_org_id(getattr(ns, "db", None))
+
+    run_preflight_checks(parser, ns)
 
     level_name = str(getattr(ns, "log_level", "") or "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)

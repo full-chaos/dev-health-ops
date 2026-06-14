@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 def _close_coroutine(coro):
     """Close a coroutine without awaiting it to suppress RuntimeWarning."""
     coro.close()
-    return None
+    return 1
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +81,7 @@ def _make_ns(
     ns.path = None
     ns.owner = None
     ns.auth = None
-    ns.org = None
+    ns.org = "org-1"
     return ns
 
 
@@ -108,6 +108,7 @@ class TestLinearTeamSync:
         mock_client = MagicMock()
         mock_client_class.from_env.return_value = mock_client
         mock_resolve_sink.return_value = "clickhouse://localhost:8123/default"
+        mock_bridge.return_value = 2
         mock_client.iter_teams.return_value = [
             _mock_linear_team(
                 key="ENG",
@@ -153,6 +154,7 @@ class TestLinearTeamSync:
         mock_client = MagicMock()
         mock_client_class.from_env.return_value = mock_client
         mock_resolve_sink.return_value = "clickhouse://localhost:8123/default"
+        mock_bridge.return_value = 1
         mock_client.iter_teams.return_value = [
             _mock_linear_team(key="ARCH", name="Archived Team", archived=True),
             _mock_linear_team(
@@ -187,6 +189,7 @@ class TestLinearTeamSync:
         mock_client = MagicMock()
         mock_client_class.from_env.return_value = mock_client
         mock_resolve_sink.return_value = "clickhouse://localhost:8123/default"
+        mock_bridge.return_value = 1
         mock_client.iter_teams.return_value = [
             _mock_linear_team(key="EMPTY", name="Empty Team", members=[]),
         ]
@@ -217,6 +220,7 @@ class TestLinearTeamSync:
         mock_client = MagicMock()
         mock_client_class.from_env.return_value = mock_client
         mock_resolve_sink.return_value = "clickhouse://localhost:8123/default"
+        mock_bridge.return_value = 1
 
         # Team with hasNextPage=True — only 1 member in initial nodes
         initial_member = _mock_member(name="Alice", email="alice@example.com")
@@ -278,6 +282,7 @@ class TestLinearTeamSync:
         mock_client = MagicMock()
         mock_client_class.from_env.return_value = mock_client
         mock_resolve_sink.return_value = "clickhouse://localhost:8123/default"
+        mock_bridge.return_value = 1
         mock_client.iter_teams.return_value = [
             _mock_linear_team(
                 key="ENG",

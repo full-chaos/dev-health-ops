@@ -42,13 +42,29 @@ async def fetch_cycle_breakdown(
 
     where_clause = " AND ".join(filters)
 
+    # CHAOS-2377: the daily job appends a fresh row per run to this plain
+    # MergeTree, so a re-run/backfill of the same day leaves duplicate rows.
+    # Dedup with argMax(..., computed_at) over the full natural key before
+    # summing, matching the operating_review reader. Summing raw rows would
+    # inflate flow weights and touched counts on every re-run.
     query = f"""
         SELECT
             status,
             sum(duration_hours) AS total_hours,
             sum(items_touched) AS total_items
-        FROM work_item_state_durations_daily
-        WHERE {where_clause}
+        FROM (
+            SELECT
+                day,
+                provider,
+                work_scope_id,
+                team_id,
+                status,
+                argMax(duration_hours, computed_at) AS duration_hours,
+                argMax(items_touched, computed_at) AS items_touched
+            FROM work_item_state_durations_daily
+            WHERE {where_clause}
+            GROUP BY day, provider, work_scope_id, team_id, status
+        )
         GROUP BY status
         ORDER BY total_hours DESC
     """

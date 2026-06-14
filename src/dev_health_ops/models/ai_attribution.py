@@ -7,7 +7,7 @@ and the full *record* persisted to ClickHouse.
 Source precedence (highest → lowest):
     MANUAL > PR_LABEL > BOT_AUTHOR > COMMIT_TRAILER > CI_ANNOTATION > BRANCH_NAME > PR_BODY
 
-Write-time: persist every detected signal, deduped on (subject, source).
+Write-time: persist every detected signal, deduped on (repo, subject, source).
 Read-time:  the ``ai_attribution_resolved`` view resolves the effective attribution.
 """
 
@@ -104,7 +104,10 @@ class AIAttributionRecord:
     read time via the ``ai_attribution_resolved`` view.
 
     Deduplication key (ClickHouse ORDER BY):
-        (org_id, provider, subject_type, subject_id, source)
+        (org_id, provider, subject_type, repo_id, subject_id, source)
+        repo_id is part of the key (migration 044) because subject_id is the
+        bare repo-local PR/MR number — two repos in one org sharing a subject_id
+        would otherwise collapse into one row under ReplacingMergeTree.
 
     Supersession:
         When a MANUAL record is created, ``superseded_by`` on earlier records

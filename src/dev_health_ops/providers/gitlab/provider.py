@@ -12,6 +12,7 @@ import os
 from dataclasses import replace
 from datetime import datetime
 
+from dev_health_ops.models.ai_attribution import AIAttributionRecord
 from dev_health_ops.models.work_items import (
     Sprint,
     WorkItem,
@@ -89,6 +90,7 @@ class GitLabProvider(ProviderWithClient[GitLabWorkClient]):
             gitlab_epic_to_work_item,
             gitlab_issue_to_work_item,
             gitlab_milestone_to_sprint,
+            gitlab_mr_ai_attributions,
             gitlab_mr_to_work_item,
             gitlab_note_to_interaction_event,
         )
@@ -103,6 +105,7 @@ class GitLabProvider(ProviderWithClient[GitLabWorkClient]):
         reopen_events: list[WorkItemReopenEvent] = []
         interactions: list[WorkItemInteractionEvent] = []
         sprints: list[Sprint] = []
+        ai_attributions: list[AIAttributionRecord] = []
 
         include_mrs = _env_flag("GITLAB_INCLUDE_MRS", True)
         fetch_notes = _env_flag("GITLAB_FETCH_NOTES", True)
@@ -367,6 +370,25 @@ class GitLabProvider(ProviderWithClient[GitLabWorkClient]):
                         )
                     )
 
+                    # Detect AI attribution signals for this MR and promote
+                    # them to records via the shared normalize helper, so this
+                    # provider path and the live fetch_gitlab_work_items sync
+                    # path emit byte-identical records to write_ai_attribution.
+                    if ctx.org_id is not None:
+                        mr_records = gitlab_mr_ai_attributions(
+                            mr=mr,
+                            project_full_path=project_path,
+                            org_id=ctx.org_id,
+                            repo_id=ctx.repo_id,
+                        )
+                        if mr_records:
+                            ai_attributions.extend(mr_records)
+                            logger.debug(
+                                "GitLab: detected %d AI attribution signal(s) for %s",
+                                len(mr_records),
+                                wi.work_item_id,
+                            )
+
                     # Get notes for interactions
                     if fetch_notes:
                         try:
@@ -400,6 +422,12 @@ class GitLabProvider(ProviderWithClient[GitLabWorkClient]):
             sum(1 for w in work_items if "!" in w.work_item_id),
             project_path,
         )
+        if ai_attributions:
+            logger.info(
+                "GitLab: emitting %d AI attribution record(s) from %s",
+                len(ai_attributions),
+                project_path,
+            )
 
         return ProviderBatch(
             work_items=work_items,
@@ -408,4 +436,5 @@ class GitLabProvider(ProviderWithClient[GitLabWorkClient]):
             interactions=interactions,
             sprints=sprints,
             reopen_events=reopen_events,
+            ai_attributions=ai_attributions,
         )

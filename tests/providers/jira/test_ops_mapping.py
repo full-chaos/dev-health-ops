@@ -50,6 +50,7 @@ def test_sync_teams_jira_ops():
             "dev_health_ops.providers.teams.detect_db_type", return_value="clickhouse"
         ),
     ):
+        mock_run_store.return_value = 1
         result = sync_teams(ns)
         assert result == 0
         mock_run_store.assert_awaited_once()

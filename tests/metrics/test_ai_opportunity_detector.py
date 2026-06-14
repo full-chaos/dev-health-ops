@@ -361,3 +361,31 @@ async def test_sql_backed_kinds_skip_team_scope(monkeypatch: pytest.MonkeyPatch)
     # Only the ai_impact_metrics_daily load runs under a team scope.
     assert len(seen_queries) == 1
     assert "ai_impact_metrics_daily" in seen_queries[0]
+
+
+@pytest.mark.asyncio
+async def test_repetitive_changes_query_scopes_pull_requests_by_org(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """CHAOS-2396: the repetitive-changes detector joins ai_attribution to
+    git_pull_requests by (repo_id, number/work_item_id). Filtering only
+    attr.org_id let a same-(repo_id, number) PR from another tenant join and
+    leak its title/author. The driving git_pull_requests side must be org-scoped
+    too (made reachable now that GitHub writes bare PR-number subject_ids)."""
+    captured: list[str] = []
+
+    async def fake_query_dicts(_client, query, _params):
+        captured.append(query)
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.queries.client.query_dicts", fake_query_dicts
+    )
+    await AIOpportunityDetector(MagicMock()).detect("org-a", limit=10)
+
+    repetitive = [
+        q for q in captured if "git_pull_requests AS pr" in q and "prs_total" in q
+    ]
+    assert repetitive, "repetitive-changes query was not issued"
+    assert "pr.org_id = {org_id:String}" in repetitive[0]
+    assert "attr.org_id = {org_id:String}" in repetitive[0]

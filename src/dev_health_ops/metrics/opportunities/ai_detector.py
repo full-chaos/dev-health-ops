@@ -349,6 +349,15 @@ class AIOpportunityDetector:
         org_expr = org_scope.expression(alias="attr")
         if org_expr:
             filters.append(org_expr)
+        # CHAOS-2396: scope the driving git_pull_requests side too. The
+        # attribution<->PR join keys on (repo_id, number/work_item_id); with the
+        # duplicate-repos.id-across-orgs artifact a same-(repo_id, number) PR
+        # from ANOTHER tenant would otherwise join this org's attribution and
+        # leak that PR's title/author into the opportunity cluster. Filtering
+        # only attr.org_id (above) is not sufficient.
+        pr_org_expr = org_scope.expression(alias="pr")
+        if pr_org_expr:
+            filters.append(pr_org_expr)
         where_clause = " AND ".join(filters)
         query = f"""
         SELECT

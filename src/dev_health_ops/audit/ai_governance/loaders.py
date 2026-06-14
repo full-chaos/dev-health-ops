@@ -240,18 +240,21 @@ SELECT
 FROM ai_attribution_resolved AS a
 LEFT JOIN git_pull_requests AS pr
     ON a.repo_id = pr.repo_id
+    AND pr.org_id = {org_id:String}
     AND a.subject_type = 'pull_request'
     AND a.subject_id = toString(pr.number)
 LEFT JOIN (
     SELECT repo_id, count() AS scan_count
     FROM ci_pipeline_runs FINAL
     WHERE lower(coalesce(status, '')) IN ('success', 'passed', 'completed')
+      AND org_id = {org_id:String}
     GROUP BY repo_id
 ) AS scan ON a.repo_id = scan.repo_id
 LEFT JOIN (
     SELECT repo_id, count() AS finding_count
     FROM security_alerts FINAL
     WHERE lower(coalesce(source, '')) IN ('dependabot', 'gitlab_dependency', 'dependency_scanning')
+      AND org_id = {org_id:String}
     GROUP BY repo_id
 ) AS finding ON a.repo_id = finding.repo_id
 -- Allowlist precedence (CHAOS-2209): an exact tool+model row beats a

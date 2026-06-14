@@ -315,6 +315,16 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                             )
                         _observed = _to_utc(getattr(pr, "created_at", None))
                         _observed = _observed or datetime.now(timezone.utc)
+                        # CHAOS-2396: subject_id must be the BARE PR number, not
+                        # the prefixed work_item_id ('ghpr:{repo}#{n}'). The AI
+                        # governance loader and the ai_impact/ai_detector readers
+                        # join ai_attribution.subject_id = toString(pr.number)
+                        # (scoped by repo_id), and GitLab already writes the bare
+                        # iid. Writing the prefixed id made every GitHub PR
+                        # attribution miss the join, so GitHub orgs got zero AI
+                        # governance/coverage. repo_id (below) disambiguates the
+                        # same PR number across repos.
+                        _pr_number = str(int(getattr(pr, "number", 0) or 0))
                         for _sig in pr_signals:
                             ai_attributions.append(
                                 AIAttributionRecord.from_signal(
@@ -322,7 +332,7 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                                     org_id=ctx.org_id,
                                     provider="github",
                                     subject_type="pull_request",
-                                    subject_id=wi.work_item_id,
+                                    subject_id=_pr_number,
                                     repo_id=ctx.repo_id,
                                     observed_at=_observed,
                                 )

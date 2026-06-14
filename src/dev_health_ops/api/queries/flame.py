@@ -12,6 +12,10 @@ async def fetch_pull_request(
     number: int,
     org_id: str = "",
 ) -> dict[str, Any] | None:
+    # CHAOS-2397: scope on git_pull_requests.org_id directly. The previous
+    # `INNER JOIN repos ... WHERE repos.org_id` leaked across tenants because
+    # repos.id is duplicated across orgs, so a shared repo_id crossed the
+    # requester's repos row with another tenant's PR sharing (repo_id, number).
     query = """
         SELECT
             repo_id,
@@ -23,10 +27,9 @@ async def fetch_pull_request(
             merged_at,
             closed_at
         FROM git_pull_requests
-        INNER JOIN repos ON toString(repos.id) = toString(git_pull_requests.repo_id)
-        WHERE repo_id = %(repo_id)s
+        WHERE org_id = %(org_id)s
+          AND repo_id = %(repo_id)s
           AND number = %(number)s
-          AND repos.org_id = %(org_id)s
         LIMIT 1
     """
     rows = await query_dicts(
@@ -44,6 +47,9 @@ async def fetch_pull_request_reviews(
     number: int,
     org_id: str = "",
 ) -> list[dict[str, Any]]:
+    # CHAOS-2397: scope on git_pull_request_reviews.org_id directly (see
+    # fetch_pull_request) — the repos join leaked across tenants for shared
+    # repo_ids.
     query = """
         SELECT
             review_id,
@@ -51,11 +57,10 @@ async def fetch_pull_request_reviews(
             state,
             submitted_at
         FROM git_pull_request_reviews
-        INNER JOIN repos ON toString(repos.id) = toString(git_pull_request_reviews.repo_id)
-        WHERE repo_id = %(repo_id)s
+        WHERE org_id = %(org_id)s
+          AND repo_id = %(repo_id)s
           AND number = %(number)s
           AND submitted_at IS NOT NULL
-          AND repos.org_id = %(org_id)s
         ORDER BY submitted_at
     """
     return await query_dicts(

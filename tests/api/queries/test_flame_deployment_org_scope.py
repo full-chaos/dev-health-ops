@@ -45,3 +45,44 @@ async def test_fetch_deployment_scopes_on_deployments_org_id(monkeypatch):
         "deployment_id": "d1",
         "org_id": "org-A",
     }
+
+
+@pytest.mark.asyncio
+async def test_fetch_pull_request_scopes_on_git_pull_requests_org_id(monkeypatch):
+    """CHAOS-2397: the same repos-join leak existed in the PR readers."""
+    captured: dict[str, object] = {}
+
+    async def _fake_query_dicts(client, query, params):
+        captured["query"] = query
+        captured["params"] = params
+        return []
+
+    monkeypatch.setattr(flame, "query_dicts", _fake_query_dicts)
+    await flame.fetch_pull_request(object(), repo_id="r1", number=7, org_id="org-A")
+
+    query = str(captured["query"])
+    assert "org_id = %(org_id)s" in query
+    assert "INNER JOIN repos" not in query
+    assert "repos.org_id" not in query
+    assert captured["params"] == {"repo_id": "r1", "number": 7, "org_id": "org-A"}  # type: ignore[comparison-overlap]
+
+
+@pytest.mark.asyncio
+async def test_fetch_pull_request_reviews_scopes_on_org_id(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def _fake_query_dicts(client, query, params):
+        captured["query"] = query
+        captured["params"] = params
+        return []
+
+    monkeypatch.setattr(flame, "query_dicts", _fake_query_dicts)
+    await flame.fetch_pull_request_reviews(
+        object(), repo_id="r1", number=7, org_id="org-A"
+    )
+
+    query = str(captured["query"])
+    assert "org_id = %(org_id)s" in query
+    assert "INNER JOIN repos" not in query
+    assert "repos.org_id" not in query
+    assert captured["params"] == {"repo_id": "r1", "number": 7, "org_id": "org-A"}  # type: ignore[comparison-overlap]

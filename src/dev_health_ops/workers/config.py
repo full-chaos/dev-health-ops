@@ -80,6 +80,15 @@ beat_schedule = {
         "schedule": crontab(hour=1, minute=0),
         "options": {"queue": "default"},
     },
+    # Release-impact daily compute (CHAOS-2381): materializes
+    # release_impact_daily from telemetry_signal_bucket + deployments, read by
+    # the /feature-flags release-reliability cards. Runs after run-daily-metrics
+    # so the deployments it joins against are already materialized.
+    "run-release-impact-daily": {
+        "task": "dev_health_ops.workers.tasks.run_release_impact_job",
+        "schedule": crontab(hour=1, minute=30),
+        "options": {"queue": "metrics"},
+    },
     "sync-team-drift": {
         "task": "dev_health_ops.workers.tasks.sync_team_drift",
         "schedule": crontab(hour=2, minute=30),

@@ -5,6 +5,7 @@ import uuid
 from datetime import date
 
 from dev_health_ops.utils.datetime import utc_today
+from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.task_utils import _get_db_url
 
@@ -153,4 +154,72 @@ def run_dora_metrics(
         }
     except Exception as exc:
         logger.exception("DORA metrics task failed: %s", exc)
+        raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=3,
+    queue="metrics",
+    name="dev_health_ops.workers.tasks.run_release_impact_job",
+)
+def run_release_impact_job(
+    self,
+    db_url: str | None = None,
+    day: str | None = None,
+    backfill_days: int = 1,
+    recomputation_window_days: int = 7,
+    org_id: str | None = None,
+) -> dict:
+    """Compute and persist release_impact_daily metrics asynchronously.
+
+    Materializes the ``release_impact_daily`` table (read by the
+    ``/feature-flags`` release-reliability cards) from the
+    ``telemetry_signal_bucket`` and ``deployments`` tables. Without this
+    scheduled task the compute only ran via the ``dev-hops metrics
+    release-impact`` CLI, so live orgs saw flat-zero cards (CHAOS-2381).
+
+    Args:
+        db_url: ClickHouse connection string (defaults to CLICKHOUSE_URI env)
+        day: Target day as ISO string (defaults to today)
+        backfill_days: Number of days to backfill
+        recomputation_window_days: Days to recompute per run (late-data window)
+        org_id: Organization scope
+
+    Returns:
+        dict with job status and number of records written
+    """
+    from dev_health_ops.metrics.job_release_impact import (
+        run_release_impact_job as _run_release_impact_job,
+    )
+
+    db_url = db_url or _get_db_url()
+    target_day = date.fromisoformat(day) if day else utc_today()
+
+    logger.info(
+        "Starting release-impact metrics task: day=%s backfill=%d org=%s",
+        target_day.isoformat(),
+        backfill_days,
+        org_id or "all",
+    )
+
+    try:
+        written = run_async(
+            _run_release_impact_job(
+                db_url=db_url,
+                day=target_day,
+                backfill_days=backfill_days,
+                recomputation_window_days=recomputation_window_days,
+                org_id=org_id or "",
+            )
+        )
+
+        return {
+            "status": "success",
+            "day": target_day.isoformat(),
+            "backfill_days": backfill_days,
+            "records_written": written,
+        }
+    except Exception as exc:
+        logger.exception("Release-impact metrics task failed: %s", exc)
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))

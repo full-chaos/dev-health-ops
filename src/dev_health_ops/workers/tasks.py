@@ -6,6 +6,7 @@ from dev_health_ops.workers.metrics_tasks import (
     run_daily_metrics_batch,
     run_daily_metrics_finalize_task,
     run_dora_metrics,
+    run_release_impact_job,
 )
 from dev_health_ops.workers.product_tasks import (
     run_capacity_forecast_job,
@@ -82,6 +83,7 @@ __all__ = [
     "run_ingest_consumer",
     "run_investment_materialize",
     "run_product_telemetry_consumer",
+    "run_release_impact_job",
     "run_sync_config",
     "run_work_graph_build",
     "run_work_items_sync",

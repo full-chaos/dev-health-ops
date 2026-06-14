@@ -150,3 +150,58 @@ def test_queries_helpers_build_expected_params(monkeypatch):
     assert repo_ids == ["repo-1", "repo-2"]
 
     assert len(calls) >= 4
+
+
+def test_fetch_work_item_active_hours_scopes_to_requested_org(monkeypatch):
+    """Active-hours effort must not leak another tenant's cycle-time weight.
+
+    Two orgs share the same provider-native work_item_id; an org-scoped
+    materialization must only see its own org's active hours.
+    """
+    captured: list[tuple[str, dict[str, object]]] = []
+
+    # Simulate the ClickHouse backend honoring the org_id predicate: rows for
+    # both tenants exist for work item "W1", but only the requested org's row
+    # is returned when the query filters by org_id.
+    rows_by_org = {
+        "org-a": [{"work_item_id": "W1", "active_time_hours": 5.0}],
+        "org-b": [{"work_item_id": "W1", "active_time_hours": 999.0}],
+    }
+
+    def fake_query_dicts(_sink, query, params):
+        captured.append((query, params))
+        org_id = params.get("org_id")
+        if org_id is None:
+            # No org scope -> backend would return all tenants' rows.
+            return [row for rows in rows_by_org.values() for row in rows]
+        return rows_by_org.get(str(org_id), [])
+
+    monkeypatch.setattr(q, "query_dicts", fake_query_dicts)
+    sink = cast(BaseMetricsSink, object())
+
+    result = q.fetch_work_item_active_hours(sink, work_item_ids=["W1"], org_id="org-a")
+
+    # Only org-a's active hours are used; org-b's 999.0 is excluded.
+    assert result == {"W1": 5.0}
+    query, params = captured[-1]
+    assert "AND org_id = %(org_id)s" in query
+    assert params["org_id"] == "org-a"
+
+
+def test_fetch_work_item_active_hours_omits_org_filter_when_unscoped(monkeypatch):
+    """When no org_id is supplied, the query stays unscoped (back-compat)."""
+    captured: list[tuple[str, dict[str, object]]] = []
+
+    def fake_query_dicts(_sink, query, params):
+        captured.append((query, params))
+        return [{"work_item_id": "W1", "active_time_hours": 3.0}]
+
+    monkeypatch.setattr(q, "query_dicts", fake_query_dicts)
+    sink = cast(BaseMetricsSink, object())
+
+    result = q.fetch_work_item_active_hours(sink, work_item_ids=["W1"])
+
+    assert result == {"W1": 3.0}
+    query, params = captured[-1]
+    assert "org_id" not in query
+    assert "org_id" not in params

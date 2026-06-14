@@ -471,7 +471,90 @@ class ClickHouseStore:
         return await self._has_any("git_commit_stats", self._normalize_uuid(repo_id))
 
     async def has_any_git_blame(self, repo_id) -> bool:
-        return await self._has_any("git_blame", self._normalize_uuid(repo_id))
+        """Whether blame exists for this repo *under the current org*.
+
+        Onboarding uses this gate to decide whether to fetch fresh blame
+        (``check_backfill_needs`` -> ``backfill``). ``git_blame`` is
+        ``org_id``-partitioned (migration 027), and ``repo_id`` can be reused
+        across tenants. A repo-only existence check would let a stale/default
+        org's blame row suppress the fresh fetch for a newly-onboarded org,
+        leaving its Ownership-risk tab empty (CHAOS-2376 round-2). Scoping by
+        ``self.org_id`` makes the gate tenant-correct; when ``org_id`` is unset
+        we fall back to the repo-only check.
+        """
+        assert self.client is not None
+        org_id = getattr(self, "org_id", None) or ""
+        query = "SELECT 1 FROM git_blame WHERE repo_id = {repo_id:UUID}"
+        params: dict[str, Any] = {"repo_id": str(self._normalize_uuid(repo_id))}
+        if org_id:
+            query += " AND org_id = {org_id:String}"
+            params["org_id"] = org_id
+        query += " LIMIT 1"
+        async with self._lock:
+            result = await asyncio.to_thread(
+                self.client.query, query, parameters=params
+            )
+        return bool(getattr(result, "result_rows", None))
+
+    async def get_blamed_paths(self, repo_id) -> set[str]:
+        """Return the set of file paths that already have blame for this repo.
+
+        Used by the onboarding blame backfill to compute the *next* unblamed
+        batch (CHAOS-2376 round-3). The onboarding crawl is capped at
+        ``BLAME_BACKFILL_MAX_FILES`` per sync; without per-path coverage the
+        any-row ``has_any_git_blame`` gate would mark the repo "done" after the
+        first capped insert, permanently leaving files past the cap without
+        ``blame_concentration``. Scoped by ``self.org_id`` because ``git_blame``
+        is org-partitioned (migration 027) and ``repo_id`` is reused across
+        tenants.
+        """
+        assert self.client is not None
+        org_id = getattr(self, "org_id", None) or ""
+        query = "SELECT DISTINCT path FROM git_blame WHERE repo_id = {repo_id:UUID}"
+        params: dict[str, Any] = {"repo_id": str(self._normalize_uuid(repo_id))}
+        if org_id:
+            query += " AND org_id = {org_id:String}"
+            params["org_id"] = org_id
+        async with self._lock:
+            result = await asyncio.to_thread(
+                self.client.query, query, parameters=params
+            )
+        rows = getattr(result, "result_rows", None) or []
+        return {str(row[0]) for row in rows if row and row[0] is not None}
+
+    async def has_unblamed_files(self, repo_id) -> bool:
+        """Whether any tracked file still lacks blame for this repo/org.
+
+        Cheap gate that keeps the blame backfill alive across reruns without
+        walking the provider tree when coverage is already complete
+        (CHAOS-2376 round-3). A file is "unblamed" when a ``git_files`` row
+        exists whose ``path`` has no matching ``git_blame`` row. Both tables are
+        org-partitioned, so the comparison is scoped to ``self.org_id``.
+        Returns False when no files are tracked yet (first onboarding falls
+        back to the ``has_any_git_blame`` any-row gate to start the crawl).
+        """
+        assert self.client is not None
+        org_id = getattr(self, "org_id", None) or ""
+        repo_uuid = str(self._normalize_uuid(repo_id))
+        params: dict[str, Any] = {"repo_id": repo_uuid}
+        files_filter = "repo_id = {repo_id:UUID}"
+        blame_filter = "repo_id = {repo_id:UUID}"
+        if org_id:
+            params["org_id"] = org_id
+            files_filter += " AND org_id = {org_id:String}"
+            blame_filter += " AND org_id = {org_id:String}"
+        query = (
+            "SELECT 1 FROM git_files "
+            f"WHERE {files_filter} "
+            "AND path NOT IN ("
+            f"SELECT path FROM git_blame WHERE {blame_filter}"
+            ") LIMIT 1"
+        )
+        async with self._lock:
+            result = await asyncio.to_thread(
+                self.client.query, query, parameters=params
+            )
+        return bool(getattr(result, "result_rows", None))
 
     async def insert_git_file_data(self, file_data: list[GitFile]) -> None:
         if not file_data:

@@ -381,6 +381,85 @@ async def check_backfill_needs(
     )
 
 
+async def blame_backfill_needed(
+    store: Any,
+    repo_id: Any,
+    *,
+    include_blame: bool,
+    any_row_needs_blame: bool,
+) -> bool:
+    """Decide whether the (capped) blame crawl should run this sync.
+
+    Coverage-aware gate (CHAOS-2376 round-3): the any-row ``has_any_git_blame``
+    check flips false after the first capped batch, which would strand every
+    file past the cap without blame. So when blame already exists, fall through
+    to ``has_unblamed_files`` to keep the crawl alive until coverage is
+    complete. A probe failure must not abort the wider backfill (files / commit
+    stats); on error we leave the any-row decision intact and retry next run.
+    """
+    if not include_blame:
+        return False
+    if any_row_needs_blame:
+        return True
+    if not hasattr(store, "has_unblamed_files"):
+        return False
+    try:
+        return bool(await store.has_unblamed_files(repo_id))
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning(
+            "Failed to probe blame coverage for repo %s; "
+            "deferring blame crawl to next sync: %s",
+            repo_id,
+            e,
+        )
+        return False
+
+
+async def select_unblamed_paths(
+    store: Any,
+    repo_id: Any,
+    file_paths: list[str],
+    max_files: int,
+) -> list[str]:
+    """Return the next bounded batch of paths that still lack blame.
+
+    The onboarding blame crawl is capped at ``max_files`` per sync (one
+    API call per file). Pairing that cap with the any-row ``has_any_git_blame``
+    gate caused silent data loss (CHAOS-2376 round-3): once the first capped
+    batch inserted, the existence gate flipped ``needs_blame`` false and every
+    file past the cap stayed without ``blame_concentration`` forever.
+
+    To make each sync *progress*, diff the live tree (``file_paths``) against
+    the paths already blamed for this repo/org and return only the next
+    unblamed batch. When the store does not expose per-path coverage
+    (``get_blamed_paths``), fall back to the capped prefix of ``file_paths`` so
+    behaviour degrades to the previous bounded crawl rather than failing.
+
+    Returns an empty list when blame coverage is already complete, letting the
+    caller skip the crawl entirely.
+    """
+    if not file_paths:
+        return []
+
+    blamed: set[str] = set()
+    if hasattr(store, "get_blamed_paths"):
+        try:
+            blamed = await store.get_blamed_paths(repo_id)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(
+                "Failed to read blame coverage for repo %s; "
+                "falling back to capped prefix: %s",
+                repo_id,
+                e,
+            )
+            return file_paths[:max_files]
+
+    # Preserve tree order so reruns deterministically advance through the
+    # remaining files instead of reblaming the same prefix.
+    unblamed = [p for p in file_paths if p not in blamed]
+    return unblamed[:max_files]
+
+
 async def backfill_file_records(
     ingestion_sink: Any,
     repo_id: Any,

@@ -25,6 +25,7 @@ from dev_health_ops.models.git import (
 from dev_health_ops.processors.base_git import (
     BaseGitProcessor,
     backfill_file_records,
+    blame_backfill_needed,
     build_ci_pipeline_run,
     build_connector_pull_request,
     build_deployment,
@@ -32,6 +33,7 @@ from dev_health_ops.processors.base_git import (
     check_backfill_needs,
     resolve_commit_stats_limit,
     resolve_incident_labels,
+    select_unblamed_paths,
 )
 from dev_health_ops.processors.fetch_utils import (
     AsyncBatchCollector,
@@ -796,6 +798,14 @@ def _split_full_name(full_name: str) -> tuple[str, str]:
 CONTENT_FETCH_MAX_BYTES = 1_000_000
 CONTENT_FETCH_MAX_FILES = 2_000
 
+# Cap on per-file blame fetches during onboarding backfill. Blame costs one
+# GraphQL call per file; without a cap a large repo would turn a normal sync
+# into thousands of calls (quota exhaustion / timeouts). The repo-level
+# has_any_git_blame gate means this is a bounded one-time cost on first
+# onboarding; full coverage remains available via the dedicated blame sync
+# target (CHAOS-2376).
+BLAME_BACKFILL_MAX_FILES = 500
+
 
 async def _fetch_scannable_contents(
     connector: GitHubConnector,
@@ -876,13 +886,24 @@ async def _backfill_github_missing_data(
     if not needs_files and hasattr(store, "has_any_git_file_contents"):
         needs_files = not await store.has_any_git_file_contents(db_repo.id)
 
-    needs_blame = needs.blame and include_blame
+    # Blame backfill is coverage-aware (CHAOS-2376 round-3). The crawl is capped
+    # at BLAME_BACKFILL_MAX_FILES per sync, so an any-row gate (needs.blame)
+    # would mark the repo "done" after the first capped batch and strand every
+    # file past the cap without blame. Keep the blame branch alive while any
+    # tracked file still lacks blame, so successive syncs advance coverage.
+    needs_blame = await blame_backfill_needed(
+        store,
+        db_repo.id,
+        include_blame=include_blame,
+        any_row_needs_blame=needs.blame,
+    )
     if not (needs_files or needs_blame or needs.commit_stats):
         return
 
     gh_repo = connector.github.get_repo(f"{owner}/{repo_name}")
 
     file_paths: list[str] = []
+    blame_paths: list[str] = []
     if needs_files or needs_blame:
         try:
             branch = gh_repo.get_branch(default_branch)
@@ -971,17 +992,29 @@ async def _backfill_github_missing_data(
             )
 
     if needs_blame and file_paths:
+        # Bound the blame crawl: one GraphQL call per file, so cap the number
+        # of files we blame on a single sync to avoid quota exhaustion /
+        # timeouts on large repos (CHAOS-2376). Select the *next* unblamed batch
+        # (diffing the live tree against already-blamed paths) so each rerun
+        # advances coverage instead of reblaming the same capped prefix; the
+        # capped prefix is used only as a fallback when the store lacks per-path
+        # coverage.
+        blame_paths = await select_unblamed_paths(
+            store, db_repo.id, file_paths, BLAME_BACKFILL_MAX_FILES
+        )
+    if needs_blame and blame_paths:
         processed_files = 0
         try:
             logging.info(
-                "Backfilling blame for %d files in %s...",
-                len(file_paths),
+                "Backfilling blame for %d unblamed files in %s (cap %d)...",
+                len(blame_paths),
                 repo_full_name,
+                BLAME_BACKFILL_MAX_FILES,
             )
             async with AsyncBatchCollector(
                 ingestion_sink.insert_blame_data
             ) as blame_collector:
-                for path in file_paths:
+                for path in blame_paths:
                     try:
                         blame = connector.get_file_blame(
                             owner=owner,
@@ -1458,10 +1491,15 @@ async def process_github_repo(
                 )
 
             # 6. Backfill file records + contents so DB-based metrics
-            # (e.g. complexity) can run without a local checkout. Gated on
-            # sync_git so non-git targets (prs, cicd, ...) stay lean. Blame
-            # is excluded here: it costs one GraphQL call per file and has
-            # its own dedicated sync target.
+            # (e.g. complexity, hotspots, ownership-risk) can run without a
+            # local checkout. Gated on sync_git so non-git targets (prs,
+            # cicd, ...) stay lean. Blame is included so the /complexity
+            # Ownership-risk tab is populated on normal onboarding. The
+            # has_any_git_blame gate is repo-level, so blame is fetched once
+            # per repo on first onboarding (skipped once any blame exists) and
+            # capped at BLAME_BACKFILL_MAX_FILES files per sync so a large repo
+            # cannot turn onboarding into an unbounded GraphQL crawl
+            # (CHAOS-2376).
             if backfill_missing and sync_git:
                 try:
                     await _backfill_github_missing_data(
@@ -1472,7 +1510,7 @@ async def process_github_repo(
                         repo_full_name=repo_info.full_name,
                         default_branch=repo_info.default_branch,
                         max_commits=max_commits,
-                        include_blame=False,
+                        include_blame=True,
                         include_commit_stats=False,
                     )
                 except Exception as e:
@@ -1795,6 +1833,11 @@ async def process_github_repos_batch(
 
         if backfill_missing and sync_git:
             try:
+                # Blame is included so the /complexity Ownership-risk tab is
+                # populated on normal onboarding. The has_any_git_blame gate is
+                # repo-level (fetched once per repo on first onboarding) and the
+                # per-sync crawl is capped at BLAME_BACKFILL_MAX_FILES files so
+                # a large repo cannot exhaust API quota (CHAOS-2376).
                 await _backfill_github_missing_data(
                     store=store,
                     ingestion_sink=ingestion_sink,
@@ -1803,7 +1846,7 @@ async def process_github_repos_batch(
                     repo_full_name=repo_info.full_name,
                     default_branch=repo_info.default_branch,
                     max_commits=max_commits_per_repo,
-                    include_blame=False,
+                    include_blame=True,
                     include_commit_stats=False,
                 )
             except Exception as e:

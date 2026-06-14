@@ -1,4 +1,3 @@
-import asyncio
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
@@ -97,6 +96,7 @@ async def test_clickhouse_store_teams():
         mock_result.result_rows = [
             (
                 "t1",
+                "org-1",
                 str(uuid.uuid4()),
                 "Team 1",
                 "Desc",
@@ -138,40 +138,54 @@ def test_synthetic_teams_generation():
         assert len(list(getattr(team, "members") or [])) > 0
 
 
-@pytest.mark.asyncio
-async def test_cli_sync_teams_synthetic():
+def test_cli_sync_teams_synthetic():
     """Test CLI sync teams command with synthetic provider."""
     from dev_health_ops.providers.teams import sync_teams as _cmd_sync_teams
 
-    with patch("asyncio.run") as mock_run:
-        with (
-            patch("dev_health_ops.providers.teams.validate_sink") as mock_validate,
-            patch(
-                "dev_health_ops.providers.teams.resolve_sink_uri",
-                return_value="clickhouse://localhost:8123/default",
-            ) as mock_resolve_sink,
-            patch(
-                "dev_health_ops.providers.teams.detect_db_type",
-                return_value="clickhouse",
-            ) as mock_detect,
-        ):
-            ns = MagicMock()
-            ns.db = "sqlite:///:memory:"
-            ns.sink = "clickhouse"
-            ns.analytics_db = None
-            ns.provider = "synthetic"
-            ns.path = None
+    class FakeStore:
+        def __init__(self):
+            self.teams = []
 
-            result = _cmd_sync_teams(ns)
+        async def ensure_tables(self):
+            return None
 
-            assert result == 0
-            assert mock_run.called
-            mock_validate.assert_called_once_with(ns)
-            mock_resolve_sink.assert_called_once_with(ns)
-            mock_detect.assert_called_once_with("clickhouse://localhost:8123/default")
-            coro = mock_run.call_args[0][0]
-            assert asyncio.iscoroutine(coro)
-            coro.close()
+        async def insert_teams(self, teams):
+            self.teams = teams
+
+        async def get_all_teams(self):
+            return self.teams
+
+    async def fake_run_with_store(_db_uri, _db_type, handler, org_id=None):
+        assert org_id is None
+        return await handler(FakeStore())
+
+    with (
+        patch("dev_health_ops.storage.run_with_store", new=fake_run_with_store),
+        patch("dev_health_ops.providers.teams.validate_sink") as mock_validate,
+        patch(
+            "dev_health_ops.providers.teams.resolve_sink_uri",
+            return_value="clickhouse://localhost:8123/default",
+        ) as mock_resolve_sink,
+        patch(
+            "dev_health_ops.providers.teams.detect_db_type",
+            return_value="clickhouse",
+        ) as mock_detect,
+    ):
+        ns = MagicMock()
+        ns.db = "sqlite:///:memory:"
+        ns.sink = "clickhouse"
+        ns.analytics_db = None
+        ns.provider = "synthetic"
+        ns.path = None
+        ns.org = None
+        ns.allow_empty = False
+
+        result = _cmd_sync_teams(ns)
+
+        assert result == 0
+        mock_validate.assert_called_once_with(ns)
+        mock_resolve_sink.assert_called_once_with(ns)
+        mock_detect.assert_called_once_with("clickhouse://localhost:8123/default")
 
 
 @pytest.mark.asyncio
@@ -193,3 +207,245 @@ async def test_load_team_resolver_from_store_accepts_id_name_dicts():
     team_id, team_name = resolver.resolve("alice@example.com")
     assert team_id == "team-a"
     assert team_name == "Team Alpha"
+
+
+def test_cli_sync_teams_empty_exits_one(tmp_path):
+    """Test that sync_teams exits 1 when no teams are found and allow_empty is False."""
+    import yaml
+
+    from dev_health_ops.providers.teams import sync_teams as _cmd_sync_teams
+
+    config_file = tmp_path / "empty_teams.yaml"
+    config_file.write_text(yaml.dump({"teams": []}))
+
+    ns = MagicMock()
+    ns.provider = "config"
+    ns.path = str(config_file)
+    ns.allow_empty = False
+
+    result = _cmd_sync_teams(ns)
+    assert result == 1
+
+
+def test_cli_sync_teams_empty_allow_empty_exits_zero(tmp_path):
+    """Test that sync_teams exits 0 when no teams are found and allow_empty is True."""
+    import yaml
+
+    from dev_health_ops.providers.teams import sync_teams as _cmd_sync_teams
+
+    config_file = tmp_path / "empty_teams.yaml"
+    config_file.write_text(yaml.dump({"teams": []}))
+
+    ns = MagicMock()
+    ns.provider = "config"
+    ns.path = str(config_file)
+    ns.allow_empty = True
+
+    result = _cmd_sync_teams(ns)
+    assert result == 0
+
+
+def test_cli_sync_teams_non_empty_zero_persisted_exits_one(tmp_path):
+    import yaml
+
+    from dev_health_ops.providers.teams import sync_teams as _cmd_sync_teams
+
+    config_file = tmp_path / "teams.yaml"
+    config_file.write_text(
+        yaml.dump({"teams": [{"team_id": "team-a", "team_name": "Team A"}]})
+    )
+
+    class FakeStore:
+        async def ensure_tables(self):
+            return None
+
+        async def insert_teams(self, teams):
+            assert len(teams) == 1
+
+        async def get_all_teams(self):
+            return []
+
+    async def fake_run_with_store(_db_uri, _db_type, handler, org_id=None):
+        assert org_id is None
+        return await handler(FakeStore())
+
+    with (
+        patch("dev_health_ops.storage.run_with_store", new=fake_run_with_store),
+        patch("dev_health_ops.providers.teams.validate_sink"),
+        patch(
+            "dev_health_ops.providers.teams.resolve_sink_uri",
+            return_value="clickhouse://localhost:8123/default",
+        ),
+        patch(
+            "dev_health_ops.providers.teams.detect_db_type", return_value="clickhouse"
+        ),
+    ):
+        ns = MagicMock()
+        ns.provider = "config"
+        ns.path = str(config_file)
+        ns.org = None
+        ns.allow_empty = False
+
+        result = _cmd_sync_teams(ns)
+
+    assert result == 1
+
+
+def test_cli_sync_teams_allow_empty_overrides_zero_persisted(tmp_path):
+    import yaml
+
+    from dev_health_ops.providers.teams import sync_teams as _cmd_sync_teams
+
+    config_file = tmp_path / "teams.yaml"
+    config_file.write_text(
+        yaml.dump({"teams": [{"team_id": "team-a", "team_name": "Team A"}]})
+    )
+
+    class FakeStore:
+        async def ensure_tables(self):
+            return None
+
+        async def insert_teams(self, teams):
+            assert len(teams) == 1
+
+        async def get_all_teams(self):
+            return []
+
+    async def fake_run_with_store(_db_uri, _db_type, handler, org_id=None):
+        assert org_id is None
+        return await handler(FakeStore())
+
+    with (
+        patch("dev_health_ops.storage.run_with_store", new=fake_run_with_store),
+        patch("dev_health_ops.providers.teams.validate_sink"),
+        patch(
+            "dev_health_ops.providers.teams.resolve_sink_uri",
+            return_value="clickhouse://localhost:8123/default",
+        ),
+        patch(
+            "dev_health_ops.providers.teams.detect_db_type", return_value="clickhouse"
+        ),
+    ):
+        ns = MagicMock()
+        ns.provider = "config"
+        ns.path = str(config_file)
+        ns.org = None
+        ns.allow_empty = True
+
+        result = _cmd_sync_teams(ns)
+
+    assert result == 0
+
+
+def test_cli_sync_teams_org_bridge_failure_exits_one(tmp_path):
+    import yaml
+
+    from dev_health_ops.providers.teams import sync_teams as _cmd_sync_teams
+
+    config_file = tmp_path / "teams.yaml"
+    config_file.write_text(
+        yaml.dump({"teams": [{"team_id": "team-a", "team_name": "Team A"}]})
+    )
+
+    class FakeStore:
+        def __init__(self):
+            self.teams = []
+
+        async def ensure_tables(self):
+            return None
+
+        async def insert_teams(self, teams):
+            self.teams = teams
+
+        async def get_all_teams(self):
+            return self.teams
+
+    async def fake_run_with_store(_db_uri, _db_type, handler, org_id=None):
+        assert org_id == "org-1"
+        return await handler(FakeStore())
+
+    with (
+        patch("dev_health_ops.storage.run_with_store", new=fake_run_with_store),
+        patch("dev_health_ops.providers.teams.validate_sink"),
+        patch(
+            "dev_health_ops.providers.teams.resolve_sink_uri",
+            return_value="clickhouse://localhost:8123/default",
+        ),
+        patch(
+            "dev_health_ops.providers.teams.detect_db_type", return_value="clickhouse"
+        ),
+        patch(
+            "dev_health_ops.providers.teams._bridge_teams_to_postgres",
+            side_effect=RuntimeError("bridge down"),
+        ),
+    ):
+        ns = MagicMock()
+        ns.provider = "config"
+        ns.path = str(config_file)
+        ns.org = "org-1"
+        ns.allow_empty = False
+
+        result = _cmd_sync_teams(ns)
+
+    assert result == 1
+
+
+def test_cli_sync_teams_org_stale_global_row_does_not_mask(tmp_path):
+    """An org-scoped run must not count a stale row from another org as
+    persisted: the org-scoped read-back filters by the store's org_id."""
+    from types import SimpleNamespace
+
+    import yaml
+
+    from dev_health_ops.providers.teams import sync_teams as _cmd_sync_teams
+
+    config_file = tmp_path / "teams.yaml"
+    config_file.write_text(
+        yaml.dump({"teams": [{"team_id": "team-a", "team_name": "Team A"}]})
+    )
+
+    class FakeStore:
+        # Store is scoped to org-1.
+        org_id = "org-1"
+
+        async def ensure_tables(self):
+            return None
+
+        async def insert_teams(self, teams):
+            # Simulate the org-1 analytics write not landing.
+            return None
+
+        async def get_all_teams(self):
+            # A pre-existing row for the SAME id but a DIFFERENT org.
+            return [SimpleNamespace(id="team-a", org_id="other-org")]
+
+    async def fake_run_with_store(_db_uri, _db_type, handler, org_id=None):
+        assert org_id == "org-1"
+        return await handler(FakeStore())
+
+    with (
+        patch("dev_health_ops.storage.run_with_store", new=fake_run_with_store),
+        patch("dev_health_ops.providers.teams.validate_sink"),
+        patch(
+            "dev_health_ops.providers.teams.resolve_sink_uri",
+            return_value="clickhouse://localhost:8123/default",
+        ),
+        patch(
+            "dev_health_ops.providers.teams.detect_db_type", return_value="clickhouse"
+        ),
+        patch(
+            "dev_health_ops.providers.teams._bridge_teams_to_postgres",
+            return_value=1,
+        ),
+    ):
+        ns = MagicMock()
+        ns.provider = "config"
+        ns.path = str(config_file)
+        ns.org = "org-1"
+        ns.allow_empty = False
+
+        result = _cmd_sync_teams(ns)
+
+    # Stale cross-org row is filtered out -> primary persisted count is 0 -> exit 1,
+    # even though the Postgres bridge succeeded.
+    assert result == 1

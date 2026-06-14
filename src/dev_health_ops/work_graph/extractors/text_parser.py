@@ -54,6 +54,128 @@ GITHUB_PLAIN_REF_PATTERN = re.compile(r"(?<!\w)#(\d+)\b")
 # GitLab uses same patterns but also supports cross-project refs like "group/project#123"
 GITLAB_CROSS_PROJECT_PATTERN = re.compile(r"([\w\-\.]+/[\w\-\.]+)#(\d+)")
 
+# Pull-request references embedded in commit messages by GitHub/GitLab *only*
+# via their explicit merge-keyword conventions. These forms are PR/MR-specific
+# by construction -- the literal words "pull request" / "merge request" cannot
+# appear in an ordinary issue reference -- so they are safe to promote into
+# PR->commit links:
+# - GitHub merge commit: "Merge pull request #123 from ..."
+# - GitLab merge commit:  "See merge request grp/proj!45"
+#
+# The bare squash form "Some change (#123)" is deliberately NOT recognized.
+# GitHub's squash-and-merge produces "<subject> (#N)", but that is positionally
+# and lexically identical to a hand-authored issue reference such as
+# "Fix parser edge case (#42)". Because git_pull_requests carries no persisted
+# merge_commit_sha (or any merge metadata) to corroborate the link, a bare
+# "(#N)" is indistinguishable from an issue mention. Promoting it would attach a
+# commit to an unrelated PR whenever an issue number happens to collide with a
+# real PR number in the same repo -- durable corruption of work_graph_pr_commit
+# and every downstream file/AI-impact metric that reads it. See CHAOS-2375
+# round-2 review: only unambiguous merge/MR-keyword evidence is accepted.
+GITHUB_MERGE_PR_PATTERN = re.compile(r"merge\s+pull\s+request\s+#(\d+)", re.IGNORECASE)
+GITLAB_MERGE_MR_PATTERN = re.compile(
+    r"(?:merge\s+request|see\s+merge\s+request)\b[^!\n]*!(\d+)", re.IGNORECASE
+)
+
+# Revert commits embed the *original* merge subject verbatim, e.g.
+#   Revert "Merge pull request #42 from team/x"
+#
+#   This reverts commit <sha>.
+# A revert is a *later undo* commit -- it is NOT contained by PR #42, so the
+# merge-keyword number it quotes must never be promoted into a PR->commit link
+# (doing so attributes the revert's changes back to the reverted PR and skews
+# every downstream file/AI-impact metric). We reject the message outright when
+# its subject is a revert or its body carries git's revert marker. Anchored to
+# the start-of-line so an ordinary sentence merely containing the word "revert"
+# (e.g. "Merge pull request #5: revert flag default") is unaffected.
+# CHAOS-2375 round-3.
+REVERT_SUBJECT_PATTERN = re.compile(r"^\s*revert[\s\"']", re.IGNORECASE)
+REVERT_BODY_PATTERN = re.compile(
+    r"^\s*this\s+reverts\s+(?:commit|merge\s+request)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _is_revert_message(text: str) -> bool:
+    """Return True if ``text`` is a revert commit message.
+
+    Recognizes git's canonical revert shapes: a subject line beginning with
+    ``Revert "..."`` and/or a body line ``This reverts commit <sha>.`` (GitLab
+    also emits ``This reverts merge request !N``). Such commits quote the
+    reverted PR/MR's merge subject but are not part of that PR/MR.
+    """
+    if not text:
+        return False
+    first_line = text.lstrip().split("\n", 1)[0]
+    if REVERT_SUBJECT_PATTERN.match(first_line):
+        return True
+    return bool(REVERT_BODY_PATTERN.search(text))
+
+
+def extract_pr_refs(text: str) -> list[int]:
+    """
+    Extract pull/merge-request numbers referenced in a commit message.
+
+    Only the explicit, unambiguous merge-keyword conventions that GitHub and
+    GitLab embed in *merge* commit messages are recognized:
+
+    - "Merge pull request #123 from ..."   (GitHub merge commit)
+    - "See merge request group/proj!45"    (GitLab merge commit)
+
+    The literal "pull request" / "merge request" wording guarantees these denote
+    a PR/MR rather than an issue, so the derived ``work_graph_pr_commit`` links
+    are trustworthy.
+
+    Bare forms are intentionally **not** treated as PR/MR evidence:
+
+    - ``#123`` / ``!45``  -- almost always an ordinary issue reference
+      (e.g. "Fixes #7", "Closes #500").
+    - ``(#123)``          -- GitHub's squash-and-merge subject suffix, but it is
+      indistinguishable from a hand-authored parenthetical issue reference like
+      "Fix parser edge case (#42)". With no persisted merge metadata to
+      corroborate it, accepting this would persist false high-confidence
+      PR->commit edges (a commit attached to an unrelated PR whenever an issue
+      number collides with a real PR number), corrupting the work graph and
+      downstream file/AI-impact metrics.
+
+    Revert commits are rejected entirely: ``Revert "Merge pull request #42 ..."``
+    quotes the reverted PR's merge subject but is a *later undo* commit, not a
+    commit contained by PR #42. Linking it would attribute the revert's changes
+    back to the original PR.
+
+    Args:
+        text: Commit message to search.
+
+    Returns:
+        De-duplicated list of referenced PR/MR numbers, in first-seen order.
+    """
+    if not text:
+        return []
+
+    # A revert commit quotes the reverted PR/MR's merge subject verbatim but is
+    # not contained by that PR/MR; emitting its number would attribute the undo
+    # back to the original PR. Reject before extracting. CHAOS-2375 round-3.
+    if _is_revert_message(text):
+        return []
+
+    seen: set[int] = set()
+    ordered: list[int] = []
+
+    def _add(value: str) -> None:
+        number = int(value)
+        if number not in seen:
+            seen.add(number)
+            ordered.append(number)
+
+    for pattern in (
+        GITHUB_MERGE_PR_PATTERN,
+        GITLAB_MERGE_MR_PATTERN,
+    ):
+        for match in pattern.finditer(text):
+            _add(match.group(1))
+
+    return ordered
+
 
 def extract_jira_keys(text: str) -> list[ParsedIssueRef]:
     """

@@ -7,6 +7,8 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+from dev_health_ops.utils.datetime import utc_today
+
 from ..authz import require_org_id
 from ..context import GraphQLContext
 from ..models.recommendations import (
@@ -23,39 +25,81 @@ logger = logging.getLogger(__name__)
 # SQL — argMax reads the latest computed row per (org_id, team_id, rule_id, window_end).
 # These are the ORDER BY columns in migration 039_recommendations.sql.
 # Table: recommendations_daily (ClickHouse, append-only / ReplacingMergeTree).
+#
+# Resolution is two-stage so a *recovered* signal stops showing (CHAOS-2373):
+#   1. inner: argMax(..., computed_at) collapses re-runs of the SAME window_end.
+#   2. outer: argMax(..., window_end) keeps ONLY the latest window_end (as-of
+#      day) per (org, team, rule). Each scheduled run writes the full rule
+#      state — fired rows AND explicit fired=false tombstones — at
+#      window_end == as_of_day + 1 (the day AFTER the finalized partition, so
+#      the loader's exclusive `day < window_end` still *reads* that partition),
+#      so the most recent as-of dominates and a stale fired row from an earlier
+#      day is superseded instead of lingering in-range.
+# The read cap below (_window_to_dates) is therefore inclusive of today+1 to
+# match that persisted key, mirroring api/services/filtering.time_window so the
+# home and recommendations() surfaces agree (CHAOS-2373).
+# Final HAVING keeps only currently-fired rules.
 # ---------------------------------------------------------------------------
 _RECOMMENDATIONS_SQL = """\
-    SELECT
+SELECT
     team_id,
     org_id,
     rule_id,
-    argMax(fired,               computed_at) AS latest_fired,
-    argMax(severity,            computed_at) AS latest_severity,
-    argMax(title,               computed_at) AS latest_title,
-    argMax(rationale,           computed_at) AS latest_rationale,
-    argMax(success_criterion,   computed_at) AS latest_success_criterion,
-    argMax(evidence_json,       computed_at) AS latest_evidence_json,
-    argMax(window_start,        computed_at) AS latest_window_start,
-    argMax(window_end,          computed_at) AS latest_window_end,
-    max(computed_at)                         AS latest_computed_at
-FROM recommendations_daily
-WHERE team_id  = {team_id:String}
-  AND org_id   = {org_id:String}
-  AND window_end >= {window_start:Date}
-  AND window_end <= {window_end:Date}
-GROUP BY org_id, team_id, rule_id, window_end
+    argMax(latest_fired,             window_end) AS latest_fired,
+    argMax(latest_severity,          window_end) AS latest_severity,
+    argMax(latest_title,             window_end) AS latest_title,
+    argMax(latest_rationale,         window_end) AS latest_rationale,
+    argMax(latest_success_criterion, window_end) AS latest_success_criterion,
+    argMax(latest_evidence_json,     window_end) AS latest_evidence_json,
+    argMax(latest_window_start,      window_end) AS latest_window_start,
+    max(window_end)                              AS latest_window_end,
+    argMax(latest_computed_at,       window_end) AS latest_computed_at
+FROM (
+    SELECT
+        team_id,
+        org_id,
+        rule_id,
+        window_end,
+        argMax(fired,               computed_at) AS latest_fired,
+        argMax(severity,            computed_at) AS latest_severity,
+        argMax(title,               computed_at) AS latest_title,
+        argMax(rationale,           computed_at) AS latest_rationale,
+        argMax(success_criterion,   computed_at) AS latest_success_criterion,
+        argMax(evidence_json,       computed_at) AS latest_evidence_json,
+        argMax(window_start,        computed_at) AS latest_window_start,
+        max(computed_at)                         AS latest_computed_at
+    FROM recommendations_daily
+    WHERE team_id  = {team_id:String}
+      AND org_id   = {org_id:String}
+      AND window_end >= {window_start:Date}
+      AND window_end <= {window_end:Date}
+    GROUP BY org_id, team_id, rule_id, window_end
+)
+GROUP BY org_id, team_id, rule_id
 HAVING latest_fired = true
-ORDER BY window_end DESC, rule_id
+ORDER BY latest_window_end DESC, rule_id
 """
 
 
 def _window_to_dates(window: WindowInput) -> tuple[date, date]:
     """Convert a WindowInput to (window_start, window_end) date bounds.
 
-    window_end is always today (UTC); window_start is computed from the
-    unit/value pair.  A *cycle* is treated as 14 days (two-week sprint).
+    ``window_end`` is ``utc_today() + 1`` — the EXCLUSIVE-style cap that the
+    scheduled writer persists rows at (it anchors ``window_end == as_of_day + 1``
+    so the loader's exclusive ``day < window_end`` still reads the finalized
+    partition; see workers/recommendations_tasks.py). Capping the read at
+    ``today + 1`` therefore *includes* today's finalized recommendations
+    same-day instead of leaving them one finalize-day stale. This mirrors
+    ``api/services/filtering.time_window`` (``end_day = utc_today() + 1``) so the
+    ``recommendations()`` GraphQL surface and the home surface agree on the
+    convention (CHAOS-2373).
+
+    ``window_start`` is computed from the unit/value pair, anchored to *today*
+    (not the bumped cap) so the lookback span is unchanged. A *cycle* is treated
+    as 14 days (two-week sprint).
     """
-    today = datetime.now(tz=timezone.utc).date()
+    today = utc_today()
+    window_end = today + timedelta(days=1)
     days = window.value * 7
     match window.unit:
         case WindowUnit.DAY:
@@ -64,7 +108,7 @@ def _window_to_dates(window: WindowInput) -> tuple[date, date]:
             days = window.value * 7
         case WindowUnit.CYCLE:
             days = window.value * 14
-    return today - timedelta(days=days), today
+    return today - timedelta(days=days), window_end
 
 
 def _parse_evidence(raw: str | list[Any] | None) -> list[EvidenceRef]:

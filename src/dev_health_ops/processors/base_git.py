@@ -301,6 +301,7 @@ def build_ci_pipeline_run(
     queued_at: datetime | None,
     started_at: datetime,
     finished_at: datetime | None,
+    retry_count: int = 0,
 ) -> CiPipelineRun:
     """Build a CI pipeline run record from provider-normalized fields."""
     return CiPipelineRun(
@@ -310,6 +311,7 @@ def build_ci_pipeline_run(
         queued_at=queued_at,
         started_at=started_at,
         finished_at=finished_at,
+        retry_count=retry_count,
     )
 
 

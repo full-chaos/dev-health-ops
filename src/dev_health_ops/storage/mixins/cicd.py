@@ -22,6 +22,7 @@ class CicdMixin(SQLAlchemyStoreMixinProtocol):
                     "queued_at": item.get("queued_at"),
                     "started_at": item.get("started_at"),
                     "finished_at": item.get("finished_at"),
+                    "retry_count": int(item.get("retry_count") or 0),
                     "last_synced": item.get("last_synced") or synced_at_default,
                 }
             else:
@@ -32,6 +33,7 @@ class CicdMixin(SQLAlchemyStoreMixinProtocol):
                     "queued_at": getattr(item, "queued_at", None),
                     "started_at": item.started_at,
                     "finished_at": getattr(item, "finished_at", None),
+                    "retry_count": int(getattr(item, "retry_count", 0) or 0),
                     "last_synced": getattr(item, "last_synced", None)
                     or synced_at_default,
                 }
@@ -46,6 +48,7 @@ class CicdMixin(SQLAlchemyStoreMixinProtocol):
                 "queued_at",
                 "started_at",
                 "finished_at",
+                "retry_count",
                 "last_synced",
             ],
         )

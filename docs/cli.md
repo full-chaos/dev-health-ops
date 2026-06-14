@@ -71,3 +71,16 @@ dev-hops migrate clickhouse repair --apply --org <uuid>
 ## Flags and overrides
 
 CLI flags override environment variables. Set `CLICKHOUSE_URI` for analytics and `POSTGRES_URI` for semantic data. Subcommands accept `--sink` for analytics and `--since`/`--before`/`--backfill` for date ranges.
+
+## Input validation
+
+Commands that need a database connection or an organization id are validated **before** they run. If a required input is missing, the command fails fast with a usage error (**exit code 2**) that names exactly what is missing, rather than failing partway through:
+
+```bash
+$ dev-hops metrics compounding-risk        # CLICKHOUSE_URI / org not set
+dev-health-ops metrics compounding-risk: error: missing required input(s):
+  - ClickHouse analytics database — pass --analytics-db or set CLICKHOUSE_URI (...)
+  - organization id — pass --org or set ORG_ID (could not auto-resolve ...)
+```
+
+Every affected command lists its requirements at the bottom of `--help` (a `Requires:` line). See the [CLI Reference requirement matrix](ops/cli-reference.md#input-validation-preflight) for the full per-command list.

@@ -4,18 +4,16 @@ import argparse
 import logging
 import os
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
-from dev_health_ops.connectors import GitLabConnector
-from dev_health_ops.connectors.exceptions import ConnectorException
 from dev_health_ops.db import resolve_sink_uri
-from dev_health_ops.metrics.job_daily import (
-    _discover_repos,
+from dev_health_ops.metrics.compute_dora import compute_dora_metrics_daily
+from dev_health_ops.metrics.schemas import (
+    DeploymentRow,
+    IncidentRow,
 )
-from dev_health_ops.metrics.schemas import DORAMetricsRecord
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
-from dev_health_ops.metrics.work_items import DiscoveredRepo
 from dev_health_ops.storage import detect_db_type
 from dev_health_ops.utils.cli import (
     add_date_range_args,
@@ -48,16 +46,110 @@ def _parse_metrics(raw_metrics: str | None) -> list[str]:
     return metrics or list(DEFAULT_DORA_METRICS)
 
 
-def _is_gitlab_repo(repo: DiscoveredRepo, allow_unknown: bool) -> bool:
-    source = ""
-    if isinstance(repo.settings, dict):
-        source = str(repo.settings.get("source") or "")
-    if not source:
-        source = str(repo.source or "")
-    source = source.strip().lower()
-    if source == "gitlab":
-        return True
-    return allow_unknown
+def _utc_day_window(day: date) -> tuple[datetime, datetime]:
+    start = datetime.combine(day, time.min, tzinfo=timezone.utc)
+    return start, start + timedelta(days=1)
+
+
+def _repo_filter(
+    params: dict[str, Any],
+    *,
+    org_id: str,
+    repo_id: uuid.UUID | None,
+    repo_name: str | None,
+) -> str:
+    """Build the repo-scoping clause and mutate *params* in place.
+
+    Mirrors the ClickHouseDataLoader pattern: a ``repo_id`` filters directly,
+    while a ``repo_name`` resolves to repo UUIDs via an org-scoped ``repos``
+    subquery. The subquery is org-scoped so a name collision across tenants
+    cannot pull in another org's repo. ``repo_id`` takes precedence when both
+    are supplied.
+    """
+    if repo_id is not None:
+        params["repo_id"] = str(repo_id)
+        return " AND repo_id = {repo_id:UUID}"
+    if repo_name is not None:
+        params["repo_name"] = repo_name
+        return (
+            " AND repo_id IN ("
+            "SELECT id FROM repos"
+            " WHERE repo = {repo_name:String}"
+            " AND org_id = {org_id:String})"
+        )
+    return ""
+
+
+def _load_deployments(
+    primary_sink: Any,
+    *,
+    org_id: str,
+    start: datetime,
+    end: datetime,
+    repo_id: uuid.UUID | None,
+    repo_name: str | None = None,
+) -> list[DeploymentRow]:
+    """Read deployments active in the day window from ClickHouse.
+
+    ``deployments`` is a ReplacingMergeTree, so FINAL dedups pre-merge
+    duplicates. The window matches the daily job (event time falls back to
+    last_synced for in-flight rows).
+    """
+    params: dict[str, Any] = {"org_id": org_id, "start": start, "end": end}
+    repo_filter = _repo_filter(
+        params, org_id=org_id, repo_id=repo_id, repo_name=repo_name
+    )
+
+    rows = primary_sink.query_dicts(
+        "SELECT repo_id, deployment_id, status, environment,"
+        " started_at, finished_at, deployed_at, merged_at,"
+        " pull_request_number"
+        " FROM deployments FINAL"
+        " WHERE org_id = {org_id:String}"
+        "   AND coalesce(deployed_at, finished_at, started_at, last_synced)"
+        "       >= {start:DateTime64(3, 'UTC')}"
+        "   AND coalesce(deployed_at, finished_at, started_at, last_synced)"
+        "       < {end:DateTime64(3, 'UTC')}"
+        f"{repo_filter}",
+        params,
+    )
+    return [r for r in rows if _has_valid_repo(r)]
+
+
+def _load_incidents(
+    primary_sink: Any,
+    *,
+    org_id: str,
+    start: datetime,
+    end: datetime,
+    repo_id: uuid.UUID | None,
+    repo_name: str | None = None,
+) -> list[IncidentRow]:
+    """Read incidents resolved in the day window from ClickHouse."""
+    params: dict[str, Any] = {"org_id": org_id, "start": start, "end": end}
+    repo_filter = _repo_filter(
+        params, org_id=org_id, repo_id=repo_id, repo_name=repo_name
+    )
+
+    rows = primary_sink.query_dicts(
+        "SELECT repo_id, incident_id, status, started_at, resolved_at"
+        " FROM incidents FINAL"
+        " WHERE org_id = {org_id:String}"
+        "   AND resolved_at IS NOT NULL"
+        "   AND resolved_at >= {start:DateTime64(3, 'UTC')}"
+        "   AND resolved_at < {end:DateTime64(3, 'UTC')}"
+        f"{repo_filter}",
+        params,
+    )
+    return [r for r in rows if _has_valid_repo(r)]
+
+
+def _has_valid_repo(row: dict[str, Any]) -> bool:
+    try:
+        uuid.UUID(str(row.get("repo_id")))
+    except (ValueError, TypeError, AttributeError):
+        return False
+    return True
 
 
 def run_dora_metrics_job(
@@ -95,28 +187,22 @@ def run_dora_metrics_job(
             f"sink='{sink}' requires db backend '{sink}', got '{backend}'."
         )
 
-    token = (auth or os.getenv("GITLAB_TOKEN") or "").strip()
-    if not token:
-        raise ValueError("GitLab token required (set GITLAB_TOKEN or pass --auth).")
+    # CHAOS-2382: DORA is now provider-agnostic — the four metrics are derived
+    # from already-synced ClickHouse rows (deployments / incidents) that both
+    # the GitHub and GitLab processors write. No live provider fetch and no
+    # GITLAB_TOKEN is required, so GitHub-only orgs no longer crash.
+    del interval, gitlab_url, auth  # legacy GitLab-API knobs, retained for API compat
 
-    gitlab_url = gitlab_url or os.getenv("GITLAB_URL") or "https://gitlab.com"
-    resolved_org_id = org_id or ""
+    resolved_org_id = (org_id or "").strip()
 
     days = _date_range(day, backfill_days)
-    start_date = min(days).isoformat()
-    end_date = max(days).isoformat()
-    metrics_list = _parse_metrics(metrics)
+    metrics_list = set(_parse_metrics(metrics))
     computed_at = datetime.now(timezone.utc)
 
-    primary_sink: Any
-
-    primary_sink = ClickHouseMetricsSink(db_url)
-
+    primary_sink: Any = ClickHouseMetricsSink(db_url)
     sinks: list[Any] = [primary_sink]
     for s in sinks:
         setattr(s, "org_id", resolved_org_id)
-
-    connector = GitLabConnector(url=gitlab_url, private_token=token)
 
     try:
         for s in sinks:
@@ -125,59 +211,48 @@ def run_dora_metrics_job(
             elif hasattr(s, "ensure_indexes"):
                 s.ensure_indexes()
 
-        discovered_repos = _discover_repos(
-            backend=backend,
-            primary_sink=primary_sink,
-            repo_id=repo_id,
-            repo_name=repo_name,
-            org_id=resolved_org_id,
-            provider="gitlab",
-        )
+        for d in days:
+            start, end = _utc_day_window(d)
+            deployments = _load_deployments(
+                primary_sink,
+                org_id=resolved_org_id,
+                start=start,
+                end=end,
+                repo_id=repo_id,
+                repo_name=repo_name,
+            )
+            incidents = _load_incidents(
+                primary_sink,
+                org_id=resolved_org_id,
+                start=start,
+                end=end,
+                repo_id=repo_id,
+                repo_name=repo_name,
+            )
 
-        allow_unknown = repo_id is not None or repo_name is not None
+            # org_id is auto-injected by the sink from its bound context
+            # (ClickHouseCore._insert_rows), matching the daily-job pattern.
+            rows = [
+                row
+                for row in compute_dora_metrics_daily(
+                    day=d,
+                    deployments=deployments,
+                    incidents=incidents,
+                    computed_at=computed_at,
+                )
+                if row.metric_name in metrics_list
+            ]
 
-        for repo in discovered_repos:
-            if not _is_gitlab_repo(repo, allow_unknown):
-                continue
-
-            rows: list[DORAMetricsRecord] = []
-            for metric in metrics_list:
-                try:
-                    dora_metrics = connector.get_dora_metrics(
-                        repo.full_name,
-                        metric,
-                        start_date=start_date,
-                        end_date=end_date,
-                        interval=interval,
-                    )
-                except ConnectorException as exc:
-                    logger.warning(
-                        "GitLab DORA metric fetch failed for %s (%s): %s",
-                        repo.full_name,
-                        metric,
-                        exc,
-                    )
-                    continue
-
-                for dp in dora_metrics.data_points:
-                    rows.append(
-                        DORAMetricsRecord(
-                            repo_id=repo.repo_id,
-                            day=dp.date.date(),
-                            metric_name=metric,
-                            value=float(dp.value),
-                            computed_at=computed_at,
-                        )
-                    )
-
-            for s in sinks:
-                if rows:
+            if rows:
+                for s in sinks:
                     s.write_dora_metrics(rows)
+                logger.info(
+                    "DORA: wrote %d metric rows for org_id=%s day=%s",
+                    len(rows),
+                    resolved_org_id,
+                    d.isoformat(),
+                )
     finally:
-        try:
-            connector.close()
-        except Exception:
-            logger.exception("Error closing GitLab connector")
         for s in sinks:
             try:
                 s.close()
@@ -188,7 +263,7 @@ def run_dora_metrics_job(
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
     dora = subparsers.add_parser(
         "dora",
-        help="Fetch and persist DORA metrics from GitLab (supplemental).",
+        help="Compute and persist DORA metrics from synced ClickHouse data.",
     )
     add_date_range_args(dora)
     dora.add_argument("--repo-id", type=uuid.UUID)
@@ -196,19 +271,21 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     add_sink_arg(dora)
     dora.add_argument(
         "--metrics",
-        help="Comma-separated metric names to fetch (default: GitLab DORA set).",
+        help="Comma-separated metric names to compute (default: full DORA set).",
     )
+    # Legacy GitLab-API flags retained for backward compatibility; DORA is now
+    # provider-agnostic and sourced from ClickHouse, so these are ignored.
     dora.add_argument(
         "--interval",
         default="daily",
-        help="DORA interval (default: daily).",
+        help=argparse.SUPPRESS,
     )
     dora.add_argument(
         "--gitlab-url",
         default=os.getenv("GITLAB_URL", "https://gitlab.com"),
-        help="GitLab instance URL.",
+        help=argparse.SUPPRESS,
     )
-    dora.add_argument("--auth", help="GitLab token override.")
+    dora.add_argument("--auth", help=argparse.SUPPRESS)
     dora.set_defaults(func=_cmd_metrics_dora)
 
 

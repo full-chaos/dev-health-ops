@@ -6,6 +6,10 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from uuid import UUID
 
+from dev_health_ops.models.ai_attribution import (
+    AIAttributionRecord,
+    AIAttributionSignal,
+)
 from dev_health_ops.models.work_items import (
     Sprint,
     WorkItem,
@@ -14,6 +18,14 @@ from dev_health_ops.models.work_items import (
     WorkItemReopenEvent,
     WorkItemStatusCategory,
     WorkItemStatusTransition,
+)
+from dev_health_ops.providers._ai_detection import (
+    AuthorInfo,
+    detect_from_author,
+    detect_from_branch_name,
+    detect_from_commit_trailers,
+    detect_from_pr_body,
+    detect_from_pr_labels,
 )
 from dev_health_ops.providers.identity import IdentityResolver
 from dev_health_ops.providers.normalize_common import (
@@ -748,3 +760,174 @@ def build_epic_id_for_issue(
 
     epic_group = _get(epic, "group_id") or group_full_path
     return f"gitlab:{epic_group}:epic:{epic_iid}"
+
+
+# ---------------------------------------------------------------------------
+# AI attribution detection — wired into the GitLab normalize path
+# ---------------------------------------------------------------------------
+
+
+def detect_mr_attributions(
+    *,
+    mr: object,
+) -> list[AIAttributionSignal]:
+    """Detect all AI attribution signals from a GitLab merge request.
+
+    Mirrors :func:`providers.github.normalize.detect_pr_attributions` so the
+    SAME downstream write path (``ProviderBatch.ai_attributions`` →
+    ``write_ai_attribution``) persists GitLab attribution into
+    ``ai_governance_coverage_daily``.
+
+    Runs every provider-agnostic detector and returns the full list of raw
+    signals.  Signals are not collapsed — all are returned for raw
+    persistence; precedence is resolved at read time by the storage layer.
+
+    Sources checked (in precedence order, but all persisted regardless):
+        1. MR labels (highest confidence)
+        2. MR author (bot detection)
+        3. Commit trailers in MR description (squash merges expose them here)
+        4. MR source branch name (weak)
+        5. MR description body (weak)
+
+    Note on commit-level trailers:
+        Full commit message traversal requires an extra API call and is not
+        wired here — the normalize path receives the MR object only.  Squash
+        workflows typically surface commit trailers in the MR description.
+
+    Args:
+        mr: GitLab merge request object (REST attribute object or dict).
+
+    Returns:
+        List of :class:`AIAttributionSignal` objects (may be empty).
+    """
+    signals: list[AIAttributionSignal] = []
+
+    # 1. MR labels (GitLab labels are plain strings)
+    labels = [str(lbl) for lbl in (_get(mr, "labels") or []) if lbl]
+    signals.extend(detect_from_pr_labels(labels))
+
+    # 2. MR author (GitLab user objects expose ``username``/``name``; bots set
+    #    ``bot=True`` rather than GitHub's ``type``/``app_slug``).
+    author_obj = _get(mr, "author")
+    if author_obj is not None:
+        login = str(_get(author_obj, "username") or "")
+        if login:
+            is_bot = bool(_get(author_obj, "bot"))
+            author_signal = detect_from_author(
+                AuthorInfo(
+                    login=login,
+                    user_type="Bot" if is_bot else None,
+                    app_slug=None,
+                )
+            )
+            if author_signal is not None:
+                signals.append(author_signal)
+
+    # 3. Commit trailers from MR description
+    #    Squash/rebase merges often surface commit messages in the description.
+    description = str(_get(mr, "description") or "")
+    signals.extend(detect_from_commit_trailers(description))
+
+    # 4. Source branch name (weak signal)
+    source_branch = _get(mr, "source_branch")
+    if source_branch:
+        branch_signal = detect_from_branch_name(str(source_branch))
+        if branch_signal is not None:
+            signals.append(branch_signal)
+
+    # 5. MR description text (keyword matching — weak signal)
+    #    Only run if a trailer signal hasn't already fired from the same text
+    #    (avoids double-counting the same description body).
+    trailer_fired = any(s.source.value == "commit_trailer" for s in signals)
+    if not trailer_fired and description:
+        body_signal = detect_from_pr_body(description)
+        if body_signal is not None:
+            signals.append(body_signal)
+
+    return signals
+
+
+def gitlab_mr_ai_attributions(
+    *,
+    mr: object,
+    project_full_path: str,
+    org_id: UUID,
+    repo_id: UUID | None,
+) -> list[AIAttributionRecord]:
+    """Promote a GitLab MR's AI attribution signals to persisted records.
+
+    This is the single mapping from a merge request to
+    :class:`AIAttributionRecord` so that BOTH ingestion paths — the live
+    ``metrics.work_items.fetch_gitlab_work_items`` sync entrypoint and
+    :class:`GitLabProvider` — emit byte-identical records into
+    ``ai_governance_coverage_daily`` via ``write_ai_attribution``.
+
+    ``subject_id`` is the bare MR ``iid`` as a string (``str(iid)``) — the
+    SAME shape the governance/impact read paths join against, where
+    ``ai_attribution.subject_id = toString(git_pull_requests.number)`` and the
+    GitLab processor stores ``git_pull_requests.number = int(mr.iid)`` (see
+    :mod:`dev_health_ops.processors.gitlab` and
+    :mod:`dev_health_ops.audit.ai_governance.loaders`). A prefixed work-item id
+    such as ``gitlab:{path}!{iid}`` would NEVER match that join, leaving
+    ``human_reviewed`` NULL for every GitLab AI MR and fabricating
+    high-severity "missing review" governance violations (CHAOS-2379 round-2).
+    The synthetic fixtures use the same ``str(pr.number)`` contract.
+
+    GitLab MR ``iid`` (and GitHub PR ``number``) is only unique WITHIN a repo,
+    so two repos in one org can both carry attribution for ``subject_id="1"``.
+    The bare-iid join is safe because EVERY read path additionally constrains
+    ``attr.repo_id = pr.repo_id`` and the ``ai_attribution_resolved`` view
+    resolves per ``(org_id, subject_type, repo_id, subject_id)`` (migration
+    043, CHAOS-2379 round-3) — both repos' rows survive the resolve and each
+    matches only its own repo's PR. ``repo_id`` therefore disambiguates the
+    repo-local id; we do NOT repo-qualify ``subject_id`` itself (that would
+    break the ``toString(pr.number)`` join used by every loader).
+
+    ``observed_at`` is a real provider timestamp — never a fabricated
+    ingest-time value — derived from the MR's ``created_at``, falling back to
+    the MR ``updated_at`` and only then to ``now()`` when the provider omits
+    both.
+
+    Args:
+        mr: GitLab merge request object (REST attribute object or dict).
+        project_full_path: Project path used to build the canonical subject id.
+        org_id: Owning organization (tenant scope) — required; records are
+            never written with a blank tenant.
+        repo_id: Repository UUID for this project (may be ``None``).
+
+    Returns:
+        List of :class:`AIAttributionRecord` (may be empty).
+    """
+    signals = detect_mr_attributions(mr=mr)
+    if not signals:
+        return []
+
+    iid = int(_get(mr, "iid") or 0)
+    # Governance/impact loaders join `ai_attribution.subject_id =
+    # toString(git_pull_requests.number)`, and the GitLab processor stores
+    # `git_pull_requests.number = int(mr.iid)`. The subject id MUST therefore be
+    # the bare iid string — a prefixed `gitlab:{path}!{iid}` work-item id would
+    # never join and would fabricate "missing review" policy failures.
+    # iid is repo-local; cross-repo collisions are disambiguated by repo_id in
+    # every read-path join AND in the ai_attribution_resolved partition
+    # (migration 043), so both repos' rows survive — see this function's
+    # docstring (CHAOS-2379 round-3).
+    subject_id = str(iid)
+    observed_at = (
+        _to_utc(_parse_iso(_get(mr, "created_at")))
+        or _to_utc(_parse_iso(_get(mr, "updated_at")))
+        or datetime.now(timezone.utc)
+    )
+
+    return [
+        AIAttributionRecord.from_signal(
+            sig,
+            org_id=org_id,
+            provider="gitlab",
+            subject_type="pull_request",
+            subject_id=subject_id,
+            repo_id=repo_id,
+            observed_at=observed_at,
+        )
+        for sig in signals
+    ]

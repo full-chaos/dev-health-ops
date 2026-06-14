@@ -25,6 +25,7 @@ from dev_health_ops.metrics.sinks.clickhouse._insert import (
     _chunked,
     _dt_to_clickhouse_datetime,
 )
+from dev_health_ops.metrics.sinks.factory import detect_backend
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,7 @@ class ClickHouseCore(BaseMetricsSink):
     def __init__(self, dsn: str, client: Any | None = None) -> None:
         if not dsn:
             raise ValueError("ClickHouse DSN is required")
+        detect_backend(dsn)
         self.dsn = dsn
         if client:
             self.client = client

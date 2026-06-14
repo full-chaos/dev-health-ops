@@ -95,6 +95,10 @@ jobs:
           POSTGRES_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           SECONDARY_DATABASE_URI: mongodb://localhost:27017
           COVERAGE_THRESHOLD: "70"
+          # No OTLP collector runs in CI; with OTEL on, the exporter retries to
+          # localhost:4317 with backoff on every span/metric, flooding logs and
+          # slowing the suite into timeouts. We don't assert OTEL stats in CI.
+          OTEL_ENABLED: "false"
         run: |
           chmod +x ci/run_tests.sh
           mkdir -p test-results/logs

@@ -42,6 +42,9 @@ jobs:
           GITLAB_TOKEN: ${{ secrets.GL_TOKEN }}
           GITLAB_URL: ${{ secrets.GITLAB_URL }}
           SKIP_INTEGRATION_TESTS: ${{ secrets.SKIP_INTEGRATION_TESTS }}
+          # No OTLP collector in CI; OTEL on floods logs with localhost:4317
+          # export retries. We don't assert OTEL stats in CI.
+          OTEL_ENABLED: "false"
         run: |
           chmod +x ci/run_tests.sh
           mkdir -p test-results/logs

@@ -102,6 +102,8 @@ def retry_with_backoff(
     """
 
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        op_name = getattr(func, "__qualname__", getattr(func, "__name__", repr(func)))
+
         @wraps(func)
         async def async_wrapper(*args: Any, **kwargs: Any) -> T:
             rate_limiter = RateLimiter(
@@ -122,7 +124,8 @@ def retry_with_backoff(
                     if attempt < max_retries - 1:
                         retry_after = _get_retry_after_seconds(e)
                         logger.warning(
-                            "Attempt %s/%s failed: %s. Retrying...",
+                            "%s attempt %s/%s failed: %s. Retrying...",
+                            op_name,
                             attempt + 1,
                             max_retries,
                             e,
@@ -137,7 +140,8 @@ def retry_with_backoff(
                             await rate_limiter.wait()
                     else:
                         logger.error(
-                            "All %s attempts failed. Giving up.",
+                            "%s: all %s attempts failed. Giving up.",
+                            op_name,
                             max_retries,
                         )
 
@@ -166,7 +170,8 @@ def retry_with_backoff(
                     if attempt < max_retries - 1:
                         retry_after = _get_retry_after_seconds(e)
                         logger.warning(
-                            "Attempt %s/%s failed: %s. Retrying...",
+                            "%s attempt %s/%s failed: %s. Retrying...",
+                            op_name,
                             attempt + 1,
                             max_retries,
                             e,
@@ -181,7 +186,8 @@ def retry_with_backoff(
                             rate_limiter.wait_sync()
                     else:
                         logger.error(
-                            "All %s attempts failed. Giving up.",
+                            "%s: all %s attempts failed. Giving up.",
+                            op_name,
                             max_retries,
                         )
 

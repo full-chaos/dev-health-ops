@@ -23,6 +23,18 @@ from dev_health_ops.connectors.utils.retry import retry_with_backoff
 logger = logging.getLogger(__name__)
 
 
+# GitHub response headers that explain a 403/rate-limit without leaking the
+# token. Logged verbatim so an operator can attribute a failure to a permission,
+# SSO, or rate-limit cause.
+_DIAGNOSTIC_HEADERS = (
+    "x-ratelimit-remaining",
+    "x-ratelimit-reset",
+    "retry-after",
+    "x-github-request-id",
+    "x-accepted-github-permissions",
+)
+
+
 def _github_reset_delay_seconds(
     response: requests.Response,
 ) -> float | None:
@@ -35,6 +47,18 @@ def _github_reset_delay_seconds(
         return None
 
     return max(0.0, reset_epoch - time.time())
+
+
+def safe_github_headers(response: requests.Response) -> dict[str, str]:
+    """Extract diagnostic GitHub headers, never the credential.
+
+    Returns only the allow-listed ``_DIAGNOSTIC_HEADERS`` so logs and error
+    messages can attribute a 403 (rate-limit vs permission/SSO) without ever
+    echoing ``Authorization``. Header lookup is case-insensitive (HTTP headers
+    are case-insensitive; ``requests`` uses a ``CaseInsensitiveDict``).
+    """
+    lowered = {str(k).lower(): str(v) for k, v in response.headers.items()}
+    return {name: lowered[name] for name in _DIAGNOSTIC_HEADERS if name in lowered}
 
 
 class GitHubGraphQLClient:
@@ -112,14 +136,57 @@ class GitHubGraphQLClient:
             if response.status_code == 401:
                 raise AuthenticationException("GitHub authentication failed")
             elif response.status_code == 403:
-                # Could be rate limit or other forbidden error
-                rate_limit_remaining = response.headers.get("X-RateLimit-Remaining")
-                if rate_limit_remaining == "0":
+                diag = safe_github_headers(response)
+                logger.warning(
+                    "GitHub 403 on POST %s headers=%s body=%s",
+                    self.GRAPHQL_ENDPOINT,
+                    diag,
+                    response.text,
+                )
+                # (a) primary rate limit: remaining quota exhausted -> retry
+                # after the reset window.
+                if diag.get("x-ratelimit-remaining") == "0":
                     raise RateLimitException(
-                        "GitHub API rate limit exceeded",
+                        f"GitHub API rate limit exceeded on POST "
+                        f"{self.GRAPHQL_ENDPOINT} (headers={diag})",
                         retry_after_seconds=_github_reset_delay_seconds(response),
                     )
-                raise APIException(f"GitHub API forbidden: {response.text}")
+                # (b) secondary/abuse limit: Retry-After present, OR the body
+                # carries GitHub's documented secondary/abuse wording even with
+                # no Retry-After header (a DOCUMENTED case). Mirrors the REST
+                # path's ``_is_github_rate_limit_403`` body-wording fallback so
+                # both transports back off + retry instead of raising a
+                # non-retryable auth error on the file-contents/blame hot path.
+                retry_after = diag.get("retry-after")
+                body = response.text.lower()
+                body_indicates_rate_limit = (
+                    "rate limit" in body or "abuse" in body or "secondary" in body
+                )
+                if retry_after is not None or body_indicates_rate_limit:
+                    if retry_after is not None:
+                        try:
+                            retry_after_seconds: float | None = float(retry_after)
+                        except ValueError:
+                            retry_after_seconds = None
+                    else:
+                        # Body-only secondary/abuse 403 with no Retry-After:
+                        # back off a sane default before the decorator retries.
+                        retry_after_seconds = 60.0
+                    raise RateLimitException(
+                        f"GitHub secondary/abuse rate limit on POST "
+                        f"{self.GRAPHQL_ENDPOINT} (headers={diag})",
+                        retry_after_seconds=retry_after_seconds,
+                    )
+                # (c) permission/SSO/other 403: NOT a transient condition.
+                # Raise a non-retryable AuthenticationException so the retry
+                # decorator (which only retries RateLimitException/APIException)
+                # does not blindly spin on an unfixable permission error.
+                raise AuthenticationException(
+                    f"GitHub 403 (permission/SSO) on POST {self.GRAPHQL_ENDPOINT}: "
+                    "token likely lacks a required scope/permission or the org "
+                    "requires SAML SSO authorization for this token "
+                    f"(headers={diag}). Body: {response.text}"
+                )
             elif response.status_code != 200:
                 raise APIException(
                     f"GitHub API error: {response.status_code} - {response.text}"

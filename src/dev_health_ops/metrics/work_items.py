@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from dev_health_ops.metrics.dependencies import get_metrics_dependencies
+from dev_health_ops.models.ai_attribution import AIAttributionRecord
 from dev_health_ops.models.work_items import (
     Sprint,
     WorkItem,
@@ -430,17 +431,40 @@ def fetch_gitlab_work_items(
     identity: IdentityResolver,
     include_label_events: bool = True,
     max_label_events: int = 300,
-) -> tuple[list[WorkItem], list[WorkItemStatusTransition]]:
+    org_id: str = "",
+) -> tuple[
+    list[WorkItem],
+    list[WorkItemStatusTransition],
+    list[AIAttributionRecord],
+]:
     """
     Fetch GitLab issues updated since `since` for the given projects and normalize into WorkItems.
 
+    Also scans merge requests updated since `since` for AI attribution signals
+    (labels, bot authors, commit trailers in the description, branch names) and
+    returns them as :class:`AIAttributionRecord` so the work-items sync job can
+    persist GitLab governance coverage through the SAME ``write_ai_attribution``
+    sink path used by GitHub (CHAOS-2379). Attribution detection is the only
+    reason MRs are fetched here; their work items continue to be produced by the
+    provider path, so this scan does not duplicate MR work-item rows.
+
+    Attribution rows are written with the caller's real ``org_id`` and are
+    skipped entirely when ``org_id`` is blank (a CLI-only run with no tenant
+    scope) so a blank-tenant row is never persisted.
+
     Requires `GITLAB_TOKEN` and optional `GITLAB_URL`.
     """
+    from uuid import UUID
+
+    from dev_health_ops.providers.gitlab.normalize import gitlab_mr_ai_attributions
+    from dev_health_ops.providers.utils import env_flag
+
     deps = get_metrics_dependencies()
 
     client = deps.gitlab_client_factory()
     work_items: dict[str, WorkItem] = {}
     transitions: list[WorkItemStatusTransition] = []
+    ai_attributions: list[AIAttributionRecord] = []
 
     since_utc = to_utc(since)
     gitlab_repos = [r for r in repos if r.source == "gitlab"]
@@ -449,6 +473,9 @@ def fetch_gitlab_work_items(
         len(gitlab_repos),
         since_utc.isoformat(),
     )
+    # AI attribution requires a tenant scope and the MR-attribution feature.
+    org_uuid = UUID(org_id) if org_id else None
+    scan_mrs = org_uuid is not None and env_flag("GITLAB_INCLUDE_MRS", True)
     for repo in repos:
         if repo.source != "gitlab":
             continue
@@ -479,9 +506,33 @@ def fetch_gitlab_work_items(
             work_items[wi.work_item_id] = wi
             transitions.extend(list(_transitions or []))
 
+        if scan_mrs:
+            assert org_uuid is not None  # for type checker; guarded by scan_mrs
+            try:
+                for mr in client.iter_project_merge_requests(
+                    project_id_or_path=repo.full_name,
+                    state="all",
+                    updated_after=since_utc,
+                ):
+                    ai_attributions.extend(
+                        gitlab_mr_ai_attributions(
+                            mr=mr,
+                            project_full_path=repo.full_name,
+                            org_id=org_uuid,
+                            repo_id=repo.repo_id,
+                        )
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "GitLab: failed to scan MRs for AI attribution in %s: %s",
+                    repo.full_name,
+                    exc,
+                )
+
     logger.info(
-        "Fetched %d GitLab work items (since %s)",
+        "Fetched %d GitLab work items (since %s); %d AI attribution record(s)",
         len(work_items),
         since_utc.isoformat(),
+        len(ai_attributions),
     )
-    return list(work_items.values()), transitions
+    return list(work_items.values()), transitions, ai_attributions

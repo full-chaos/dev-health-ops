@@ -126,13 +126,17 @@ def fetch_work_item_active_hours(
     ids = list(dict.fromkeys(work_item_ids))
     if not ids:
         return {}
-    params = {"work_item_ids": ids}
-    query = """
+    params: dict[str, object] = {"work_item_ids": ids}
+    where_sql = "WHERE work_item_id IN %(work_item_ids)s"
+    if org_id:
+        params["org_id"] = org_id
+        where_sql += " AND org_id = %(org_id)s"
+    query = f"""
         SELECT
             work_item_id,
             argMax(active_time_hours, computed_at) AS active_time_hours
         FROM work_item_cycle_times
-        WHERE work_item_id IN %(work_item_ids)s
+        {where_sql}
         GROUP BY work_item_id
     """
     rows = query_dicts(sink, query, params)

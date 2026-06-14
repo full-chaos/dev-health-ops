@@ -221,11 +221,17 @@ class TestRunDailyMetricsBatch:
 
 
 class TestRunDailyMetricsFinalizeTask:
+    @patch("dev_health_ops.workers.recommendations_tasks.run_recommendations_job")
     @patch("dev_health_ops.workers.metrics_partitioned._invalidate_metrics_cache")
     @patch("asyncio.run")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_calls_finalize_and_invalidates_cache(
-        self, mock_get_session, mock_asyncio_run, mock_invalidate, db_session
+        self,
+        mock_get_session,
+        mock_asyncio_run,
+        mock_invalidate,
+        mock_recommendations,
+        db_session,
     ):
         from dev_health_ops.workers.metrics_partitioned import (
             run_daily_metrics_finalize_task,
@@ -249,6 +255,19 @@ class TestRunDailyMetricsFinalizeTask:
         assert result["status"] == "success"
         mock_asyncio_run.assert_called_once()
         mock_invalidate.assert_called_once_with("2025-01-15", "test-org")
+
+        # Completion-gated trigger (CHAOS-2373): once finalize succeeds, the
+        # recommendations job is chained for the same org with the same db_url.
+        mock_recommendations.apply_async.assert_called_once()
+        chained_kwargs = mock_recommendations.apply_async.call_args.kwargs
+        # as_of carries the exact finalized partition day (not wall-clock today)
+        # so the gate + window_end key on the right partition across UTC midnight.
+        assert chained_kwargs["kwargs"] == {
+            "org_id": "test-org",
+            "db_url": "clickhouse://fake",
+            "as_of": "2025-01-15",
+        }
+        assert chained_kwargs["queue"] == "metrics"
 
         checkpoint_day = datetime.combine(
             date(2025, 1, 15), time.min, tzinfo=timezone.utc

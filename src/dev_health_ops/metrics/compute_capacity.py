@@ -279,8 +279,8 @@ def forecast_capacity(
         seed: Random seed for reproducibility.
         today: Reference date for the forecast horizon (``days_available =
             target_date - today``). Defaults to the current UTC date. Inject a
-            fixed value for deterministic tests: ``target_date`` derived from a
-            local ``date.today()`` while the horizon is measured against UTC
+            fixed value for deterministic tests: a ``target_date`` derived from a
+            naive local "today" while the horizon is measured against the UTC
             ``now.date()`` makes ``days_available`` (and therefore the
             quantiles) flip by one near a UTC-midnight boundary (CHAOS-2400).
 

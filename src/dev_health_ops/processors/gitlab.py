@@ -242,6 +242,15 @@ def _fetch_gitlab_mrs_sync(connector, project_id, repo_id, max_mrs):
 _GITLAB_APPROVE_NOTE = "approved this merge request"
 _GITLAB_UNAPPROVE_NOTE = "unapproved this merge request"
 
+# A GitLab MR note attached to a diff position (``type == "DiffNote"``) is a
+# code-line review comment — the GitLab analogue of a GitHub review comment.
+# Plain discussion notes (``type`` null/``"DiscussionNote"``) are ordinary MR
+# chatter (author replies, status banter) and are NOT review activity, so they
+# must stay in ``comments_count`` only and never become COMMENTED review rows
+# (CHAOS-2378: counting them inflated reviews_count and corrupted
+# first_review_at / review-latency).
+_GITLAB_DIFF_NOTE_TYPE = "DiffNote"
+
 
 def map_gitlab_mr_reviews(
     repo_id: Any,
@@ -249,6 +258,7 @@ def map_gitlab_mr_reviews(
     approvals: dict[str, Any] | None,
     notes: list[dict[str, Any]] | None,
     fallback_at: datetime | None = None,
+    author_username: str | None = None,
 ) -> tuple[list[GitPullRequestReview], datetime | None]:
     """Map GitLab approvals + MR notes to GitPullRequestReview rows.
 
@@ -258,7 +268,16 @@ def map_gitlab_mr_reviews(
 
     * approval ("approved" system note / approvals.approved_by) -> APPROVED
     * "unapproved" system note -> CHANGES_REQUESTED
-    * resolvable reviewer comment (non-system note) -> COMMENTED
+    * diff-line review comment by a non-author reviewer
+      (``type == "DiffNote"``) -> COMMENTED
+
+    Only diff-line notes authored by someone other than the MR author count as
+    review activity. Generic MR discussion notes (``type`` null /
+    ``"DiscussionNote"``) and the author's own replies are ordinary chatter:
+    they stay in ``comments_count`` only and must NOT become COMMENTED rows,
+    because doing so inflated ``reviews_count`` and let non-review timestamps
+    drive ``first_review_at`` / review-latency (CHAOS-2378). Pass the MR author
+    via ``author_username`` so self-comments are excluded.
 
     Approval events appear in *both* the note stream (a timestamped
     "approved this merge request" system note) and the approvals endpoint
@@ -278,6 +297,9 @@ def map_gitlab_mr_reviews(
     """
     reviews: list[GitPullRequestReview] = []
     seen_ids: set[str] = set()
+    # MR author: their own comments/replies are not reviews and are excluded
+    # from COMMENTED rows (the author cannot review their own MR).
+    author = (author_username or "").strip().lower()
     # Reviewers whose approval is already captured by a timestamped note;
     # used to dedup the timestampless approvals-endpoint entries.
     approved_reviewers: set[str] = set()
@@ -310,12 +332,12 @@ def map_gitlab_mr_reviews(
         )
 
     # 1. Note stream FIRST (authoritative, timestamped). System notes capture
-    #    (un)approval events; non-system resolvable notes are reviewer comments.
+    #    (un)approval events; diff-line notes by non-authors are review comments.
     for note in notes or []:
         if not isinstance(note, dict):
             continue
-        author = note.get("author") if isinstance(note.get("author"), dict) else {}
-        username = (author or {}).get("username") or "Unknown"
+        note_author = note.get("author") if isinstance(note.get("author"), dict) else {}
+        username = (note_author or {}).get("username") or "Unknown"
         created_at = safe_parse_datetime(note.get("created_at"))
         note_id = note.get("id")
         body = str(note.get("body") or "").strip().lower()
@@ -329,7 +351,14 @@ def map_gitlab_mr_reviews(
             # other system notes (label/assignee/etc.) are not reviews
             continue
 
-        # Human review comment.
+        # Human note. Only a diff-line comment (``type == "DiffNote"``) by a
+        # reviewer other than the MR author is review activity; generic
+        # discussion notes and the author's own comments are plain chatter
+        # (counted via comments_count, never as a COMMENTED review row).
+        if note.get("type") != _GITLAB_DIFF_NOTE_TYPE:
+            continue
+        if author and username.strip().lower() == author:
+            continue
         _add(f"note-{note_id}", username, "COMMENTED", created_at)
 
     # 2. Approvals endpoint: backfill only approvers NOT already covered by a
@@ -367,12 +396,68 @@ class _MrReviewFetch(NamedTuple):
     known: bool
 
 
+def _fetch_all_mr_notes(
+    connector,
+    project_id: int,
+    iid: int,
+    gate: Any = None,
+) -> list[dict[str, Any]]:
+    """Fetch *every* page of an MR's notes, not just the first.
+
+    The notes endpoint is paginated (per_page<=100); a busy MR can carry an
+    approval / unapproval / review-comment event past page 1. Fetching only the
+    first page would silently drop those events and undercount reviews while the
+    sync still reports success (CHAOS-2378). We exhaust pages, honouring the
+    shared rate-limit gate/backoff exactly like the MR-list loop.
+
+    Raises on a non-rate-limit error so the caller can flag the MR's review
+    state as ``known=False`` (an incomplete page set is as untrustworthy as a
+    failed first page — both must avoid clobbering correct metrics).
+    """
+    per_page = int(getattr(connector, "per_page", 100) or 100)
+    all_notes: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        if gate is not None:
+            gate.wait_sync()
+        try:
+            page_notes = connector.rest_client.get_merge_request_notes(
+                project_id,
+                iid,
+                page=page,
+                per_page=per_page,
+            )
+            if gate is not None:
+                gate.reset()
+        except Exception as exc:
+            retry_after = getattr(exc, "retry_after_seconds", None)
+            if retry_after is not None and gate is not None:
+                applied = gate.penalize(retry_after)
+                logging.info(
+                    "GitLab rate limited fetching notes for MR !%d; backoff %.1fs (%s)",
+                    iid,
+                    applied,
+                    exc,
+                )
+                continue
+            raise
+        if not page_notes:
+            break
+        all_notes.extend(page_notes)
+        # Final page when the server returns fewer than a full page.
+        if len(page_notes) < per_page:
+            break
+        page += 1
+    return all_notes
+
+
 def _fetch_gitlab_mr_reviews(
     connector,
     project_id: int,
     mr: dict[str, Any],
     repo_id: Any,
     created_at: datetime | None,
+    gate: Any = None,
 ) -> _MrReviewFetch:
     """Best-effort fetch + map of one MR's reviews (approvals + notes).
 
@@ -381,9 +466,10 @@ def _fetch_gitlab_mr_reviews(
     404s on tiers without merge-request approvals). Accordingly:
 
     * approvals-only failure is benign (notes still give authoritative data);
-    * a notes failure means we genuinely do not know the review state, so we
-      report ``known=False`` and the caller preserves the existing PR row
-      rather than overwriting its review metrics with zero/null.
+    * a notes failure (or an incomplete page set) means we genuinely do not
+      know the review state, so we report ``known=False`` and the caller
+      preserves the existing PR row rather than overwriting its review metrics
+      with zero/null.
 
     Never raises (CHAOS-2378).
     """
@@ -400,7 +486,7 @@ def _fetch_gitlab_mr_reviews(
     notes: list[dict[str, Any]] = []
     notes_known = True
     try:
-        notes = connector.rest_client.get_merge_request_notes(project_id, iid)
+        notes = _fetch_all_mr_notes(connector, project_id, iid, gate=gate)
     except Exception as exc:  # noqa: BLE001 - best-effort
         notes_known = False
         logging.warning(
@@ -412,16 +498,22 @@ def _fetch_gitlab_mr_reviews(
         )
 
     if not notes_known:
-        # Authoritative source unavailable: signal "unknown" so the caller does
-        # not persist this MR's PR row with zeroed-out review metrics.
+        # Authoritative source unavailable / incomplete: signal "unknown" so the
+        # caller does not persist this MR's PR row with zeroed-out review
+        # metrics.
         return _MrReviewFetch([], None, 0, known=False)
 
+    author_data = mr.get("author")
+    author_username = (
+        author_data.get("username") if isinstance(author_data, dict) else None
+    )
     reviews, first_review_at = map_gitlab_mr_reviews(
         repo_id=repo_id,
         number=iid,
         approvals=approvals,
         notes=notes,
         fallback_at=created_at,
+        author_username=author_username,
     )
     changes_requested_count = sum(1 for r in reviews if r.state == "CHANGES_REQUESTED")
     return _MrReviewFetch(reviews, first_review_at, changes_requested_count, known=True)
@@ -530,6 +622,7 @@ def _sync_gitlab_mrs_to_store(
                 mr=mr,
                 repo_id=repo_id,
                 created_at=created_at,
+                gate=gate,
             )
 
             if not fetched.known:

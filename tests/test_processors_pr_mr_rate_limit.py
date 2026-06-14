@@ -195,7 +195,9 @@ async def test_gitlab_mr_sync_retries_on_retry_after_and_persists():
         def get_merge_request_approvals(self, project_id, iid):
             return {"approved_by": []}
 
-        def get_merge_request_notes(self, project_id, iid):
+        def get_merge_request_notes(
+            self, project_id, iid, page=1, per_page=100, **_kwargs
+        ):
             return []
 
     class _Connector:

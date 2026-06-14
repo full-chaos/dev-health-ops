@@ -7,7 +7,7 @@ review-latency / /ai/review-load populate for GitLab orgs. No live API or DB.
 
 import uuid
 from datetime import datetime, timezone
-from typing import cast
+from typing import Any, cast
 from unittest.mock import Mock
 
 # Initialize the connectors package before processors to avoid the
@@ -17,6 +17,7 @@ import dev_health_ops.connectors  # noqa: F401
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.models.git import GitPullRequestReview
 from dev_health_ops.processors.gitlab import (
+    _fetch_all_mr_notes,
     _fetch_gitlab_mr_reviews,
     _sync_gitlab_mrs_to_store,
     map_gitlab_mr_reviews,
@@ -79,23 +80,89 @@ def test_unapproval_system_note_maps_to_changes_requested():
     assert first_review_at == datetime(2026, 1, 2, 9, 30, tzinfo=timezone.utc)
 
 
-def test_human_comment_note_maps_to_commented():
+def test_diff_note_by_reviewer_maps_to_commented():
+    """A diff-line comment (``type == "DiffNote"``) by a non-author reviewer is
+    the GitLab analogue of a GitHub review comment -> COMMENTED."""
     notes = [
         {
             "id": 200,
             "system": False,
+            "type": "DiffNote",
             "body": "Please rename this variable.",
             "author": {"username": "carol"},
             "created_at": "2026-01-03T08:00:00Z",
         }
     ]
     reviews, _ = map_gitlab_mr_reviews(
-        repo_id=REPO_ID, number=42, approvals=None, notes=notes
+        repo_id=REPO_ID,
+        number=42,
+        approvals=None,
+        notes=notes,
+        author_username="author",
     )
 
     assert len(reviews) == 1
     assert reviews[0].state == "COMMENTED"
     assert reviews[0].reviewer == "carol"
+
+
+def test_generic_discussion_note_is_not_a_review():
+    """Regression (CHAOS-2378): a plain MR discussion note (no diff position) is
+    ordinary chatter and must NOT be counted as a COMMENTED review -- counting
+    it inflated reviews_count and corrupted first_review_at."""
+    notes: list[dict[str, Any]] = [
+        {
+            "id": 201,
+            "system": False,
+            "type": None,  # generic discussion note, not attached to a diff
+            "body": "Thanks, will do!",
+            "author": {"username": "carol"},
+            "created_at": "2026-01-03T08:00:00Z",
+        },
+        {
+            "id": 202,
+            "system": False,
+            "type": "DiscussionNote",  # reply in a thread, still not a diff note
+            "body": "ping",
+            "author": {"username": "carol"},
+            "created_at": "2026-01-03T09:00:00Z",
+        },
+    ]
+    reviews, first_review_at = map_gitlab_mr_reviews(
+        repo_id=REPO_ID,
+        number=42,
+        approvals=None,
+        notes=notes,
+        author_username="author",
+    )
+
+    assert reviews == []
+    assert first_review_at is None
+
+
+def test_author_self_diff_note_is_not_a_review():
+    """Regression (CHAOS-2378): the MR author commenting on their own diff is
+    not a review -- it must not mark the MR reviewed nor drive first_review_at."""
+    notes = [
+        {
+            "id": 203,
+            "system": False,
+            "type": "DiffNote",
+            "body": "Self-note: refactor later.",
+            "author": {"username": "Author"},  # case-insensitive match
+            "created_at": "2026-01-03T08:00:00Z",
+        }
+    ]
+    reviews, first_review_at = map_gitlab_mr_reviews(
+        repo_id=REPO_ID,
+        number=42,
+        approvals=None,
+        notes=notes,
+        author_username="author",
+    )
+
+    assert reviews == []
+    assert first_review_at is None
 
 
 def test_approve_system_note_maps_to_approved():
@@ -220,6 +287,7 @@ def test_combined_payload_yields_all_expected_rows():
         {
             "id": 200,
             "system": False,
+            "type": "DiffNote",
             "body": "nit: typo",
             "author": {"username": "carol"},
             "created_at": "2026-01-02T10:00:00Z",
@@ -255,6 +323,7 @@ def test_empty_payloads_yield_no_rows():
 def test_fetch_calls_rest_endpoints_and_maps():
     """The fetch helper wires the REST approvals + notes calls into the mapper."""
     connector = Mock()
+    connector.per_page = 100
     connector.rest_client.get_merge_request_approvals.return_value = _approvals(
         ("alice", 7)
     )
@@ -262,6 +331,7 @@ def test_fetch_calls_rest_endpoints_and_maps():
         {
             "id": 200,
             "system": False,
+            "type": "DiffNote",
             "body": "looks good",
             "author": {"username": "carol"},
             "created_at": "2026-01-03T08:00:00Z",
@@ -271,13 +341,15 @@ def test_fetch_calls_rest_endpoints_and_maps():
     fetched = _fetch_gitlab_mr_reviews(
         connector=connector,
         project_id=99,
-        mr={"iid": 42},
+        mr={"iid": 42, "author": {"username": "author"}},
         repo_id=REPO_ID,
         created_at=CREATED_AT,
     )
 
     connector.rest_client.get_merge_request_approvals.assert_called_once_with(99, 42)
-    connector.rest_client.get_merge_request_notes.assert_called_once_with(99, 42)
+    connector.rest_client.get_merge_request_notes.assert_called_once_with(
+        99, 42, page=1, per_page=100
+    )
     assert fetched.known is True
     assert sorted(r.state for r in fetched.reviews) == ["APPROVED", "COMMENTED"]
     assert fetched.first_review_at == datetime(2026, 1, 3, 8, 0, tzinfo=timezone.utc)
@@ -286,6 +358,7 @@ def test_fetch_calls_rest_endpoints_and_maps():
 def test_fetch_is_resilient_to_missing_approvals_endpoint():
     """MRs whose approvals endpoint 404s still ingest notes (skip cleanly)."""
     connector = Mock()
+    connector.per_page = 100
     connector.rest_client.get_merge_request_approvals.side_effect = Exception("404")
     connector.rest_client.get_merge_request_notes.return_value = []
 
@@ -307,6 +380,7 @@ def test_fetch_notes_failure_reports_unknown():
     """Regression (CHAOS-2378): when the authoritative notes call fails, the
     result is flagged unknown so the caller will NOT zero out review metrics."""
     connector = Mock()
+    connector.per_page = 100
     connector.rest_client.get_merge_request_approvals.return_value = _approvals(
         ("alice", 7)
     )
@@ -385,11 +459,14 @@ def _make_connector(mrs_page, approvals_by_iid, notes_by_iid):
             raise val
         return val
 
-    def _notes_for(project_id, iid):
+    def _notes_for(project_id, iid, page=1, per_page=100):
         val = notes_by_iid.get(iid)
         if isinstance(val, Exception):
             raise val
-        return val or []
+        all_notes = val or []
+        # Emulate real GitLab note pagination so the exhaustion loop is exercised.
+        start = (page - 1) * per_page
+        return all_notes[start : start + per_page]
 
     connector.rest_client.get_merge_request_approvals.side_effect = _approvals_for
     connector.rest_client.get_merge_request_notes.side_effect = _notes_for
@@ -528,4 +605,162 @@ def test_live_sync_mr_with_no_reviews_persists_zero_counts():
     assert pr.reviews_count == 0
     assert pr.changes_requested_count == 0
     assert pr.first_review_at is None
+    assert sink.reviews == []
+
+
+# --- Pagination + classification regressions (CHAOS-2378 round 2) ---
+
+
+def test_fetch_all_mr_notes_exhausts_pages():
+    """Regression (CHAOS-2378): notes are paginated; we must fetch EVERY page,
+    not just page 1, or late approval/review events are silently dropped."""
+    # 100 generic notes (a full first page) + a 101st note carrying the only
+    # approval system note. A single-page fetch would lose it entirely.
+    page_one = [
+        {
+            "id": i,
+            "system": True,
+            "body": "added 1 commit",
+            "author": {"username": "ci"},
+            "created_at": "2026-01-02T00:00:00Z",
+        }
+        for i in range(100)
+    ]
+    page_two = [
+        {
+            "id": 1000,
+            "system": True,
+            "body": "approved this merge request",
+            "author": {"username": "alice"},
+            "created_at": "2026-01-04T10:00:00Z",
+        }
+    ]
+    all_notes = page_one + page_two
+
+    connector = Mock()
+    connector.per_page = 100
+
+    def _notes(project_id, iid, page=1, per_page=100):
+        start = (page - 1) * per_page
+        return all_notes[start : start + per_page]
+
+    connector.rest_client.get_merge_request_notes.side_effect = _notes
+
+    fetched = _fetch_all_mr_notes(connector, project_id=99, iid=42)
+
+    assert len(fetched) == 101
+    # The page-2 approval note survived pagination.
+    assert any(n["id"] == 1000 for n in fetched)
+    # Two full-size fetches + one short page would also be valid; here page 2
+    # is short (1 item) so the loop stops after 2 calls.
+    assert connector.rest_client.get_merge_request_notes.call_count == 2
+
+
+def test_live_sync_approval_after_first_note_page_is_counted():
+    """End-to-end regression (CHAOS-2378): an MR whose approval lands past the
+    first 100 notes still yields an APPROVED review with the real timestamp --
+    the sync no longer drops it by fetching only page 1."""
+    notes = [
+        {
+            "id": i,
+            "system": True,
+            "body": "added 1 commit",
+            "author": {"username": "ci"},
+            "created_at": "2026-01-02T00:00:00Z",
+        }
+        for i in range(100)
+    ] + [
+        {
+            "id": 9999,
+            "system": True,
+            "body": "approved this merge request",
+            "author": {"username": "alice"},
+            "created_at": "2026-01-04T10:00:00Z",
+        }
+    ]
+    mr = {
+        "iid": 44,
+        "title": "Busy MR",
+        "description": "desc",
+        "state": "merged",
+        "author": {"username": "author"},
+        "created_at": "2026-01-01T12:00:00Z",
+        "updated_at": "2026-01-05T12:00:00Z",
+        "merged_at": "2026-01-04T11:00:00Z",
+        "source_branch": "feat",
+        "target_branch": "main",
+        "user_notes_count": 101,
+    }
+    connector = _make_connector(
+        mrs_page=[mr],
+        approvals_by_iid={44: {"approved_by": []}},
+        notes_by_iid={44: notes},
+    )
+
+    total, sink = _run_sync(connector)
+
+    assert total == 1
+    pr = sink.prs[0]
+    assert pr.reviews_count == 1
+    assert pr.first_review_at == datetime(2026, 1, 4, 10, 0, tzinfo=timezone.utc)
+    assert len(sink.reviews) == 1
+    assert sink.reviews[0].state == "APPROVED"
+
+
+def test_live_sync_generic_notes_are_not_counted_as_reviews():
+    """End-to-end regression (CHAOS-2378): generic MR discussion notes and the
+    author's own replies must NOT inflate reviews_count nor set first_review_at;
+    they live in comments_count only."""
+    mr = {
+        "iid": 45,
+        "title": "Chat-heavy MR",
+        "description": "desc",
+        "state": "opened",
+        "author": {"username": "author"},
+        "created_at": "2026-01-01T12:00:00Z",
+        "updated_at": "2026-01-05T12:00:00Z",
+        "merged_at": None,
+        "source_branch": "feat",
+        "target_branch": "main",
+        "user_notes_count": 3,
+    }
+    notes = [
+        {
+            "id": 1,
+            "system": False,
+            "type": None,  # generic discussion
+            "body": "When will this be ready?",
+            "author": {"username": "pm"},
+            "created_at": "2026-01-02T08:00:00Z",
+        },
+        {
+            "id": 2,
+            "system": False,
+            "type": "DiffNote",  # but it's the AUTHOR self-commenting
+            "body": "Will refactor.",
+            "author": {"username": "author"},
+            "created_at": "2026-01-02T09:00:00Z",
+        },
+        {
+            "id": 3,
+            "system": False,
+            "type": "DiscussionNote",  # thread reply, not a diff comment
+            "body": "thanks",
+            "author": {"username": "pm"},
+            "created_at": "2026-01-02T10:00:00Z",
+        },
+    ]
+    connector = _make_connector(
+        mrs_page=[mr],
+        approvals_by_iid={45: {"approved_by": []}},
+        notes_by_iid={45: notes},
+    )
+
+    total, sink = _run_sync(connector)
+
+    assert total == 1
+    pr = sink.prs[0]
+    assert pr.reviews_count == 0  # no genuine review activity
+    assert pr.first_review_at is None
+    assert pr.comments_count == 3  # generic chatter stays here
     assert sink.reviews == []

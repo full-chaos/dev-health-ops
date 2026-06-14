@@ -77,7 +77,7 @@ def _make_ns(
     ns.provider = provider
     ns.db = db
     ns.sink = "clickhouse"
-    ns.analytics_db = None
+    ns.analytics_db = "clickhouse://example.test:8123/default"
     ns.path = None
     ns.owner = None
     ns.auth = None
@@ -94,20 +94,22 @@ class TestLinearTeamSync:
     """Tests for the linear branch inside sync_teams()."""
 
     @patch("dev_health_ops.providers.teams._bridge_teams_to_postgres")
-    @patch("dev_health_ops.providers.teams.resolve_sink_uri")
     @patch("dev_health_ops.providers.linear.client.LinearClient")
     def test_happy_path_two_teams(
         self,
         mock_client_class: MagicMock,
-        mock_resolve_sink: MagicMock,
         mock_bridge: MagicMock,
     ) -> None:
-        """Happy path: two active teams with members → two Team objects created."""
+        """Happy path: two active teams with members → two Team objects created.
+
+        Org-scoped path (ns.org set): _bridge_teams_to_postgres is called directly;
+        asyncio.run is NOT called for the ClickHouse write (bridge_teams_to_clickhouse
+        handles that internally).
+        """
         from dev_health_ops.providers.teams import sync_teams
 
         mock_client = MagicMock()
         mock_client_class.from_env.return_value = mock_client
-        mock_resolve_sink.return_value = "clickhouse://localhost:8123/default"
         mock_bridge.return_value = 2
         mock_client.iter_teams.return_value = [
             _mock_linear_team(
@@ -123,14 +125,14 @@ class TestLinearTeamSync:
         ]
 
         ns = _make_ns()
-        with patch("asyncio.run") as mock_run:
-            mock_run.side_effect = _close_coroutine
+        with patch(
+            "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
+            return_value=2,
+        ):
             result = sync_teams(ns)
 
         assert result == 0
-        # asyncio.run was called (to persist teams)
-        mock_run.assert_called_once()
-        # bridge was called
+        # bridge was called with the provider-built teams list
         mock_bridge.assert_called_once()
         # Verify the teams list passed to bridge has 2 items with correct IDs
         teams_arg = mock_bridge.call_args[0][0]
@@ -165,7 +167,13 @@ class TestLinearTeamSync:
         ]
 
         ns = _make_ns()
-        with patch("asyncio.run") as mock_run:
+        with (
+            patch("asyncio.run") as mock_run,
+            patch(
+                "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
+                return_value=1,
+            ),
+        ):
             mock_run.side_effect = _close_coroutine
             result = sync_teams(ns)
 
@@ -195,7 +203,13 @@ class TestLinearTeamSync:
         ]
 
         ns = _make_ns()
-        with patch("asyncio.run") as mock_run:
+        with (
+            patch("asyncio.run") as mock_run,
+            patch(
+                "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
+                return_value=1,
+            ),
+        ):
             mock_run.side_effect = _close_coroutine
             result = sync_teams(ns)
 
@@ -239,7 +253,13 @@ class TestLinearTeamSync:
         mock_client.get_team_members.return_value = [initial_member, extra_member]
 
         ns = _make_ns()
-        with patch("asyncio.run") as mock_run:
+        with (
+            patch("asyncio.run") as mock_run,
+            patch(
+                "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
+                return_value=1,
+            ),
+        ):
             mock_run.side_effect = _close_coroutine
             result = sync_teams(ns)
 
@@ -251,6 +271,49 @@ class TestLinearTeamSync:
         # Both members should be present
         assert "alice@example.com" in teams_arg[0].members
         assert "bob@example.com" in teams_arg[0].members
+
+    @patch("dev_health_ops.providers.teams._bridge_teams_to_postgres")
+    @patch("dev_health_ops.providers.teams.resolve_sink_uri")
+    @patch("dev_health_ops.providers.linear.client.LinearClient")
+    def test_partial_member_pagination_is_marked_incomplete(
+        self,
+        mock_client_class: MagicMock,
+        mock_resolve_sink: MagicMock,
+        mock_bridge: MagicMock,
+    ) -> None:
+        from dev_health_ops.providers.teams import sync_teams
+
+        mock_client = MagicMock()
+        mock_client_class.from_env.return_value = mock_client
+        mock_resolve_sink.return_value = "clickhouse://localhost:8123/default"
+        mock_bridge.return_value = 1
+        initial_member = _mock_member(name="Alice", email="alice@example.com")
+        mock_client.iter_teams.return_value = [
+            _mock_linear_team(
+                key="BIG",
+                name="Big Team",
+                team_id="team-big",
+                members=[initial_member],
+                has_next_page=True,
+            ),
+        ]
+        mock_client.get_team_members.side_effect = RuntimeError("linear timeout")
+
+        ns = _make_ns()
+        with (
+            patch("asyncio.run") as mock_run,
+            patch(
+                "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
+                return_value=1,
+            ),
+        ):
+            mock_run.side_effect = _close_coroutine
+            result = sync_teams(ns)
+
+        assert result == 0
+        teams_arg = mock_bridge.call_args[0][0]
+        assert teams_arg[0].members == ["alice@example.com"]
+        assert getattr(teams_arg[0], "members_complete") is False
 
     @patch("dev_health_ops.providers.linear.client.LinearClient")
     def test_linear_config_error_returns_1(
@@ -311,7 +374,13 @@ class TestLinearTeamSync:
         ]
 
         ns = _make_ns()
-        with patch("asyncio.run") as mock_run:
+        with (
+            patch("asyncio.run") as mock_run,
+            patch(
+                "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
+                return_value=1,
+            ),
+        ):
             mock_run.side_effect = _close_coroutine
             result = sync_teams(ns)
 

@@ -5,10 +5,18 @@ import importlib
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from dev_health_ops.db import resolve_sink_uri
+from sqlalchemy import select
+
+from dev_health_ops.db import (
+    get_postgres_session_sync_for_uri,
+    resolve_db_uri,
+    resolve_sink_uri,
+)
+from dev_health_ops.models.settings import IdentityMapping, TeamMapping
 from dev_health_ops.models.teams import Team
 from dev_health_ops.storage import detect_db_type
 from dev_health_ops.utils.cli import add_sink_arg, validate_sink
@@ -279,6 +287,17 @@ def sync_teams(ns: argparse.Namespace) -> int:
                         members=[str(m) for m in members],
                     )
                 )
+                setattr(
+                    teams_data[-1],
+                    "project_keys",
+                    [str(k) for k in entry.get("project_keys", []) if k],
+                )
+                setattr(
+                    teams_data[-1],
+                    "repo_patterns",
+                    [str(p) for p in entry.get("repo_patterns", []) if p],
+                )
+                setattr(teams_data[-1], "members_complete", True)
 
     elif provider == "jira":
         from dev_health_ops.providers.jira.client import JiraClient
@@ -312,6 +331,7 @@ def sync_teams(ns: argparse.Namespace) -> int:
                             members=members,
                         )
                     )
+                    setattr(teams_data[-1], "members_complete", False)
             logging.info(f"Fetched {len(teams_data)} projects from Jira.")
         except Exception as e:
             logging.error(f"Failed to fetch Jira projects: {e}")
@@ -354,6 +374,7 @@ def sync_teams(ns: argparse.Namespace) -> int:
                             description=f"Atlassian Ops team linked to Jira {project.project.key}",
                             members=[],
                         )
+                        setattr(ops_team_cache[team_id], "members_complete", False)
                     ops_links.append(
                         JiraProjectOpsTeamLink(
                             project_key=project.project.key,
@@ -380,6 +401,8 @@ def sync_teams(ns: argparse.Namespace) -> int:
 
         generator = SyntheticDataGenerator()
         teams_data = generator.generate_teams(count=8)
+        for team in teams_data:
+            setattr(team, "members_complete", True)
         logging.info(f"Generated {len(teams_data)} synthetic teams.")
 
     elif provider == "github":
@@ -412,6 +435,7 @@ def sync_teams(ns: argparse.Namespace) -> int:
                         members=members,
                     )
                 )
+                setattr(teams_data[-1], "members_complete", True)
             gh.close()
             logging.info(f"Fetched {len(teams_data)} teams from GitHub.")
         except Exception as e:
@@ -446,6 +470,7 @@ def sync_teams(ns: argparse.Namespace) -> int:
                     members=[m.username for m in members_list],
                 )
             )
+            setattr(teams_data[-1], "members_complete", True)
             # Also fetch subgroups as separate teams
             for subgroup in group.subgroups.list(per_page=100, get_all=True):
                 full_sg = gl.groups.get(subgroup.id)
@@ -459,6 +484,7 @@ def sync_teams(ns: argparse.Namespace) -> int:
                         members=[m.username for m in sg_members],
                     )
                 )
+                setattr(teams_data[-1], "members_complete", True)
             logging.info(f"Fetched {len(teams_data)} teams from GitLab.")
         except Exception as e:
             logging.error(f"Failed to fetch GitLab teams: {e}")
@@ -485,6 +511,7 @@ def sync_teams(ns: argparse.Namespace) -> int:
                 description = t.get("description")
                 description_text = str(description) if description else None
                 members_nodes = (t.get("members", {}) or {}).get("nodes", [])
+                members_complete = True
                 if t.get("members", {}).get("pageInfo", {}).get("hasNextPage"):
                     try:
                         full_members = linear_client.get_team_members(
@@ -492,6 +519,7 @@ def sync_teams(ns: argparse.Namespace) -> int:
                         )
                     except Exception:
                         full_members = members_nodes
+                        members_complete = False
                     members_source = full_members
                 else:
                     members_source = members_nodes
@@ -499,14 +527,14 @@ def sync_teams(ns: argparse.Namespace) -> int:
                     (m.get("email") or m.get("name", "")) for m in members_source
                 ]
                 members = [m for m in members if m]
-                teams_data.append(
-                    Team(
-                        id=team_id,
-                        name=name,
-                        description=description_text,
-                        members=members,
-                    )
+                team = Team(
+                    id=team_id,
+                    name=name,
+                    description=description_text,
+                    members=members,
                 )
+                setattr(team, "members_complete", members_complete)
+                teams_data.append(team)
             logging.info(f"Fetched {len(teams_data)} teams from Linear.")
         except Exception as e:
             logging.error(f"Failed to fetch Linear teams: {e}")
@@ -548,6 +576,7 @@ def sync_teams(ns: argparse.Namespace) -> int:
                         members=member_ids,
                     )
                 )
+                setattr(teams_data[-1], "members_complete", True)
             logging.info(f"Fetched {len(teams_data)} teams from Microsoft Teams.")
         except Exception as e:
             logging.error(f"Failed to fetch Microsoft Teams: {e}")
@@ -567,6 +596,73 @@ def sync_teams(ns: argparse.Namespace) -> int:
         )
         return 1
 
+    org_id = getattr(ns, "org", None)
+
+    if org_id is not None:
+        # Org-scoped path: provider -> Postgres TeamMapping -> bridge_teams_to_clickhouse.
+        # Never write ClickHouse directly; the bridge reads from Postgres so the
+        # semantic layer is always the source of truth for org-scoped teams.
+        validate_sink(ns)
+        db_uri = resolve_sink_uri(ns)
+        postgres_db_uri = resolve_db_uri(ns)
+        postgres_bridge_count: int = 0
+        try:
+            result = _bridge_teams_to_postgres(teams_data, ns)
+            postgres_bridge_count = result if result is not None else 0
+        except Exception as e:  # noqa: BLE001 - bridge failures must affect exit code
+            logging.error("Failed to bridge teams to PostgreSQL: %s", e)
+            postgres_bridge_count = 0
+
+        if postgres_bridge_count <= 0:
+            message = (
+                "No teams were persisted to PostgreSQL TeamMapping "
+                f"(org={org_id}, count={postgres_bridge_count})."
+            )
+            if getattr(ns, "allow_empty", False):
+                logging.warning(message)
+                return 0
+            logging.error(
+                "%s Pass --allow-empty to exit successfully on an empty sync.", message
+            )
+            return 1
+
+        # Bridge Postgres TeamMapping -> ClickHouse.
+        try:
+            from dev_health_ops.providers.team_bridge import bridge_teams_to_clickhouse
+
+            bridge_teams_to_clickhouse(
+                org_id=org_id,
+                db_url=db_uri,
+                postgres_db_url=postgres_db_uri,
+            )
+            logging.info(
+                "Bridged %d teams from PostgreSQL to ClickHouse (org=%s).",
+                postgres_bridge_count,
+                org_id,
+            )
+            if ops_links:
+                import asyncio
+
+                from dev_health_ops.storage.clickhouse import ClickHouseStore
+
+                async def _insert_ops_links() -> None:
+                    async with ClickHouseStore(db_uri) as store:
+                        store.org_id = str(org_id)
+                        await store.insert_jira_project_ops_team_links(ops_links)
+
+                asyncio.run(_insert_ops_links())
+                logging.info(
+                    "Synced %d jira project ops team links to ClickHouse (org=%s).",
+                    len(ops_links),
+                    org_id,
+                )
+        except Exception as e:  # noqa: BLE001 - bridge failures must affect exit code
+            logging.error("bridge_teams_to_clickhouse failed (org=%s): %s", org_id, e)
+            return 1
+
+        return 0
+
+    # No-org path: write directly to ClickHouse (unchanged).
     validate_sink(ns)
     db_uri = resolve_sink_uri(ns)
     db_type = detect_db_type(db_uri)
@@ -588,27 +684,11 @@ def sync_teams(ns: argparse.Namespace) -> int:
         return persisted_count
 
     persisted_count = asyncio.run(
-        run_with_store(db_uri, db_type, _handler, org_id=getattr(ns, "org", None))
+        run_with_store(db_uri, db_type, _handler, org_id=None)
     )
 
-    org_id = getattr(ns, "org", None)
-    postgres_bridge_count: int | None = None
-    if org_id is not None:
-        try:
-            postgres_bridge_count = _bridge_teams_to_postgres(teams_data, ns)
-        except Exception as e:  # noqa: BLE001 - bridge failures must affect exit code
-            logging.error("Failed to bridge teams to PostgreSQL: %s", e)
-            postgres_bridge_count = 0
-
-    required_counts = [persisted_count]
-    if postgres_bridge_count is not None:
-        required_counts.append(postgres_bridge_count)
-
-    if any(count <= 0 for count in required_counts):
-        message = (
-            "No teams were persisted to all required stores "
-            f"(primary={persisted_count}, postgres_bridge={postgres_bridge_count})."
-        )
+    if persisted_count <= 0:
+        message = "No teams were persisted to ClickHouse."
         if getattr(ns, "allow_empty", False):
             logging.warning(message)
             return 0
@@ -639,18 +719,146 @@ async def _count_persisted_teams(store: Any, teams_data: list) -> int:
     return len(expected_ids & persisted_ids)
 
 
+def _team_string_list(team: Any, field: str) -> list[str]:
+    value = team.get(field) if isinstance(team, dict) else getattr(team, field, [])
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if item]
+
+
+def _provider_team_id(team_id: str, provider: str) -> str:
+    if provider == "github" and team_id.startswith("gh:"):
+        return team_id.removeprefix("gh:")
+    if provider == "gitlab" and team_id.startswith("gl:"):
+        return team_id.removeprefix("gl:")
+    if provider == "linear" and team_id.startswith("linear:"):
+        return team_id.removeprefix("linear:")
+    if provider == "ms-teams" and team_id.startswith("ms-teams:"):
+        return team_id.removeprefix("ms-teams:")
+    return team_id
+
+
+def _project_keys_for_team(team_id: str, provider: str, team: Any) -> list[str]:
+    configured = _team_string_list(team, "project_keys")
+    if configured:
+        return configured
+    if provider == "jira":
+        return [team_id]
+    if provider == "linear" and team_id.startswith("linear:"):
+        return [team_id.removeprefix("linear:")]
+    return []
+
+
+def _team_members(team: Any) -> list[str]:
+    return [
+        str(member).strip()
+        for member in (getattr(team, "members", None) or [])
+        if str(member).strip()
+    ]
+
+
+def _team_members_complete(team: Any) -> bool:
+    return bool(getattr(team, "members_complete", False))
+
+
+def _identity_member_values(identity: Any) -> set[str]:
+    values: set[str] = set()
+    email = getattr(identity, "email", None)
+    if email:
+        values.add(str(email))
+    canonical_id = getattr(identity, "canonical_id", None)
+    if canonical_id:
+        values.add(str(canonical_id))
+    for provider_values in (
+        getattr(identity, "provider_identities", None) or {}
+    ).values():
+        if isinstance(provider_values, list):
+            values.update(str(value) for value in provider_values if value)
+        elif provider_values:
+            values.add(str(provider_values))
+    return values
+
+
+def _reconcile_team_member_identities(
+    session: Any,
+    *,
+    org_id: str,
+    team_id: str,
+    provider: str,
+    members: list[str],
+    members_complete: bool,
+) -> None:
+    desired_members = set(members)
+    if members_complete:
+        existing_identities = (
+            session.execute(
+                select(IdentityMapping).where(
+                    IdentityMapping.org_id == org_id,
+                    IdentityMapping.is_active.is_(True),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for identity in existing_identities:
+            provider_identities = dict(
+                getattr(identity, "provider_identities", {}) or {}
+            )
+            if provider not in provider_identities:
+                continue
+            team_ids = list(getattr(identity, "team_ids", []) or [])
+            if team_id not in team_ids:
+                continue
+            if _identity_member_values(identity) & desired_members:
+                continue
+            team_ids = [
+                existing_team_id
+                for existing_team_id in team_ids
+                if existing_team_id != team_id
+            ]
+            setattr(identity, "team_ids", team_ids)
+
+    for member in members:
+        existing = session.execute(
+            select(IdentityMapping).filter_by(org_id=org_id, canonical_id=member)
+        ).scalar_one_or_none()
+        if existing is None:
+            session.add(
+                IdentityMapping(
+                    org_id=org_id,
+                    canonical_id=member,
+                    email=member if "@" in member else None,
+                    display_name=None if "@" in member else member,
+                    provider_identities={provider: [member]},
+                    team_ids=[team_id],
+                    is_active=True,
+                )
+            )
+            continue
+
+        provider_identities = dict(getattr(existing, "provider_identities", {}) or {})
+        provider_members = list(provider_identities.get(provider) or [])
+        if member not in provider_members:
+            provider_members.append(member)
+        provider_identities[provider] = provider_members
+
+        team_ids = list(getattr(existing, "team_ids", []) or [])
+        if team_id not in team_ids:
+            team_ids.append(team_id)
+
+        setattr(existing, "provider_identities", provider_identities)
+        setattr(existing, "team_ids", team_ids)
+        setattr(existing, "is_active", True)
+
+
 def _bridge_teams_to_postgres(teams_data: list, ns: argparse.Namespace) -> int | None:
-    """Upsert Team records into PostgreSQL TeamMapping table for multi-tenant bridge."""
+    """Upsert provider-discovered teams into the org-scoped TeamMapping layer."""
     import logging
-
-    from sqlalchemy import select
-
-    from dev_health_ops.db import get_postgres_session_sync
-    from dev_health_ops.models.settings import TeamMapping
 
     org_id = getattr(ns, "org", None)
     if org_id is None:
         return None
+    provider = str(getattr(ns, "provider", "config") or "config").lower()
 
     expected_ids = {
         str(getattr(team, "id", "") or "").strip() for team in teams_data
@@ -659,7 +867,7 @@ def _bridge_teams_to_postgres(teams_data: list, ns: argparse.Namespace) -> int |
         return 0
 
     try:
-        with get_postgres_session_sync() as session:
+        with get_postgres_session_sync_for_uri(resolve_db_uri(ns)) as session:
             for team in teams_data:
                 team_id = str(getattr(team, "id", "")).strip()
                 if not team_id:
@@ -671,11 +879,37 @@ def _bridge_teams_to_postgres(teams_data: list, ns: argparse.Namespace) -> int |
 
                 team_name = str(getattr(team, "name", team_id) or team_id)
                 team_description = getattr(team, "description", None)
+                repo_patterns = _team_string_list(team, "repo_patterns")
+                project_keys = _project_keys_for_team(team_id, provider, team)
+                members = _team_members(team)
+                members_complete = _team_members_complete(team)
+                extra_data = dict(getattr(existing, "extra_data", {}) or {})
+                extra_data.update(
+                    {
+                        "provider_type": provider,
+                        "provider_team_id": _provider_team_id(team_id, provider),
+                        "last_discovered_at": datetime.now(timezone.utc).isoformat(),
+                        "sync_source": "cli-sync-teams",
+                    }
+                )
 
                 if existing:
-                    setattr(existing, "name", team_name)
-                    setattr(existing, "description", team_description)
+                    managed_fields = set(getattr(existing, "managed_fields", []) or [])
+                    if getattr(existing, "sync_policy", 1) == 0:
+                        if "name" in managed_fields:
+                            setattr(existing, "name", team_name)
+                        if (
+                            "description" in managed_fields
+                            and team_description is not None
+                        ):
+                            setattr(existing, "description", team_description)
+                        if "repo_patterns" in managed_fields:
+                            setattr(existing, "repo_patterns", repo_patterns)
+                        if "project_keys" in managed_fields:
+                            setattr(existing, "project_keys", project_keys)
                     setattr(existing, "is_active", True)
+                    setattr(existing, "extra_data", extra_data)
+                    setattr(existing, "last_drift_sync_at", datetime.now(timezone.utc))
                 else:
                     session.add(
                         TeamMapping(
@@ -683,9 +917,20 @@ def _bridge_teams_to_postgres(teams_data: list, ns: argparse.Namespace) -> int |
                             name=team_name,
                             org_id=org_id,
                             description=team_description,
+                            repo_patterns=repo_patterns,
+                            project_keys=project_keys,
+                            extra_data=extra_data,
                             is_active=True,
                         )
                     )
+                _reconcile_team_member_identities(
+                    session,
+                    org_id=org_id,
+                    team_id=team_id,
+                    provider=provider,
+                    members=members,
+                    members_complete=members_complete,
+                )
             session.flush()
             persisted_ids = set(
                 session.execute(

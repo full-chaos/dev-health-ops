@@ -260,6 +260,7 @@ def forecast_capacity(
     work_scope_id: str | None = None,
     simulations: int = 10000,
     seed: int | None = None,
+    today: date | None = None,
 ) -> ForecastResult:
     """Compute capacity forecast using Monte Carlo simulation.
 
@@ -276,6 +277,12 @@ def forecast_capacity(
         work_scope_id: Work scope identifier (optional).
         simulations: Number of Monte Carlo simulations.
         seed: Random seed for reproducibility.
+        today: Reference date for the forecast horizon (``days_available =
+            target_date - today``). Defaults to the current UTC date. Inject a
+            fixed value for deterministic tests: a ``target_date`` derived from a
+            naive local "today" while the horizon is measured against the UTC
+            ``now.date()`` makes ``days_available`` (and therefore the
+            quantiles) flip by one near a UTC-midnight boundary (CHAOS-2400).
 
     Returns:
         ForecastResult with percentile estimates.
@@ -291,7 +298,8 @@ def forecast_capacity(
         raise ValueError("Cannot forecast with empty throughput history")
 
     now = datetime.now(timezone.utc)
-    today = now.date()
+    if today is None:
+        today = now.date()
     forecast_id = str(uuid.uuid4())
 
     p50_days: int | None = None

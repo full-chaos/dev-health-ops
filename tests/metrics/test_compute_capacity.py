@@ -207,17 +207,27 @@ class TestForecastCapacity:
         samples = _make_samples([5] * 30)
         history = ThroughputHistory(samples)
 
-        target = date.today() + timedelta(days=10)
+        # CHAOS-2400: pin `today` to the SAME reference used to build the target
+        # so days_available is exactly 10. Without injection the target is built
+        # from a naive local date.today() while forecast_capacity measures the
+        # horizon against UTC now.date(); near a UTC-midnight boundary the two
+        # differ by a day, days_available flips 10->9, and the deterministic
+        # quantiles drop 50->45, making this assertion flaky.
+        reference = date.today()
+        target = reference + timedelta(days=10)
         result = forecast_capacity(
             history,
             target_date=target,
             simulations=1000,
             seed=42,
+            today=reference,
         )
 
         assert result.target_date == target
         assert result.target_items is None
 
+        # 30 days of constant throughput == 5 -> every Monte Carlo draw is 5, so
+        # 10 days available yields exactly 50 items at every percentile.
         assert result.p50_items == 50
         assert result.p85_items == 50
         assert result.p95_items == 50
@@ -229,13 +239,15 @@ class TestForecastCapacity:
         samples = _make_samples([5] * 30)
         history = ThroughputHistory(samples)
 
-        target_date = date.today() + timedelta(days=10)
+        reference = date.today()
+        target_date = reference + timedelta(days=10)
         result = forecast_capacity(
             history,
             target_items=50,
             target_date=target_date,
             simulations=1000,
             seed=42,
+            today=reference,
         )
 
         assert result.p50_days is not None
@@ -262,8 +274,11 @@ class TestForecastCapacity:
         samples = _make_samples([5] * 30)
         history = ThroughputHistory(samples)
 
-        past_date = date.today() - timedelta(days=10)
-        result = forecast_capacity(history, target_date=past_date, simulations=100)
+        reference = date.today()
+        past_date = reference - timedelta(days=10)
+        result = forecast_capacity(
+            history, target_date=past_date, simulations=100, today=reference
+        )
 
         assert result.p50_items == 0
         assert result.p85_items == 0

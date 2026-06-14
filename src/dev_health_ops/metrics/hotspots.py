@@ -13,6 +13,7 @@ from dev_health_ops.metrics.schemas import (
     FileHotspotDaily,
     FileMetricsRecord,
 )
+from dev_health_ops.utils import AGGREGATE_STATS_MARKER
 
 
 class FileStats(TypedDict):
@@ -57,6 +58,10 @@ def compute_file_hotspots(
 
         path = row.get("file_path")
         if not path:
+            continue
+        # Skip the aggregate-stats sentinel (see compute_file_risk_hotspots):
+        # __AGGREGATE__ is a backfill marker, not a real file.
+        if path == AGGREGATE_STATS_MARKER:
             continue
 
         if path not in file_map:
@@ -128,6 +133,13 @@ def compute_file_risk_hotspots(
             continue
         path = row.get("file_path")
         if not path:
+            continue
+        # GitLab/GitHub backfill stores aggregate-only commit stats with
+        # file_path == AGGREGATE_STATS_MARKER ("__AGGREGATE__"). That sentinel
+        # is not a real file; it must never be ranked/persisted as a hotspot
+        # or it pollutes the risk treemap and hides real files (CHAOS-2376
+        # round-4).
+        if path == AGGREGATE_STATS_MARKER:
             continue
 
         if path not in churn_map:

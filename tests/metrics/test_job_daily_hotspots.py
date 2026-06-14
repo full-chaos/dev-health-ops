@@ -33,8 +33,12 @@ import pytest
 
 import dev_health_ops.connectors  # noqa: F401
 from dev_health_ops.metrics import job_daily
-from dev_health_ops.metrics.hotspots import compute_file_risk_hotspots
+from dev_health_ops.metrics.hotspots import (
+    compute_file_hotspots,
+    compute_file_risk_hotspots,
+)
 from dev_health_ops.metrics.schemas import CommitStatRow, FileComplexitySnapshot
+from dev_health_ops.utils import AGGREGATE_STATS_MARKER
 
 DAY = date(2026, 5, 20)
 NOW = datetime(2026, 5, 21, 12, 0, tzinfo=timezone.utc)
@@ -1136,3 +1140,166 @@ async def test_github_blame_gate_alive_when_files_present_blame_partial() -> Non
     # file is not re-fetched.
     blamed_now = {row.path for row in captured}
     assert blamed_now == {"src/b.py", "src/c.py"}
+
+
+# ---------------------------------------------------------------------------
+# (d) round-4: the risk-hotspot pass covers idle complexity-only repos
+#     (it must NOT be gated on same-day activity / active_repos)
+# ---------------------------------------------------------------------------
+
+
+def test_hotspot_repo_ids_includes_idle_complexity_only_repos() -> None:
+    """A discovered repo with no same-day activity is still in the hotspot set.
+
+    Regression for CHAOS-2376 round-4: gating the file_hotspot_daily pass on
+    active_repos (commits/pipelines/deployments that day) silently dropped
+    quiet-but-risky repos whose risk comes from static complexity.
+    """
+    active = uuid.uuid4()
+    idle_complexity_only = uuid.uuid4()
+
+    # active_repos is built only from same-day activity; the idle repo is only
+    # known via discovery.
+    repo_ids = job_daily._hotspot_repo_ids(
+        active_repos={active},
+        discovered_repo_ids=[active, idle_complexity_only],
+    )
+
+    assert active in repo_ids
+    assert idle_complexity_only in repo_ids
+
+
+def test_hotspot_repo_ids_unions_active_not_only_discovered() -> None:
+    """An active repo missing from discovery is still covered (no data loss)."""
+    active_only = uuid.uuid4()
+    discovered = uuid.uuid4()
+
+    repo_ids = job_daily._hotspot_repo_ids(
+        active_repos={active_only},
+        discovered_repo_ids=[discovered],
+    )
+
+    assert repo_ids == {active_only, discovered}
+
+
+def test_risk_hotspot_rows_for_complexity_only_repo_without_churn() -> None:
+    """A repo with complexity snapshots but ZERO churn still yields rows.
+
+    Proves the union semantics the idle-repo fix relies on: even with an empty
+    churn window, complexity-only files produce file_hotspot_daily rows.
+    """
+    repo_id = uuid.uuid4()
+    complexity_map = job_daily._load_complexity_map_for_repo(
+        primary_sink=_ComplexitySink(
+            [
+                {
+                    "file_path": "legacy/god_object.py",
+                    "language": "python",
+                    "loc": 1200,
+                    "functions_count": 40,
+                    "cyclomatic_total": 300,
+                    "cyclomatic_avg": 7.5,
+                    "high_complexity_functions": 12,
+                    "very_high_complexity_functions": 4,
+                },
+                {
+                    "file_path": "legacy/helper.py",
+                    "language": "python",
+                    "loc": 80,
+                    "functions_count": 3,
+                    "cyclomatic_total": 6,
+                    "cyclomatic_avg": 2.0,
+                    "high_complexity_functions": 0,
+                    "very_high_complexity_functions": 0,
+                },
+            ]
+        ),
+        org_id="acme",
+        repo_id=repo_id,
+        day=DAY,
+    )
+
+    # No commits at all in the window for this repo.
+    rows = compute_file_risk_hotspots(
+        repo_id=repo_id,
+        day=DAY,
+        window_stats=[],
+        complexity_map=complexity_map,
+        computed_at=NOW,
+    )
+
+    assert {r.file_path for r in rows} == {
+        "legacy/god_object.py",
+        "legacy/helper.py",
+    }
+    # Highest complexity ranks first; churn is zero for every file.
+    assert rows[0].file_path == "legacy/god_object.py"
+    assert all(r.churn_loc_30d == 0 for r in rows)
+
+
+# ---------------------------------------------------------------------------
+# (e) round-4: aggregate-stats sentinel rows are never persisted as hotspots
+# ---------------------------------------------------------------------------
+
+
+def _stat_row(repo_id: uuid.UUID, path: str, *, adds: int, dels: int) -> CommitStatRow:
+    return {
+        "repo_id": repo_id,
+        "commit_hash": f"c-{path}",
+        "file_path": path,
+        "additions": adds,
+        "deletions": dels,
+        "author_email": "a@ex.com",
+        "author_name": "A",
+        "committer_when": NOW,
+        "old_file_mode": "100644",
+        "new_file_mode": "100644",
+    }
+
+
+def test_risk_hotspots_exclude_aggregate_sentinel() -> None:
+    """GitLab/GitHub backfill's __AGGREGATE__ marker is not ranked as a file.
+
+    Regression for CHAOS-2376 round-4: aggregate-only commit stats store
+    file_path == AGGREGATE_STATS_MARKER; converting that into a
+    file_hotspot_daily row exposes a synthetic __AGGREGATE__ "file" with churn
+    belonging to no real path, hiding real hotspots.
+    """
+    repo_id = uuid.uuid4()
+    window_stats: list[CommitStatRow] = [
+        _stat_row(repo_id, "real/module.py", adds=100, dels=50),
+        # Aggregate-only backfill row: must be ignored.
+        _stat_row(repo_id, AGGREGATE_STATS_MARKER, adds=9999, dels=9999),
+    ]
+
+    rows = compute_file_risk_hotspots(
+        repo_id=repo_id,
+        day=DAY,
+        window_stats=window_stats,
+        complexity_map={},
+        computed_at=NOW,
+    )
+
+    paths = {r.file_path for r in rows}
+    assert AGGREGATE_STATS_MARKER not in paths
+    assert paths == {"real/module.py"}
+
+
+def test_file_hotspots_exclude_aggregate_sentinel() -> None:
+    """compute_file_hotspots (file_metrics path) also ignores the sentinel."""
+    repo_id = uuid.uuid4()
+    window_stats: list[CommitStatRow] = [
+        _stat_row(repo_id, "real/module.py", adds=10, dels=5),
+        _stat_row(repo_id, AGGREGATE_STATS_MARKER, adds=9999, dels=9999),
+    ]
+
+    records = compute_file_hotspots(
+        repo_id=repo_id,
+        day=DAY,
+        window_stats=window_stats,
+        computed_at=NOW,
+    )
+
+    paths = {r.path for r in records}
+    assert AGGREGATE_STATS_MARKER not in paths
+    assert paths == {"real/module.py"}

@@ -6,6 +6,7 @@ import argparse
 import logging
 import os
 import uuid
+from collections.abc import Iterable
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -458,6 +459,23 @@ def _secondary_uri_from_env() -> str:
     return uri
 
 
+def _hotspot_repo_ids(
+    active_repos: set[uuid.UUID],
+    discovered_repo_ids: Iterable[uuid.UUID],
+) -> set[uuid.UUID]:
+    """Repos eligible for the live ``file_hotspot_daily`` risk pass.
+
+    The risk-hotspot computation must NOT be gated on same-day activity:
+    ``compute_file_risk_hotspots`` unions complexity-only files with churned
+    files, so a discovered repo whose risk comes from static complexity (no
+    commits/pipelines/deployments that day) must still produce rows. Returning
+    ``active_repos`` UNION every discovered repo ensures idle complexity-only
+    repos are covered; the compute returns no rows for repos with neither churn
+    nor complexity, so empty repos are never fabricated (CHAOS-2376 round-4).
+    """
+    return set(active_repos) | set(discovered_repo_ids)
+
+
 def _load_complexity_map_for_repo(
     *,
     primary_sink: Any,
@@ -790,11 +808,6 @@ async def run_daily_metrics_job(
         gini_by_repo: dict[uuid.UUID, float] = {}
 
         all_file_metrics = []
-        # file_hotspot_daily (risk treemap + hotspot drilldown on /complexity)
-        # is computed live here by merging the 30d churn window with the latest
-        # complexity snapshot per file, so real OAuth orgs get data instead of
-        # only fixtures (CHAOS-2376).
-        all_file_hotspots = []
         for r_id in active_repos:
             rework_ratio_by_repo[r_id] = compute_rework_churn_ratio(
                 repo_id=str(r_id), window_stats=h_commit_rows
@@ -816,6 +829,25 @@ async def run_daily_metrics_job(
             )
             all_file_metrics.extend(file_metrics)
 
+        # file_hotspot_daily (risk treemap + hotspot drilldown on /complexity)
+        # is computed live here by merging the 30d churn window with the latest
+        # complexity snapshot per file, so real OAuth orgs get data instead of
+        # only fixtures (CHAOS-2376).
+        #
+        # The risk-hotspot pass is NOT gated on active_repos: a repo's risk can
+        # come purely from static complexity (compute_file_risk_hotspots unions
+        # complexity-only files with churned files), and discovered repos can
+        # have complexity snapshots with zero same-day commits/pipelines/
+        # deployments -- common right after onboarding or on quiet-but-risky
+        # repos. Gating on active_repos there left /complexity empty/stale for
+        # those repos. Iterate over active_repos UNION all discovered repos so
+        # idle complexity-only repos still produce rows; compute_file_risk_
+        # hotspots returns [] when a repo has neither churn nor complexity, so
+        # this never fabricates rows for genuinely empty repos (CHAOS-2376
+        # round-4).
+        all_file_hotspots = []
+        hotspot_repos = _hotspot_repo_ids(active_repos, repo_names_by_id)
+        for r_id in hotspot_repos:
             complexity_map = _load_complexity_map_for_repo(
                 primary_sink=primary_sink,
                 org_id=org_id,

@@ -12,6 +12,47 @@ def _date_params(start_day: date, end_day: date) -> dict[str, Any]:
     return {"start_day": start_day, "end_day": end_day}
 
 
+# CHAOS-2377: tables that the daily job appends to per-run (plain MergeTree, one
+# fresh row per (natural key, computed_at)). Reading them with a top-level
+# sum() double-counts re-runs/backfills, so the table read must be wrapped in a
+# per-key argMax(..., computed_at) dedup subquery before aggregating — matching
+# the operating_review / sankey / aggregated_flame readers on this branch.
+_DEDUP_BY_COMPUTED_AT: dict[str, tuple[str, ...]] = {
+    "work_item_state_durations_daily": (
+        "day",
+        "provider",
+        "work_scope_id",
+        "team_id",
+        "status",
+    ),
+}
+
+
+def _metric_from_clause(*, table: str, column: str, scope_filter: str) -> str:
+    """Return the FROM source for a metric read.
+
+    For most tables this is just the raw table name. For ReplacingMergeTree-by-
+    ``computed_at`` daily tables (those in ``_DEDUP_BY_COMPUTED_AT``) the table
+    is wrapped in a subquery that collapses to the latest ``computed_at`` per
+    natural key — so a top-level ``sum(column)`` counts each key once instead of
+    once per re-run. ``org_id`` stays filtered in the inner ``WHERE``.
+    """
+    natural_key = _DEDUP_BY_COMPUTED_AT.get(table)
+    if natural_key is None:
+        return table
+    key_columns = ",\n                ".join(natural_key)
+    return f"""(
+            SELECT
+                {key_columns},
+                argMax({column}, computed_at) AS {column}
+            FROM {table}
+            WHERE day >= %(start_day)s AND day < %(end_day)s
+            {scope_filter}
+              AND org_id = %(org_id)s
+            GROUP BY {", ".join(natural_key)}
+        )"""
+
+
 async def fetch_metric_series(
     client: Any,
     *,
@@ -27,7 +68,23 @@ async def fetch_metric_series(
     value_expression = _metric_value_expression(
         table=table, column=column, aggregator=aggregator
     )
-    query = f"""
+    if table in _DEDUP_BY_COMPUTED_AT:
+        # Dedup re-run rows under the outer sum() (CHAOS-2377). The subquery
+        # filters day/scope/org_id and emits one row per natural key with the
+        # latest computed_at, so we group only by day on the outer query.
+        from_clause = _metric_from_clause(
+            table=table, column=column, scope_filter=scope_filter
+        )
+        query = f"""
+        SELECT
+            day,
+            {value_expression} AS value
+        FROM {from_clause}
+        GROUP BY day
+        ORDER BY day
+    """
+    else:
+        query = f"""
         SELECT
             day,
             {value_expression} AS value
@@ -59,7 +116,20 @@ async def fetch_metric_value(
     value_expression = _metric_value_expression(
         table=table, column=column, aggregator=aggregator
     )
-    query = f"""
+    if table in _DEDUP_BY_COMPUTED_AT:
+        # Dedup re-run rows under the outer sum() (CHAOS-2377). Without this the
+        # /explain blocked_work headline (current + comparison) inflates by the
+        # number of duplicate daily runs/backfills for the same natural key.
+        from_clause = _metric_from_clause(
+            table=table, column=column, scope_filter=scope_filter
+        )
+        query = f"""
+        SELECT
+            {value_expression} AS value
+        FROM {from_clause}
+    """
+    else:
+        query = f"""
         SELECT
             {value_expression} AS value
         FROM {table}

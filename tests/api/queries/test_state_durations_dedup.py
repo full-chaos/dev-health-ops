@@ -123,3 +123,114 @@ async def test_blocked_hours_dedups_reruns(monkeypatch: pytest.MonkeyPatch) -> N
     table_pos = normalized.index("work_item_state_durations_daily")
     inner_group_pos = normalized.index(_NATURAL_KEY_GROUP_BY)
     assert inner_group_pos > table_pos
+
+
+def _assert_value_expr_dedup(query: str, *, value_expr: str) -> None:
+    """The /explain & /home generic readers must dedup re-runs for this table.
+
+    Without the per-key argMax(..., computed_at) subquery the outer
+    sum(duration_hours) double-counts every duplicate daily run/backfill, so the
+    blocked_work headline (current AND comparison) inflates by the re-run count.
+    """
+    normalized = " ".join(query.split())
+    assert "argMax(duration_hours, computed_at)" in normalized
+    assert _NATURAL_KEY_GROUP_BY in normalized
+    # The table must be read *inside* the dedup subquery, not summed directly.
+    table_pos = normalized.index("work_item_state_durations_daily")
+    inner_group_pos = normalized.index(_NATURAL_KEY_GROUP_BY)
+    assert inner_group_pos > table_pos, "dedup GROUP BY must follow the table read"
+    # org_id stays filtered in the inner WHERE (before the dedup GROUP BY).
+    org_pos = normalized.index("org_id = %(org_id)s")
+    assert org_pos < inner_group_pos, "org_id filter must sit inside the subquery"
+    # The outer aggregation runs over the deduped alias, not the raw table.
+    assert value_expr in normalized
+
+
+@pytest.mark.asyncio
+async def test_fetch_metric_value_dedups_state_durations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # This is the 4th reader path (CHAOS-2377 re-review): /explain blocked_work
+    # current + comparison headline both flow through fetch_metric_value.
+    captured: dict[str, str] = {}
+
+    async def fake_query_dicts(_client: Any, query: str, _params: Any) -> list[Any]:
+        captured["query"] = query
+        return [{"value": 0.0}]
+
+    monkeypatch.setattr(metrics, "query_dicts", fake_query_dicts)
+
+    await metrics.fetch_metric_value(
+        cast(BaseMetricsSink, object()),
+        table="work_item_state_durations_daily",
+        column="duration_hours",
+        start_day=date(2026, 5, 1),
+        end_day=date(2026, 5, 2),
+        scope_filter=" AND team_id IN %(team_ids)s",
+        scope_params={"team_ids": ["core"]},
+        aggregator="sum",
+        org_id="org-a",
+    )
+
+    _assert_value_expr_dedup(captured["query"], value_expr="sum(duration_hours)")
+
+
+@pytest.mark.asyncio
+async def test_fetch_metric_series_dedups_state_durations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, str] = {}
+
+    async def fake_query_dicts(_client: Any, query: str, _params: Any) -> list[Any]:
+        captured["query"] = query
+        return []
+
+    monkeypatch.setattr(metrics, "query_dicts", fake_query_dicts)
+
+    await metrics.fetch_metric_series(
+        cast(BaseMetricsSink, object()),
+        table="work_item_state_durations_daily",
+        column="duration_hours",
+        start_day=date(2026, 5, 1),
+        end_day=date(2026, 5, 2),
+        scope_filter=" AND team_id IN %(team_ids)s",
+        scope_params={"team_ids": ["core"]},
+        aggregator="sum",
+        org_id="org-a",
+    )
+
+    _assert_value_expr_dedup(captured["query"], value_expr="sum(duration_hours)")
+    # The series query still groups the deduped rows by day for the sparkline.
+    normalized = " ".join(captured["query"].split())
+    assert normalized.rstrip().endswith("GROUP BY day ORDER BY day")
+
+
+@pytest.mark.asyncio
+async def test_fetch_metric_value_leaves_other_tables_flat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The generic reader must NOT add argMax dedup for unaffected tables.
+    captured: dict[str, str] = {}
+
+    async def fake_query_dicts(_client: Any, query: str, _params: Any) -> list[Any]:
+        captured["query"] = query
+        return [{"value": 0.0}]
+
+    monkeypatch.setattr(metrics, "query_dicts", fake_query_dicts)
+
+    await metrics.fetch_metric_value(
+        cast(BaseMetricsSink, object()),
+        table="work_item_metrics_daily",
+        column="items_completed",
+        start_day=date(2026, 5, 1),
+        end_day=date(2026, 5, 2),
+        scope_filter=" AND team_id IN %(team_ids)s",
+        scope_params={"team_ids": ["core"]},
+        aggregator="sum",
+        org_id="org-a",
+    )
+
+    normalized = " ".join(captured["query"].split())
+    assert "argMax" not in normalized
+    assert _NATURAL_KEY_GROUP_BY not in normalized
+    assert "FROM work_item_metrics_daily WHERE" in normalized

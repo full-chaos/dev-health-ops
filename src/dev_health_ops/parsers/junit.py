@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -68,7 +69,13 @@ def _read_text(source: str | bytes | Path) -> str:
     if isinstance(source, bytes):
         return source.decode("utf-8")
     path = Path(source)
-    if path.exists():
+    try:
+        path_exists = path.exists()
+    except OSError as exc:
+        if exc.errno != errno.ENAMETOOLONG:
+            raise
+        path_exists = False
+    if path_exists:
         return path.read_text(encoding="utf-8")
     return source
 

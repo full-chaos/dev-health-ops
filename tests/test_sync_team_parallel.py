@@ -1,4 +1,7 @@
-"""Assert sync_team_drift dispatches provider discovery concurrently."""
+"""Assert sync_team_drift dispatches provider discovery concurrently.
+
+Covers the full capability registry: github, gitlab, jira, linear, ms-teams.
+"""
 
 from __future__ import annotations
 
@@ -33,10 +36,24 @@ async def test_providers_discovered_concurrently(monkeypatch):
 
     fake_creds = MagicMock()
     fake_creds.get = AsyncMock(
-        return_value=MagicMock(config={"org": "o", "group": "g", "url": "https://j"})
+        return_value=MagicMock(
+            config={
+                "org": "o",
+                "group": "g",
+                "url": "https://j",
+            }
+        )
     )
     fake_creds.get_decrypted_credentials = AsyncMock(
-        return_value={"token": "t", "email": "e@x", "api_token": "a"}
+        return_value={
+            "token": "t",
+            "email": "e@x",
+            "api_token": "a",
+            "api_key": "lk",
+            "tenant_id": "tid",
+            "client_id": "cid",
+            "client_secret": "csec",
+        }
     )
 
     async def slow_discover_gitlab(*args, **kwargs):
@@ -49,6 +66,8 @@ async def test_providers_discovered_concurrently(monkeypatch):
     fake_discovery.discover_github = slow_discover
     fake_discovery.discover_gitlab = slow_discover_gitlab
     fake_discovery.discover_jira = slow_discover
+    fake_discovery.discover_linear = slow_discover
+    fake_discovery.discover_ms_teams = slow_discover
 
     fake_drift = MagicMock()
     fake_drift.run_drift_sync = AsyncMock(return_value={"provider": "x"})
@@ -83,8 +102,8 @@ async def test_providers_discovered_concurrently(monkeypatch):
     ):
         result = await mod._discover_and_sync_all(org_id="org-1")
 
-    assert peak >= 3, f"Expected 3 concurrent providers, observed peak={peak}"
-    assert len(result["results"]) == 3
+    assert peak >= 5, f"Expected 5 concurrent providers, observed peak={peak}"
+    assert len(result["results"]) == 5
     # CHAOS-2066: the connection is scoped to DB ops only -- never held during
     # discovery, and never more than one open at a time per job.
     assert open_during_discovery == 0, (
@@ -94,3 +113,32 @@ async def test_providers_discovered_concurrently(monkeypatch):
         f"More than one session open at once (peak={sessions['peak_open']})"
     )
     assert sessions["open"] == 0, "Session leaked (not closed)"
+
+
+@pytest.mark.asyncio
+async def test_capability_registry_covers_all_supported_providers():
+    """The capability registry in _discover_and_sync_all must cover all 5 org-scoped providers.
+
+    This test is a static invariant: if a provider is added to providers/teams.py
+    sync_teams() but not to the worker registry, this test catches the drift.
+    """
+    import inspect
+
+    from dev_health_ops.workers import sync_team as mod
+
+    source = inspect.getsource(mod._discover_and_sync_all)
+    for provider in ("github", "gitlab", "jira", "linear", "ms-teams"):
+        assert provider in source, (
+            f"Provider '{provider}' missing from _discover_and_sync_all capability registry"
+        )
+
+
+def test_reconcile_team_members_uses_clickhouse_uri_and_preserves_org_scope():
+    import inspect
+
+    from dev_health_ops.workers import sync_team as mod
+
+    source = inspect.getsource(mod.reconcile_team_members)
+    assert "require_clickhouse_uri()" in source
+    assert "_get_db_url" not in source
+    assert 'org_id=str(getattr(team, "org_id"' in source

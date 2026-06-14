@@ -873,6 +873,16 @@ def gitlab_mr_ai_attributions(
     high-severity "missing review" governance violations (CHAOS-2379 round-2).
     The synthetic fixtures use the same ``str(pr.number)`` contract.
 
+    GitLab MR ``iid`` (and GitHub PR ``number``) is only unique WITHIN a repo,
+    so two repos in one org can both carry attribution for ``subject_id="1"``.
+    The bare-iid join is safe because EVERY read path additionally constrains
+    ``attr.repo_id = pr.repo_id`` and the ``ai_attribution_resolved`` view
+    resolves per ``(org_id, subject_type, repo_id, subject_id)`` (migration
+    043, CHAOS-2379 round-3) — both repos' rows survive the resolve and each
+    matches only its own repo's PR. ``repo_id`` therefore disambiguates the
+    repo-local id; we do NOT repo-qualify ``subject_id`` itself (that would
+    break the ``toString(pr.number)`` join used by every loader).
+
     ``observed_at`` is a real provider timestamp — never a fabricated
     ingest-time value — derived from the MR's ``created_at``, falling back to
     the MR ``updated_at`` and only then to ``now()`` when the provider omits
@@ -898,6 +908,10 @@ def gitlab_mr_ai_attributions(
     # `git_pull_requests.number = int(mr.iid)`. The subject id MUST therefore be
     # the bare iid string — a prefixed `gitlab:{path}!{iid}` work-item id would
     # never join and would fabricate "missing review" policy failures.
+    # iid is repo-local; cross-repo collisions are disambiguated by repo_id in
+    # every read-path join AND in the ai_attribution_resolved partition
+    # (migration 043), so both repos' rows survive — see this function's
+    # docstring (CHAOS-2379 round-3).
     subject_id = str(iid)
     observed_at = (
         _to_utc(_parse_iso(_get(mr, "created_at")))

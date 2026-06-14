@@ -373,9 +373,13 @@ def _resolve_effective(records: list[AIAttributionRecord]) -> AIAttributionRecor
 
     Mirrors the SQL:
         QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY org_id, subject_type, subject_id
+            PARTITION BY org_id, subject_type, repo_id, subject_id
             ORDER BY _source_priority ASC, confidence DESC
         ) = 1
+
+    These callers pass records that all share a single resolution partition,
+    so this returns the single winner. Use :func:`_resolve_all` to simulate the
+    full per-partition view output (CHAOS-2379 repo-scope, migration 043).
     """
     active = [r for r in records if r.superseded_by is None]
     if not active:
@@ -384,6 +388,27 @@ def _resolve_effective(records: list[AIAttributionRecord]) -> AIAttributionRecor
         active,
         key=lambda r: (SOURCE_PRECEDENCE.get(r.source, 99), -r.confidence),
     )
+
+
+def _resolve_all(
+    records: list[AIAttributionRecord],
+) -> list[AIAttributionRecord]:
+    """Per-partition resolution mirroring migration 043's view.
+
+    Partition key: (org_id, subject_type, repo_id, subject_id). `repo_id` is
+    part of the key because PR/MR subject ids are repo-local — two repos that
+    share a subject id must each surface their own winning row, never collapse
+    into one.
+    """
+    active = [r for r in records if r.superseded_by is None]
+    partitions: dict[tuple[object, str, object, str], list[AIAttributionRecord]] = {}
+    for r in active:
+        key = (r.org_id, r.subject_type, r.repo_id, r.subject_id)
+        partitions.setdefault(key, []).append(r)
+    return [
+        min(rows, key=lambda r: (SOURCE_PRECEDENCE.get(r.source, 99), -r.confidence))
+        for rows in partitions.values()
+    ]
 
 
 class TestResolvedViewPrecedence:
@@ -450,3 +475,124 @@ class TestResolvedViewPrecedence:
     def test_precedence_values_are_unique(self) -> None:
         values = list(SOURCE_PRECEDENCE.values())
         assert len(values) == len(set(values)), "Duplicate precedence values found"
+
+
+# ---------------------------------------------------------------------------
+# 7. Repo-scoped resolution — cross-repo subject_id collision (CHAOS-2379)
+# ---------------------------------------------------------------------------
+
+
+class TestResolvedViewRepoScope:
+    """Migration 043: PR/MR subject ids are repo-local, so two repos in one org
+    that share the same subject_id (e.g. both have PR/MR #1) must each surface
+    their own resolved row. The pre-043 partition (org, subject_type,
+    subject_id) collapsed them to ONE, silently dropping the second repo's AI
+    MR from governance coverage and impact. This simulates the view's partition
+    key and proves both repos survive.
+    """
+
+    def test_two_repos_same_subject_id_both_survive(self) -> None:
+        repo_a = uuid4()
+        repo_b = uuid4()
+        # Two GitLab repos in the SAME org both have MR !1 attributed as AI.
+        rec_a = AIAttributionRecord(
+            org_id=ORG,
+            provider="gitlab",
+            subject_type="pull_request",
+            subject_id="1",
+            repo_id=repo_a,
+            kind=AIAttributionKind.AI_ASSISTED,
+            source=AIAttributionSource.PR_LABEL,
+            confidence=0.9,
+            actor=None,
+            evidence={"label": "ai-assisted"},
+            observed_at=NOW,
+        )
+        rec_b = AIAttributionRecord(
+            org_id=ORG,
+            provider="gitlab",
+            subject_type="pull_request",
+            subject_id="1",
+            repo_id=repo_b,
+            kind=AIAttributionKind.AGENT_CREATED,
+            source=AIAttributionSource.BOT_AUTHOR,
+            confidence=0.85,
+            actor="claude-code[bot]",
+            evidence={"login": "claude-code[bot]"},
+            observed_at=NOW,
+        )
+        resolved = _resolve_all([rec_a, rec_b])
+        # BOTH repos' attribution rows survive — neither is collapsed away.
+        survivors = {(r.repo_id, r.subject_id) for r in resolved}
+        assert survivors == {(repo_a, "1"), (repo_b, "1")}
+        assert len(resolved) == 2
+
+    def test_same_repo_same_subject_still_resolves_to_one(self) -> None:
+        # Within ONE repo, cross-source precedence still collapses to a single
+        # winner — repo-scoping does NOT weaken intra-repo dedup.
+        repo = uuid4()
+        weak = AIAttributionRecord(
+            org_id=ORG,
+            provider="gitlab",
+            subject_type="pull_request",
+            subject_id="1",
+            repo_id=repo,
+            kind=AIAttributionKind.AI_ASSISTED,
+            source=AIAttributionSource.PR_BODY,
+            confidence=0.95,
+            actor=None,
+            evidence={},
+            observed_at=NOW,
+        )
+        strong = AIAttributionRecord(
+            org_id=ORG,
+            provider="gitlab",
+            subject_type="pull_request",
+            subject_id="1",
+            repo_id=repo,
+            kind=AIAttributionKind.AI_ASSISTED,
+            source=AIAttributionSource.PR_LABEL,
+            confidence=0.5,
+            actor=None,
+            evidence={"label": "ai-assisted"},
+            observed_at=NOW,
+        )
+        resolved = _resolve_all([weak, strong])
+        assert len(resolved) == 1
+        assert resolved[0].source == AIAttributionSource.PR_LABEL
+
+    def test_repo_pinned_and_repo_less_do_not_collapse(self) -> None:
+        # A repo-less (work-item-level) attribution and a repo-pinned one that
+        # share a subject_id are DIFFERENT partitions (repo_id NULL vs a UUID),
+        # so neither suppresses the other.
+        repo = uuid4()
+        pinned = AIAttributionRecord(
+            org_id=ORG,
+            provider="github",
+            subject_type="pull_request",
+            subject_id="1",
+            repo_id=repo,
+            kind=AIAttributionKind.AI_ASSISTED,
+            source=AIAttributionSource.PR_LABEL,
+            confidence=0.9,
+            actor=None,
+            evidence={},
+            observed_at=NOW,
+        )
+        repo_less = AIAttributionRecord(
+            org_id=ORG,
+            provider="github",
+            subject_type="pull_request",
+            subject_id="1",
+            repo_id=None,
+            kind=AIAttributionKind.AI_ASSISTED,
+            source=AIAttributionSource.MANUAL,
+            confidence=0.99,
+            actor=None,
+            evidence={},
+            observed_at=NOW,
+        )
+        resolved = _resolve_all([pinned, repo_less])
+        repo_ids = {r.repo_id for r in resolved}
+        assert repo_ids == {repo, None}
+        assert len(resolved) == 2

@@ -37,6 +37,11 @@ SETTINGS index_granularity = 8192;
 -- Resolved view: pick the highest-precedence, non-superseded record per
 -- (org_id, subject_type, subject_id) using window functions.
 --
+-- NOTE: migration 043 REPLACES this view to add `repo_id` to the partition
+-- key (PR/MR subject ids are repo-local, so two repos sharing PR #1 must each
+-- resolve independently — CHAOS-2379). The definition below is the original
+-- and the live view is whatever 043 last applied.
+--
 -- Implemented as a plain VIEW (not an incremental MV) because precedence
 -- resolution requires visibility across all rows for a subject, which
 -- incremental ClickHouse MVs cannot provide.  The base table uses

@@ -2,7 +2,9 @@
 AIAttributionMixin — ClickHouse write methods for AI attribution records.
 
 Table: ai_attribution (ReplacingMergeTree, ORDER BY (org_id, provider, subject_type, subject_id, source))
-View:  ai_attribution_resolved (plain VIEW resolving highest-precedence record per subject)
+View:  ai_attribution_resolved (plain VIEW resolving highest-precedence record per
+       (org_id, subject_type, repo_id, subject_id) — repo_id is part of the key
+       because PR/MR subject ids are repo-local, see migration 043)
 
 Write-time: every detected signal is persisted raw; dedup is by the ORDER BY key.
 Read-time:  query ai_attribution_resolved for the effective attribution.

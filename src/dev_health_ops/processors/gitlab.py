@@ -18,6 +18,7 @@ from dev_health_ops.models.git import (
     GitCommit,
     GitCommitStat,
     GitPullRequest,
+    GitPullRequestReview,
     Incident,
     Repo,
 )
@@ -235,6 +236,126 @@ def _fetch_gitlab_mrs_sync(connector, project_id, repo_id, max_mrs):
     return pr_objects
 
 
+# GitLab system-note bodies that signal an approval state change. GitLab does
+# not expose a discrete "review" object like GitHub, so we reconstruct reviews
+# from the approvals endpoint plus the MR note stream (CHAOS-2378).
+_GITLAB_APPROVE_NOTE = "approved this merge request"
+_GITLAB_UNAPPROVE_NOTE = "unapproved this merge request"
+
+
+def map_gitlab_mr_reviews(
+    repo_id: Any,
+    number: int,
+    approvals: dict[str, Any] | None,
+    notes: list[dict[str, Any]] | None,
+    fallback_at: datetime | None = None,
+) -> list[GitPullRequestReview]:
+    """Map GitLab approvals + MR notes to GitPullRequestReview rows.
+
+    Mirrors the GitHub review states so downstream metrics
+    (review_edges_daily, user_metrics_daily review latency,
+    /ai/review-load) treat both providers identically (CHAOS-2378):
+
+    * approval (approvals.approved_by / "approved" system note) -> APPROVED
+    * "unapproved" system note -> CHANGES_REQUESTED
+    * resolvable reviewer comment (non-system note) -> COMMENTED
+
+    Rows are org-scoped via ``repo_id`` (the repo belongs to an org), exactly
+    like the GitHub path. MRs with no approvals/notes yield an empty list.
+    """
+    reviews: list[GitPullRequestReview] = []
+    seen_ids: set[str] = set()
+
+    def _add(review_id: str, reviewer: str, state: str, at: datetime | None) -> None:
+        if not review_id or review_id in seen_ids:
+            return
+        seen_ids.add(review_id)
+        reviews.append(
+            GitPullRequestReview(
+                repo_id=repo_id,
+                number=int(number),
+                review_id=review_id,
+                reviewer=reviewer or "Unknown",
+                state=state,
+                submitted_at=at or fallback_at or datetime.now(timezone.utc),
+            )
+        )
+
+    # 1. Approvals endpoint: each approver is an APPROVED review. The endpoint
+    #    has no per-approver timestamp, so we fall back to the MR-derived time.
+    for entry in (approvals or {}).get("approved_by") or []:
+        user = entry.get("user") if isinstance(entry, dict) else None
+        if not isinstance(user, dict):
+            continue
+        username = user.get("username") or "Unknown"
+        user_id = user.get("id")
+        review_id = (
+            f"approval-{user_id}" if user_id is not None else f"approval-{username}"
+        )
+        _add(review_id, username, "APPROVED", None)
+
+    # 2. Note stream: system notes capture (un)approval events with timestamps;
+    #    non-system resolvable notes are reviewer comments.
+    for note in notes or []:
+        if not isinstance(note, dict):
+            continue
+        author = note.get("author") if isinstance(note.get("author"), dict) else {}
+        username = (author or {}).get("username") or "Unknown"
+        created_at = safe_parse_datetime(note.get("created_at"))
+        note_id = note.get("id")
+        body = str(note.get("body") or "").strip().lower()
+
+        if note.get("system"):
+            if body.startswith(_GITLAB_APPROVE_NOTE):
+                _add(f"note-{note_id}", username, "APPROVED", created_at)
+            elif body.startswith(_GITLAB_UNAPPROVE_NOTE):
+                _add(f"note-{note_id}", username, "CHANGES_REQUESTED", created_at)
+            # other system notes (label/assignee/etc.) are not reviews
+            continue
+
+        # Human review comment.
+        _add(f"note-{note_id}", username, "COMMENTED", created_at)
+
+    return reviews
+
+
+def _fetch_gitlab_mr_reviews(
+    connector,
+    project_id: int,
+    mr: dict[str, Any],
+    repo_id: Any,
+    created_at: datetime | None,
+) -> list[GitPullRequestReview]:
+    """Best-effort fetch + map of one MR's reviews (approvals + notes).
+
+    Returns ``[]`` (never raises) when an MR has no approvals endpoint or the
+    calls fail, so review ingestion never blocks MR persistence (CHAOS-2378).
+    """
+    iid = int(mr.get("iid") or 0)
+    if iid <= 0:
+        return []
+
+    approvals: dict[str, Any] | None = None
+    try:
+        approvals = connector.rest_client.get_merge_request_approvals(project_id, iid)
+    except Exception as exc:  # noqa: BLE001 - best-effort, some tiers lack approvals
+        logging.debug("Failed to fetch approvals for MR !%d: %s", iid, exc)
+
+    notes: list[dict[str, Any]] = []
+    try:
+        notes = connector.rest_client.get_merge_request_notes(project_id, iid)
+    except Exception as exc:  # noqa: BLE001 - best-effort
+        logging.debug("Failed to fetch notes for MR !%d: %s", iid, exc)
+
+    return map_gitlab_mr_reviews(
+        repo_id=repo_id,
+        number=iid,
+        approvals=approvals,
+        notes=notes,
+        fallback_at=created_at,
+    )
+
+
 def _sync_gitlab_mrs_to_store(
     connector,
     project_id: int,
@@ -255,11 +376,20 @@ def _sync_gitlab_mrs_to_store(
         project_id,
     )
     batch: list[GitPullRequest] = []
+    review_batch: list[GitPullRequestReview] = []
     total = 0
     page = 1
 
     gate = BaseGitProcessor.ensure_gate(gate)
     assert gate is not None
+
+    def _flush_reviews() -> None:
+        if review_batch:
+            BaseGitProcessor.persist_batch_threadsafe(
+                ingestion_sink.insert_git_pull_request_reviews(list(review_batch)),
+                loop,
+            )
+            review_batch.clear()
 
     while True:
         try:
@@ -321,6 +451,24 @@ def _sync_gitlab_mrs_to_store(
                 mrs = []
                 break
 
+            # Reconstruct reviews (approvals + notes) so GitLab orgs populate
+            # git_pull_request_reviews like GitHub does (CHAOS-2378).
+            mr_reviews = _fetch_gitlab_mr_reviews(
+                connector=connector,
+                project_id=project_id,
+                mr=mr,
+                repo_id=repo_id,
+                created_at=created_at,
+            )
+            first_review_at: datetime | None = None
+            changes_requested_count = 0
+            for review in mr_reviews:
+                if first_review_at is None or review.submitted_at < first_review_at:
+                    first_review_at = review.submitted_at
+                if review.state == "CHANGES_REQUESTED":
+                    changes_requested_count += 1
+            review_batch.extend(mr_reviews)
+
             batch.append(
                 build_git_pull_request(
                     repo_id=repo_id,
@@ -335,8 +483,9 @@ def _sync_gitlab_mrs_to_store(
                     closed_at=closed_at,
                     head_branch=mr.get("source_branch"),
                     base_branch=mr.get("target_branch"),
-                    changes_requested_count=0,
-                    reviews_count=0,
+                    first_review_at=first_review_at,
+                    changes_requested_count=changes_requested_count,
+                    reviews_count=len(mr_reviews),
                     comments_count=comments_count,
                 )
             )
@@ -354,6 +503,7 @@ def _sync_gitlab_mrs_to_store(
                     total,
                 )
                 batch.clear()
+                _flush_reviews()
 
         page += 1
         if not mrs:
@@ -364,6 +514,7 @@ def _sync_gitlab_mrs_to_store(
             ingestion_sink.insert_git_pull_requests(batch),
             loop,
         )
+    _flush_reviews()
 
     logging.info(
         "Fetched %d merge requests for project %d",

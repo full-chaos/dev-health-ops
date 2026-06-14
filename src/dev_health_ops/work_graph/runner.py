@@ -73,7 +73,14 @@ def run_work_graph_build(ns: argparse.Namespace) -> int:
     )
 
     logging.info(f"Building work graph from {config.from_date} to {config.to_date}")
-    builder = WorkGraphBuilder(config)
+    try:
+        builder = WorkGraphBuilder(config)
+    except ValueError as exc:
+        parser = getattr(ns, "_leaf_parser", None)
+        if parser is not None:
+            parser.error(str(exc))
+        logging.error("Work graph build failed: %s", exc)
+        return 2
     try:
         result = builder.build()
 

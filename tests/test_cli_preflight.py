@@ -113,6 +113,15 @@ def test_investment_materialize_accepts_clickhouse_via_db_flag() -> None:
     assert "missing required input" not in result.stderr
 
 
+def test_work_graph_build_rejects_unsupported_db_scheme_cleanly() -> None:
+    result = _run_cli("work-graph", "build", "--db", "sqlite:///x.db")
+
+    assert result.returncode == 2, result.stderr
+    assert "Traceback" not in result.stderr
+    assert "Unknown or unsupported sink scheme 'sqlite'" in result.stderr
+    assert "Only ClickHouse is supported" in result.stderr
+
+
 def test_help_lists_requirements_in_epilog() -> None:
     result = _run_cli("metrics", "compounding-risk", "--help")
 

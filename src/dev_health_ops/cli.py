@@ -369,6 +369,8 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     ("metrics", "validate-flags"): frozenset({_REQ_CLICKHOUSE}),
     ("metrics", "rebuild"): frozenset({_REQ_CLICKHOUSE}),
     ("metrics", "compounding-risk"): frozenset({_REQ_CLICKHOUSE, _REQ_ORG}),
+    # capacity takes its ClickHouse DSN via its own required --db flag.
+    ("metrics", "capacity"): frozenset({_REQ_SINK_DB}),
     # --- sync (persist to ClickHouse analytics store) ---
     ("sync", "git"): frozenset({_REQ_CLICKHOUSE}),
     ("sync", "prs"): frozenset({_REQ_CLICKHOUSE}),

@@ -150,6 +150,7 @@ def test_sync_rejects_unsupported_analytics_scheme_cleanly() -> None:
             "sqlite:///x.db",
         ),
         ("investment", "materialize", "--db", "sqlite:///x.db"),
+        ("metrics", "capacity", "--db", "sqlite:///x.db"),
     ],
 )
 def test_clickhouse_commands_reject_unsupported_analytics_scheme_cleanly(

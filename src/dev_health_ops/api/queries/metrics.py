@@ -92,15 +92,30 @@ async def fetch_blocked_hours(
     scope_params: dict[str, Any],
     org_id: str = "",
 ) -> tuple[float, list[dict[str, Any]]]:
+    # CHAOS-2377: the daily job appends a fresh row per run to this plain
+    # MergeTree, so a re-run/backfill of the same day leaves duplicate rows.
+    # Dedup with argMax(duration_hours, computed_at) over the full natural key
+    # before summing, matching the operating_review reader; summing raw rows
+    # would inflate the blocked-hours panel on every re-run.
     query = f"""
         SELECT
             day,
             sum(duration_hours) AS value
-        FROM work_item_state_durations_daily
-        WHERE day >= %(start_day)s AND day < %(end_day)s
-          AND status = 'blocked'
-        {scope_filter}
-          AND org_id = %(org_id)s
+        FROM (
+            SELECT
+                day,
+                provider,
+                work_scope_id,
+                team_id,
+                status,
+                argMax(duration_hours, computed_at) AS duration_hours
+            FROM work_item_state_durations_daily
+            WHERE day >= %(start_day)s AND day < %(end_day)s
+              AND status = 'blocked'
+            {scope_filter}
+              AND org_id = %(org_id)s
+            GROUP BY day, provider, work_scope_id, team_id, status
+        )
         GROUP BY day
         ORDER BY day
     """

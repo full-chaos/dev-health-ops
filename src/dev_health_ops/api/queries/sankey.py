@@ -98,14 +98,29 @@ async def fetch_state_status_counts(
     scope_params: dict[str, Any],
     org_id: str = "",
 ) -> list[dict[str, Any]]:
+    # CHAOS-2377: the daily job appends a fresh row per run to this plain
+    # MergeTree, so a re-run/backfill of the same day leaves duplicate rows.
+    # Dedup with argMax(items_touched, computed_at) over the full natural key
+    # before summing, matching the operating_review reader; summing raw rows
+    # would inflate the Sankey status counts on every re-run.
     query = f"""
         SELECT
             status,
             sum(items_touched) AS items_touched
-        FROM work_item_state_durations_daily
-        WHERE day >= %(start_day)s AND day < %(end_day)s
-          AND org_id = %(org_id)s
-            {scope_filter}
+        FROM (
+            SELECT
+                day,
+                provider,
+                work_scope_id,
+                team_id,
+                status,
+                argMax(items_touched, computed_at) AS items_touched
+            FROM work_item_state_durations_daily
+            WHERE day >= %(start_day)s AND day < %(end_day)s
+              AND org_id = %(org_id)s
+                {scope_filter}
+            GROUP BY day, provider, work_scope_id, team_id, status
+        )
         GROUP BY status
         ORDER BY items_touched DESC
     """

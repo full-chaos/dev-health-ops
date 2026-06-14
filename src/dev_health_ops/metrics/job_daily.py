@@ -62,7 +62,10 @@ from dev_health_ops.metrics.reviews import compute_review_edges_daily
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.metrics.work_items import DiscoveredRepo
 from dev_health_ops.providers.identity import load_identity_resolver
-from dev_health_ops.providers.teams import build_repo_pattern_resolver
+from dev_health_ops.providers.teams import (
+    build_project_key_resolver,
+    build_repo_pattern_resolver,
+)
 from dev_health_ops.storage import detect_db_type
 from dev_health_ops.utils.cli import (
     add_date_range_args,
@@ -508,6 +511,11 @@ async def run_daily_metrics_job(
     team_resolver = get_team_resolver()
     teams_data = await primary_sink.get_all_teams()
     repo_team_resolver = build_repo_pattern_resolver(teams_data)
+    # CHAOS-2377: project-key team attribution for the work-item state-duration
+    # rollup. Mirrors job_work_items: team-owned-by-project-key items that are
+    # unassigned (or assigned to unmapped users) must still land under their
+    # team, not the normalized "unassigned" bucket.
+    project_key_resolver = build_project_key_resolver(teams_data)
     discovered_repos = discover_repos(
         backend=backend,
         primary_sink=primary_sink,
@@ -705,6 +713,7 @@ async def run_daily_metrics_job(
                 transitions=work_item_transitions,
                 computed_at=computed_at,
                 team_resolver=team_resolver,
+                project_key_resolver=project_key_resolver,
             )
 
         review_edges = compute_review_edges_daily(

@@ -1049,8 +1049,15 @@ def _iter_gitlab_repo_tree(
 ) -> Iterable[Any]:
     page = 1
     seen = 0
+    # Defensive page cap. GitLab paginates until it returns an empty page, but a
+    # transport/API glitch — or a test double whose ``repository_tree()`` is a
+    # truthy Mock that never yields a falsy page — would otherwise spin forever
+    # (an unbounded REST crawl that hangs the sync; this hung the unit suite to
+    # the CI job timeout). 10k pages at per_page=100 covers ~1M tree entries,
+    # far beyond any real repository.
+    max_pages = 10_000
 
-    while True:
+    while page <= max_pages:
         try:
             page_items = gl_project.repository_tree(
                 ref=ref,
@@ -1067,13 +1074,21 @@ def _iter_gitlab_repo_tree(
                 page=page,
                 all=False,
             )
-        if not page_items:
+        # An empty page marks the end. Check the length explicitly: a real
+        # GitLab response is a list (``[]`` is falsy), but a truthy-but-empty
+        # container — e.g. a test Mock with no configured return — is not caught
+        # by ``not page_items`` alone and would loop until ``max_pages``.
+        try:
+            page_len = len(page_items)
+        except TypeError:
+            page_len = 0
+        if not page_items or page_len == 0:
             break
-        seen += len(page_items)
+        seen += page_len
         logging.debug(
             "GitLab repo tree page %d returned %d items (total: %d)",
             page,
-            len(page_items),
+            page_len,
             seen,
         )
         yield from page_items

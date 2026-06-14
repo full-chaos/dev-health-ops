@@ -138,14 +138,21 @@ def _find_release_env_pairs(
 
 
 def _count_total_releases(client: Any, org_id: str, day: date) -> int:
-    """Count total distinct release_refs deployed on this day."""
+    """Count total distinct release_refs deployed on this day.
+
+    Scoped to the current org's repos: ``deployments`` has no ``org_id``
+    column, so we restrict ``repo_id`` to this org's repos (``repos.id``)
+    to avoid mixing other tenants' deployments into the coverage_ratio
+    denominator (CHAOS-2381).
+    """
     query = """
         SELECT count(DISTINCT release_ref) AS cnt
         FROM deployments
         WHERE release_ref != ''
           AND toDate(coalesce(deployed_at, started_at)) = {day:Date}
+          AND repo_id IN (SELECT id FROM repos WHERE org_id = {org_id:String})
     """
-    params: dict[str, Any] = {"day": str(day)}
+    params: dict[str, Any] = {"day": str(day), "org_id": org_id}
     rows = _query_dicts(client, query, params)
     if rows:
         return int(rows[0].get("cnt", 0))
@@ -155,19 +162,29 @@ def _count_total_releases(client: Any, org_id: str, day: date) -> int:
 def _get_deploy_timestamp(
     client: Any, org_id: str, release_ref: str, environment: str
 ) -> datetime | None:
-    """Get the deploy timestamp for a release_ref + environment."""
+    """Get the deploy timestamp for a release_ref + environment.
+
+    Scoped to the current org's repos (``repos.id``): ``release_ref`` +
+    ``environment`` is not globally unique, so an unscoped read could pick
+    another tenant's deployment timestamp (CHAOS-2381).
+    """
     query = """
         SELECT coalesce(deployed_at, started_at) AS deploy_ts
         FROM deployments
         WHERE release_ref = {release_ref:String}
           AND environment = {environment:String}
+          AND repo_id IN (SELECT id FROM repos WHERE org_id = {org_id:String})
         ORDER BY deploy_ts DESC
         LIMIT 1
     """
     rows = _query_dicts(
         client,
         query,
-        {"release_ref": release_ref, "environment": environment},
+        {
+            "release_ref": release_ref,
+            "environment": environment,
+            "org_id": org_id,
+        },
     )
     if rows and rows[0].get("deploy_ts"):
         ts = rows[0]["deploy_ts"]
@@ -190,6 +207,14 @@ def _signal_rate(
     """Compute signal_count / session_count rate in a time window.
 
     Returns (rate, total_sessions).
+
+    Filters on ``release_ref`` so the rate reflects ONLY this release's
+    telemetry. ``release_ref`` + ``environment`` is not 1:1 — two releases
+    can share ``production`` with overlapping baseline/post windows — so
+    without this predicate every co-resident release would receive the same
+    org/environment aggregate friction/error rate, producing false
+    release-impact deltas and confidence scores (CHAOS-2381). The PRD join
+    contract is ``release_ref`` + environment + time window.
     """
     query = """
         SELECT
@@ -197,6 +222,7 @@ def _signal_rate(
             sum(session_count) AS total_sessions
         FROM telemetry_signal_bucket
         WHERE org_id = {org_id:String}
+          AND release_ref = {release_ref:String}
           AND environment = {environment:String}
           AND signal_type LIKE {signal_pattern:String}
           AND bucket_start >= {window_start:DateTime64(3)}
@@ -207,6 +233,7 @@ def _signal_rate(
         query,
         {
             "org_id": org_id,
+            "release_ref": release_ref,
             "environment": environment,
             "signal_pattern": signal_pattern,
             "window_start": window_start,
@@ -274,15 +301,23 @@ def _compute_delta(
 def _time_to_first_friction_spike(
     client: Any,
     org_id: str,
+    release_ref: str,
     environment: str,
     deploy_ts: datetime,
 ) -> float | None:
-    """Hours from deploy to first friction signal spike (within 72h)."""
+    """Hours from deploy to first friction signal spike (within 72h).
+
+    Filters on ``release_ref`` so ``time_to_first_user_issue_after_release``
+    measures THIS release's first friction, not any unrelated release that
+    happens to share the same ``environment`` in the post-deploy window
+    (CHAOS-2381).
+    """
     spike_end = deploy_ts + timedelta(hours=_SPIKE_DETECTION_HOURS)
     query = """
         SELECT min(bucket_start) AS first_friction_ts
         FROM telemetry_signal_bucket
         WHERE org_id = {org_id:String}
+          AND release_ref = {release_ref:String}
           AND environment = {environment:String}
           AND signal_type LIKE 'friction.%'
           AND bucket_start >= {deploy_ts:DateTime64(3)}
@@ -294,6 +329,7 @@ def _time_to_first_friction_spike(
         query,
         {
             "org_id": org_id,
+            "release_ref": release_ref,
             "environment": environment,
             "deploy_ts": deploy_ts,
             "spike_end": spike_end,
@@ -322,7 +358,12 @@ def _concurrent_deploy_count(
     environment: str,
     deploy_ts: datetime,
 ) -> int:
-    """Count other releases in same environment within 24h window."""
+    """Count other releases in same environment within 24h window.
+
+    Scoped to the current org's repos (``repos.id``) so concurrent-deploy
+    confounding only counts this tenant's deployments, not other orgs that
+    happen to share the same ``environment`` label (CHAOS-2381).
+    """
     window_start = deploy_ts - timedelta(hours=24)
     window_end = deploy_ts + timedelta(hours=24)
     query = """
@@ -333,6 +374,7 @@ def _concurrent_deploy_count(
           AND release_ref != ''
           AND coalesce(deployed_at, started_at) >= {window_start:DateTime64(3)}
           AND coalesce(deployed_at, started_at) <= {window_end:DateTime64(3)}
+          AND repo_id IN (SELECT id FROM repos WHERE org_id = {org_id:String})
     """
     rows = _query_dicts(
         client,
@@ -342,6 +384,7 @@ def _concurrent_deploy_count(
             "release_ref": release_ref,
             "window_start": window_start,
             "window_end": window_end,
+            "org_id": org_id,
         },
     )
     if rows:
@@ -359,18 +402,29 @@ def _data_completeness(
     """Compute data completeness: 1.0 if all expected hourly buckets present.
 
     Expects 24 hourly buckets per day. Scaled proportionally.
+
+    Filters on ``release_ref`` so the completeness score reflects THIS
+    release's telemetry coverage rather than the whole environment's
+    (CHAOS-2381); otherwise a busy co-resident release would mask this
+    release's missing buckets.
     """
     query = """
         SELECT count(DISTINCT toStartOfHour(bucket_start)) AS bucket_hours
         FROM telemetry_signal_bucket
         WHERE org_id = {org_id:String}
+          AND release_ref = {release_ref:String}
           AND environment = {environment:String}
           AND toDate(bucket_start) = {day:Date}
     """
     rows = _query_dicts(
         client,
         query,
-        {"org_id": org_id, "environment": environment, "day": str(day)},
+        {
+            "org_id": org_id,
+            "release_ref": release_ref,
+            "environment": environment,
+            "day": str(day),
+        },
     )
     if not rows:
         return 0.0
@@ -409,7 +463,7 @@ def _compute_release_env(
     computed_at: datetime,
 ) -> ReleaseImpactDailyRecord:
     deploy_ts = _get_deploy_timestamp(client, org_id, release_ref, environment)
-    repo_id = _get_repo_id_for_release(client, release_ref, environment)
+    repo_id = _get_repo_id_for_release(client, org_id, release_ref, environment)
 
     friction_delta: float | None = None
     post_friction_rate: float | None = None
@@ -461,7 +515,9 @@ def _compute_release_env(
 
     total_sessions = friction_sessions + error_sessions
     time_to_first_issue = (
-        _time_to_first_friction_spike(client, org_id, environment, deploy_ts)
+        _time_to_first_friction_spike(
+            client, org_id, release_ref, environment, deploy_ts
+        )
         if deploy_ts is not None
         else None
     )
@@ -516,21 +572,32 @@ def _compute_release_env(
 
 
 def _get_repo_id_for_release(
-    client: Any, release_ref: str, environment: str
+    client: Any, org_id: str, release_ref: str, environment: str
 ) -> UUID | None:
-    """Look up repo_id from deployments for a release_ref."""
+    """Look up repo_id from deployments for a release_ref.
+
+    Scoped to the current org's repos (``repos.id``): without this scope an
+    unscoped read could write ANOTHER tenant's ``repo_id`` into this org's
+    surface-readable ``release_impact_daily`` row, since ``release_ref`` +
+    ``environment`` is not globally unique (CHAOS-2381).
+    """
     query = """
         SELECT repo_id
         FROM deployments
         WHERE release_ref = {release_ref:String}
           AND environment = {environment:String}
+          AND repo_id IN (SELECT id FROM repos WHERE org_id = {org_id:String})
         ORDER BY coalesce(deployed_at, started_at) DESC
         LIMIT 1
     """
     rows = _query_dicts(
         client,
         query,
-        {"release_ref": release_ref, "environment": environment},
+        {
+            "release_ref": release_ref,
+            "environment": environment,
+            "org_id": org_id,
+        },
     )
     if rows and rows[0].get("repo_id"):
         try:

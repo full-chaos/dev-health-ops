@@ -8,6 +8,17 @@ from typing import TypedDict
 from dev_health_ops.metrics.schemas import DeploymentRow, DeployMetricsDailyRecord
 from dev_health_ops.utils.datetime import to_utc
 
+# Deployment statuses that count as a FAILED change. Must be PROVIDER-AGNOSTIC:
+# deployment rows are persisted from the raw provider status with no
+# normalization, so both vocabularies coexist in the ``deployments`` table:
+#   * GitHub deployment state  -> 'failure', 'error'   (GitHub Deployment API)
+#   * GitLab deployment status -> 'failed', 'canceled' (GitLab Deployment API)
+# Counting only 'failure' (or only {failed,error,canceled}) silently drops one
+# provider's failures and biases DORA change-failure-rate toward 0. This is the
+# single source of truth shared with ``compute_dora`` and the ClickHouse
+# ``deployment_daily_rollup`` MV (CHAOS-2382 / CHAOS-2395).
+DEPLOYMENT_FAILURE_STATUSES = {"failure", "failed", "error", "canceled"}
+
 
 class DeploymentBucket(TypedDict):
     deployments: int
@@ -74,7 +85,7 @@ def compute_deploy_metrics_daily(
 
         bucket["deployments"] = int(bucket["deployments"]) + 1
         status = (row.get("status") or "").strip().lower()
-        if status in {"failed", "error", "canceled"}:
+        if status in DEPLOYMENT_FAILURE_STATUSES:
             bucket["failed"] = int(bucket["failed"]) + 1
 
         started_at = row.get("started_at")

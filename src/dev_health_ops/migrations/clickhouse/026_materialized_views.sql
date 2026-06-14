@@ -92,6 +92,6 @@ AS SELECT
     toDate(coalesce(deployed_at, started_at)) AS day,
     toUInt64(count()) AS total_deployments,
     toUInt64(countIf(status = 'success')) AS success_deployments,
-    toUInt64(countIf(status = 'failure')) AS failure_deployments
+    toUInt64(countIf(status IN ('failure', 'failed', 'error', 'canceled'))) AS failure_deployments
 FROM deployments
 GROUP BY repo_id, toDate(coalesce(deployed_at, started_at));

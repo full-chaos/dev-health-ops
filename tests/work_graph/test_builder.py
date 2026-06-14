@@ -575,6 +575,209 @@ class TestDerivePRCommitLinks:
         assert records[0].commit_hash == "eee555"
 
 
+class TestFastPathTenantIsolation:
+    """Tenant-isolation guards for ``_build_pr_commit_edges_from_fast_path``.
+
+    The fast path materializes PR->commit edges by joining
+    ``work_graph_pr_commit`` to ``git_commits`` on (repo_id, commit_hash).
+    Because ``repo_id``/``commit_hash`` values can collide across tenants
+    (documented in metrics/loaders/ai_impact.py), the commit side MUST be
+    scoped to the same org as the PR-commit row -- otherwise an org-scoped
+    build could pick up another tenant's ``git_commits`` row and stamp a
+    cross-tenant edge into ``work_graph_edges``.
+    """
+
+    def test_join_predicate_scopes_commits_by_org(self):
+        """The fast-path SQL must equate ``c.org_id`` with ``p.org_id``.
+
+        Without this the join only matches on (repo_id, commit_hash) and a
+        colliding commit from another org would satisfy the join.
+        """
+        captured: dict[str, str] = {}
+
+        def mock_query(query, params):
+            if "work_graph_pr_commit AS p" in query:
+                captured["query"] = query
+            return []
+
+        fake_sink = MagicMock()
+        fake_sink.backend_type = "clickhouse"
+        fake_sink.query_dicts.side_effect = mock_query
+
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default", org_id="org-a")
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            builder._build_pr_commit_edges_from_fast_path()
+            builder.close()
+
+        sql = captured["query"]
+        normalized = " ".join(sql.split())
+        # Both join sides must be org-scoped together.
+        assert "toString(p.org_id) = toString(c.org_id)" in normalized
+        # The selected org is still pinned via the WHERE filter.
+        assert "p.org_id = 'org-a'" in normalized
+
+    def test_cross_tenant_commit_collision_is_excluded(self):
+        """Two orgs share repo_id+commit_hash; org A's build must not use B's commit.
+
+        The fake sink simulates the JOIN honoring whatever predicates the
+        builder emits: org A has a PR-commit fast-path row but NO matching
+        ``git_commits`` row of its own; org B owns the colliding commit. With
+        the org-equality predicate present, the join yields zero rows for
+        org A, so no edge is created. (Drop ``c.org_id = p.org_id`` from the
+        builder and this test fails -- the join would match org B's commit.)
+        """
+        shared_repo = uuid.uuid4()
+        shared_hash = "deadbeef"
+        base_time = datetime(2024, 6, 15, tzinfo=timezone.utc)
+
+        # work_graph_pr_commit: org A has a fast-path link row.
+        pr_commit_rows = [
+            {
+                "repo_id": shared_repo,
+                "org_id": "org-a",
+                "pr_number": 1,
+                "commit_hash": shared_hash,
+            },
+        ]
+        # git_commits: ONLY org B owns the colliding commit row.
+        git_commits = [
+            {
+                "repo_id": shared_repo,
+                "org_id": "org-b",
+                "hash": shared_hash,
+                "author_when": base_time,
+            },
+        ]
+
+        def mock_query(query, params):
+            if "work_graph_pr_commit AS p" not in query:
+                return []
+            normalized = " ".join(query.split())
+            # Simulate the INNER JOIN + WHERE org filter the builder emits.
+            org_equijoin = "toString(p.org_id) = toString(c.org_id)" in normalized
+            results = []
+            for p in pr_commit_rows:
+                # WHERE p.org_id = '<selected>'
+                if f"p.org_id = '{p['org_id']}'" not in normalized:
+                    continue
+                for c in git_commits:
+                    if str(p["repo_id"]) != str(c["repo_id"]):
+                        continue
+                    if p["commit_hash"] != c["hash"]:
+                        continue
+                    # The org-equality predicate, when present, excludes the
+                    # cross-tenant commit.
+                    if org_equijoin and str(p["org_id"]) != str(c["org_id"]):
+                        continue
+                    results.append(
+                        {
+                            "repo_id": p["repo_id"],
+                            "pr_number": p["pr_number"],
+                            "commit_hash": p["commit_hash"],
+                            "confidence": 0.9,
+                            "provenance": "explicit_text",
+                            "evidence": "commit_message_pr_ref",
+                            "last_synced": base_time,
+                            "author_when": c["author_when"],
+                        }
+                    )
+            return results
+
+        fake_sink = MagicMock()
+        fake_sink.backend_type = "clickhouse"
+        fake_sink.query_dicts.side_effect = mock_query
+        fake_sink.write_work_graph_edges = MagicMock()
+
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default", org_id="org-a")
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            count = builder._build_pr_commit_edges_from_fast_path()
+            builder.close()
+
+        # org A has no commit of its own -> the colliding org B commit must be
+        # excluded -> zero edges, no cross-tenant contamination.
+        assert count == 0
+        fake_sink.write_work_graph_edges.assert_not_called()
+
+    def test_same_tenant_commit_still_links(self):
+        """The org-equality predicate must not break the legitimate same-org join."""
+        repo = uuid.uuid4()
+        commit_hash = "cafef00d"
+        base_time = datetime(2024, 6, 15, tzinfo=timezone.utc)
+
+        pr_commit_rows = [
+            {
+                "repo_id": repo,
+                "org_id": "org-a",
+                "pr_number": 7,
+                "commit_hash": commit_hash,
+            },
+        ]
+        git_commits = [
+            {
+                "repo_id": repo,
+                "org_id": "org-a",
+                "hash": commit_hash,
+                "author_when": base_time,
+            },
+        ]
+
+        def mock_query(query, params):
+            if "work_graph_pr_commit AS p" not in query:
+                return []
+            normalized = " ".join(query.split())
+            org_equijoin = "toString(p.org_id) = toString(c.org_id)" in normalized
+            results = []
+            for p in pr_commit_rows:
+                if f"p.org_id = '{p['org_id']}'" not in normalized:
+                    continue
+                for c in git_commits:
+                    if str(p["repo_id"]) != str(c["repo_id"]):
+                        continue
+                    if p["commit_hash"] != c["hash"]:
+                        continue
+                    if org_equijoin and str(p["org_id"]) != str(c["org_id"]):
+                        continue
+                    results.append(
+                        {
+                            "repo_id": p["repo_id"],
+                            "pr_number": p["pr_number"],
+                            "commit_hash": p["commit_hash"],
+                            "confidence": 0.9,
+                            "provenance": "explicit_text",
+                            "evidence": "commit_message_pr_ref",
+                            "last_synced": base_time,
+                            "author_when": c["author_when"],
+                        }
+                    )
+            return results
+
+        fake_sink = MagicMock()
+        fake_sink.backend_type = "clickhouse"
+        fake_sink.query_dicts.side_effect = mock_query
+        fake_sink.write_work_graph_edges = MagicMock(return_value=1)
+
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default", org_id="org-a")
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            count = builder._build_pr_commit_edges_from_fast_path()
+            builder.close()
+
+        assert count == 1
+        fake_sink.write_work_graph_edges.assert_called_once()
+        edge_records = fake_sink.write_work_graph_edges.call_args[0][0]
+        assert len(edge_records) == 1
+        assert edge_records[0].repo_id == repo
+        assert edge_records[0].org_id == "org-a"
+
+
 class TestWorkGraphBuilderIntegration:
     """Integration tests for WorkGraphBuilder.
 

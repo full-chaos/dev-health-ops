@@ -1451,6 +1451,14 @@ class WorkGraphBuilder:
             "Building PR->commit edges from dev_health_ops.work_graph_pr_commit..."
         )
 
+        # Tenant isolation: ``git_commits`` carries an ``org_id`` column
+        # (migration 027) and ``repo_id``/``hash`` values can collide across
+        # tenants (documented in metrics/loaders/ai_impact.py). The commit side
+        # of this join MUST be scoped to the same org as the PR-commit row, or a
+        # tenant-scoped build could satisfy the commit from another org and stamp
+        # a cross-tenant edge into the current org's work_graph_edges. Matching
+        # ``c.org_id = p.org_id`` keeps both sides within one tenant. The
+        # ``p.org_id`` WHERE filter below then pins it to the selected org.
         query = """
         SELECT
             p.repo_id,
@@ -1462,7 +1470,11 @@ class WorkGraphBuilder:
             p.last_synced,
             c.author_when
         FROM work_graph_pr_commit AS p
-        INNER JOIN git_commits AS c ON (toString(p.repo_id) = toString(c.repo_id) AND p.commit_hash = c.hash)
+        INNER JOIN git_commits AS c ON (
+            toString(p.repo_id) = toString(c.repo_id)
+            AND p.commit_hash = c.hash
+            AND toString(p.org_id) = toString(c.org_id)
+        )
         """
         where_parts: list[str] = []
         if self.config.repo_id:

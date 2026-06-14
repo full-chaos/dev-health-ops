@@ -60,7 +60,25 @@ def run_work_graph_build(ns: argparse.Namespace) -> int:
     if ns.repo_id:
         repo_id = uuid.UUID(ns.repo_id)
 
-    org_id = getattr(ns, "org", None) or None
+    # Resolve the tenant scope. If --org was supplied it MUST flow into
+    # BuildConfig so every read/write the builder performs is org-scoped:
+    # _derive_pr_commit_links and the *_from_fast_path readers only apply the
+    # org filter (and stamp org_id onto work_graph_pr_commit rows) when
+    # BuildConfig.org_id is set. Dropping it here let `dev-hops work-graph build`
+    # scan all visible PRs/commits and persist derived PR-commit links under the
+    # empty org -- the intended tenant would miss its links while cross-tenant
+    # linkage material accumulated in the empty-org bucket (CHAOS-2375 round-3).
+    org_raw = getattr(ns, "org", None)
+    org_id = org_raw or None
+    if org_raw is not None and not str(org_raw).strip():
+        # An explicit but blank --org is almost certainly a mis-wired tenant
+        # scope; fail closed rather than silently building under the empty org.
+        logging.error(
+            "FAIL: --org was provided but resolved empty; refusing to build an "
+            "unscoped work graph. Pass a concrete org id or omit --org for a "
+            "full rebuild."
+        )
+        return 2
     logging.info("Building work graph for org_id=%s", org_id)
 
     config = BuildConfig(
@@ -70,6 +88,7 @@ def run_work_graph_build(ns: argparse.Namespace) -> int:
         repo_id=repo_id,
         heuristic_days_window=ns.heuristic_window,
         heuristic_confidence=ns.heuristic_confidence,
+        org_id=org_id or "",
     )
 
     logging.info(f"Building work graph from {config.from_date} to {config.to_date}")
@@ -105,6 +124,10 @@ def run_work_graph_build(ns: argparse.Namespace) -> int:
         ]
         if repo_id:
             where_parts.append(f"repo_id = '{repo_id}'")
+        # Verify against THIS tenant's edges only; otherwise a tenant-scoped build
+        # could "pass" on another org's rows while writing nothing of its own.
+        if org_id:
+            where_parts.append(f"org_id = '{org_id}'")
         where_sql = " AND ".join(where_parts)
 
         # Check edge count in DB for verification

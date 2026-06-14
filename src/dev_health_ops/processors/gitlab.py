@@ -24,6 +24,7 @@ from dev_health_ops.models.git import (
 from dev_health_ops.processors.base_git import (
     BaseGitProcessor,
     backfill_file_records,
+    blame_backfill_needed,
     build_ci_pipeline_run,
     build_connector_pull_request,
     build_deployment,
@@ -31,6 +32,7 @@ from dev_health_ops.processors.base_git import (
     check_backfill_needs,
     resolve_commit_stats_limit,
     resolve_incident_labels,
+    select_unblamed_paths,
 )
 from dev_health_ops.processors.fetch_utils import (
     AsyncBatchCollector,
@@ -814,7 +816,17 @@ async def _backfill_gitlab_missing_data(
     if not needs_files and hasattr(store, "has_any_git_file_contents"):
         needs_files = not await store.has_any_git_file_contents(db_repo.id)
 
-    needs_blame = needs.blame and include_blame
+    # Blame backfill is coverage-aware (CHAOS-2376 round-3). The crawl is capped
+    # at BLAME_BACKFILL_MAX_FILES per sync, so an any-row gate (needs.blame)
+    # would mark the project "done" after the first capped batch and strand
+    # every file past the cap without blame. Keep the blame branch alive while
+    # any tracked file still lacks blame, so successive syncs advance coverage.
+    needs_blame = await blame_backfill_needed(
+        store,
+        db_repo.id,
+        include_blame=include_blame,
+        any_row_needs_blame=needs.blame,
+    )
     if not (needs_files or needs_blame or needs.commit_stats):
         return
 
@@ -825,6 +837,7 @@ async def _backfill_gitlab_missing_data(
         return
 
     file_paths: list[str] = []
+    blame_paths: list[str] = []
     if needs_files or needs_blame:
         try:
             items = _iter_gitlab_repo_tree(
@@ -906,8 +919,25 @@ async def _backfill_gitlab_missing_data(
     if needs_blame and file_paths:
         # Bound the blame crawl: one REST call per file, so cap the number of
         # files we blame on a single sync to avoid rate-limit failures /
-        # timeouts on large projects (CHAOS-2376).
-        blame_paths = file_paths[:BLAME_BACKFILL_MAX_FILES]
+        # timeouts on large projects (CHAOS-2376). Select the *next* unblamed
+        # batch (diffing the live tree against already-blamed paths) so each
+        # rerun advances coverage instead of reblaming the same capped prefix;
+        # the capped prefix is a fallback when the store lacks per-path coverage.
+        blame_paths = await select_unblamed_paths(
+            store, db_repo.id, file_paths, BLAME_BACKFILL_MAX_FILES
+        )
+        if not blame_paths:
+            logging.info(
+                "Blame coverage already complete for %s; skipping crawl",
+                project_full_name,
+            )
+    if needs_blame and blame_paths:
+        logging.info(
+            "Backfilling blame for %d unblamed files in %s (cap %d)...",
+            len(blame_paths),
+            project_full_name,
+            BLAME_BACKFILL_MAX_FILES,
+        )
         async with AsyncBatchCollector(
             ingestion_sink.insert_blame_data
         ) as blame_collector:

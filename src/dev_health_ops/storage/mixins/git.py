@@ -53,6 +53,40 @@ class GitDataMixin(SQLAlchemyStoreMixinProtocol):
         )
         return (result.scalar() or 0) > 0
 
+    async def get_blamed_paths(self, repo_id) -> set[str]:
+        """Return the set of file paths that already have blame for this repo.
+
+        Drives the coverage-aware onboarding blame backfill (CHAOS-2376
+        round-3): the crawl is capped per sync, so the backfill must diff the
+        live tree against already-blamed paths and process the next unblamed
+        batch instead of stopping once any blame row exists.
+        """
+        assert self.session is not None
+        result = await self.session.execute(
+            select(GitBlame.path).distinct().where(GitBlame.repo_id == repo_id)
+        )
+        return {str(path) for (path,) in result.all() if path is not None}
+
+    async def has_unblamed_files(self, repo_id) -> bool:
+        """Whether any tracked file still lacks blame for this repo.
+
+        Keeps the capped onboarding blame crawl alive across reruns without
+        re-walking the provider tree once coverage is complete (CHAOS-2376
+        round-3). Returns False when no files are tracked yet so first
+        onboarding starts via the ``has_any_git_blame`` any-row gate.
+        """
+        assert self.session is not None
+        blamed_subq = select(GitBlame.path).where(GitBlame.repo_id == repo_id)
+        result = await self.session.execute(
+            select(GitFile.path)
+            .where(
+                GitFile.repo_id == repo_id,
+                GitFile.path.not_in(blamed_subq),
+            )
+            .limit(1)
+        )
+        return result.first() is not None
+
     async def insert_git_file_data(self, file_data: list[GitFile]) -> None:
         if not file_data:
             return

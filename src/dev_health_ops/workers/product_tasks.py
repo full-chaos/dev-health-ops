@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 
+from dev_health_ops.db import require_clickhouse_uri
 from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.task_utils import _get_db_url
@@ -20,7 +21,9 @@ def sync_teams_to_analytics(self, org_id: str | None = None) -> dict:
     from dev_health_ops.providers.team_bridge import bridge_teams_to_clickhouse
 
     try:
-        count = bridge_teams_to_clickhouse(org_id=org_id)
+        count = bridge_teams_to_clickhouse(
+            org_id=org_id, db_url=require_clickhouse_uri()
+        )
         return {"status": "success", "teams_synced": count}
     except Exception as exc:
         logger.exception("sync_teams_to_analytics failed: %s", exc)

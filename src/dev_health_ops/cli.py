@@ -347,9 +347,18 @@ def _should_resolve_org(ns: argparse.Namespace) -> bool:
 _REQ_CLICKHOUSE = "clickhouse"
 _REQ_POSTGRES = "postgres"
 _REQ_ORG = "org"
+# ClickHouse supplied via a command's own ``--db`` flag (not the global
+# ``--analytics-db``). Used by commands like ``investment materialize`` whose
+# ``--db`` carries the ClickHouse DSN (default: CLICKHOUSE_URI).
+_REQ_SINK_DB = "sink_db"
 
 # Stable display order for messages/epilogs.
-_REQUIREMENT_ORDER: tuple[str, ...] = (_REQ_CLICKHOUSE, _REQ_POSTGRES, _REQ_ORG)
+_REQUIREMENT_ORDER: tuple[str, ...] = (
+    _REQ_CLICKHOUSE,
+    _REQ_POSTGRES,
+    _REQ_ORG,
+    _REQ_SINK_DB,
+)
 
 _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     # --- metrics (ClickHouse analytics store) ---
@@ -370,12 +379,13 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     ("sync", "security"): frozenset({_REQ_CLICKHOUSE}),
     ("sync", "tests"): frozenset({_REQ_CLICKHOUSE}),
     ("sync", "work-items"): frozenset({_REQ_CLICKHOUSE}),
+    ("sync", "teams"): frozenset({_REQ_CLICKHOUSE}),
     # --- audit (read ClickHouse analytics store) ---
     ("audit", "perf"): frozenset({_REQ_CLICKHOUSE}),
     ("audit", "schema"): frozenset({_REQ_CLICKHOUSE}),
     # --- other ClickHouse-backed commands ---
     ("recommendations", "compute"): frozenset({_REQ_CLICKHOUSE}),
-    ("investment", "materialize"): frozenset({_REQ_CLICKHOUSE}),
+    ("investment", "materialize"): frozenset({_REQ_SINK_DB}),
     ("ai", "allowlist", "list"): frozenset({_REQ_CLICKHOUSE, _REQ_ORG}),
     ("ai", "allowlist", "set"): frozenset({_REQ_CLICKHOUSE, _REQ_ORG}),
     # --- PostgreSQL semantic store ---
@@ -391,6 +401,9 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     ("migrate", "upgrade"): frozenset({_REQ_POSTGRES}),
     ("migrate", "downgrade"): frozenset({_REQ_POSTGRES}),
     ("migrate", "current"): frozenset({_REQ_POSTGRES}),
+    # Bare ``migrate postgres`` / ``migrate clickhouse`` default to upgrade.
+    ("migrate", "postgres"): frozenset({_REQ_POSTGRES}),
+    ("migrate", "clickhouse"): frozenset({_REQ_CLICKHOUSE}),
 }
 
 _REQUIREMENT_MESSAGES: dict[str, str] = {
@@ -406,12 +419,17 @@ _REQUIREMENT_MESSAGES: dict[str, str] = {
         "organization id \u2014 pass --org or set ORG_ID "
         "(could not auto-resolve one from the database)"
     ),
+    _REQ_SINK_DB: (
+        "ClickHouse analytics database \u2014 pass --db or set CLICKHOUSE_URI "
+        "(e.g. clickhouse://ch:ch@localhost:8123/default)"
+    ),
 }
 
 _REQUIREMENT_HELP_LABELS: dict[str, str] = {
     _REQ_CLICKHOUSE: "ClickHouse (--analytics-db / CLICKHOUSE_URI)",
     _REQ_POSTGRES: "PostgreSQL (--db / POSTGRES_URI)",
     _REQ_ORG: "organization (--org / ORG_ID)",
+    _REQ_SINK_DB: "ClickHouse (--db / CLICKHOUSE_URI)",
 }
 
 
@@ -432,10 +450,15 @@ def _org_present(ns: argparse.Namespace) -> bool:
     return bool(getattr(ns, "org", None) or os.getenv("ORG_ID"))
 
 
+def _sink_db_present(ns: argparse.Namespace) -> bool:
+    return bool(getattr(ns, "db", None) or os.getenv("CLICKHOUSE_URI"))
+
+
 _REQUIREMENT_PRESENCE = {
     _REQ_CLICKHOUSE: _clickhouse_present,
     _REQ_POSTGRES: _postgres_present,
     _REQ_ORG: _org_present,
+    _REQ_SINK_DB: _sink_db_present,
 }
 
 
@@ -464,22 +487,23 @@ def _attach_preflight_metadata(parser: argparse.ArgumentParser) -> None:
     """Attach ``_leaf_parser``/``_requires`` defaults and a help epilog per leaf."""
 
     def walk(p: argparse.ArgumentParser, path: tuple[str, ...]) -> None:
-        sub_actions = [
-            a for a in p._actions if isinstance(a, argparse._SubParsersAction)
-        ]
-        if sub_actions:
-            for sa in sub_actions:
-                for name, child in sa.choices.items():
-                    walk(child, path + (name,))
-            return
-        requires = _COMMAND_REQUIREMENTS.get(path, frozenset())
-        p.set_defaults(_leaf_parser=p, _requires=requires)
-        labels = [
-            _REQUIREMENT_HELP_LABELS[t] for t in _REQUIREMENT_ORDER if t in requires
-        ]
-        if labels:
-            note = "Requires: " + ", ".join(labels) + "."
-            p.epilog = f"{p.epilog}\n\n{note}" if p.epilog else note
+        # Attach to any *dispatchable* parser (one that has a handler). This
+        # includes leaf commands and intermediate parsers that set a default
+        # ``func`` (e.g. bare ``migrate postgres`` -> upgrade), so those forms
+        # are guarded too. Always recurse so more-specific child commands can
+        # override the metadata on the same namespace.
+        if p.get_default("func") is not None:
+            requires = _COMMAND_REQUIREMENTS.get(path, frozenset())
+            p.set_defaults(_leaf_parser=p, _requires=requires)
+            labels = [
+                _REQUIREMENT_HELP_LABELS[t] for t in _REQUIREMENT_ORDER if t in requires
+            ]
+            if labels:
+                note = "Requires: " + ", ".join(labels) + "."
+                p.epilog = f"{p.epilog}\n\n{note}" if p.epilog else note
+        for sa in (a for a in p._actions if isinstance(a, argparse._SubParsersAction)):
+            for name, child in sa.choices.items():
+                walk(child, path + (name,))
 
     walk(parser, ())
 

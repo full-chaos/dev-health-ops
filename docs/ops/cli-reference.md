@@ -25,7 +25,7 @@ The CLI is implemented in `cli.py` and orchestrates:
 
 Subcommands like `metrics daily` also accept `--sink` to select the output backend. Legacy values (`mongo`, `sqlite`, `postgres`, `both`) are rejected immediately with a migration message. ClickHouse is the only supported analytics backend.
 
-> **Caveat:** Some subcommands (e.g., `audit completeness`, `audit coverage`) define their own `--db` flag that accepts an **analytics** (ClickHouse) connection string, overriding the global `--db` meaning for that subcommand. Check individual subcommand docs below for the expected connection type.
+> **Caveat:** Some subcommands (e.g., `audit completeness`, `audit coverage`, `investment materialize`, `work-graph build`) define their own `--db` flag that accepts an **analytics** (ClickHouse) connection string, overriding the global `--db` meaning for that subcommand. Check individual subcommand docs below for the expected connection type.
 
 ### Dual-Database Architecture
 
@@ -44,6 +44,43 @@ See [Database Architecture](../architecture/database-architecture.md) for detail
 |---------|--------|---------|
 | PostgreSQL | `postgresql+asyncpg://` | `postgresql+asyncpg://localhost:5555/postgres` |
 | ClickHouse | `clickhouse://` | `clickhouse://localhost:8123/default` |
+
+---
+
+## Input Validation (Preflight)
+
+Before a subcommand runs, the CLI validates that the inputs it actually needs are present. Commands that require a database connection or an organization id **fail fast** with an argparse usage error (**exit code 2**) that names exactly what is missing — instead of failing deep inside the handler with a logged error or a traceback.
+
+These inputs are supplied through global flags or environment variables (`--analytics-db`/`CLICKHOUSE_URI`, `--db`/`POSTGRES_URI`, `--org`/`ORG_ID`), so they cannot be marked `required` on individual subparsers. The preflight closes that gap centrally.
+
+```bash
+$ dev-hops metrics compounding-risk        # no CLICKHOUSE_URI / org configured
+usage: dev-health-ops metrics compounding-risk [-h] [--day DAY] ...
+dev-health-ops metrics compounding-risk: error: missing required input(s):
+  - ClickHouse analytics database — pass --analytics-db or set CLICKHOUSE_URI (...)
+  - organization id — pass --org or set ORG_ID (could not auto-resolve ...)
+```
+
+Each affected command also lists its requirements at the bottom of `--help`:
+
+```bash
+$ dev-hops metrics compounding-risk --help
+...
+Requires: ClickHouse (--analytics-db / CLICKHOUSE_URI), organization (--org / ORG_ID).
+```
+
+**Requirement matrix:**
+
+| Requirement | Commands |
+|-------------|----------|
+| ClickHouse (`--analytics-db` / `CLICKHOUSE_URI`) | `sync git`, `sync prs`, `sync blame`, `sync cicd`, `sync deployments`, `sync incidents`, `sync security`, `sync tests`, `sync work-items`, `sync teams`; `metrics daily`, `metrics dora`, `metrics complexity`, `metrics release-impact`, `metrics validate-flags`, `metrics rebuild`, `metrics compounding-risk` (+org); `audit perf`, `audit schema`; `recommendations compute`; `ai allowlist list/set` (+org); `migrate clickhouse` (bare + `upgrade`/`status`/`repair`) |
+| ClickHouse via `--db` (`CLICKHOUSE_URI`) | `investment materialize` |
+| PostgreSQL (`--db` / `POSTGRES_URI`) | `billing reconcile`; `migrate postgres` (bare + `upgrade`/`downgrade`/`current`); legacy `migrate upgrade`/`downgrade`/`current` |
+| Organization (`--org` / `ORG_ID`) | `metrics compounding-risk`, `backfill run`, `ai allowlist list/set` |
+
+> The org id auto-resolves from the first organization in PostgreSQL when `--org`/`ORG_ID` are omitted; the preflight only fails when no org can be resolved.
+
+> Read-only Alembic commands that do not open a connection (`migrate [postgres] heads`, `migrate [postgres] history`) are intentionally **not** gated. Commands that declare their own `required=True` flag (e.g. `audit completeness`/`coverage` `--db`, `metrics capacity` `--db`, `fixtures validate` `--sink`) keep using argparse's own required-argument error.
 
 ---
 
@@ -176,7 +213,7 @@ dev-hops sync incidents --provider github \
 
 ### `sync teams`
 
-Sync team definitions.
+Sync team definitions. Persists to the analytics store, so `CLICKHOUSE_URI` (or `--analytics-db`) is required regardless of the `--provider` source (see [Input Validation](#input-validation-preflight)).
 
 ```bash
 # From config file
@@ -718,6 +755,6 @@ dev-hops sync git --provider github \
 |------|---------|
 | 0 | Success |
 | 1 | General error |
-| 2 | Configuration error |
+| 2 | Configuration error — includes argparse usage errors and missing required inputs surfaced by the [preflight](#input-validation-preflight) (e.g. unset `CLICKHOUSE_URI`/`POSTGRES_URI`/`ORG_ID`) |
 | 3 | Authentication error |
 | 4 | Rate limit exceeded |

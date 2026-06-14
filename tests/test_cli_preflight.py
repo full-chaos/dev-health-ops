@@ -62,6 +62,11 @@ _MISSING_CASES = [
     (("migrate", "postgres", "upgrade"), ("PostgreSQL",)),
     (("migrate", "clickhouse", "status"), ("ClickHouse",)),
     (("backfill", "run", "--config-id", "x"), ("organization",)),
+    # Bare migrate forms default to upgrade and must be guarded too.
+    (("migrate", "postgres"), ("PostgreSQL",)),
+    (("migrate", "clickhouse"), ("ClickHouse",)),
+    # sync teams persists to ClickHouse after generating teams.
+    (("sync", "teams", "--provider", "synthetic"), ("ClickHouse",)),
 ]
 
 
@@ -92,6 +97,19 @@ def test_configured_command_passes_preflight() -> None:
     )
 
     # Preflight passed: it may still fail to connect, but not on a missing input.
+    assert "missing required input" not in result.stderr
+
+
+def test_investment_materialize_accepts_clickhouse_via_db_flag() -> None:
+    """`investment materialize` carries its ClickHouse DSN on --db, not
+    --analytics-db; the preflight must accept it and not false-positive."""
+    result = _run_cli(
+        "investment",
+        "materialize",
+        "--db",
+        "clickhouse://ch:ch@localhost:9/default",
+    )
+
     assert "missing required input" not in result.stderr
 
 

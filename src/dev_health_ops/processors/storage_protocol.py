@@ -127,8 +127,8 @@ class GitSyncStore(Protocol):
 
     async def get_blamed_paths(self, repo_id: object) -> set[str]:
         """Return the set of file paths that already have blame for the repo."""
-        ...
+        raise NotImplementedError
 
     async def has_unblamed_files(self, repo_id: object) -> bool:
         """Return True if any tracked file still lacks blame for the repo."""
-        ...
+        raise NotImplementedError

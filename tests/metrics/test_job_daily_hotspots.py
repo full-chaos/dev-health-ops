@@ -31,7 +31,12 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-import dev_health_ops.connectors  # noqa: F401
+# Imported for its registration side effects, and *before* dev_health_ops.metrics
+# (which transitively imports providers._base) to dodge the pre-existing
+# providers._base <-> connectors circular import when this file is collected in
+# isolation. The `_CONNECTORS_SIDE_EFFECT` reference below marks it as used so
+# ruff/CodeQL don't flag the side-effect-only import.
+import dev_health_ops.connectors
 from dev_health_ops.metrics import job_daily
 from dev_health_ops.metrics.hotspots import (
     compute_file_hotspots,
@@ -39,6 +44,10 @@ from dev_health_ops.metrics.hotspots import (
 )
 from dev_health_ops.metrics.schemas import CommitStatRow, FileComplexitySnapshot
 from dev_health_ops.utils import AGGREGATE_STATS_MARKER
+
+# Mark the side-effect-only connectors import (above) as used so ruff/CodeQL
+# don't flag it; it is imported purely to pre-empt the circular import.
+_CONNECTORS_SIDE_EFFECT = dev_health_ops.connectors
 
 DAY = date(2026, 5, 20)
 NOW = datetime(2026, 5, 21, 12, 0, tzinfo=timezone.utc)
@@ -686,12 +695,8 @@ async def test_gitlab_blame_backfill_is_capped(
 ) -> None:
     """Onboarding blame must stop at BLAME_BACKFILL_MAX_FILES files (GitLab)."""
     import dev_health_ops.processors.gitlab as gitlab_mod
-    from dev_health_ops.processors.gitlab import (
-        BLAME_BACKFILL_MAX_FILES,
-        _backfill_gitlab_missing_data,
-    )
 
-    n_files = BLAME_BACKFILL_MAX_FILES + 9
+    n_files = gitlab_mod.BLAME_BACKFILL_MAX_FILES + 9
 
     store = Mock()
     store.has_any_git_files = AsyncMock(return_value=True)
@@ -736,7 +741,7 @@ async def test_gitlab_blame_backfill_is_capped(
     monkeypatch.setattr(
         gitlab_mod, "_iter_gitlab_repo_tree", lambda *a, **k: tree_items
     )
-    await _backfill_gitlab_missing_data(
+    await gitlab_mod._backfill_gitlab_missing_data(
         store=store,
         ingestion_sink=sink,
         connector=connector,
@@ -748,7 +753,7 @@ async def test_gitlab_blame_backfill_is_capped(
         include_commit_stats=False,
     )
 
-    assert len(blame_calls) == BLAME_BACKFILL_MAX_FILES
+    assert len(blame_calls) == gitlab_mod.BLAME_BACKFILL_MAX_FILES
     assert {row.path for row in inserted} == set(blame_calls)
     assert len(blame_calls) < n_files
 
@@ -1010,12 +1015,8 @@ async def test_gitlab_blame_backfill_resumes_on_second_sync(
 ) -> None:
     """A second GitLab sync blames the files the first sync left uncovered."""
     import dev_health_ops.processors.gitlab as gitlab_mod
-    from dev_health_ops.processors.gitlab import (
-        BLAME_BACKFILL_MAX_FILES,
-        _backfill_gitlab_missing_data,
-    )
 
-    n_files = BLAME_BACKFILL_MAX_FILES + 11
+    n_files = gitlab_mod.BLAME_BACKFILL_MAX_FILES + 11
     all_paths = {f"src/f{i}.py" for i in range(n_files)}
     store = _StatefulBlameStore(all_paths)
 
@@ -1046,7 +1047,7 @@ async def test_gitlab_blame_backfill_resumes_on_second_sync(
 
         sink = Mock()
         sink.insert_blame_data = AsyncMock(side_effect=insert_blame)
-        await _backfill_gitlab_missing_data(
+        await gitlab_mod._backfill_gitlab_missing_data(
             store=store,
             ingestion_sink=sink,
             connector=connector,
@@ -1062,7 +1063,7 @@ async def test_gitlab_blame_backfill_resumes_on_second_sync(
         return blamed_now
 
     first = await sync()
-    assert len(first) == BLAME_BACKFILL_MAX_FILES
+    assert len(first) == gitlab_mod.BLAME_BACKFILL_MAX_FILES
 
     second = await sync()
     assert second == all_paths - first

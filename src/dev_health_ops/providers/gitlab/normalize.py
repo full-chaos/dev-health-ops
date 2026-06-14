@@ -748,3 +748,97 @@ def build_epic_id_for_issue(
 
     epic_group = _get(epic, "group_id") or group_full_path
     return f"gitlab:{epic_group}:epic:{epic_iid}"
+
+
+# ---------------------------------------------------------------------------
+# AI attribution detection — wired into the GitLab normalize path
+# ---------------------------------------------------------------------------
+from dev_health_ops.providers._ai_detection import (  # noqa: E402
+    AIAttributionSignal,
+    AuthorInfo,
+    detect_from_author,
+    detect_from_branch_name,
+    detect_from_commit_trailers,
+    detect_from_pr_body,
+    detect_from_pr_labels,
+)
+
+
+def detect_mr_attributions(
+    *,
+    mr: object,
+) -> list[AIAttributionSignal]:
+    """Detect all AI attribution signals from a GitLab merge request.
+
+    Mirrors :func:`providers.github.normalize.detect_pr_attributions` so the
+    SAME downstream write path (``ProviderBatch.ai_attributions`` →
+    ``write_ai_attribution``) persists GitLab attribution into
+    ``ai_governance_coverage_daily``.
+
+    Runs every provider-agnostic detector and returns the full list of raw
+    signals.  Signals are not collapsed — all are returned for raw
+    persistence; precedence is resolved at read time by the storage layer.
+
+    Sources checked (in precedence order, but all persisted regardless):
+        1. MR labels (highest confidence)
+        2. MR author (bot detection)
+        3. Commit trailers in MR description (squash merges expose them here)
+        4. MR source branch name (weak)
+        5. MR description body (weak)
+
+    Note on commit-level trailers:
+        Full commit message traversal requires an extra API call and is not
+        wired here — the normalize path receives the MR object only.  Squash
+        workflows typically surface commit trailers in the MR description.
+
+    Args:
+        mr: GitLab merge request object (REST attribute object or dict).
+
+    Returns:
+        List of :class:`AIAttributionSignal` objects (may be empty).
+    """
+    signals: list[AIAttributionSignal] = []
+
+    # 1. MR labels (GitLab labels are plain strings)
+    labels = [str(lbl) for lbl in (_get(mr, "labels") or []) if lbl]
+    signals.extend(detect_from_pr_labels(labels))
+
+    # 2. MR author (GitLab user objects expose ``username``/``name``; bots set
+    #    ``bot=True`` rather than GitHub's ``type``/``app_slug``).
+    author_obj = _get(mr, "author")
+    if author_obj is not None:
+        login = str(_get(author_obj, "username") or "")
+        if login:
+            is_bot = bool(_get(author_obj, "bot"))
+            author_signal = detect_from_author(
+                AuthorInfo(
+                    login=login,
+                    user_type="Bot" if is_bot else None,
+                    app_slug=None,
+                )
+            )
+            if author_signal is not None:
+                signals.append(author_signal)
+
+    # 3. Commit trailers from MR description
+    #    Squash/rebase merges often surface commit messages in the description.
+    description = str(_get(mr, "description") or "")
+    signals.extend(detect_from_commit_trailers(description))
+
+    # 4. Source branch name (weak signal)
+    source_branch = _get(mr, "source_branch")
+    if source_branch:
+        branch_signal = detect_from_branch_name(str(source_branch))
+        if branch_signal is not None:
+            signals.append(branch_signal)
+
+    # 5. MR description text (keyword matching — weak signal)
+    #    Only run if a trailer signal hasn't already fired from the same text
+    #    (avoids double-counting the same description body).
+    trailer_fired = any(s.source.value == "commit_trailer" for s in signals)
+    if not trailer_fired and description:
+        body_signal = detect_from_pr_body(description)
+        if body_signal is not None:
+            signals.append(body_signal)
+
+    return signals

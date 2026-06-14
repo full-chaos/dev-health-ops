@@ -863,6 +863,7 @@ class ClickHouseStore:
                         "finished_at": self._normalize_datetime(
                             item.get("finished_at")
                         ),
+                        "retry_count": int(item.get("retry_count") or 0),
                         "last_synced": self._normalize_datetime(
                             item.get("last_synced") or synced_at_default
                         ),
@@ -881,6 +882,7 @@ class ClickHouseStore:
                         "finished_at": self._normalize_datetime(
                             getattr(item, "finished_at", None)
                         ),
+                        "retry_count": int(getattr(item, "retry_count", 0) or 0),
                         "last_synced": self._normalize_datetime(
                             getattr(item, "last_synced", None) or synced_at_default
                         ),
@@ -896,6 +898,7 @@ class ClickHouseStore:
                 "queued_at",
                 "started_at",
                 "finished_at",
+                "retry_count",
                 "last_synced",
             ],
             rows,

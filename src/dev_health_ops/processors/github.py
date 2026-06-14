@@ -308,6 +308,8 @@ def _fetch_github_workflow_runs_sync(gh_repo, repo_id, max_runs, since):
         if since is not None and started_at.astimezone(timezone.utc) < since:
             continue
         finished_at = _coerce_datetime(getattr(run, "updated_at", None))
+        run_attempt = getattr(run, "run_attempt", None)
+        retry_count = max(0, int(run_attempt or 1) - 1)
         runs.append(
             build_ci_pipeline_run(
                 repo_id=repo_id,
@@ -316,6 +318,7 @@ def _fetch_github_workflow_runs_sync(gh_repo, repo_id, max_runs, since):
                 queued_at=queued_at,
                 started_at=started_at,
                 finished_at=finished_at,
+                retry_count=retry_count,
             )
         )
     return runs

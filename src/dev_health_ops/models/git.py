@@ -705,6 +705,14 @@ class CiPipelineRun(Base):
         DateTime(timezone=True), nullable=False
     )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    retry_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+        comment="number of automatic re-runs for this pipeline run "
+        "(GitHub run_attempt - 1); drives TestOps rerun_rate",
+    )
     last_synced: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

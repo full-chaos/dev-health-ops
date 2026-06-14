@@ -322,7 +322,10 @@ def _dispatch_post_sync_tasks(
             queue="metrics",
         )
 
-    if provider == "gitlab" and has_git:
+    if has_git:
+        # CHAOS-2382: DORA is provider-agnostic — computed from synced
+        # deployments/incidents in ClickHouse, which both GitHub and GitLab
+        # populate. Dispatch for every git-syncing org, not just GitLab.
         celery_app.send_task(
             "dev_health_ops.workers.tasks.run_dora_metrics",
             kwargs={"org_id": org_id},

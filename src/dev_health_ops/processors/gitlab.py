@@ -280,6 +280,37 @@ class PartialGitLabMrSyncError(RuntimeError):
         )
 
 
+class BatchGitLabMrSyncError(RuntimeError):
+    """Raised by the batch/group GitLab sync when one or more projects skipped
+    MR rows due to a degraded review fetch (each surfaced as a
+    :class:`PartialGitLabMrSyncError` during per-project processing).
+
+    The batch path processes many projects and must keep flushing the good rows
+    from healthy projects, so it cannot abort the whole run the moment one
+    project degrades. Instead it *accumulates* the per-project failures and
+    raises this aggregate error after the batch summary. Raising (rather than
+    returning normally) is what stops the caller — ``sync_gitlab_target`` — from
+    reporting success: a successful sync advances the per-target watermark, so a
+    silently-skipped MR would fall behind ``since`` on the next incremental run
+    and never be retried (a permanent, silent loss of PR facts and review
+    metrics with no failed job to alert operators — the exact failure mode the
+    per-project :class:`PartialGitLabMrSyncError` exists to prevent). Because the
+    error is retryable and PR/review rows are ReplacingMergeTree-replaced, the
+    re-run is idempotent (CHAOS-2378).
+    """
+
+    def __init__(self, errors: list[PartialGitLabMrSyncError]) -> None:
+        self.errors = errors
+        project_ids = [e.project_id for e in errors]
+        total_skipped = sum(len(e.skipped_iids) for e in errors)
+        super().__init__(
+            f"GitLab batch MR sync degraded for {len(errors)} project(s) "
+            f"(project_ids={project_ids[:20]}); {total_skipped} MR row(s) "
+            f"skipped due to degraded review fetch; not reporting success so "
+            f"the run is retried"
+        )
+
+
 def map_gitlab_mr_reviews(
     repo_id: Any,
     number: int,
@@ -1846,6 +1877,11 @@ async def process_gitlab_projects_batch(
 
     all_results: list[Any] = []
     stored_count = 0
+    # Per-project degraded MR fetches accumulated across the batch. The batch
+    # keeps flushing healthy projects' rows, then raises after the summary so
+    # the overall run is marked failed/retried instead of silently succeeding
+    # while MR rows were skipped (CHAOS-2378).
+    degraded_mr_errors: list[PartialGitLabMrSyncError] = []
 
     results_queue: asyncio.Queue | None = None
     _queue_sentinel = object()
@@ -1954,18 +1990,22 @@ async def process_gitlab_projects_batch(
                         since,
                     )
             except PartialGitLabMrSyncError as e:
-                # Degraded review fetch skipped MR rows. The batch (group) path
-                # does NOT persist a per-project watermark, so the next group
-                # run re-fetches these MRs from the caller-supplied ``since``
-                # (no permanent stranding, unlike the scheduled single-project
-                # path which raises to hold its watermark). Log loudly so the
-                # skip is never silent (CHAOS-2378).
+                # Degraded review fetch skipped MR rows for this project. Keep
+                # processing the rest of the batch (so healthy projects'
+                # commits/MRs/CI still flush), but ACCUMULATE the failure: the
+                # batch raises a BatchGitLabMrSyncError after the summary so the
+                # whole run is marked failed/retried. Returning normally here
+                # would let sync_gitlab_target report success and advance the
+                # per-target watermark past the skipped MRs, stranding them
+                # behind ``since`` on the next incremental run — a permanent,
+                # silent loss with no failed job to alert operators (CHAOS-2378).
                 logging.warning(
                     "Degraded MR review fetch for GitLab project %s: %s "
-                    "(group sync continues; MRs retried on next run)",
+                    "(batch continues; run will be marked failed for retry)",
                     project_info.full_name,
                     e,
                 )
+                degraded_mr_errors.append(e)
             except Exception as e:
                 logging.warning(
                     "Failed to fetch/store MRs for GitLab project %s: %s",
@@ -2242,9 +2282,23 @@ async def process_gitlab_projects_batch(
         logging.info(f"  Failed: {failed}")
         logging.info(f"  Total: {len(all_results)}")
         logging.info(f"  Stored: {stored_count}")
+        if degraded_mr_errors:
+            logging.warning(
+                "  Degraded MR sync: %d project(s)", len(degraded_mr_errors)
+            )
+
+        # Good rows from healthy projects are fully flushed at this point.
+        # Raise so the caller marks the run failed/retried rather than reporting
+        # success while some MR rows were silently skipped (CHAOS-2378).
+        if degraded_mr_errors:
+            raise BatchGitLabMrSyncError(degraded_mr_errors)
 
     except ConnectorException as e:
         logging.error(f"Connector error: {e}")
+        raise
+    except BatchGitLabMrSyncError:
+        # Intentional control-flow signal: healthy rows are flushed, but the run
+        # must fail so the watermark is held and the batch retries (CHAOS-2378).
         raise
     except Exception as e:
         logging.error(f"Error in batch processing: {e}")

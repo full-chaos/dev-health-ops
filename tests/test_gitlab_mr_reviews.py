@@ -19,12 +19,15 @@ import pytest
 import dev_health_ops.connectors  # noqa: F401
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.models.git import GitPullRequestReview
+from dev_health_ops.processors import gitlab as gitlab_processor
 from dev_health_ops.processors.gitlab import (
+    BatchGitLabMrSyncError,
     PartialGitLabMrSyncError,
     _fetch_all_mr_notes,
     _fetch_gitlab_mr_reviews,
     _sync_gitlab_mrs_to_store,
     map_gitlab_mr_reviews,
+    process_gitlab_projects_batch,
 )
 
 REPO_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
@@ -992,3 +995,199 @@ def test_live_sync_unapproval_does_not_inflate_changes_requested_count():
     # ...but the unapproval is NOT a request for changes: zero rework pressure.
     assert pr.changes_requested_count == 0
     assert all(r.state != "CHANGES_REQUESTED" for r in sink.reviews)
+
+
+# ---------------------------------------------------------------------------
+# Batch/group path: a degraded MR fetch must not look like a successful sync
+# (CHAOS-2378 round 4).
+# ---------------------------------------------------------------------------
+
+
+class _FakeBatchSink:
+    """Captures rows written by the batch store_result seam."""
+
+    def __init__(self, store):
+        self.store = store
+        self.repos = []
+
+    async def insert_repo(self, repo):
+        self.repos.append(repo)
+
+
+class _FakeProjectInfo:
+    def __init__(self, project_id, full_name):
+        self.id = project_id
+        self.full_name = full_name
+        self.url = f"https://gitlab.com/{full_name}"
+        self.default_branch = "main"
+
+
+class _FakeBatchConnector:
+    """Stands in for GitLabConnector inside process_gitlab_projects_batch for
+    the non-async, list-projects path."""
+
+    def __init__(self, projects, **_kwargs):
+        self._projects = projects
+        self.closed = False
+
+    def _get_projects_for_processing(self, *, group_name, pattern, max_repos):
+        return list(self._projects)
+
+    def close(self):
+        self.closed = True
+
+
+def _patch_batch(monkeypatch, projects, sync_behavior):
+    """Wire process_gitlab_projects_batch to fakes.
+
+    ``sync_behavior`` maps project_id -> either an int (success) or a
+    PartialGitLabMrSyncError instance to raise from _sync_gitlab_mrs_to_store.
+    """
+    monkeypatch.setattr(
+        gitlab_processor,
+        "GitLabConnector",
+        lambda **kw: _FakeBatchConnector(projects, **kw),
+    )
+    monkeypatch.setattr(gitlab_processor, "IngestionSink", _FakeBatchSink)
+    monkeypatch.setattr(gitlab_processor, "CONNECTORS_AVAILABLE", True)
+
+    calls: list[int] = []
+
+    def _fake_sync_mrs(
+        connector, project_id, repo_id, sink, loop, batch_size, state, gate, since
+    ):
+        calls.append(project_id)
+        outcome = sync_behavior[project_id]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(gitlab_processor, "_sync_gitlab_mrs_to_store", _fake_sync_mrs)
+    return calls
+
+
+_BATCH_PRS_ONLY: dict[str, Any] = dict(
+    sync_git=False,
+    sync_prs=True,
+    sync_cicd=False,
+    sync_deployments=False,
+    sync_incidents=False,
+    sync_security=False,
+    sync_tests=False,
+    backfill_missing=False,
+    use_async=False,
+)
+
+
+def test_batch_degraded_mr_fetch_raises_and_does_not_report_success(monkeypatch):
+    """A single degraded project in a group sync must NOT let the batch return
+    normally: process_gitlab_projects_batch raises BatchGitLabMrSyncError so the
+    caller (sync_gitlab_target) marks the run failed and retries, instead of
+    advancing the watermark past the skipped MRs (CHAOS-2378 round 4)."""
+    projects = [
+        _FakeProjectInfo(1, "group/healthy"),
+        _FakeProjectInfo(2, "group/degraded"),
+    ]
+    calls = _patch_batch(
+        monkeypatch,
+        projects,
+        sync_behavior={
+            1: 5,  # 5 MRs synced fine
+            2: PartialGitLabMrSyncError([42, 43], project_id=2),
+        },
+    )
+
+    store = Mock()
+    with pytest.raises(BatchGitLabMrSyncError) as exc_info:
+        asyncio.run(
+            process_gitlab_projects_batch(
+                store=store,
+                token="tok",
+                group_name="group",
+                pattern="*",
+                **_BATCH_PRS_ONLY,
+            )
+        )
+
+    # Both projects were attempted (the degraded one did not abort the batch).
+    assert set(calls) == {1, 2}
+    # The aggregate error carries the degraded project's partial failure so the
+    # skipped iids are surfaced, not lost.
+    assert [e.project_id for e in exc_info.value.errors] == [2]
+    assert exc_info.value.errors[0].skipped_iids == [42, 43]
+
+
+def test_batch_flushes_healthy_repos_before_raising(monkeypatch):
+    """Healthy projects' repo rows are still written even when a later project
+    degrades — the batch keeps flushing good work, then raises (CHAOS-2378)."""
+    projects = [
+        _FakeProjectInfo(1, "group/healthy-a"),
+        _FakeProjectInfo(2, "group/degraded"),
+        _FakeProjectInfo(3, "group/healthy-b"),
+    ]
+    _patch_batch(
+        monkeypatch,
+        projects,
+        sync_behavior={
+            1: 1,
+            2: PartialGitLabMrSyncError([99], project_id=2),
+            3: 1,
+        },
+    )
+
+    captured_sinks: list[_FakeBatchSink] = []
+    real_sink_cls = _FakeBatchSink
+
+    def _capturing_sink(store):
+        sink = real_sink_cls(store)
+        captured_sinks.append(sink)
+        return sink
+
+    monkeypatch.setattr(gitlab_processor, "IngestionSink", _capturing_sink)
+
+    store = Mock()
+    with pytest.raises(BatchGitLabMrSyncError):
+        asyncio.run(
+            process_gitlab_projects_batch(
+                store=store,
+                token="tok",
+                group_name="group",
+                pattern="*",
+                max_concurrent=1,  # deterministic ordering
+                **_BATCH_PRS_ONLY,
+            )
+        )
+
+    # All three projects' repo rows were flushed (healthy work preserved); the
+    # degraded project's repo still inserts because the partial error is raised
+    # AFTER the MR flush, not before the repo upsert.
+    assert len(captured_sinks) == 1
+    stored = {repo.repo for repo in captured_sinks[0].repos}
+    assert stored == {"group/healthy-a", "group/degraded", "group/healthy-b"}
+
+
+def test_batch_all_healthy_returns_success(monkeypatch):
+    """Guard against over-raising: a batch where every project syncs cleanly must
+    return normally (None) so the caller reports success (CHAOS-2378)."""
+    projects = [
+        _FakeProjectInfo(1, "group/a"),
+        _FakeProjectInfo(2, "group/b"),
+    ]
+    _patch_batch(
+        monkeypatch,
+        projects,
+        sync_behavior={1: 3, 2: 4},
+    )
+
+    store = Mock()
+    # Must NOT raise.
+    result = asyncio.run(
+        process_gitlab_projects_batch(
+            store=store,
+            token="tok",
+            group_name="group",
+            pattern="*",
+            **_BATCH_PRS_ONLY,
+        )
+    )
+    assert result is None

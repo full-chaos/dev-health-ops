@@ -58,6 +58,73 @@ _MISSING_CASES = [
     (("audit", "schema"), ("ClickHouse",)),
     (("recommendations", "compute", "--team", "t1"), ("ClickHouse",)),
     (("investment", "materialize"), ("ClickHouse",)),
+    (
+        (
+            "admin",
+            "users",
+            "create",
+            "--email",
+            "x@example.com",
+            "--password",
+            "yyyyyyyy",
+        ),
+        ("PostgreSQL",),
+    ),
+    (("admin", "users", "list"), ("PostgreSQL",)),
+    (
+        ("admin", "users", "update", "--email", "x@example.com", "--full-name", "X"),
+        ("PostgreSQL",),
+    ),
+    (("admin", "orgs", "create", "--name", "x"), ("PostgreSQL",)),
+    (
+        ("admin", "orgs", "delete", "--org-id", "00000000-0000-0000-0000-000000000000"),
+        ("PostgreSQL",),
+    ),
+    (("admin", "orgs", "list"), ("PostgreSQL",)),
+    (("admin", "features", "seed"), ("PostgreSQL",)),
+    (("admin", "billing", "seed"), ("PostgreSQL",)),
+    (("admin", "billing", "list"), ("PostgreSQL",)),
+    (("admin", "billing", "pull-stripe", "--dry-run"), ("PostgreSQL",)),
+    (("admin", "billing", "sync-stripe"), ("PostgreSQL",)),
+    (
+        (
+            "admin",
+            "bundles",
+            "create",
+            "--key",
+            "bundle-x",
+            "--name",
+            "Bundle X",
+            "--features",
+            "api_access",
+        ),
+        ("PostgreSQL",),
+    ),
+    (("admin", "bundles", "list"), ("PostgreSQL",)),
+    (
+        (
+            "admin",
+            "bundles",
+            "assign-plan",
+            "--bundle-key",
+            "bundle-x",
+            "--plan-key",
+            "team",
+        ),
+        ("PostgreSQL",),
+    ),
+    (
+        (
+            "admin",
+            "bundles",
+            "assign-org",
+            "--org-id",
+            "00000000-0000-0000-0000-000000000000",
+            "--feature-key",
+            "api_access",
+        ),
+        ("PostgreSQL",),
+    ),
     (("billing", "reconcile"), ("PostgreSQL",)),
     (("migrate", "postgres", "upgrade"), ("PostgreSQL",)),
     (("migrate", "clickhouse", "status"), ("ClickHouse",)),
@@ -176,6 +243,23 @@ def test_recommendations_compute_accepts_clickhouse_scheme_preflight() -> None:
 
     assert "missing required input" not in result.stderr
     assert "Unknown or unsupported sink scheme" not in result.stderr
+
+
+def test_admin_license_create_is_not_a_postgres_preflight_false_positive() -> None:
+    result = _run_cli(
+        "admin",
+        "licenses",
+        "create",
+        "--org-id",
+        "00000000-0000-0000-0000-000000000000",
+        "--tier",
+        "team",
+    )
+
+    assert result.returncode == 1
+    assert "missing required input" not in result.stderr
+    assert "PostgreSQL" not in result.stderr
+    assert "LICENSE_PRIVATE_KEY" in result.stdout
 
 
 def test_help_lists_requirements_in_epilog() -> None:

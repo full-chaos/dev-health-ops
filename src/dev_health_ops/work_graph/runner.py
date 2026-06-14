@@ -113,6 +113,8 @@ def run_work_graph_build(ns: argparse.Namespace) -> int:
 
         client = getattr(builder, "client", None)
         if client is None:
+            client = getattr(getattr(builder, "sink", None), "client", None)
+        if client is None:
             logging.error(
                 "FAIL: Work graph builder did not expose a ClickHouse client."
             )

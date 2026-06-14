@@ -86,3 +86,21 @@ def test_blank_org_fails_closed():
 
     assert rc == 2
     builder_cls.assert_not_called()
+
+
+def test_verification_uses_builder_sink_client_when_builder_has_no_client():
+    fake_builder = MagicMock()
+    fake_builder.build.return_value = {"pr_commit_edges": 1}
+    fake_builder.client = None
+    client = MagicMock()
+    client.query.return_value.result_rows = [[1]]
+    fake_builder.sink.client = client
+
+    with patch(
+        "dev_health_ops.work_graph.runner.WorkGraphBuilder",
+        return_value=fake_builder,
+    ):
+        rc = run_work_graph_build(_ns(org="org-abc"))
+
+    assert rc == 0
+    client.query.assert_called_once()

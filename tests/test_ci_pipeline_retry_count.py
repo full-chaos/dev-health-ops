@@ -234,3 +234,159 @@ async def test_cicd_mixin_defaults_missing_retry_count_to_zero() -> None:
     )
 
     assert store.calls[0]["rows"][0]["retry_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Migration 0010 — Postgres schema parity for retry_count (CHAOS-2380 round-2)
+#
+# The git data-plane tables (ci_pipeline_runs, deployments, …) are bootstrapped
+# via Base.metadata.create_all, NOT by the Alembic 0001 initial schema. create_all
+# only creates *missing tables*; it never adds a *column* to an existing table.
+# So an already-provisioned deployment whose ci_pipeline_runs predates retry_count
+# would have the base sync_cicd INSERT/ON CONFLICT (which now references
+# retry_count) fail the whole batch. Migration 0010 closes that gap idempotently.
+# These tests drive the migration's real upgrade()/downgrade() bodies via Alembic's
+# Operations context against an "old-schema" table to prove existing deployments
+# upgrade cleanly before the insert path runs.
+# ---------------------------------------------------------------------------
+
+
+def _load_migration_0010():
+    import importlib.util
+    from pathlib import Path
+
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "dev_health_ops"
+        / "alembic"
+        / "versions"
+        / "0010_add_ci_pipeline_runs_retry_count.py"
+    )
+    spec = importlib.util.spec_from_file_location("_mig_0010", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _columns(conn, table: str) -> set[str]:
+    import sqlalchemy as sa
+
+    return {col["name"] for col in sa.inspect(conn).get_columns(table)}
+
+
+def _run_in_op_context(conn, fn) -> None:
+    """Bind Alembic ``op`` to ``conn`` and invoke a migration upgrade/downgrade.
+
+    Mirrors how ``op.get_bind()`` resolves inside a live ``alembic upgrade`` run,
+    so the migration's real body (table-existence guard + add/drop column) is
+    exercised end-to-end rather than reimplemented in the test.
+    """
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    ctx = MigrationContext.configure(conn)
+    with Operations.context(ctx):
+        fn()
+
+
+def test_migration_0010_chain_links_to_0009():
+    """0010 must follow 0009 so the head advances (deploy ordering)."""
+    mig = _load_migration_0010()
+    assert mig.revision == "0010"
+    assert mig.down_revision == "0009"
+
+
+def test_migration_0010_adds_column_to_old_schema_table():
+    """An existing ci_pipeline_runs WITHOUT retry_count gains it on upgrade,
+    and the base-path INSERT referencing retry_count then succeeds."""
+    import sqlalchemy as sa
+
+    mig = _load_migration_0010()
+    engine = sa.create_engine("sqlite://")
+    with engine.begin() as conn:
+        # Simulate an old (pre-retry_count) deployment's table.
+        conn.exec_driver_sql(
+            "CREATE TABLE ci_pipeline_runs ("
+            "  repo_id TEXT, run_id TEXT, status TEXT, started_at TEXT,"
+            "  PRIMARY KEY (repo_id, run_id)"
+            ")"
+        )
+        assert "retry_count" not in _columns(conn, "ci_pipeline_runs")
+
+        _run_in_op_context(conn, mig.upgrade)
+
+        assert "retry_count" in _columns(conn, "ci_pipeline_runs")
+        # The exact statement shape the base sync_cicd path emits must now work
+        # against the upgraded table (this is what previously failed the batch).
+        conn.exec_driver_sql(
+            "INSERT INTO ci_pipeline_runs "
+            "(repo_id, run_id, status, started_at, retry_count) "
+            "VALUES ('r', '1', 'success', '2023-01-01', 2)"
+        )
+        # NOT NULL DEFAULT 0: a row omitting retry_count still lands as 0.
+        conn.exec_driver_sql(
+            "INSERT INTO ci_pipeline_runs (repo_id, run_id, status, started_at) "
+            "VALUES ('r', '2', 'success', '2023-01-01')"
+        )
+        rows: dict[str, int] = {
+            str(run_id): int(retry_count)
+            for run_id, retry_count in conn.exec_driver_sql(
+                "SELECT run_id, retry_count FROM ci_pipeline_runs ORDER BY run_id"
+            ).fetchall()
+        }
+        assert rows == {"1": 2, "2": 0}
+
+
+def test_migration_0010_is_idempotent_when_column_present():
+    """Re-running upgrade (or a fresh create_all deploy that already has the
+    column) is a no-op — never a duplicate-column error."""
+    import sqlalchemy as sa
+
+    mig = _load_migration_0010()
+    engine = sa.create_engine("sqlite://")
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            "CREATE TABLE ci_pipeline_runs ("
+            "  repo_id TEXT, run_id TEXT,"
+            "  retry_count INTEGER NOT NULL DEFAULT 0,"
+            "  PRIMARY KEY (repo_id, run_id)"
+            ")"
+        )
+        # Should not raise even though the column already exists.
+        _run_in_op_context(conn, mig.upgrade)
+        assert "retry_count" in _columns(conn, "ci_pipeline_runs")
+
+
+def test_migration_0010_noop_when_table_absent():
+    """Fresh DB where create_all has not yet materialised the table: upgrade is
+    a no-op (the table will later be created already containing the column)."""
+    import sqlalchemy as sa
+
+    mig = _load_migration_0010()
+    engine = sa.create_engine("sqlite://")
+    with engine.begin() as conn:
+        # No ci_pipeline_runs table at all.
+        _run_in_op_context(conn, mig.upgrade)
+        assert "ci_pipeline_runs" not in sa.inspect(conn).get_table_names()
+
+
+def test_migration_0010_downgrade_drops_column():
+    """Downgrade removes the column when present and is a no-op otherwise."""
+    import sqlalchemy as sa
+
+    mig = _load_migration_0010()
+    engine = sa.create_engine("sqlite://")
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            "CREATE TABLE ci_pipeline_runs ("
+            "  repo_id TEXT, run_id TEXT,"
+            "  retry_count INTEGER NOT NULL DEFAULT 0,"
+            "  PRIMARY KEY (repo_id, run_id)"
+            ")"
+        )
+        _run_in_op_context(conn, mig.downgrade)
+        assert "retry_count" not in _columns(conn, "ci_pipeline_runs")
+        # Idempotent downgrade: column already gone -> no error.
+        _run_in_op_context(conn, mig.downgrade)

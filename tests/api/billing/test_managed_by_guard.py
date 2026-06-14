@@ -268,7 +268,9 @@ async def test_persist_license_updates_stripe_managed_rows():
 
 
 @pytest.mark.asyncio
-async def test_org_service_update_sets_managed_by_manual_on_org():
+async def test_org_service_update_sets_managed_by_manual_on_org(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """OrganizationService.update must set org.managed_by='manual' when tier changes."""
     from dev_health_ops.api.services.users import OrganizationService
 
@@ -291,17 +293,18 @@ async def test_org_service_update_sets_managed_by_manual_on_org():
         return org
 
     svc = OrganizationService(mock_session)
-    svc.get_by_id = _get_by_id  # type: ignore[method-assign]
+    monkeypatch.setattr(svc, "get_by_id", _get_by_id)
 
     # Stub _sync_license_tier to avoid DB calls
-    svc._sync_license_tier = AsyncMock()  # type: ignore[method-assign]
+    sync_license_tier = AsyncMock()
+    monkeypatch.setattr(svc, "_sync_license_tier", sync_license_tier)
 
     result = await svc.update(str(org_id), tier="enterprise")
 
     assert result is org
     assert org.tier == "enterprise"
     assert org.managed_by == "manual"
-    svc._sync_license_tier.assert_awaited_once_with(org_id, "enterprise")
+    sync_license_tier.assert_awaited_once_with(org_id, "enterprise")
 
 
 @pytest.mark.asyncio
@@ -339,7 +342,9 @@ async def test_org_service_create_leaves_community_stripe_managed():
 
 
 @pytest.mark.asyncio
-async def test_org_service_update_no_tier_does_not_set_managed_by():
+async def test_org_service_update_no_tier_does_not_set_managed_by(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """OrganizationService.update must NOT set managed_by when tier is not changed."""
     from dev_health_ops.api.services.users import OrganizationService
 
@@ -362,18 +367,21 @@ async def test_org_service_update_no_tier_does_not_set_managed_by():
         return org
 
     svc = OrganizationService(mock_session)
-    svc.get_by_id = _get_by_id  # type: ignore[method-assign]
-    svc._sync_license_tier = AsyncMock()  # type: ignore[method-assign]
+    monkeypatch.setattr(svc, "get_by_id", _get_by_id)
+    sync_license_tier = AsyncMock()
+    monkeypatch.setattr(svc, "_sync_license_tier", sync_license_tier)
 
     await svc.update(str(org_id), name="New Name")
 
     # managed_by must remain unchanged
     assert org.managed_by == "stripe"
-    svc._sync_license_tier.assert_not_awaited()
+    sync_license_tier.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_org_service_update_same_tier_preserves_managed_by():
+async def test_org_service_update_same_tier_preserves_managed_by(
+    monkeypatch: pytest.MonkeyPatch,
+):
     from dev_health_ops.api.services.users import OrganizationService
 
     org_id = uuid.uuid4()
@@ -395,17 +403,20 @@ async def test_org_service_update_same_tier_preserves_managed_by():
         return org
 
     svc = OrganizationService(mock_session)
-    svc.get_by_id = _get_by_id  # type: ignore[method-assign]
-    svc._sync_license_tier = AsyncMock()  # type: ignore[method-assign]
+    monkeypatch.setattr(svc, "get_by_id", _get_by_id)
+    sync_license_tier = AsyncMock()
+    monkeypatch.setattr(svc, "_sync_license_tier", sync_license_tier)
 
     await svc.update(str(org_id), name="New Name", tier="team")
 
     assert org.managed_by == "stripe"
-    svc._sync_license_tier.assert_not_awaited()
+    sync_license_tier.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_org_service_update_community_keeps_stripe_manageable():
+async def test_org_service_update_community_keeps_stripe_manageable(
+    monkeypatch: pytest.MonkeyPatch,
+):
     from dev_health_ops.api.services.users import OrganizationService
 
     org_id = uuid.uuid4()
@@ -427,14 +438,15 @@ async def test_org_service_update_community_keeps_stripe_manageable():
         return org
 
     svc = OrganizationService(mock_session)
-    svc.get_by_id = _get_by_id  # type: ignore[method-assign]
-    svc._sync_license_tier = AsyncMock()  # type: ignore[method-assign]
+    monkeypatch.setattr(svc, "get_by_id", _get_by_id)
+    sync_license_tier = AsyncMock()
+    monkeypatch.setattr(svc, "_sync_license_tier", sync_license_tier)
 
     await svc.update(str(org_id), tier="community")
 
     assert org.tier == "community"
     assert org.managed_by == "stripe"
-    svc._sync_license_tier.assert_awaited_once_with(org_id, "community")
+    sync_license_tier.assert_awaited_once_with(org_id, "community")
 
 
 # ---------------------------------------------------------------------------

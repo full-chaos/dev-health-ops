@@ -36,6 +36,9 @@ from dev_health_ops.metrics.compute_testops_risk import (
 from dev_health_ops.metrics.compute_wellbeing import (
     compute_team_wellbeing_metrics_daily,
 )
+from dev_health_ops.metrics.compute_work_item_state_durations import (
+    compute_work_item_state_durations_daily,
+)
 from dev_health_ops.metrics.compute_work_items import compute_work_item_metrics_daily
 from dev_health_ops.metrics.dependencies import get_metrics_dependencies
 from dev_health_ops.metrics.hotspots import compute_file_hotspots
@@ -679,6 +682,7 @@ async def run_daily_metrics_job(
         wi_metrics: list[Any] = []
         wi_user_metrics: list[Any] = []
         wi_cycle_times: list[Any] = []
+        wi_state_durations: list[Any] = []
         if work_items:
             wi_metrics, wi_user_metrics, wi_cycle_times = (
                 compute_work_item_metrics_daily(
@@ -688,6 +692,19 @@ async def run_daily_metrics_job(
                     computed_at=computed_at,
                     team_resolver=team_resolver,
                 )
+            )
+            # CHAOS-2377: the state-duration rollup powers /metrics Flow Sankey +
+            # Flame and the Operating Review state-duration panel. The compute
+            # already exists (and is used by the fixtures runner + job_work_items)
+            # but was never invoked in the live scheduled daily job, so the table
+            # stayed empty for real orgs. Reuse the work_items / transitions
+            # already loaded for this day.
+            wi_state_durations = compute_work_item_state_durations_daily(
+                day=d,
+                work_items=work_items,
+                transitions=work_item_transitions,
+                computed_at=computed_at,
+                team_resolver=team_resolver,
             )
 
         review_edges = compute_review_edges_daily(
@@ -880,6 +897,8 @@ async def run_daily_metrics_job(
                 s.write_work_item_user_metrics(wi_user_metrics)
             if wi_cycle_times:
                 s.write_work_item_cycle_times(wi_cycle_times)
+            if wi_state_durations:
+                s.write_work_item_state_durations(wi_state_durations)
             s.write_review_edges(review_edges)
             s.write_cicd_metrics(cicd_metrics)
             s.write_testops_pipeline_metrics(testops_pipeline_metrics)

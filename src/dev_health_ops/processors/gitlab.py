@@ -252,6 +252,34 @@ _GITLAB_UNAPPROVE_NOTE = "unapproved this merge request"
 _GITLAB_DIFF_NOTE_TYPE = "DiffNote"
 
 
+class PartialGitLabMrSyncError(RuntimeError):
+    """Raised when one or more MR rows were skipped due to a degraded review
+    fetch (e.g. a transient MR-notes failure).
+
+    The MR sync must NOT report overall success when it has silently skipped MR
+    rows: a successful run advances the per-target sync watermark to the run's
+    start time, so on the next incremental run those MRs fall behind ``since``
+    (``updated_at < since``) and are never retried until a full resync — a
+    permanent, silent loss of PR facts and review metrics with no failed job to
+    alert operators (CHAOS-2378).
+
+    Raising a *retryable* (non-terminal) error instead keeps the run marked
+    FAILED so the watermark is held at its prior value and the Celery task
+    retries the whole project. Rows that were fetched successfully this cycle
+    are flushed before the raise; the re-run is idempotent (PR/review rows are
+    ReplacingMergeTree-replaced), so re-writing them is harmless.
+    """
+
+    def __init__(self, skipped_iids: list[int], project_id: int) -> None:
+        self.skipped_iids = skipped_iids
+        self.project_id = project_id
+        super().__init__(
+            f"GitLab MR sync for project {project_id} skipped "
+            f"{len(skipped_iids)} MR row(s) due to degraded review fetch "
+            f"(iids={skipped_iids[:20]}); not advancing watermark"
+        )
+
+
 def map_gitlab_mr_reviews(
     repo_id: Any,
     number: int,
@@ -267,7 +295,8 @@ def map_gitlab_mr_reviews(
     /ai/review-load) treat both providers identically (CHAOS-2378):
 
     * approval ("approved" system note / approvals.approved_by) -> APPROVED
-    * "unapproved" system note -> CHANGES_REQUESTED
+    * "unapproved" system note -> DISMISSED (revoking an approval is not an
+      explicit request for changes; it is excluded from changes_requested_count)
     * diff-line review comment by a non-author reviewer
       (``type == "DiffNote"``) -> COMMENTED
 
@@ -347,7 +376,15 @@ def map_gitlab_mr_reviews(
                 approved_reviewers.add(username)
                 _add(f"note-{note_id}", username, "APPROVED", created_at)
             elif body.startswith(_GITLAB_UNAPPROVE_NOTE):
-                _add(f"note-{note_id}", username, "CHANGES_REQUESTED", created_at)
+                # Revoking an approval is NOT an explicit "request changes" event.
+                # GitLab has no native request-changes action, so an unapproval
+                # is the dismissal of a prior approval, not rework pressure.
+                # Map it to GitHub's canonical DISMISSED state (shared review
+                # vocabulary) so it stays on the review timeline but is excluded
+                # from changes_requested_count / changes_requested_given — only a
+                # genuine CHANGES_REQUESTED must inflate rework/review-load
+                # signals (CHAOS-2378).
+                _add(f"note-{note_id}", username, "DISMISSED", created_at)
             # other system notes (label/assignee/etc.) are not reviews
             continue
 
@@ -540,6 +577,11 @@ def _sync_gitlab_mrs_to_store(
     )
     batch: list[GitPullRequest] = []
     review_batch: list[GitPullRequestReview] = []
+    # MRs skipped this cycle because their authoritative review source (MR notes)
+    # was degraded. If non-empty at the end, we MUST NOT report success (which
+    # would advance the watermark past these MRs and strand them); we flush the
+    # good rows then raise PartialGitLabMrSyncError so the run is retried.
+    skipped_iids: list[int] = []
     total = 0
     page = 1
 
@@ -631,11 +673,16 @@ def _sync_gitlab_mrs_to_store(
                 # so persisting it now with zeroed review metrics would clobber
                 # previously-correct first_review_at / reviews_count /
                 # changes_requested_count. Skip this MR's row this cycle so the
-                # prior values are preserved; the next sync re-attempts it.
+                # prior values are preserved, and record the iid so the run
+                # fails loud (no watermark advancement) and is retried — a
+                # silent skip would let the watermark move past this MR and
+                # strand it until a full resync (CHAOS-2378).
+                skipped_iid = int(mr.get("iid") or 0)
+                skipped_iids.append(skipped_iid)
                 logging.warning(
                     "Skipping PR row for MR !%d (project %d): review fetch "
-                    "degraded, preserving existing review metrics",
-                    int(mr.get("iid") or 0),
+                    "degraded; run will not advance watermark and will retry",
+                    skipped_iid,
                     project_id,
                 )
                 continue
@@ -694,6 +741,14 @@ def _sync_gitlab_mrs_to_store(
         total,
         project_id,
     )
+
+    if skipped_iids:
+        # Good rows are already flushed above; raising now (after the flush)
+        # preserves the work done this cycle while preventing the caller's
+        # success path from advancing the per-target watermark past the skipped
+        # MRs. The error is retryable (non-terminal), so the project re-syncs.
+        raise PartialGitLabMrSyncError(skipped_iids, project_id)
+
     return total
 
 
@@ -1898,6 +1953,19 @@ async def process_gitlab_projects_batch(
                         mr_gate,
                         since,
                     )
+            except PartialGitLabMrSyncError as e:
+                # Degraded review fetch skipped MR rows. The batch (group) path
+                # does NOT persist a per-project watermark, so the next group
+                # run re-fetches these MRs from the caller-supplied ``since``
+                # (no permanent stranding, unlike the scheduled single-project
+                # path which raises to hold its watermark). Log loudly so the
+                # skip is never silent (CHAOS-2378).
+                logging.warning(
+                    "Degraded MR review fetch for GitLab project %s: %s "
+                    "(group sync continues; MRs retried on next run)",
+                    project_info.full_name,
+                    e,
+                )
             except Exception as e:
                 logging.warning(
                     "Failed to fetch/store MRs for GitLab project %s: %s",

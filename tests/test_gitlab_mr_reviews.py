@@ -5,10 +5,13 @@ Proves the seam that wires GitLab approvals + MR notes into
 review-latency / /ai/review-load populate for GitLab orgs. No live API or DB.
 """
 
+import asyncio
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 from unittest.mock import Mock
+
+import pytest
 
 # Initialize the connectors package before processors to avoid the
 # pre-existing providers._base <-> connectors circular import when this file
@@ -17,6 +20,7 @@ import dev_health_ops.connectors  # noqa: F401
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.models.git import GitPullRequestReview
 from dev_health_ops.processors.gitlab import (
+    PartialGitLabMrSyncError,
     _fetch_all_mr_notes,
     _fetch_gitlab_mr_reviews,
     _sync_gitlab_mrs_to_store,
@@ -58,7 +62,10 @@ def test_approval_maps_to_approved_state_and_org_scope():
     assert first_review_at is None
 
 
-def test_unapproval_system_note_maps_to_changes_requested():
+def test_unapproval_system_note_maps_to_dismissed_not_changes_requested():
+    """Revoking an approval is NOT an explicit request-changes event. It must map
+    to DISMISSED (on the timeline) and never inflate changes_requested_count /
+    review-load rework signals (CHAOS-2378 round 3)."""
     notes = [
         {
             "id": 100,
@@ -73,7 +80,10 @@ def test_unapproval_system_note_maps_to_changes_requested():
     )
 
     assert len(reviews) == 1
-    assert reviews[0].state == "CHANGES_REQUESTED"
+    assert reviews[0].state == "DISMISSED"
+    # Crucially NOT changes-requested: rework/review-load signals only count
+    # genuine CHANGES_REQUESTED, so an unapproval contributes zero.
+    assert reviews[0].state != "CHANGES_REQUESTED"
     assert reviews[0].reviewer == "bob"
     assert reviews[0].review_id == "note-100"
     assert reviews[0].submitted_at == datetime(2026, 1, 2, 9, 30, tzinfo=timezone.utc)
@@ -309,9 +319,11 @@ def test_combined_payload_yields_all_expected_rows():
     )
 
     by_state = sorted(r.state for r in reviews)
-    assert by_state == ["APPROVED", "CHANGES_REQUESTED", "COMMENTED"]
+    assert by_state == ["APPROVED", "COMMENTED", "DISMISSED"]
+    # No unapproval is ever counted as a request for changes.
+    assert all(r.state != "CHANGES_REQUESTED" for r in reviews)
     assert all(r.repo_id == REPO_ID and r.number == 42 for r in reviews)
-    # Earliest real event is bob's unapproval note.
+    # Earliest real event is bob's unapproval (now DISMISSED) note.
     assert first_review_at == datetime(2026, 1, 2, 9, 30, tzinfo=timezone.utc)
 
 
@@ -473,9 +485,7 @@ def _make_connector(mrs_page, approvals_by_iid, notes_by_iid):
     return connector
 
 
-def _run_sync(connector):
-    import asyncio
-
+def _run_sync(connector, since=None):
     sink = _FakeSink()
 
     async def _driver():
@@ -491,6 +501,9 @@ def _run_sync(connector):
                 cast(IngestionSink, sink),
                 loop,
                 50,  # batch_size
+                "all",  # state
+                None,  # gate
+                since,
             ),
         )
 
@@ -543,9 +556,15 @@ def test_live_sync_approved_mr_counts_once_with_real_timestamp():
     assert sink.reviews[0].state == "APPROVED"
 
 
-def test_live_sync_notes_failure_does_not_persist_zeroed_pr():
+def test_live_sync_notes_failure_does_not_persist_zeroed_pr_and_fails_loud():
     """End-to-end: a notes-fetch failure must NOT persist a PR row with zeroed
-    review metrics (which ReplacingMergeTree would use to clobber prior data)."""
+    review metrics (which ReplacingMergeTree would use to clobber prior data),
+    AND must NOT report success — otherwise the per-target watermark advances
+    past this MR and strands it until a full resync (CHAOS-2378 round 3).
+
+    The fix raises a retryable PartialGitLabMrSyncError so the run is marked
+    FAILED, the watermark is held, and Celery retries the project.
+    """
     mr = {
         "iid": 42,
         "title": "Add feature",
@@ -565,13 +584,165 @@ def test_live_sync_notes_failure_does_not_persist_zeroed_pr():
         notes_by_iid={42: TimeoutError("notes endpoint down")},
     )
 
-    total, sink = _run_sync(connector)
+    with pytest.raises(PartialGitLabMrSyncError) as exc_info:
+        _run_sync(connector)
 
-    # The MR is not counted and no PR/review row is written this cycle, so the
-    # existing (previously-correct) row is preserved untouched.
-    assert total == 0
-    assert sink.prs == []
-    assert sink.reviews == []
+    # The skip is surfaced loudly with the affected iid so it cannot be lost.
+    assert exc_info.value.skipped_iids == [42]
+    assert exc_info.value.project_id == 99
+    # Retryable (non-terminal): a plain RuntimeError, not ValueError/Terminal.
+    assert isinstance(exc_info.value, RuntimeError)
+    assert not isinstance(exc_info.value, ValueError)
+
+
+def test_live_sync_partial_failure_flushes_good_rows_before_raising():
+    """A degraded MR in a multi-MR page must not discard the successfully
+    fetched MRs: their PR/review rows are flushed before the raise (the re-run
+    is idempotent via ReplacingMergeTree), so we never lose good work nor
+    silently advance the watermark (CHAOS-2378 round 3)."""
+    good_mr = {
+        "iid": 41,
+        "title": "Good MR",
+        "description": "desc",
+        "state": "merged",
+        "author": {"username": "author"},
+        "created_at": "2026-01-01T12:00:00Z",
+        "updated_at": "2026-01-06T12:00:00Z",
+        "merged_at": "2026-01-04T11:00:00Z",
+        "source_branch": "feat",
+        "target_branch": "main",
+        "user_notes_count": 1,
+    }
+    bad_mr = {
+        "iid": 42,
+        "title": "Degraded MR",
+        "description": "desc",
+        "state": "merged",
+        "author": {"username": "author"},
+        "created_at": "2026-01-01T12:00:00Z",
+        "updated_at": "2026-01-05T12:00:00Z",
+        "merged_at": "2026-01-04T11:00:00Z",
+        "source_branch": "feat2",
+        "target_branch": "main",
+        "user_notes_count": 1,
+    }
+    connector = _make_connector(
+        # Page ordered updated_at desc: good MR (41) first, then degraded (42).
+        mrs_page=[good_mr, bad_mr],
+        approvals_by_iid={41: {"approved_by": []}, 42: {"approved_by": []}},
+        notes_by_iid={
+            41: [
+                {
+                    "id": 300,
+                    "system": True,
+                    "body": "approved this merge request",
+                    "author": {"username": "alice"},
+                    "created_at": "2026-01-04T10:00:00Z",
+                }
+            ],
+            42: TimeoutError("notes endpoint down"),
+        },
+    )
+
+    sink = _FakeSink()
+
+    async def _driver():
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: _sync_gitlab_mrs_to_store(
+                connector,
+                99,
+                REPO_ID,
+                cast(IngestionSink, sink),
+                loop,
+                50,
+            ),
+        )
+
+    with pytest.raises(PartialGitLabMrSyncError) as exc_info:
+        asyncio.run(_driver())
+
+    # The good MR (41) is persisted; the degraded MR (42) is not.
+    assert [pr.number for pr in sink.prs] == [41]
+    assert {r.number for r in sink.reviews} == {41}
+    assert exc_info.value.skipped_iids == [42]
+
+
+def test_live_sync_degraded_mr_not_skipped_by_since_after_held_watermark():
+    """Regression proving the stranding is closed end-to-end: because a degraded
+    run does NOT advance the watermark (it raises), the next incremental run's
+    ``since`` stays BELOW the degraded MR's ``updated_at`` and re-attempts it —
+    it is not filtered out by the ``updated_at < since`` early-stop. Here the
+    retry's notes succeed and the MR is finally persisted (CHAOS-2378 round 3)."""
+    updated_at = "2026-01-05T12:00:00Z"
+    mr = {
+        "iid": 42,
+        "title": "Add feature",
+        "description": "desc",
+        "state": "merged",
+        "author": {"username": "author"},
+        "created_at": "2026-01-01T12:00:00Z",
+        "updated_at": updated_at,
+        "merged_at": "2026-01-04T11:00:00Z",
+        "source_branch": "feat",
+        "target_branch": "main",
+        "user_notes_count": 1,
+    }
+    # The watermark that WOULD have been set had the first (degraded) run
+    # wrongly reported success: just after the MR's updated_at. Since the run
+    # raised, this watermark is NOT persisted, so the real ``since`` remains the
+    # PRIOR (older) watermark below.
+    prior_watermark = datetime(2026, 1, 4, 0, 0, tzinfo=timezone.utc)
+    would_be_advanced = datetime(2026, 1, 5, 12, 0, tzinfo=timezone.utc) + timedelta(
+        minutes=1
+    )
+
+    # 1. First run: notes down -> raises, no watermark advance.
+    connector_fail = _make_connector(
+        mrs_page=[mr],
+        approvals_by_iid={42: {"approved_by": []}},
+        notes_by_iid={42: TimeoutError("notes endpoint down")},
+    )
+    with pytest.raises(PartialGitLabMrSyncError):
+        _run_sync(connector_fail, since=prior_watermark)
+
+    # 2. Next run uses the UNADVANCED (prior) watermark as ``since``. The MR's
+    #    updated_at is >= since, so it is NOT filtered out; notes now succeed.
+    connector_ok = _make_connector(
+        mrs_page=[mr],
+        approvals_by_iid={42: {"approved_by": []}},
+        notes_by_iid={
+            42: [
+                {
+                    "id": 300,
+                    "system": True,
+                    "body": "approved this merge request",
+                    "author": {"username": "alice"},
+                    "created_at": "2026-01-04T10:00:00Z",
+                }
+            ]
+        },
+    )
+    total, sink = _run_sync(connector_ok, since=prior_watermark)
+
+    # Re-attempted and persisted on the retry — not stranded.
+    assert total == 1
+    assert [pr.number for pr in sink.prs] == [42]
+    assert sink.prs[0].reviews_count == 1
+
+    # Sanity: had the watermark wrongly advanced past the MR, the MR would have
+    # been filtered by the ``updated_at < since`` early-stop and never synced.
+    connector_stranded = _make_connector(
+        mrs_page=[mr],
+        approvals_by_iid={42: {"approved_by": []}},
+        notes_by_iid={42: []},
+    )
+    total_stranded, sink_stranded = _run_sync(
+        connector_stranded, since=would_be_advanced
+    )
+    assert total_stranded == 0
+    assert sink_stranded.prs == []
 
 
 def test_live_sync_mr_with_no_reviews_persists_zero_counts():
@@ -764,3 +935,60 @@ def test_live_sync_generic_notes_are_not_counted_as_reviews():
     assert pr.first_review_at is None
     assert pr.comments_count == 3  # generic chatter stays here
     assert sink.reviews == []
+
+
+def test_live_sync_unapproval_does_not_inflate_changes_requested_count():
+    """End-to-end regression (CHAOS-2378 round 3): a reviewer revoking their
+    approval (GitLab 'unapproved' system note) must NOT increment
+    changes_requested_count — only a genuine request-changes event should drive
+    rework/review-load pressure. The unapproval is recorded as DISMISSED on the
+    timeline (reviews_count includes it) but is excluded from the rework count.
+    """
+    mr = {
+        "iid": 46,
+        "title": "Approved then unapproved",
+        "description": "desc",
+        "state": "opened",
+        "author": {"username": "author"},
+        "created_at": "2026-01-01T12:00:00Z",
+        "updated_at": "2026-01-05T12:00:00Z",
+        "merged_at": None,
+        "source_branch": "feat",
+        "target_branch": "main",
+        "user_notes_count": 0,
+    }
+    notes = [
+        {
+            "id": 500,
+            "system": True,
+            "body": "approved this merge request",
+            "author": {"username": "bob"},
+            "created_at": "2026-01-02T09:00:00Z",
+        },
+        {
+            "id": 501,
+            "system": True,
+            "body": "unapproved this merge request",
+            "author": {"username": "bob"},
+            "created_at": "2026-01-02T09:30:00Z",
+        },
+    ]
+    connector = _make_connector(
+        mrs_page=[mr],
+        # Net approvals state is empty (bob revoked); the unapproval is the
+        # later authoritative note.
+        approvals_by_iid={46: {"approved_by": []}},
+        notes_by_iid={46: notes},
+    )
+
+    total, sink = _run_sync(connector)
+
+    assert total == 1
+    pr = sink.prs[0]
+    # Both the approval and the dismissal are on the review timeline...
+    assert pr.reviews_count == 2
+    states = sorted(r.state for r in sink.reviews)
+    assert states == ["APPROVED", "DISMISSED"]
+    # ...but the unapproval is NOT a request for changes: zero rework pressure.
+    assert pr.changes_requested_count == 0
+    assert all(r.state != "CHANGES_REQUESTED" for r in sink.reviews)

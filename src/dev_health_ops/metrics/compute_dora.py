@@ -28,8 +28,18 @@ from dev_health_ops.metrics.schemas import (
 from dev_health_ops.utils.datetime import to_utc
 
 # Deployment statuses that count as a failed change for change_failure_rate.
-# Mirrors compute_deployments._compute (failed|error|canceled).
-_FAILED_STATUSES = {"failed", "error", "canceled"}
+#
+# This must be PROVIDER-AGNOSTIC: deployment rows are persisted from the raw
+# provider status with no normalization (see processors/github.py and
+# processors/gitlab.py -> build_deployment), so both vocabularies coexist in
+# the ``deployments`` table:
+#   * GitHub deployment state  -> 'failure', 'error'   (GitHub Deployment API)
+#   * GitLab deployment status -> 'failed', 'canceled' (GitLab Deployment API)
+# The canonical ClickHouse rollup (026_materialized_views.sql) classifies a
+# failed deployment via ``status = 'failure'``; we include the full union so a
+# GitHub ``status='failure'`` row is not silently counted as a success and
+# driving change_failure_rate toward 0 (CHAOS-2382 round-3).
+_FAILED_STATUSES = {"failure", "failed", "error", "canceled"}
 
 
 class _DeployBucket(TypedDict):

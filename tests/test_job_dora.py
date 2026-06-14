@@ -275,6 +275,120 @@ def test_compute_dora_metrics_daily_seconds_units():
     assert "time_to_restore_service" not in by_metric
 
 
+@pytest.mark.parametrize(
+    "failed_status",
+    ["failure", "failed", "error", "canceled", "FAILURE", " Failed "],
+)
+def test_compute_dora_metrics_daily_counts_failed_status_variants(failed_status):
+    """CHAOS-2382 round-3: every provider's failed-deployment vocabulary must
+    contribute to change_failure_rate. GitHub persists ``status='failure'``
+    (raw GitHub Deployment ``state``); GitLab persists ``status='failed'``.
+    Regression for the no-ship where a GitHub ``status='failure'`` row was
+    counted as a success, driving CFR toward 0 and hiding failed changes."""
+    repo_id = uuid.uuid4()
+    rows = compute_dora_metrics_daily(
+        day=date(2025, 1, 1),
+        deployments=[
+            {
+                "repo_id": repo_id,
+                "deployment_id": "d-ok",
+                "status": "success",
+                "environment": "production",
+                "started_at": datetime(2025, 1, 1, 9, 0, tzinfo=timezone.utc),
+                "finished_at": datetime(2025, 1, 1, 10, 0, tzinfo=timezone.utc),
+                "deployed_at": datetime(2025, 1, 1, 10, 0, tzinfo=timezone.utc),
+                "merged_at": None,
+            },
+            {
+                "repo_id": repo_id,
+                "deployment_id": "d-bad",
+                "status": failed_status,
+                "environment": "production",
+                "started_at": datetime(2025, 1, 1, 11, 0, tzinfo=timezone.utc),
+                "finished_at": datetime(2025, 1, 1, 11, 30, tzinfo=timezone.utc),
+                "deployed_at": datetime(2025, 1, 1, 11, 30, tzinfo=timezone.utc),
+                "merged_at": None,
+            },
+        ],
+        incidents=[],
+        computed_at=datetime(2025, 1, 2, tzinfo=timezone.utc),
+    )
+    by_metric = {row.metric_name: row.value for row in rows}
+    assert by_metric["deployment_frequency"] == 2.0
+    # 1 failed of 2 total -> CFR must be 0.5, never 0.0.
+    assert by_metric["change_failure_rate"] == pytest.approx(0.5)
+
+
+def test_compute_dora_metrics_daily_github_failure_not_counted_as_success():
+    """Pin the exact Codex regression at the compute layer: a single
+    GitHub-style ``status='failure'`` deployment yields CFR == 1.0, not 0.0."""
+    repo_id = uuid.uuid4()
+    rows = compute_dora_metrics_daily(
+        day=date(2025, 1, 1),
+        deployments=[
+            {
+                "repo_id": repo_id,
+                "deployment_id": "gh-1",
+                "status": "failure",  # raw GitHub Deployment state
+                "environment": "production",
+                "started_at": datetime(2025, 1, 1, 11, 0, tzinfo=timezone.utc),
+                "finished_at": None,
+                "deployed_at": datetime(2025, 1, 1, 11, 0, tzinfo=timezone.utc),
+                "merged_at": None,
+            },
+        ],
+        incidents=[],
+        computed_at=datetime(2025, 1, 2, tzinfo=timezone.utc),
+    )
+    by_metric = {row.metric_name: row.value for row in rows}
+    assert by_metric["change_failure_rate"] == pytest.approx(1.0)
+
+
+def test_compute_dora_metrics_daily_mixed_provider_failures_per_repo():
+    """A two-repo mix where one repo's failure uses the GitHub vocabulary
+    ('failure') and the other uses GitLab's ('failed') must classify BOTH as
+    failed — proving the failed-status set is provider-agnostic across repos
+    in a single org-wide run."""
+    gh_repo = uuid.uuid4()
+    gl_repo = uuid.uuid4()
+    started = datetime(2025, 1, 1, 9, 0, tzinfo=timezone.utc)
+    finished = datetime(2025, 1, 1, 9, 30, tzinfo=timezone.utc)
+    rows = compute_dora_metrics_daily(
+        day=date(2025, 1, 1),
+        deployments=[
+            {
+                "repo_id": gh_repo,
+                "deployment_id": "gh-1",
+                "status": "failure",  # GitHub vocabulary
+                "environment": "production",
+                "started_at": started,
+                "finished_at": finished,
+                "deployed_at": finished,
+                "merged_at": None,
+            },
+            {
+                "repo_id": gl_repo,
+                "deployment_id": "gl-1",
+                "status": "failed",  # GitLab vocabulary
+                "environment": "production",
+                "started_at": started,
+                "finished_at": finished,
+                "deployed_at": finished,
+                "merged_at": None,
+            },
+        ],
+        incidents=[],
+        computed_at=datetime(2025, 1, 2, tzinfo=timezone.utc),
+    )
+    cfr = {
+        str(row.repo_id): row.value
+        for row in rows
+        if row.metric_name == "change_failure_rate"
+    }
+    assert cfr[str(gh_repo)] == pytest.approx(1.0)
+    assert cfr[str(gl_repo)] == pytest.approx(1.0)
+
+
 def test_compute_dora_metrics_daily_ignores_out_of_window():
     repo_id = uuid.uuid4()
     rows = compute_dora_metrics_daily(

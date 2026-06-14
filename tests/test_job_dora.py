@@ -1,11 +1,13 @@
 import uuid
 from datetime import date, datetime, timezone
-from unittest.mock import MagicMock, patch
 
 import pytest
 
-from dev_health_ops.connectors.models import DORAMetric, DORAMetrics
+# Import connectors first to defuse the providers._base <-> connectors circular
+# import so this module collects/runs in isolation (CHAOS-2370 pattern).
+import dev_health_ops.connectors  # noqa: F401
 from dev_health_ops.metrics import job_dora
+from dev_health_ops.metrics.compute_dora import compute_dora_metrics_daily
 
 
 def test_run_dora_metrics_job_rejects_sqlite():
@@ -17,58 +19,192 @@ def test_run_dora_metrics_job_rejects_sqlite():
             backfill_days=1,
             repo_id=uuid.uuid4(),
             repo_name="group/project",
-            auth="token",
             org_id="test-org",
         )
 
 
-def test_run_dora_metrics_job_writes_clickhouse(monkeypatch):
-    class FakeGitLabConnector:
-        def __init__(self, url: str, private_token: str) -> None:
-            self.url = url
-            self.private_token = private_token
+class _FakeClickHouseSink:
+    """Captures DORA writes and serves seeded deployments/incidents.
 
-        def get_dora_metrics(
-            self,
-            project_name: str,
-            metric: str,
-            start_date: str | None = None,
-            end_date: str | None = None,
-            interval: str = "daily",
-        ) -> DORAMetrics:
-            return DORAMetrics(
-                metric_name=metric,
-                data_points=[
-                    DORAMetric(
-                        date=datetime(2025, 1, 1, tzinfo=timezone.utc),
-                        value=1.25,
-                    )
-                ],
-            )
+    Mirrors the real ClickHouse sink surface used by run_dora_metrics_job:
+    query_dicts(), ensure_tables(), write_dora_metrics(), close().
+    """
 
-        def close(self) -> None:
-            return
+    def __init__(self, deployments=None, incidents=None):
+        self._deployments = deployments or []
+        self._incidents = incidents or []
+        self.org_id = ""
+        self.written = []
 
-    monkeypatch.setattr(job_dora, "GitLabConnector", FakeGitLabConnector)
+    def query_dicts(self, query, parameters):
+        if "FROM deployments" in query:
+            return self._deployments
+        if "FROM incidents" in query:
+            return self._incidents
+        raise AssertionError(f"Unexpected query: {query}")
 
-    mock_sink = MagicMock()
-    mock_sink.client = MagicMock()
+    def ensure_tables(self):
+        return None
+
+    def write_dora_metrics(self, rows):
+        self.written.extend(rows)
+
+    def close(self):
+        return None
+
+
+def test_run_dora_metrics_job_github_org_no_gitlab_token(monkeypatch):
+    """CHAOS-2382: a GitHub-only org (no GITLAB_TOKEN) must NOT raise and must
+    compute DORA rows from already-synced ClickHouse deployments."""
+    monkeypatch.delenv("GITLAB_TOKEN", raising=False)
 
     repo_id = uuid.uuid4()
+    deployments = [
+        {
+            "repo_id": repo_id,
+            "deployment_id": "d1",
+            "status": "success",
+            "environment": "production",
+            "started_at": datetime(2025, 1, 1, 9, 0, tzinfo=timezone.utc),
+            "finished_at": datetime(2025, 1, 1, 10, 0, tzinfo=timezone.utc),
+            "deployed_at": datetime(2025, 1, 1, 10, 0, tzinfo=timezone.utc),
+            "merged_at": datetime(2025, 1, 1, 8, 0, tzinfo=timezone.utc),
+            "pull_request_number": 42,
+        },
+        {
+            "repo_id": repo_id,
+            "deployment_id": "d2",
+            "status": "failed",
+            "environment": "production",
+            "started_at": datetime(2025, 1, 1, 12, 0, tzinfo=timezone.utc),
+            "finished_at": datetime(2025, 1, 1, 12, 30, tzinfo=timezone.utc),
+            "deployed_at": datetime(2025, 1, 1, 12, 30, tzinfo=timezone.utc),
+            "merged_at": None,
+            "pull_request_number": None,
+        },
+    ]
+    incidents = [
+        {
+            "repo_id": repo_id,
+            "incident_id": "i1",
+            "status": "resolved",
+            "started_at": datetime(2025, 1, 1, 13, 0, tzinfo=timezone.utc),
+            "resolved_at": datetime(2025, 1, 1, 14, 0, tzinfo=timezone.utc),
+        },
+    ]
 
-    with patch(
-        "dev_health_ops.metrics.job_dora.ClickHouseMetricsSink",
-        return_value=mock_sink,
-    ):
-        job_dora.run_dora_metrics_job(
-            db_url="clickhouse://localhost:8123/default",
-            day=date(2025, 1, 1),
-            backfill_days=1,
-            repo_id=repo_id,
-            repo_name="group/project",
-            auth="token",
-            org_id="test-org",
-        )
+    sink = _FakeClickHouseSink(deployments=deployments, incidents=incidents)
+    monkeypatch.setattr(job_dora, "ClickHouseMetricsSink", lambda db_url: sink)
 
-    # Verify the sink's write method was called
-    assert mock_sink.write_dora_metrics.called
+    # No auth / GITLAB_TOKEN passed: must not raise.
+    job_dora.run_dora_metrics_job(
+        db_url="clickhouse://localhost:8123/default",
+        day=date(2025, 1, 1),
+        backfill_days=1,
+        org_id="a78c1a6a-0000-0000-0000-000000000000",
+    )
+
+    by_metric = {row.metric_name: row.value for row in sink.written}
+    assert by_metric["deployment_frequency"] == 2.0
+    # 1 failed of 2 deployments
+    assert by_metric["change_failure_rate"] == pytest.approx(0.5)
+    # lead time: deployed 10:00 - merged 08:00 = 2h = 7200s (only d1 has merged_at)
+    assert by_metric["lead_time_for_changes"] == pytest.approx(7200.0)
+    # MTTR: resolved 14:00 - started 13:00 = 1h = 3600s
+    assert by_metric["time_to_restore_service"] == pytest.approx(3600.0)
+
+
+def test_run_dora_metrics_job_no_deployments_writes_nothing(monkeypatch):
+    monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+    sink = _FakeClickHouseSink(deployments=[], incidents=[])
+    monkeypatch.setattr(job_dora, "ClickHouseMetricsSink", lambda db_url: sink)
+
+    job_dora.run_dora_metrics_job(
+        db_url="clickhouse://localhost:8123/default",
+        day=date(2025, 1, 1),
+        backfill_days=1,
+        org_id="test-org",
+    )
+
+    assert sink.written == []
+
+
+def test_run_dora_metrics_job_filters_to_requested_metrics(monkeypatch):
+    monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+    repo_id = uuid.uuid4()
+    deployments = [
+        {
+            "repo_id": repo_id,
+            "deployment_id": "d1",
+            "status": "success",
+            "environment": "production",
+            "started_at": datetime(2025, 1, 1, 9, 0, tzinfo=timezone.utc),
+            "finished_at": datetime(2025, 1, 1, 10, 0, tzinfo=timezone.utc),
+            "deployed_at": datetime(2025, 1, 1, 10, 0, tzinfo=timezone.utc),
+            "merged_at": None,
+            "pull_request_number": None,
+        },
+    ]
+    sink = _FakeClickHouseSink(deployments=deployments, incidents=[])
+    monkeypatch.setattr(job_dora, "ClickHouseMetricsSink", lambda db_url: sink)
+
+    job_dora.run_dora_metrics_job(
+        db_url="clickhouse://localhost:8123/default",
+        day=date(2025, 1, 1),
+        backfill_days=1,
+        metrics="deployment_frequency",
+        org_id="test-org",
+    )
+
+    assert {row.metric_name for row in sink.written} == {"deployment_frequency"}
+
+
+def test_compute_dora_metrics_daily_seconds_units():
+    """Lead time and MTTR are emitted in seconds (GitLab-API parity)."""
+    repo_id = uuid.uuid4()
+    computed_at = datetime(2025, 1, 2, tzinfo=timezone.utc)
+    rows = compute_dora_metrics_daily(
+        day=date(2025, 1, 1),
+        deployments=[
+            {
+                "repo_id": repo_id,
+                "deployment_id": "d1",
+                "status": "success",
+                "environment": "production",
+                "started_at": datetime(2025, 1, 1, 9, 0, tzinfo=timezone.utc),
+                "finished_at": datetime(2025, 1, 1, 10, 0, tzinfo=timezone.utc),
+                "deployed_at": datetime(2025, 1, 1, 10, 0, tzinfo=timezone.utc),
+                "merged_at": datetime(2025, 1, 1, 7, 0, tzinfo=timezone.utc),
+            },
+        ],
+        incidents=[],
+        computed_at=computed_at,
+    )
+    by_metric = {row.metric_name: row.value for row in rows}
+    # 10:00 - 07:00 = 3h = 10800s
+    assert by_metric["lead_time_for_changes"] == pytest.approx(10800.0)
+    assert by_metric["deployment_frequency"] == 1.0
+    assert by_metric["change_failure_rate"] == 0.0
+    assert "time_to_restore_service" not in by_metric
+
+
+def test_compute_dora_metrics_daily_ignores_out_of_window():
+    repo_id = uuid.uuid4()
+    rows = compute_dora_metrics_daily(
+        day=date(2025, 1, 1),
+        deployments=[
+            {
+                "repo_id": repo_id,
+                "deployment_id": "d1",
+                "status": "success",
+                "environment": "production",
+                "started_at": None,
+                "finished_at": None,
+                "deployed_at": datetime(2025, 1, 2, 10, 0, tzinfo=timezone.utc),
+                "merged_at": None,
+            },
+        ],
+        incidents=[],
+        computed_at=datetime(2025, 1, 2, tzinfo=timezone.utc),
+    )
+    assert rows == []

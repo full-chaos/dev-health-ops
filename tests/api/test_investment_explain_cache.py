@@ -155,3 +155,62 @@ async def test_explain_investment_mix_mock_provider_skips_cache():
 
         # Cache should not be accessed for mock provider
         mock_sink_class.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_explain_forwards_org_id_to_work_unit_evidence():
+    """Regression (CHAOS-2374): the explanation path must forward the caller's
+    org_id into build_work_unit_investments.
+
+    work_unit_investments rows are tenant-scoped (org_id is part of the
+    ReplacingMergeTree dedup key, migration 027) and every reader filters
+    ``org_id = %(org_id)s``. If the explain path omits org_id, it defaults to
+    "" and silently drops *all* persisted work-unit evidence for any real org,
+    leaving the LLM/fallback ungrounded (work_unit_count=0, no quotes, no
+    quality stats) despite a non-empty aggregate distribution.
+    """
+    real_org = "org-7c2f1a9e"
+
+    with (
+        patch(
+            "dev_health_ops.api.services.investment_mix_explain.build_investment_response"
+        ) as mock_build,
+        patch(
+            "dev_health_ops.api.services.investment_mix_explain.build_work_unit_investments"
+        ) as mock_units,
+        patch(
+            "dev_health_ops.api.services.investment_mix_explain.get_provider"
+        ) as mock_get_provider,
+    ):
+        mock_investment = MagicMock()
+        mock_investment.theme_distribution = {"feature_delivery": 1.0}
+        mock_investment.subcategory_distribution = {"feature_delivery.customer": 1.0}
+        mock_build.return_value = mock_investment
+
+        mock_units.return_value = []
+
+        mock_provider = MagicMock()
+        mock_provider.complete = AsyncMock(
+            return_value='{"summary": "Test summary", "top_findings": [], "confidence": {"level": "moderate"}, "what_to_check_next": [], "anti_claims": []}'
+        )
+        mock_get_provider.return_value = mock_provider
+
+        class MockFilters:
+            def model_dump(self, mode=None):
+                return {"scope": {"level": "org"}}
+
+        await explain_investment_mix(
+            db_url="clickhouse://localhost:9000/test",
+            filters=MockFilters(),
+            org_id=real_org,
+            llm_provider="mock",
+        )
+
+        build_call = mock_build.await_args
+        units_call = mock_units.await_args
+        assert build_call is not None
+        assert units_call is not None
+        # Aggregate response is org-scoped...
+        assert build_call.kwargs["org_id"] == real_org
+        # ...and so is the work-unit evidence reader (the bug: it defaulted to "").
+        assert units_call.kwargs["org_id"] == real_org

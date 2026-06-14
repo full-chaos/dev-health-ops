@@ -167,6 +167,7 @@ async def explain_investment_mix(
     units = await build_work_unit_investments(
         db_url=db_url,
         filters=filters,
+        org_id=org_id,
         limit=200,
         include_text=True,
     )

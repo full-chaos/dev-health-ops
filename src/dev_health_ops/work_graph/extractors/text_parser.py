@@ -77,6 +77,40 @@ GITLAB_MERGE_MR_PATTERN = re.compile(
     r"(?:merge\s+request|see\s+merge\s+request)\b[^!\n]*!(\d+)", re.IGNORECASE
 )
 
+# Revert commits embed the *original* merge subject verbatim, e.g.
+#   Revert "Merge pull request #42 from team/x"
+#
+#   This reverts commit <sha>.
+# A revert is a *later undo* commit -- it is NOT contained by PR #42, so the
+# merge-keyword number it quotes must never be promoted into a PR->commit link
+# (doing so attributes the revert's changes back to the reverted PR and skews
+# every downstream file/AI-impact metric). We reject the message outright when
+# its subject is a revert or its body carries git's revert marker. Anchored to
+# the start-of-line so an ordinary sentence merely containing the word "revert"
+# (e.g. "Merge pull request #5: revert flag default") is unaffected.
+# CHAOS-2375 round-3.
+REVERT_SUBJECT_PATTERN = re.compile(r"^\s*revert[\s\"']", re.IGNORECASE)
+REVERT_BODY_PATTERN = re.compile(
+    r"^\s*this\s+reverts\s+(?:commit|merge\s+request)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _is_revert_message(text: str) -> bool:
+    """Return True if ``text`` is a revert commit message.
+
+    Recognizes git's canonical revert shapes: a subject line beginning with
+    ``Revert "..."`` and/or a body line ``This reverts commit <sha>.`` (GitLab
+    also emits ``This reverts merge request !N``). Such commits quote the
+    reverted PR/MR's merge subject but are not part of that PR/MR.
+    """
+    if not text:
+        return False
+    first_line = text.lstrip().split("\n", 1)[0]
+    if REVERT_SUBJECT_PATTERN.match(first_line):
+        return True
+    return bool(REVERT_BODY_PATTERN.search(text))
+
 
 def extract_pr_refs(text: str) -> list[int]:
     """
@@ -104,6 +138,11 @@ def extract_pr_refs(text: str) -> list[int]:
       number collides with a real PR number), corrupting the work graph and
       downstream file/AI-impact metrics.
 
+    Revert commits are rejected entirely: ``Revert "Merge pull request #42 ..."``
+    quotes the reverted PR's merge subject but is a *later undo* commit, not a
+    commit contained by PR #42. Linking it would attribute the revert's changes
+    back to the original PR.
+
     Args:
         text: Commit message to search.
 
@@ -111,6 +150,12 @@ def extract_pr_refs(text: str) -> list[int]:
         De-duplicated list of referenced PR/MR numbers, in first-seen order.
     """
     if not text:
+        return []
+
+    # A revert commit quotes the reverted PR/MR's merge subject verbatim but is
+    # not contained by that PR/MR; emitting its number would attribute the undo
+    # back to the original PR. Reject before extracting. CHAOS-2375 round-3.
+    if _is_revert_message(text):
         return []
 
     seen: set[int] = set()

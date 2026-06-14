@@ -62,6 +62,51 @@ class TestExtractPRRefs:
         )
         assert extract_pr_refs(msg) == [88, 12]
 
+    def test_github_revert_commit_is_not_a_pr_ref(self):
+        """A revert of a GitHub merge commit must yield no PR refs.
+
+        Regression guard for CHAOS-2375 round-3: ``Revert "Merge pull request
+        #42 ..."`` quotes the reverted PR's merge subject verbatim but is a later
+        *undo* commit, not a commit contained by PR #42. Promoting it would
+        attribute the revert's changes back to the original PR.
+        """
+        assert extract_pr_refs('Revert "Merge pull request #42 from team/x"') == []
+        assert (
+            extract_pr_refs(
+                'Revert "Merge pull request #42 from team/x"\n\n'
+                "This reverts commit 0123abcd."
+            )
+            == []
+        )
+
+    def test_gitlab_revert_commit_is_not_a_pr_ref(self):
+        """A revert of a GitLab merge commit must yield no MR refs."""
+        assert extract_pr_refs('Revert "See merge request grp/proj!45"') == []
+        assert (
+            extract_pr_refs("Undo the change\n\nThis reverts merge request !45") == []
+        )
+
+    def test_revert_body_marker_without_revert_subject(self):
+        """A body carrying git's ``This reverts commit`` marker is a revert even
+        if the subject was hand-edited to mention the merge."""
+        msg = (
+            "Roll back flaky feature\n\n"
+            "This reverts commit deadbeef.\n"
+            "Originally landed via Merge pull request #88 from team/feature"
+        )
+        assert extract_pr_refs(msg) == []
+
+    def test_word_revert_inside_merge_subject_still_links(self):
+        """A real merge whose branch/subject merely contains the word 'revert'
+        must still link -- the guard is anchored to revert *commit* shapes, not
+        any occurrence of the word."""
+        assert extract_pr_refs(
+            "Merge pull request #5 from team/revert-flag-default"
+        ) == [5]
+
+    def test_revert_with_leading_whitespace_is_rejected(self):
+        assert extract_pr_refs('   Revert "Merge pull request #42 from team/x"') == []
+
     def test_empty(self):
         assert extract_pr_refs("") == []
         assert extract_pr_refs("no refs here") == []

@@ -456,6 +456,94 @@ class TestDerivePRCommitLinks:
         assert count == 0
         fake_sink.write_work_graph_pr_commit.assert_not_called()
 
+    def test_revert_commit_is_not_linked_to_reverted_pr(self):
+        """A revert of a merge commit must NOT produce a PR->commit link.
+
+        CHAOS-2375 round-3: ``Revert "Merge pull request #42 ..."`` quotes the
+        reverted PR's merge subject but is a later undo commit, not a commit
+        contained by PR #42. Persisting the link would attribute the revert's
+        changes back to the original PR and skew downstream metrics. PR #42
+        exists in this repo, so only the revert guard prevents the bad link.
+        """
+        repo_id = uuid.uuid4()
+        pr_rows = [{"repo_id": repo_id, "number": 42}]
+        commit_rows = [
+            {
+                "repo_id": repo_id,
+                "hash": "rev042",
+                "message": (
+                    'Revert "Merge pull request #42 from team/x"\n\n'
+                    "This reverts commit 0123abcd."
+                ),
+                "author_when": datetime(2024, 1, 1, tzinfo=timezone.utc),
+            },
+        ]
+        fake_sink = self._build_sink(pr_rows, commit_rows)
+
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default")
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            count = builder._derive_pr_commit_links()
+            builder.close()
+
+        assert count == 0
+        fake_sink.write_work_graph_pr_commit.assert_not_called()
+
+    def test_pr_number_does_not_collide_across_repos(self):
+        """PR #1 in repo A and PR #1 in repo B are distinct.
+
+        Guards id-uniqueness: a commit in repo A merging PR #1 must link only to
+        repo A's PR #1, never repo B's. The derivation keys known PRs by repo_id,
+        so repo B's PR #1 commit (which references no real PR in repo B) is not
+        mis-linked. work_graph_pr_commit rows carry repo_id, keeping the
+        (org, repo, pr_number, commit_hash) identity unique.
+        """
+        repo_a = uuid.uuid4()
+        repo_b = uuid.uuid4()
+        base_time = datetime(2024, 6, 15, tzinfo=timezone.utc)
+        # Both repos have a PR #1.
+        pr_rows = [
+            {"repo_id": repo_a, "number": 1},
+            {"repo_id": repo_b, "number": 1},
+        ]
+        commit_rows = [
+            {
+                "repo_id": repo_a,
+                "hash": "a0001",
+                "message": "Merge pull request #1 from team/a-feature",
+                "author_when": base_time,
+            },
+            {
+                "repo_id": repo_b,
+                "hash": "b0001",
+                "message": "Merge pull request #1 from team/b-feature",
+                "author_when": base_time,
+            },
+        ]
+        fake_sink = self._build_sink(pr_rows, commit_rows)
+
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default")
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            count = builder._derive_pr_commit_links()
+            builder.close()
+
+        assert count == 2
+        records = fake_sink.write_work_graph_pr_commit.call_args[0][0]
+        by_commit = {r.commit_hash: r for r in records}
+        # Each commit links to its OWN repo's PR #1, never the other repo's.
+        assert by_commit["a0001"].repo_id == repo_a
+        assert by_commit["a0001"].pr_number == 1
+        assert by_commit["b0001"].repo_id == repo_b
+        assert by_commit["b0001"].pr_number == 1
+        # The (repo_id, pr_number, commit_hash) identities are distinct.
+        identities = {(r.repo_id, r.pr_number, r.commit_hash) for r in records}
+        assert len(identities) == 2
+
     def test_build_invokes_derivation_before_fast_path(self):
         """build() must derive PR->commit links so the fast path is non-empty."""
         repo_id = uuid.uuid4()

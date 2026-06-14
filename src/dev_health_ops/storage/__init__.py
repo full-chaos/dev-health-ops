@@ -150,7 +150,7 @@ async def run_with_store(
     db_type: str,
     handler: Callable,
     org_id: str | None,
-) -> None:
+) -> Any:
     """
     Helper to create a store and run a handler within its context.
 
@@ -159,7 +159,7 @@ async def run_with_store(
     store: StoreLike = create_store(db_url, db_type)
     store.org_id = org_id
     async with store:
-        await handler(store)
+        return await handler(store)
 
 
 __all__ = [

@@ -1435,7 +1435,7 @@ class ClickHouseStore:
                         "is_active": int(item.get("is_active", 1)),
                         "updated_at": self._normalize_datetime(item.get("updated_at")),
                         "last_synced": synced_at,
-                        "org_id": item.get("org_id") or "",
+                        "org_id": item.get("org_id") or self.org_id or "",
                     }
                 )
             else:
@@ -1451,7 +1451,7 @@ class ClickHouseStore:
                         "is_active": int(getattr(item, "is_active", 1) or 0),
                         "updated_at": self._normalize_datetime(item.updated_at),
                         "last_synced": synced_at,
-                        "org_id": getattr(item, "org_id", None) or "",
+                        "org_id": getattr(item, "org_id", None) or self.org_id or "",
                     }
                 )
 
@@ -1628,7 +1628,7 @@ class ClickHouseStore:
 
         assert self.client is not None
         # Using FINAL to get the latest version of each team
-        query = "SELECT id, team_uuid, name, description, members, updated_at FROM teams FINAL"
+        query = "SELECT id, org_id, team_uuid, name, description, members, updated_at FROM teams FINAL"
         async with self._lock:
             result = await asyncio.to_thread(self.client.query, query)
 
@@ -1638,11 +1638,12 @@ class ClickHouseStore:
                 teams.append(
                     Team(
                         id=row[0],
-                        team_uuid=row[1],
-                        name=row[2],
-                        description=row[3],
-                        members=row[4],
-                        updated_at=_parse_datetime_value(row[5]),
+                        org_id=row[1],
+                        team_uuid=row[2],
+                        name=row[3],
+                        description=row[4],
+                        members=row[5],
+                        updated_at=_parse_datetime_value(row[6]),
                     )
                 )
         return teams

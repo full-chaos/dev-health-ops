@@ -118,8 +118,12 @@ CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
 
 # Teams into the semantic database
 POSTGRES_URI="postgresql+asyncpg://postgres:postgres@localhost:5555/postgres" \
-  dev-hops sync teams --provider config --path src/dev_health_ops/config/team_mapping.yaml
+  dev-hops sync teams --provider config --path src/dev_health_ops/config/team_mapping.yaml --allow-empty
 ```
+
+The bundled `team_mapping.yaml` is an empty onboarding sample. `sync teams`
+exits non-zero when no teams are persisted; pass `--allow-empty` only for
+intentional empty/no-op syncs such as validating the sample config.
 
 Provider authentication can come from CLI flags or environment variables such as
 `GITHUB_TOKEN`, `GITLAB_TOKEN`, `JIRA_*`, `ATLASSIAN_*`, and `LINEAR_API_KEY`.

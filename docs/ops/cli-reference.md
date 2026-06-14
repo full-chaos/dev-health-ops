@@ -217,7 +217,7 @@ Sync team definitions. Persists to the analytics store, so `CLICKHOUSE_URI` (or 
 
 ```bash
 # From config file
-dev-hops sync teams --path src/dev_health_ops/config/team_mapping.yaml
+dev-hops sync teams --path src/dev_health_ops/config/team_mapping.yaml --allow-empty
 
 # From Jira projects
 dev-hops sync teams --provider jira
@@ -235,6 +235,11 @@ dev-hops sync teams --provider gitlab \
   --owner my-group/path \
   --auth "$GITLAB_TOKEN"
 ```
+
+The bundled `src/dev_health_ops/config/team_mapping.yaml` is intentionally empty
+for onboarding. By default, `sync teams` exits non-zero when discovery or
+persistence results in zero teams; use `--allow-empty` only when an empty/no-op
+sync is expected.
 
 ---
 

@@ -101,6 +101,86 @@ def test_compute_cache_key_with_string_fallback():
     assert len(key) == 32
 
 
+def test_compute_cache_key_different_org_ids():
+    """Regression (CHAOS-2393): cross-tenant cache keys must diverge.
+
+    Two tenants with identical filters/theme/subcategory must NOT produce the
+    same SHA256 cache key, otherwise org B reads org A's cached LLM
+    explanation from the shared ``investment_explanations`` table. ``org_id``
+    is now hashed into the key so the keys differ.
+    """
+
+    class MockFilters:
+        def model_dump(self, mode=None):
+            return {
+                "scope": {"level": "org", "ids": []},
+                "time_range": {"range_days": 14, "compare_days": 14},
+            }
+
+    filters = MockFilters()
+
+    key_org_a = _compute_cache_key(
+        filters, theme="feature_delivery", subcategory=None, org_id="orgA"
+    )
+    key_org_b = _compute_cache_key(
+        filters, theme="feature_delivery", subcategory=None, org_id="orgB"
+    )
+
+    assert key_org_a != key_org_b
+    # Still a well-formed key.
+    assert len(key_org_a) == 32
+    assert len(key_org_b) == 32
+
+
+def test_compute_cache_key_same_org_id_is_stable():
+    """Same org_id (and other args) must yield the same key (cache hits work).
+
+    The org_id scoping must not break determinism: identical inputs including
+    org_id always hash to the same cache key, so a tenant's repeated request
+    hits its own cached explanation.
+    """
+
+    class MockFilters:
+        def model_dump(self, mode=None):
+            return {
+                "scope": {"level": "org", "ids": []},
+                "time_range": {"range_days": 14, "compare_days": 14},
+            }
+
+    filters = MockFilters()
+
+    key1 = _compute_cache_key(
+        filters, theme="feature_delivery", subcategory=None, org_id="orgA"
+    )
+    key2 = _compute_cache_key(
+        filters, theme="feature_delivery", subcategory=None, org_id="orgA"
+    )
+
+    assert key1 == key2
+    assert len(key1) == 32
+
+
+def test_compute_cache_key_org_id_changes_default_key():
+    """Supplying a non-default org_id must differ from the empty-default key.
+
+    The default ``org_id=""`` (legacy/global cache slot) must not collide with
+    a real tenant's key, confirming org_id genuinely participates in the hash.
+    """
+
+    class MockFilters:
+        def model_dump(self, mode=None):
+            return {"scope": {"level": "org"}}
+
+    filters = MockFilters()
+
+    key_default = _compute_cache_key(filters, theme=None, subcategory=None)
+    key_tenant = _compute_cache_key(
+        filters, theme=None, subcategory=None, org_id="org-7c2f1a9e"
+    )
+
+    assert key_default != key_tenant
+
+
 @pytest.mark.asyncio
 async def test_explain_investment_mix_mock_provider_skips_cache():
     """Test that mock provider does not use cache."""

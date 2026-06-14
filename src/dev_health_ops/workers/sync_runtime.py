@@ -321,6 +321,18 @@ def _dispatch_post_sync_tasks(
             kwargs={"org_id": org_id},
             queue="metrics",
         )
+        dispatched.append("run_work_graph_build")
+
+        # Investment distributions depend on the work-graph build that was
+        # just enqueued; without this the work_unit_investments table is only
+        # ever populated by fixtures/CLI, so live orgs see an empty /investment
+        # view (CHAOS-2374).
+        celery_app.send_task(
+            "dev_health_ops.workers.tasks.run_investment_materialize",
+            kwargs={"org_id": org_id},
+            queue="metrics",
+        )
+        dispatched.append("run_investment_materialize")
 
     if provider == "gitlab" and has_git:
         celery_app.send_task(

@@ -132,10 +132,32 @@ Commands automatically use the appropriate database:
 | `sync git` | ClickHouse | Git data ingestion |
 | `sync prs` | ClickHouse | PR data ingestion |
 | `sync work-items` | ClickHouse | Work item ingestion |
-| `sync teams` | Both | Drift/mapping → `team_mappings` (Postgres); team entities → `teams` (ClickHouse) |
+| `sync teams` | Both | **Org-scoped** (`--org`): provider → Postgres `team_mappings` → `bridge_teams_to_clickhouse`; **No-org**: direct ClickHouse write |
 | `metrics daily` | ClickHouse | Metrics computation |
 | `metrics dora` | ClickHouse | DORA metrics |
 | `api` | Both | Serves both layers |
+
+### `sync teams` routing detail
+
+The `sync teams` command has two distinct routing paths depending on whether `--org` is supplied:
+
+| Path | Trigger | Write order | ClickHouse writer |
+|------|---------|-------------|-------------------|
+| **Org-scoped** | `--org <id>` present | 1. `_bridge_teams_to_postgres` (upserts `team_mappings`) → 2. `bridge_teams_to_clickhouse` (reads Postgres, resolves identities, writes `teams`) | `bridge_teams_to_clickhouse` only |
+| **No-org** | `--org` absent | Direct `run_with_store` → ClickHouse `teams` table | `run_with_store` |
+
+**Invariants for the org-scoped path:**
+
+- PostgreSQL `team_mappings` is always the source of truth for org-scoped teams.
+- `bridge_teams_to_clickhouse` is the **sole** ClickHouse writer for org-scoped syncs.
+  It reads `TeamMapping` + `IdentityMapping` from Postgres (both filtered by `org_id`),
+  resolves member identities (email, canonical_id, all provider logins), and writes the
+  enriched payload to the ClickHouse `teams` table.
+- `run_with_store` (direct ClickHouse write from provider data) is **never** called on the
+  org-scoped path.
+- A Postgres bridge failure (`_bridge_teams_to_postgres` returns 0 or raises) causes exit 1.
+- A ClickHouse bridge failure (`bridge_teams_to_clickhouse` raises) is fatal (exit 1) so
+  callers cannot report a successful sync when analytics has not been updated.
 
 ## API Service Routing
 

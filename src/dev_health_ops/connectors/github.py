@@ -22,7 +22,11 @@ from dev_health_ops.connectors.base import (
 from dev_health_ops.connectors.exceptions import (
     APIException,
     AuthenticationException,
+    ConnectorException,
     NotFoundException,
+)
+from dev_health_ops.connectors.exceptions import (
+    RateLimitException as ExceptionsRateLimitException,
 )
 from dev_health_ops.connectors.models import (
     Author,
@@ -40,6 +44,7 @@ from dev_health_ops.connectors.utils import (
     GitHubGraphQLClient,
     match_repo_pattern,
     retry_with_backoff,
+    safe_github_headers,
 )
 from dev_health_ops.connectors.utils.github_app import GitHubAppTokenProvider
 from dev_health_ops.metrics.prometheus import (
@@ -49,8 +54,25 @@ from dev_health_ops.metrics.prometheus import (
 
 logger = logging.getLogger(__name__)
 
+# GitHub response headers worth logging to attribute a 403 (never the token).
+_DIAGNOSTIC_HEADER_NAMES = (
+    "x-ratelimit-remaining",
+    "x-ratelimit-reset",
+    "retry-after",
+    "x-github-request-id",
+    "x-accepted-github-permissions",
+)
+
 if TYPE_CHECKING:
     from dev_health_ops.credentials.types import GitHubCredentials
+
+
+def _diagnostic_headers(headers: dict[str, Any] | None) -> dict[str, str]:
+    """Filter a header mapping down to the diagnostic allow-list (no token)."""
+    if not headers:
+        return {}
+    lowered = {str(k).lower(): str(v) for k, v in headers.items()}
+    return {name: lowered[name] for name in _DIAGNOSTIC_HEADER_NAMES if name in lowered}
 
 
 class GitHubConnector(GitConnector):
@@ -123,6 +145,25 @@ class GitHubConnector(GitConnector):
         :param e: Exception from GitHub API.
         :raises: Appropriate connector exception.
         """
+        # Already-classified connector exceptions (raised by the GraphQL client
+        # in ``GitHubGraphQLClient.query``) must keep their retry semantics.
+        # Re-wrapping them in the generic ``else`` branch below converts a
+        # deliberately NON-retryable permission/SSO ``AuthenticationException``
+        # into a retryable ``APIException`` ("Unexpected error"), so the outer
+        # ``@retry_with_backoff`` decorator spins five times on an unfixable
+        # permission error with the root cause hidden. Pass these through.
+        #
+        # NB: the retry decorators on the wrappers use
+        # ``connectors.base.RateLimitException`` (imported as
+        # ``RateLimitException`` here), which is a DISTINCT class from
+        # ``connectors.exceptions.RateLimitException`` raised by the GraphQL
+        # client. Normalise the latter to the former so a rate-limit 403 stays
+        # RETRYABLE (it is the ``exceptions=`` tuple member the decorator
+        # catches), while preserving the ``retry_after_seconds`` wait.
+        if isinstance(e, ExceptionsRateLimitException):
+            raise RateLimitException(str(e), retry_after_seconds=e.retry_after_seconds)
+        if isinstance(e, ConnectorException):
+            raise e
         if isinstance(e, RateLimitExceededException):
             record_github_api_request(endpoint="unknown", status_code="429")
             raise RateLimitException(
@@ -140,11 +181,52 @@ class GitHubConnector(GitConnector):
                     "(fine-grained PAT / GitHub App tokens can 404). "
                     f"Details: {e}"
                 )
+            elif e.status == 403:
+                self._raise_github_403(e)
             else:
                 raise APIException(f"GitHub API error: {e}")
         else:
             record_github_api_request(endpoint="unknown", status_code="500")
             raise APIException(f"Unexpected error: {e}")
+
+    def _raise_github_403(self, e: GithubException) -> None:
+        """Classify a PyGithub 403 and raise an attributable exception.
+
+        Logs the diagnostic GitHub headers (never the token), then:
+        - x-ratelimit-remaining == 0 -> retryable RateLimitException (reset wait).
+        - Retry-After present -> retryable RateLimitException (secondary/abuse).
+        - permission/SSO/other -> NON-retryable AuthenticationException so the
+          retry decorator does not spin on an unfixable permission error.
+        """
+        headers = getattr(e, "headers", None)
+        diag = _diagnostic_headers(headers if isinstance(headers, dict) else None)
+        body = getattr(e, "data", None)
+        # (a) primary rate limit.
+        if diag.get("x-ratelimit-remaining") == "0":
+            logger.warning("GitHub primary rate limit (403) headers=%s", diag)
+            raise RateLimitException(
+                f"GitHub rate limit (403) (headers={diag})",
+                retry_after_seconds=self._rate_limit_reset_delay_seconds(),
+            )
+        # (b) secondary/abuse limit.
+        retry_after = diag.get("retry-after")
+        if retry_after is not None:
+            logger.warning("GitHub secondary/abuse rate limit (403) headers=%s", diag)
+            try:
+                retry_after_seconds: float | None = float(retry_after)
+            except ValueError:
+                retry_after_seconds = None
+            raise RateLimitException(
+                f"GitHub secondary/abuse rate limit (403) (headers={diag})",
+                retry_after_seconds=retry_after_seconds,
+            )
+        # (c) permission/SSO/other 403 -> non-retryable.
+        logger.warning("GitHub 403 (permission/SSO) headers=%s body=%s", diag, body)
+        raise AuthenticationException(
+            "GitHub 403 (permission/SSO): token likely lacks a required "
+            "scope/permission or the org requires SAML SSO authorization for "
+            f"this token (headers={diag}). Details: {e}"
+        )
 
     @retry_with_backoff(
         max_retries=3,
@@ -771,8 +853,61 @@ class GitHubConnector(GitConnector):
             return None
 
     def _is_github_rate_limit_403(self, response: requests.Response) -> bool:
+        # Primary rate limit advertises x-ratelimit-remaining: 0; secondary/
+        # abuse limits advertise Retry-After. Fall back to the body wording for
+        # older responses that omit the headers.
+        diag = safe_github_headers(response)
+        if diag.get("x-ratelimit-remaining") == "0" or "retry-after" in diag:
+            return True
         body = response.text.lower()
         return "rate limit" in body or "abuse" in body or "secondary" in body
+
+    def _classify_github_403(
+        self, response: requests.Response, method: str, endpoint: str
+    ) -> RateLimitException | None:
+        """Classify a 403 and log diagnostic headers (never the token).
+
+        Returns a ``RateLimitException`` (with the appropriate wait) for primary
+        or secondary/abuse rate limits, or ``None`` for a permission/SSO/other
+        403. In all cases the endpoint, HTTP method and key GitHub response
+        headers are logged so the failure is attributable.
+        """
+        diag = safe_github_headers(response)
+        retry_after = diag.get("retry-after")
+        # (a) primary rate limit -> wait for the reset window.
+        if diag.get("x-ratelimit-remaining") == "0":
+            logger.warning(
+                "GitHub primary rate limit (403) on %s %s headers=%s",
+                method,
+                endpoint,
+                diag,
+            )
+            return RateLimitException(
+                f"GitHub rate limit (403) on {method} {endpoint} (headers={diag})",
+                retry_after_seconds=(float(retry_after) if retry_after else None),
+            )
+        # (b) secondary/abuse limit -> backoff per Retry-After / body wording.
+        if retry_after is not None or self._is_github_rate_limit_403(response):
+            logger.warning(
+                "GitHub secondary/abuse rate limit (403) on %s %s headers=%s",
+                method,
+                endpoint,
+                diag,
+            )
+            return RateLimitException(
+                f"GitHub secondary/abuse rate limit (403) on {method} {endpoint} "
+                f"(headers={diag})",
+                retry_after_seconds=(float(retry_after) if retry_after else None),
+            )
+        # (c) permission/SSO/other 403 -> not a rate limit.
+        logger.warning(
+            "GitHub 403 (permission/SSO) on %s %s headers=%s body=%s",
+            method,
+            endpoint,
+            diag,
+            response.text,
+        )
+        return None
 
     def _get_security_alert_page(
         self,
@@ -799,18 +934,14 @@ class GitHubConnector(GitConnector):
             )
 
             if response.status_code == 403:
-                if self._is_github_rate_limit_403(response):
-                    retry_after = response.headers.get("Retry-After")
-                    raise RateLimitException(
-                        f"GitHub rate limit (403) for {endpoint}: {response.text}",
-                        retry_after_seconds=float(retry_after) if retry_after else None,
-                    )
-                logger.debug(
-                    "GitHub security endpoint unavailable for %s/%s (%s): 403",
-                    owner,
-                    repo,
-                    endpoint,
+                rate_limit = self._classify_github_403(
+                    response, "GET", f"/repos/{owner}/{repo}/{endpoint}"
                 )
+                if rate_limit is not None:
+                    raise rate_limit
+                # Permission/SSO 403 on an optional security endpoint: the
+                # feature is likely disabled or the token lacks the scope.
+                # Treat as "no data" (the diagnostic 403 was already logged).
                 return []
 
             if response.status_code == 404:
@@ -901,12 +1032,13 @@ class GitHubConnector(GitConnector):
             params = None
 
             if response.status_code == 403:
-                if self._is_github_rate_limit_403(response):
-                    retry_after = response.headers.get("Retry-After")
-                    raise RateLimitException(
-                        f"GitHub rate limit (403) listing artifacts: {response.text}",
-                        retry_after_seconds=float(retry_after) if retry_after else None,
-                    )
+                rate_limit = self._classify_github_403(
+                    response,
+                    "GET",
+                    f"/repos/{owner}/{repo}/actions/runs/{run_id}/artifacts",
+                )
+                if rate_limit is not None:
+                    raise rate_limit
                 return artifacts
             if response.status_code == 404:
                 return artifacts
@@ -969,12 +1101,14 @@ class GitHubConnector(GitConnector):
 
         if response.status_code in (404, 410):
             return b""
-        if response.status_code == 403 and self._is_github_rate_limit_403(response):
-            retry_after = response.headers.get("Retry-After")
-            raise RateLimitException(
-                f"GitHub rate limit downloading artifact {artifact_id}",
-                retry_after_seconds=float(retry_after) if retry_after else None,
+        if response.status_code == 403:
+            rate_limit = self._classify_github_403(
+                response,
+                "GET",
+                f"/repos/{owner}/{repo}/actions/artifacts/{artifact_id}/zip",
             )
+            if rate_limit is not None:
+                raise rate_limit
         if response.status_code in (301, 302, 307, 308):
             location = response.headers.get("Location")
             if not location:

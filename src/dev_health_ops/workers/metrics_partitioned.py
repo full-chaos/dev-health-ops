@@ -311,6 +311,30 @@ def run_daily_metrics_finalize_task(
             with get_postgres_session_sync() as session:
                 mark_completed(session, checkpoint_id)
 
+        # Completion-gated trigger: now that daily metrics for this (org, day)
+        # are finalized, evaluate recommendations against fresh tables. The
+        # beat-scheduled run is a daily safety net; this chains off the actual
+        # finalize so recommendations never read partial metrics (CHAOS-2373).
+        # Isolated from finalize success: a broker hiccup enqueueing the
+        # follow-up must NOT retry an already-completed finalize. The daily beat
+        # entry (and tomorrow's finalize) will recover the missed run.
+        try:
+            from dev_health_ops.workers.recommendations_tasks import (
+                run_recommendations_job,
+            )
+
+            run_recommendations_job.apply_async(
+                kwargs={"org_id": org_id, "db_url": db_url, "as_of": day},
+                queue="metrics",
+            )
+        except Exception:
+            logger.exception(
+                "Failed to chain recommendations after finalize for org=%s day=%s; "
+                "beat backstop will retry",
+                org_id,
+                day,
+            )
+
         return {
             "status": "success",
             "day": day,

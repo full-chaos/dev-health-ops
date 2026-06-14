@@ -148,6 +148,84 @@ class RuleEngine:
             window_end=window_end,
         )
 
+    def evaluate_state(
+        self,
+        team_id: str,
+        window: int | str = 7,
+        org_id: str = "",
+        rule_version: str = "1.0.0",
+    ) -> list[RecommendationRecord]:
+        """Evaluate every registered rule and return the *full* state as records.
+
+        Unlike :meth:`evaluate_all` (fired-only), this returns one
+        ``RecommendationRecord`` for **every** registered rule:
+
+        * a fired rule yields a ``fired=True`` record carrying its rationale and
+          evidence;
+        * a rule that does **not** fire yields an explicit ``fired=False``
+          tombstone record (from the registry's static ``RuleDef``).
+
+        Persisting the full state is required for correctness: the readers
+        ``argMax(fired, computed_at)`` per ``(org_id, team_id, rule_id,
+        window_end)`` and keep ``HAVING latest_fired = true``. Without a
+        ``fired=False`` row at the new ``window_end``, a rule that fired
+        yesterday but has since recovered would keep surfacing stale guidance
+        (CHAOS-2373). The records all share the same ``computed_at`` and
+        ``window_end`` so one scheduled run replaces the rule state for the
+        team in a single, internally-consistent batch.
+        """
+        from dev_health_ops.recommendations import registry as _registry
+
+        days = _parse_window(window)
+        window_end = self._now.date()
+        window_start = window_end - timedelta(days=days)
+
+        fired = self.evaluate(
+            team_id=team_id,
+            org_id=org_id,
+            window_start=window_start,
+            window_end=window_end,
+        )
+        fired_by_rule = {rec.rule_id: rec for rec in fired}
+
+        from dev_health_ops.recommendations.loader import recommendation_to_record
+
+        records: list[RecommendationRecord] = []
+        for rule_id in self._evaluators:
+            rec = fired_by_rule.get(rule_id)
+            if rec is not None:
+                records.append(recommendation_to_record(rec, rule_version=rule_version))
+                continue
+            # Non-fired: persist an explicit tombstone so the latest state for
+            # this (team, rule, window_end) reads as resolved.
+            try:
+                rule_def = _registry.get_rule(rule_id)
+                title = rule_def.title
+                severity = rule_def.severity
+                success_criterion = rule_def.success_criterion
+            except KeyError:
+                title = ""
+                severity = "warning"
+                success_criterion = ""
+            records.append(
+                RecommendationRecord(
+                    team_id=team_id,
+                    org_id=org_id,
+                    rule_id=rule_id,
+                    rule_version=rule_version,
+                    window_start=window_start,
+                    window_end=window_end,
+                    fired=False,
+                    severity=severity,
+                    title=title,
+                    rationale="",
+                    success_criterion=success_criterion,
+                    evidence_json="[]",
+                    computed_at=self._now,
+                )
+            )
+        return records
+
     def evaluate_one(
         self,
         rule_id: str,

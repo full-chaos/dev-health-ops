@@ -62,20 +62,33 @@ GITLAB_CROSS_PROJECT_PATTERN = re.compile(r"([\w\-\.]+/[\w\-\.]+)#(\d+)")
 # - GitHub merge commit: "Merge pull request #123 from ..."
 # - GitLab merge commit:  "See merge request grp/proj!45"
 #
-# The bare squash form "Some change (#123)" is deliberately NOT recognized.
-# GitHub's squash-and-merge produces "<subject> (#N)", but that is positionally
-# and lexically identical to a hand-authored issue reference such as
-# "Fix parser edge case (#42)". Because git_pull_requests carries no persisted
-# merge_commit_sha (or any merge metadata) to corroborate the link, a bare
-# "(#N)" is indistinguishable from an issue mention. Promoting it would attach a
-# commit to an unrelated PR whenever an issue number happens to collide with a
-# real PR number in the same repo -- durable corruption of work_graph_pr_commit
-# and every downstream file/AI-impact metric that reads it. See CHAOS-2375
-# round-2 review: only unambiguous merge/MR-keyword evidence is accepted.
+# The bare squash form "Some change (#123)" is NOT recognized here by
+# :func:`extract_pr_refs`. GitHub's squash-and-merge produces "<subject> (#N)",
+# but that is positionally and lexically identical to a hand-authored issue
+# reference such as "Fix parser edge case (#42)". Because git_pull_requests
+# carries no persisted merge_commit_sha (or any merge metadata) to corroborate
+# the link, a bare "(#N)" is indistinguishable from an issue mention on its own.
+# :func:`extract_pr_refs` therefore stays strict: only unambiguous
+# merge/MR-keyword evidence (CHAOS-2375 round-2). The squash form is instead
+# surfaced separately by :func:`extract_squash_pr_refs`, whose caller
+# corroborates the number against the set of *known* PR numbers in the same
+# (org, repo) before persisting a lower-confidence, distinctly-tagged link
+# (CHAOS-2435 interim recovery -- squash-merge orgs otherwise lose ~all
+# PR->commit edges).
 GITHUB_MERGE_PR_PATTERN = re.compile(r"merge\s+pull\s+request\s+#(\d+)", re.IGNORECASE)
 GITLAB_MERGE_MR_PATTERN = re.compile(
     r"(?:merge\s+request|see\s+merge\s+request)\b[^!\n]*!(\d+)", re.IGNORECASE
 )
+
+# GitHub's squash-and-merge appends the PR number to the *subject line* as a
+# trailing parenthetical: "<subject> (#N)". We anchor to the end of the first
+# line (the subject) so that mid-body parentheticals and hand-authored
+# mid-subject refs are far less likely to match. This form is ambiguous with a
+# hand-authored issue ref, so it is NEVER promoted on its own -- the caller must
+# corroborate N against known PR numbers in the same (org, repo) and tag the
+# resulting link with distinct, lower-confidence evidence. See
+# :func:`extract_squash_pr_refs`.
+GITHUB_SQUASH_PR_PATTERN = re.compile(r"\(#(\d+)\)\s*$")
 
 # Revert commits embed the *original* merge subject verbatim, e.g.
 #   Revert "Merge pull request #42 from team/x"
@@ -133,10 +146,11 @@ def extract_pr_refs(text: str) -> list[int]:
     - ``(#123)``          -- GitHub's squash-and-merge subject suffix, but it is
       indistinguishable from a hand-authored parenthetical issue reference like
       "Fix parser edge case (#42)". With no persisted merge metadata to
-      corroborate it, accepting this would persist false high-confidence
-      PR->commit edges (a commit attached to an unrelated PR whenever an issue
-      number collides with a real PR number), corrupting the work graph and
-      downstream file/AI-impact metrics.
+      corroborate it, accepting it *here* would persist false high-confidence
+      PR->commit edges. The squash form is instead surfaced by
+      :func:`extract_squash_pr_refs` and only linked by the caller after
+      corroborating the number against known PRs in the same (org, repo), with
+      distinct lower-confidence evidence (CHAOS-2435).
 
     Revert commits are rejected entirely: ``Revert "Merge pull request #42 ..."``
     quotes the reverted PR's merge subject but is a *later undo* commit, not a
@@ -175,6 +189,49 @@ def extract_pr_refs(text: str) -> list[int]:
             _add(match.group(1))
 
     return ordered
+
+
+def extract_squash_pr_refs(text: str) -> list[int]:
+    """Extract the PR number from a GitHub squash-merge commit subject.
+
+    GitHub's *squash and merge* writes a single commit whose subject is
+    ``"<PR title> (#N)"`` -- the PR number appended as a trailing parenthetical.
+    Unlike the merge-keyword forms recognized by :func:`extract_pr_refs`, this
+    shape is **ambiguous**: a hand-authored subject like
+    ``"Fix parser edge case (#42)"`` is lexically identical. This function
+    therefore performs *no* corroboration of its own -- it merely surfaces the
+    candidate number. Callers MUST confirm the number against the set of known
+    PR numbers in the same ``(org, repo)`` and persist the link with distinct,
+    lower-confidence evidence (see
+    :meth:`WorkGraphBuilder._derive_pr_commit_links`). On squash-merge orgs this
+    recovers the bulk of PR->commit edges that the strict
+    :func:`extract_pr_refs` necessarily discards (CHAOS-2435).
+
+    Only the trailing parenthetical on the *subject line* (first line) is
+    considered, matching GitHub's convention and avoiding mid-body matches.
+    Revert commits are rejected for the same reason as in
+    :func:`extract_pr_refs`: they quote a prior subject but are a later undo.
+
+    Args:
+        text: Commit message to search.
+
+    Returns:
+        A single-element list ``[N]`` when the subject ends in ``(#N)``, else
+        an empty list.
+    """
+    if not text:
+        return []
+
+    # Reverts quote a prior subject (potentially ending in "(#N)") but are not
+    # contained by that PR -- reject before matching, mirroring extract_pr_refs.
+    if _is_revert_message(text):
+        return []
+
+    subject = text.lstrip().split("\n", 1)[0]
+    match = GITHUB_SQUASH_PR_PATTERN.search(subject)
+    if match is None:
+        return []
+    return [int(match.group(1))]
 
 
 def extract_jira_keys(text: str) -> list[ParsedIssueRef]:

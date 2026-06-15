@@ -11,6 +11,7 @@ from dev_health_ops.work_graph.extractors.text_parser import (
     extract_gitlab_issue_refs,
     extract_jira_keys,
     extract_pr_refs,
+    extract_squash_pr_refs,
 )
 
 
@@ -110,6 +111,56 @@ class TestExtractPRRefs:
     def test_empty(self):
         assert extract_pr_refs("") == []
         assert extract_pr_refs("no refs here") == []
+
+
+class TestExtractSquashPRRefs:
+    """Tests for GitHub squash-merge subject extraction (CHAOS-2435).
+
+    ``extract_squash_pr_refs`` only *surfaces* the trailing ``(#N)`` candidate;
+    it performs no corroboration -- the builder confirms N against known PRs in
+    the same (org, repo) before persisting a distinctly-tagged link.
+    """
+
+    def test_trailing_paren_on_subject(self):
+        assert extract_squash_pr_refs("Add retry logic (#42)") == [42]
+        assert extract_squash_pr_refs("Fix parser edge case (#7)") == [7]
+
+    def test_trailing_whitespace_tolerated(self):
+        assert extract_squash_pr_refs("Add retry logic (#42)  ") == [42]
+
+    def test_only_subject_line_considered(self):
+        # A "(#N)" buried in the body is NOT a squash subject suffix.
+        msg = "Refactor module\n\nThis relates to (#99) in the tracker."
+        assert extract_squash_pr_refs(msg) == []
+
+    def test_subject_with_trailing_paren_and_body(self):
+        msg = "Implement feature (#15)\n\nLonger description here (#88)."
+        assert extract_squash_pr_refs(msg) == [15]
+
+    def test_mid_subject_paren_not_matched(self):
+        # Anchored to end-of-subject: a parenthetical that is not the suffix
+        # (e.g. GitHub appends its own number after a hand-authored one) yields
+        # only the trailing number.
+        assert extract_squash_pr_refs("Fix bug (#42) (#100)") == [100]
+
+    def test_merge_keyword_subject_not_matched(self):
+        # Classic merge commits have no trailing "(#N)".
+        assert extract_squash_pr_refs("Merge pull request #123 from feat/x") == []
+
+    def test_plain_hash_not_matched(self):
+        assert extract_squash_pr_refs("Fixes #7") == []
+        assert extract_squash_pr_refs("Relates to #500") == []
+
+    def test_revert_is_rejected(self):
+        assert extract_squash_pr_refs('Revert "Add retry logic (#42)"') == []
+        assert (
+            extract_squash_pr_refs("Undo change (#42)\n\nThis reverts commit 0123abcd.")
+            == []
+        )
+
+    def test_empty(self):
+        assert extract_squash_pr_refs("") == []
+        assert extract_squash_pr_refs("no refs here") == []
 
 
 class TestExtractJiraKeys:

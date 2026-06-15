@@ -399,9 +399,24 @@ async def _batch_resolve_membership(
                 "node_ids": node_ids,
             },
         )
-    except Exception:
-        logger.warning("work_unit_membership batch lookup failed", exc_info=True)
-        return {}
+    except Exception as exc:
+        # Only the EXPECTED recognized state — work_unit_membership does not
+        # exist yet (rolling deploy / pre-migration) — degrades to "no
+        # annotation" (edges still returned, theme/subcategory null). This
+        # mirrors the narrowed filtered-path handling. Every OTHER error
+        # (timeouts, auth, a DIFFERENT missing table, schema regressions)
+        # re-raises so real failures surface loudly instead of being silently
+        # served as null annotations. A node that genuinely has no membership
+        # row is an empty result set, not an exception, and is unaffected.
+        if _is_missing_membership_table_error(exc):
+            logger.warning(
+                "work_unit_membership table missing during annotation lookup "
+                "for org %s — returning edges without theme annotation "
+                "(CHAOS-2430).",
+                org_id,
+            )
+            return {}
+        raise
 
     result: dict[tuple[str, str], dict[str, str]] = {}
     for r in membership_rows:

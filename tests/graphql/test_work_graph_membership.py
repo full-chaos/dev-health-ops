@@ -252,9 +252,12 @@ class TestEdgeThemeAttribution:
         assert result.edges[0].subcategory is None
 
     @pytest.mark.asyncio
-    async def test_membership_lookup_failure_does_not_crash(self, mock_context):
-        """If the membership lookup query raises, the resolver degrades gracefully
-        (theme/subcategory become None, edges still returned)."""
+    async def test_annotation_missing_membership_table_degrades_gracefully(
+        self, mock_context
+    ):
+        """If the annotation lookup hits a missing work_unit_membership table
+        (rolling deploy / pre-migration), edges are still returned with null
+        theme/subcategory — the EXPECTED recognized state, swallowed."""
         edge_rows = [make_edge_row(source_id="PROJ-1")]
 
         call_count = 0
@@ -263,8 +266,14 @@ class TestEdgeThemeAttribution:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return edge_rows  # edge query
-            raise RuntimeError("ClickHouse connection lost")
+                return edge_rows  # edge query (unfiltered) succeeds
+            # Annotation lookup: work_unit_membership does not exist yet.
+            err = Exception(
+                "Code: 60. DB::Exception: Unknown table expression identifier "
+                "'work_unit_membership'. (UNKNOWN_TABLE)"
+            )
+            err.code = 60  # type: ignore[attr-defined]
+            raise err
 
         with patch(
             "dev_health_ops.api.queries.client.query_dicts",
@@ -274,3 +283,72 @@ class TestEdgeThemeAttribution:
 
         assert len(result.edges) == 1
         assert result.edges[0].theme is None
+        assert result.edges[0].subcategory is None
+
+    @pytest.mark.asyncio
+    async def test_annotation_unexpected_error_propagates(self, mock_context):
+        """A non-recognized error during the annotation lookup (e.g. a timeout /
+        connection loss) must PROPAGATE, not be silently served as null
+        annotation — the inconsistent-twin fix of the filtered-path handling."""
+        edge_rows = [make_edge_row(source_id="PROJ-1")]
+
+        call_count = 0
+
+        async def _mock_query(client, sql, params):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return edge_rows  # edge query succeeds
+            raise RuntimeError("ClickHouse connection lost")
+
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            side_effect=_mock_query,
+        ):
+            with pytest.raises(RuntimeError, match="ClickHouse connection lost"):
+                await resolve_work_graph_edges(mock_context)
+
+    @pytest.mark.asyncio
+    async def test_annotation_other_unknown_table_propagates(self, mock_context):
+        """A code-60 UNKNOWN_TABLE for a DIFFERENT table during annotation also
+        propagates (only work_unit_membership degrades)."""
+        edge_rows = [make_edge_row(source_id="PROJ-1")]
+
+        call_count = 0
+
+        async def _mock_query(client, sql, params):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return edge_rows
+            err = Exception(
+                "Code: 60. DB::Exception: Unknown table expression identifier "
+                "'work_graph_edges'. (UNKNOWN_TABLE)"
+            )
+            err.code = 60  # type: ignore[attr-defined]
+            raise err
+
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            side_effect=_mock_query,
+        ):
+            with pytest.raises(Exception, match="work_graph_edges"):
+                await resolve_work_graph_edges(mock_context)
+
+    @pytest.mark.asyncio
+    async def test_genuine_no_membership_yields_null_annotation(self, mock_context):
+        """A node that genuinely has no membership row → empty result set (NOT an
+        exception) → null theme/subcategory, edges returned. Unchanged."""
+        edge_rows = [make_edge_row(source_id="PROJ-1")]
+
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            # edge query, then an EMPTY annotation result (no membership rows).
+            mock_query.side_effect = [edge_rows, []]
+            result = await resolve_work_graph_edges(mock_context)
+
+        assert len(result.edges) == 1
+        assert result.edges[0].theme is None
+        assert result.edges[0].subcategory is None

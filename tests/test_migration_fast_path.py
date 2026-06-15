@@ -6,9 +6,15 @@ Covers both runner paths:
 
 Fast-path contract
 ------------------
-When the last entry in sorted(*.sql + *.py) is already in applied_versions,
-the per-file loop is skipped entirely.  Proof: no INSERT INTO schema_migrations
-is issued and query() is called only once (the initial SELECT).
+The per-file loop is skipped entirely ONLY when EVERY on-disk migration is
+already recorded as applied (full-set completeness check —
+``all_migrations_applied``).  Proof: no INSERT INTO schema_migrations is issued
+and query() is called only once (the initial SELECT).
+
+Critically, the fast-path must NOT fire when an *intermediate* migration is
+missing even if the lexicographically-latest one is applied (this repo has
+inserted / mixed-ordering migrations like '023b_' and duplicate numeric
+prefixes — a latest-only check would silently skip the gap, CHAOS-2440).
 
 Quiet contract
 --------------
@@ -17,9 +23,8 @@ DEBUG level, never INFO, so normal CLI output stays clean.
 
 Ordering contract
 -----------------
-The fast-path comparison uses the same ``sorted(*.sql + *.py)`` key as the
-apply loop, so exotic names like '023b_dora_metrics.sql' sort correctly between
-'023_' and '024_'.
+Pending migrations apply in the same ``sorted(*.sql + *.py)`` order, so exotic
+names like '023b_dora_metrics.sql' sort correctly between '023_' and '024_'.
 """
 
 from __future__ import annotations
@@ -33,6 +38,7 @@ import pytest
 
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.metrics.sinks.clickhouse.core import ClickHouseCore
+from dev_health_ops.migrations.clickhouse import all_migrations_applied
 from dev_health_ops.storage import ClickHouseStore
 
 # ---------------------------------------------------------------------------
@@ -80,6 +86,38 @@ def _real_migration_files_for(
 async def _fake_to_thread(fn, *args, **kwargs):
     """Collapse asyncio.to_thread into a direct synchronous call for testing."""
     return fn(*args, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# all_migrations_applied — shared full-set completeness helper
+# ---------------------------------------------------------------------------
+
+
+class TestAllMigrationsApplied:
+    def test_empty_disk_is_trivially_applied(self) -> None:
+        assert all_migrations_applied([], ["000_x.sql"]) is True
+
+    def test_all_present_returns_true(self) -> None:
+        files = ["000_a.sql", "001_b.sql", "002_c.sql"]
+        assert all_migrations_applied(files, files) is True
+
+    def test_extra_applied_rows_are_ignored(self) -> None:
+        # DB may have rows for files no longer on disk; completeness only cares
+        # that every ON-DISK file is applied.
+        files = ["000_a.sql", "001_b.sql"]
+        applied = ["000_a.sql", "001_b.sql", "999_removed.sql"]
+        assert all_migrations_applied(files, applied) is True
+
+    def test_missing_latest_returns_false(self) -> None:
+        files = ["000_a.sql", "001_b.sql", "002_c.sql"]
+        applied = ["000_a.sql", "001_b.sql"]
+        assert all_migrations_applied(files, applied) is False
+
+    def test_missing_middle_with_latest_present_returns_false(self) -> None:
+        """The core regression: latest applied but a gap in the middle."""
+        files = ["000_a.sql", "001_b.sql", "002_c.sql"]
+        applied = ["000_a.sql", "002_c.sql"]  # 001 missing, latest 002 present
+        assert all_migrations_applied(files, applied) is False
 
 
 # ---------------------------------------------------------------------------
@@ -179,15 +217,53 @@ class TestApplySqlMigrationsCoreFastPath:
         )
 
     # ------------------------------------------------------------------
+    # Correctness (the critical case): latest applied but a MIDDLE migration
+    # is missing → fast-path must NOT fire and the gap must be filled.
+    # ------------------------------------------------------------------
+
+    def test_missing_middle_migration_is_applied_despite_latest_present(self) -> None:
+        """Latest IS applied but an intermediate migration is ABSENT.
+
+        A latest-filename-only fast-path would falsely short-circuit here and
+        silently skip the missing middle migration (schema drift). The full-set
+        check must detect the gap, run the loop, and apply exactly the missing
+        migration (recording only it).
+        """
+        files = self._real_files()
+        assert len(files) >= 3, "Need at least 3 migrations to drop a middle one"
+
+        # Drop a migration from the MIDDLE; keep the latest applied.
+        missing_idx = len(files) // 2
+        missing = files[missing_idx]
+        applied = [p.name for i, p in enumerate(files) if i != missing_idx]
+        assert files[-1].name in applied, "Latest must remain applied for this test"
+
+        client = MagicMock()
+        client.query.return_value = _applied_result(applied)
+        recorded_versions: list[str] = []
+
+        def record_command(sql: str, parameters: dict | None = None) -> None:
+            if "INSERT INTO schema_migrations" in sql and parameters:
+                recorded_versions.append(parameters["version"])
+
+        client.command.side_effect = record_command
+
+        _make_core_sink(client)._apply_sql_migrations()
+
+        assert recorded_versions == [missing.name], (
+            f"Expected exactly the missing middle migration {missing.name!r} to be "
+            f"applied; got {recorded_versions}"
+        )
+
+    # ------------------------------------------------------------------
     # Ordering: mixed .sql/.py names with b-suffix sort correctly
     # ------------------------------------------------------------------
 
     def test_mixed_sql_py_ordering_matches_fast_path(self) -> None:
-        """Fast-path 'latest' comparison uses the same sort as the apply loop.
+        """Pending migrations apply in the same sort order as the file list.
 
         Exercises the '023b_' naming convention: it must sort between '023_'
-        and '024_', and the fast-path must agree with the loop on which file is
-        "latest on disk".
+        and '024_'. With all files applied the full-set fast-path fires.
         """
         files = self._real_files()
         names = [p.name for p in files]
@@ -306,4 +382,40 @@ class TestEnsureTablesFastPath:
         inserts = [c for c in commands if "INSERT INTO schema_migrations" in c]
         assert len(inserts) == 1, (
             f"Expected 1 INSERT for {pending.name!r}, got {inserts}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_missing_middle_migration_is_applied_despite_latest_present(
+        self,
+    ) -> None:
+        """Latest IS applied but an intermediate migration is ABSENT (async path).
+
+        The full-set fast-path must detect the gap and apply exactly the missing
+        middle migration — a latest-only check would silently skip it.
+        """
+        files = self._real_files()
+        assert len(files) >= 3, "Need at least 3 migrations to drop a middle one"
+
+        missing_idx = len(files) // 2
+        missing = files[missing_idx]
+        applied = [p.name for i, p in enumerate(files) if i != missing_idx]
+        assert files[-1].name in applied, "Latest must remain applied for this test"
+
+        client = MagicMock()
+        client.query.return_value = _applied_result(applied)
+        recorded_versions: list[str] = []
+
+        def record_command(sql: str, parameters: dict | None = None) -> None:
+            if "INSERT INTO schema_migrations" in sql and parameters:
+                recorded_versions.append(parameters["version"])
+
+        client.command.side_effect = record_command
+
+        store = _make_store(client)
+        with patch("asyncio.to_thread", side_effect=_fake_to_thread):
+            await store._ensure_tables()
+
+        assert recorded_versions == [missing.name], (
+            f"Expected exactly the missing middle migration {missing.name!r} to be "
+            f"applied; got {recorded_versions}"
         )

@@ -188,22 +188,28 @@ class ClickHouseCore(BaseMetricsSink):
             row[0] for row in (getattr(applied_result, "result_rows", []) or [])
         )
 
-        # Collect all migration files using the same sort order as the apply loop
-        # so the fast-path "latest" comparison is consistent.
+        # Collect all migration files in apply order.
         migration_files = sorted(
             list(migrations_dir.glob("*.sql")) + list(migrations_dir.glob("*.py"))
         )
 
-        # Fast-path: if the DB has already applied every file on disk, skip the
-        # per-file loop entirely.  We compare the last element of the sorted
-        # file list (latest migration on disk) against applied_versions, which
-        # is the single cheapest check possible (O(1) set lookup after the
-        # already-necessary full SELECT).  This avoids ~50 log lines and the
-        # iteration overhead on every CLI invocation when the schema is current.
-        if migration_files and migration_files[-1].name in applied_versions:
+        # Fast-path: short-circuit only when EVERY on-disk migration is already
+        # applied (full-set completeness check via all_migrations_applied —
+        # CHAOS-2440).  A latest-filename-only check is unsound here because of
+        # inserted / mixed-ordering migrations (023b_ between 023_ and 024_,
+        # duplicate numeric prefixes): the DB could hold the latest row yet be
+        # missing an intermediate migration.  The full-set check stays O(n) in
+        # memory over the SELECT we already ran — no per-file DB query, no log
+        # loop — so it remains fast and quiet while being correct.
+        from dev_health_ops.migrations.clickhouse import all_migrations_applied
+
+        if migration_files and all_migrations_applied(
+            (p.name for p in migration_files), applied_versions
+        ):
             logger.debug(
-                "ClickHouse schema is current (latest: %s) — skipping migration loop",
-                migration_files[-1].name,
+                "ClickHouse schema is current (%d migrations applied) — "
+                "skipping migration loop",
+                len(migration_files),
             )
             return
 

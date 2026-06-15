@@ -135,20 +135,29 @@ class ClickHouseStore:
                 row[0] for row in (getattr(applied_result, "result_rows", []) or [])
             )
 
-            # Collect all migration files using the same sort order as the apply
-            # loop so the fast-path "latest" comparison is consistent with it.
+            # Collect all migration files in apply order.
             migration_files = sorted(
                 list(migrations_dir.glob("*.sql")) + list(migrations_dir.glob("*.py"))
             )
 
-            # Fast-path: if the last file in the sorted list (latest migration on
-            # disk) is already in applied_versions, the schema is current — skip
-            # the per-file loop entirely.  This avoids iteration and log noise on
-            # every CLI invocation when no migrations are pending.
-            if migration_files and migration_files[-1].name in applied_versions:
+            # Fast-path: short-circuit only when EVERY on-disk migration is
+            # already applied (full-set completeness check via
+            # all_migrations_applied — CHAOS-2440).  A latest-filename-only
+            # check is unsound here because of inserted / mixed-ordering
+            # migrations (023b_ between 023_ and 024_, duplicate numeric
+            # prefixes): the DB could hold the latest row yet be missing an
+            # intermediate migration.  The full-set check stays O(n) in memory
+            # over the SELECT we already ran — no per-file DB query, no log
+            # loop — so it remains fast and quiet while being correct.
+            from dev_health_ops.migrations.clickhouse import all_migrations_applied
+
+            if migration_files and all_migrations_applied(
+                (p.name for p in migration_files), applied_versions
+            ):
                 logger.debug(
-                    "ClickHouse schema is current (latest: %s) — skipping migration loop",
-                    migration_files[-1].name,
+                    "ClickHouse schema is current (%d migrations applied) — "
+                    "skipping migration loop",
+                    len(migration_files),
                 )
                 return
 

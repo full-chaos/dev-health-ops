@@ -145,7 +145,11 @@ _FAKE_REPOS = [
 
 _DECRYPT_PATCH = "dev_health_ops.api.services.configuration.IntegrationCredentialsService.get_decrypted_credentials_by_id"
 _GH_CONNECTOR = "dev_health_ops.connectors.github.GitHubConnector"
+_GL_CONNECTOR = "dev_health_ops.connectors.gitlab.GitLabConnector"
 _GH_APP_PROVIDER = "dev_health_ops.connectors.utils.github_app.GitHubAppTokenProvider"
+_GL_MEMBERSHIP_HELPER = (
+    "dev_health_ops.api.admin.routers.credentials._list_gitlab_membership_repos"
+)
 
 
 def _mock_credential(provider="github", config=None, credentials=None):
@@ -336,8 +340,11 @@ async def test_rate_limit_returns_429(client):
 
 
 @pytest.mark.asyncio
-async def test_no_owner_returns_empty_without_calling_connector(client):
-    """No owner param and no config.org → 200 empty, connector never called."""
+async def test_no_owner_github_enumerates_token_wide(client):
+    """Blank owner + no config.org → connector called without org_name (token-wide).
+
+    CHAOS-2449: previously returned empty list; now enumerates all accessible repos.
+    """
     ac, state = client
 
     with (
@@ -347,6 +354,7 @@ async def test_no_owner_returns_empty_without_calling_connector(client):
         ) as _,
         patch(_GH_CONNECTOR) as MockConnector,
     ):
+        MockConnector.return_value.list_repositories.return_value = _FAKE_REPOS
         resp = await ac.get(
             f"/api/v1/admin/credentials/{state['cred_id']}/repos",
             # no owner query param
@@ -354,10 +362,12 @@ async def test_no_owner_returns_empty_without_calling_connector(client):
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["repos"] == []
-    assert body["total"] == 0
-    # Connector should never have been instantiated for the list call
-    MockConnector.return_value.list_repositories.assert_not_called()
+    assert body["total"] == 2
+    assert body["repos"][0]["name"] == "api-gateway"
+    # Connector must be called without org_name (None → token-wide)
+    MockConnector.return_value.list_repositories.assert_called_once_with(
+        org_name=None, search=None, max_repos=100
+    )
 
 
 @pytest.mark.asyncio
@@ -381,6 +391,419 @@ async def test_owner_falls_back_to_config_org(client):
     MockConnector.return_value.list_repositories.assert_called_once_with(
         org_name="my-org", search=None, max_repos=100
     )
+
+
+@pytest.mark.asyncio
+async def test_no_owner_gitlab_enumerates_membership_scoped(client):
+    """Blank owner + no config.group → membership-scoped enumeration (not global).
+
+    CHAOS-2449 review finding 2: blank-owner GitLab must use membership=True
+    to avoid returning globally-visible public projects.
+    """
+    ac, state = client
+
+    gl_repos = [
+        Repository(
+            id=10,
+            name="infra",
+            full_name="mygroup/infra",
+            default_branch="main",
+            description="Infrastructure repo",
+            url="https://gitlab.com/mygroup/infra",
+        ),
+    ]
+
+    with (
+        patch(
+            _DECRYPT_PATCH,
+            return_value=_mock_credential(
+                provider="gitlab",
+                config={},  # no group in config
+                credentials={"token": "glpat_fake"},
+            ),
+        ) as _,
+        patch(_GL_CONNECTOR) as MockGLConnector,
+        patch(_GL_MEMBERSHIP_HELPER, return_value=gl_repos) as MockMembership,
+    ):
+        resp = await ac.get(
+            f"/api/v1/admin/credentials/{state['cred_id']}/repos",
+            # no owner query param
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["provider"] == "gitlab"
+    assert body["total"] == 1
+    assert body["repos"][0]["name"] == "infra"
+    # Must use membership-scoped helper, NOT the connector's unscoped list
+    MockMembership.assert_called_once()
+    MockGLConnector.return_value.list_repositories.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Tests — Blank-owner search safety (review findings)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_no_owner_github_search_uses_pattern_not_global_search(client):
+    """Blank owner + search → client-side pattern filter, NOT global search_repositories.
+
+    Finding 1 (HIGH): passing search= to the connector with no owner triggers a
+    global GitHub search that returns repos the credential cannot access.
+    Fix: enumerate token-wide repos and apply search as a pattern filter.
+    """
+    ac, state = client
+
+    with (
+        patch(
+            _DECRYPT_PATCH,
+            return_value=_mock_credential(config={}),  # no org in config
+        ) as _,
+        patch(_GH_CONNECTOR) as MockConnector,
+    ):
+        MockConnector.return_value.list_repositories.return_value = _FAKE_REPOS
+        resp = await ac.get(
+            f"/api/v1/admin/credentials/{state['cred_id']}/repos",
+            params={"search": "api"},  # search but no owner
+        )
+
+    assert resp.status_code == 200
+    # Must NOT have called search_repositories (global search)
+    MockConnector.return_value.search_repositories = MagicMock()
+    MockConnector.return_value.search_repositories.assert_not_called()
+    # Must have called list_repositories with pattern= (client-side filter), search=None
+    call_kwargs = MockConnector.return_value.list_repositories.call_args
+    assert call_kwargs is not None
+    assert call_kwargs.kwargs.get("search") is None or call_kwargs.args[1:2] == ()
+    assert call_kwargs.kwargs.get("pattern") == "*api*"
+    assert call_kwargs.kwargs.get("org_name") is None
+
+
+@pytest.mark.asyncio
+async def test_no_owner_github_app_uses_installation_repos(client):
+    """Blank owner + GitHub App auth → installation/repositories endpoint.
+
+    Finding 2 (MEDIUM): get_user().get_repos() fails for App installation tokens
+    because App tokens have no user surface. Fix: enumerate via the
+    installation/repositories REST API.
+    """
+    ac, state = client
+    app_credentials = {
+        "app_id": "12345",
+        "private_key": "not-a-real-github-app-private-key",
+        "installation_id": "67890",
+    }
+
+    class _FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "repositories": [
+                    {
+                        "id": 1,
+                        "name": "install-repo",
+                        "full_name": "org/install-repo",
+                        "default_branch": "main",
+                        "description": "Installation repo",
+                        "html_url": "https://github.com/org/install-repo",
+                    }
+                ],
+                "total_count": 1,
+            }
+
+    class _FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, *args, **kwargs):
+            return _FakeResp()
+
+    with (
+        patch(
+            _DECRYPT_PATCH,
+            return_value=_mock_credential(config={}, credentials=app_credentials),
+        ) as _,
+        patch(_GH_CONNECTOR) as MockConnector,
+        patch(_GH_APP_PROVIDER) as MockProvider,
+        patch("httpx.AsyncClient", return_value=_FakeAsyncClient()),
+    ):
+        MockProvider.return_value.get_token.return_value = "ghs_installation_token"
+        resp = await ac.get(
+            f"/api/v1/admin/credentials/{state['cred_id']}/repos",
+            # no owner — App auth blank-owner path
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["repos"][0]["name"] == "install-repo"
+    # The connector's list_repositories must NOT have been called
+    # (we bypass it for App auth + blank owner)
+    MockConnector.return_value.list_repositories.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_no_owner_gitlab_search_uses_membership_scoped_with_pattern(client):
+    """Blank owner + search → membership-scoped enumeration with client-side pattern.
+
+    CHAOS-2449 review finding 2: blank-owner GitLab must use membership=True
+    (via _list_gitlab_membership_repos) and apply search as a client-side
+    pattern filter, never a global public-project search.
+    """
+    ac, state = client
+
+    gl_repos = [
+        Repository(
+            id=10,
+            name="infra-api",
+            full_name="mygroup/infra-api",
+            default_branch="main",
+            description="Infrastructure API",
+            url="https://gitlab.com/mygroup/infra-api",
+        ),
+    ]
+
+    with (
+        patch(
+            _DECRYPT_PATCH,
+            return_value=_mock_credential(
+                provider="gitlab",
+                config={},  # no group in config
+                credentials={"token": "glpat_fake"},
+            ),
+        ) as _,
+        patch(_GL_CONNECTOR) as MockGLConnector,
+        patch(_GL_MEMBERSHIP_HELPER, return_value=gl_repos) as MockMembership,
+    ):
+        resp = await ac.get(
+            f"/api/v1/admin/credentials/{state['cred_id']}/repos",
+            params={"search": "api"},  # search but no owner
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["provider"] == "gitlab"
+    assert body["repos"][0]["name"] == "infra-api"
+    # Must use membership-scoped helper with search forwarded for client-side filtering
+    MockMembership.assert_called_once_with(
+        url="https://gitlab.com",
+        token="glpat_fake",
+        search="api",
+        max_repos=100,
+    )
+    # Must NOT have called the connector's unscoped list
+    MockGLConnector.return_value.list_repositories.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Tests — GitLab base_url key fallback (review round 3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_gitlab_base_url_key_used_for_self_hosted(client):
+    """Credential with only base_url (no url) → discovery uses that host, not gitlab.com.
+
+    CHAOS-2449 review round 3: the GitLab url resolution previously only checked
+    decrypted['url'] and config['url'], so a self-hosted credential stored with
+    base_url would silently fall back to gitlab.com, disclosing the token to the
+    wrong host.
+    """
+    ac, state = client
+
+    gl_repos = [
+        Repository(
+            id=20,
+            name="self-hosted-repo",
+            full_name="mygroup/self-hosted-repo",
+            default_branch="main",
+            description=None,
+            url="https://gitlab.example.com/mygroup/self-hosted-repo",
+        ),
+    ]
+
+    with (
+        patch(
+            _DECRYPT_PATCH,
+            return_value=_mock_credential(
+                provider="gitlab",
+                config={},
+                credentials={
+                    "token": "glpat_selfhosted",
+                    "base_url": "https://gitlab.example.com",  # only base_url, no url
+                },
+            ),
+        ) as _,
+        patch(_GL_CONNECTOR) as MockGLConnector,
+        patch(_GL_MEMBERSHIP_HELPER, return_value=gl_repos) as MockMembership,
+        patch(
+            "dev_health_ops.api.admin.routers.credentials.socket.getaddrinfo",
+            return_value=[(2, 1, 6, "", ("8.8.8.8", 0))],
+        ),
+    ):
+        resp = await ac.get(
+            f"/api/v1/admin/credentials/{state['cred_id']}/repos",
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["repos"][0]["name"] == "self-hosted-repo"
+    # Membership helper must be called with the self-hosted URL, NOT gitlab.com
+    MockMembership.assert_called_once_with(
+        url="https://gitlab.example.com",
+        token="glpat_selfhosted",
+        search=None,
+        max_repos=100,
+    )
+    MockGLConnector.return_value.list_repositories.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Tests — App installation helper error handling (review finding 1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_github_app_installation_401_raises_auth_error(client):
+    """App installation helper: 401 response → HTTP 401, not a silent empty list."""
+    ac, state = client
+    app_credentials = {
+        "app_id": "12345",
+        "private_key": "not-a-real-github-app-private-key",
+        "installation_id": "67890",
+    }
+
+    class _FakeResp:
+        status_code = 401
+        text = "Bad credentials"
+        headers: dict = {}
+
+        def json(self):
+            return {"message": "Bad credentials"}
+
+    class _FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, *args, **kwargs):
+            return _FakeResp()
+
+    with (
+        patch(
+            _DECRYPT_PATCH,
+            return_value=_mock_credential(config={}, credentials=app_credentials),
+        ) as _,
+        patch(_GH_CONNECTOR),
+        patch(_GH_APP_PROVIDER) as MockProvider,
+        patch("httpx.AsyncClient", return_value=_FakeAsyncClient()),
+    ):
+        MockProvider.return_value.get_token.return_value = "ghs_bad_token"
+        resp = await ac.get(
+            f"/api/v1/admin/credentials/{state['cred_id']}/repos",
+        )
+
+    assert resp.status_code == 401
+    assert "authentication" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_github_app_installation_429_raises_rate_limit(client):
+    """App installation helper: 429 response → HTTP 429, not a silent empty list."""
+    ac, state = client
+    app_credentials = {
+        "app_id": "12345",
+        "private_key": "not-a-real-github-app-private-key",
+        "installation_id": "67890",
+    }
+
+    class _FakeResp:
+        status_code = 429
+        text = "rate limit exceeded"
+        headers: dict = {}
+
+        def json(self):
+            return {"message": "rate limit exceeded"}
+
+    class _FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, *args, **kwargs):
+            return _FakeResp()
+
+    with (
+        patch(
+            _DECRYPT_PATCH,
+            return_value=_mock_credential(config={}, credentials=app_credentials),
+        ) as _,
+        patch(_GH_CONNECTOR),
+        patch(_GH_APP_PROVIDER) as MockProvider,
+        patch("httpx.AsyncClient", return_value=_FakeAsyncClient()),
+    ):
+        MockProvider.return_value.get_token.return_value = "ghs_token"
+        resp = await ac.get(
+            f"/api/v1/admin/credentials/{state['cred_id']}/repos",
+        )
+
+    assert resp.status_code == 429
+    assert "rate limit" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_github_app_installation_5xx_raises_502(client):
+    """App installation helper: 5xx response → HTTP 502, not a silent empty list."""
+    ac, state = client
+    app_credentials = {
+        "app_id": "12345",
+        "private_key": "not-a-real-github-app-private-key",
+        "installation_id": "67890",
+    }
+
+    class _FakeResp:
+        status_code = 503
+        text = "Service Unavailable"
+        headers: dict = {}
+
+        def json(self):
+            return {}
+
+    class _FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, *args, **kwargs):
+            return _FakeResp()
+
+    with (
+        patch(
+            _DECRYPT_PATCH,
+            return_value=_mock_credential(config={}, credentials=app_credentials),
+        ) as _,
+        patch(_GH_CONNECTOR),
+        patch(_GH_APP_PROVIDER) as MockProvider,
+        patch("httpx.AsyncClient", return_value=_FakeAsyncClient()),
+    ):
+        MockProvider.return_value.get_token.return_value = "ghs_token"
+        resp = await ac.get(
+            f"/api/v1/admin/credentials/{state['cred_id']}/repos",
+        )
+
+    assert resp.status_code == 502
 
 
 # ---------------------------------------------------------------------------
@@ -438,3 +861,107 @@ async def test_missing_token_returns_400(client):
 
     assert resp.status_code == 400
     assert "require either token" in resp.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Tests — Security / correctness fixes (review round 4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_gitlab_internal_url_rejected_ssrf(client):
+    """GitLab credential with an internal/private base_url → HTTP 400 (SSRF guard).
+
+    CHAOS-2449 review round 4 (FINDING 1 HIGH): the GitLab branch of
+    list_credential_repos must validate the resolved URL with _validate_external_url
+    before constructing GitLabConnector or calling _list_gitlab_membership_repos,
+    so a tenant-controlled base_url cannot be used to exfiltrate the GitLab token
+    to an internal host.
+    """
+    ac, state = client
+
+    for internal_url in (
+        "http://localhost",
+        "http://169.254.169.254",
+        "http://192.168.1.1",
+    ):
+        with (
+            patch(
+                _DECRYPT_PATCH,
+                return_value=_mock_credential(
+                    provider="gitlab",
+                    config={},
+                    credentials={"token": "glpat_fake", "url": internal_url},
+                ),
+            ) as _,
+            patch(_GL_CONNECTOR) as MockGLConnector,
+            patch(_GL_MEMBERSHIP_HELPER) as MockMembership,
+        ):
+            resp = await ac.get(
+                f"/api/v1/admin/credentials/{state['cred_id']}/repos",
+            )
+
+        assert resp.status_code == 400, (
+            f"Expected 400 for {internal_url}, got {resp.status_code}"
+        )
+        # Connector and membership helper must NOT have been called
+        MockGLConnector.assert_not_called()
+        MockMembership.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_github_app_403_permission_not_rate_limit(client):
+    """App installation helper: 403 with x-ratelimit-remaining=4999 and a
+    permission-error body → auth/permission error (HTTP 403), NOT 429.
+
+    CHAOS-2449 review round 4 (FINDING 2 MEDIUM): the previous logic treated any
+    403 carrying an x-ratelimit-remaining header as a rate limit, causing admins
+    to be wrongly told to wait when the real problem is a missing permission or
+    SSO requirement.  A 403 is only a rate limit when remaining==0, Retry-After
+    is present, or the body explicitly mentions rate/abuse/secondary limiting.
+    """
+    ac, state = client
+    app_credentials = {
+        "app_id": "12345",
+        "private_key": "not-a-real-github-app-private-key",
+        "installation_id": "67890",
+    }
+
+    class _FakeResp:
+        status_code = 403
+        text = "Resource not accessible by integration"
+        headers = {"x-ratelimit-remaining": "4999"}
+
+        def json(self):
+            return {"message": "Resource not accessible by integration"}
+
+    class _FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, *args, **kwargs):
+            return _FakeResp()
+
+    with (
+        patch(
+            _DECRYPT_PATCH,
+            return_value=_mock_credential(config={}, credentials=app_credentials),
+        ) as _,
+        patch(_GH_CONNECTOR),
+        patch(_GH_APP_PROVIDER) as MockProvider,
+        patch("httpx.AsyncClient", return_value=_FakeAsyncClient()),
+    ):
+        MockProvider.return_value.get_token.return_value = "ghs_token"
+        resp = await ac.get(
+            f"/api/v1/admin/credentials/{state['cred_id']}/repos",
+        )
+
+    # Must NOT be 429 — remaining=4999 means quota is not exhausted
+    assert resp.status_code != 429, (
+        "Permission 403 must not be misreported as rate limit"
+    )
+    # Must be a client-side auth/permission error
+    assert resp.status_code in (401, 403)

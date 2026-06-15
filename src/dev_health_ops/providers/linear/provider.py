@@ -93,6 +93,20 @@ class LinearProvider(ProviderWithClient[LinearClient]):
 
         client = self._make_client()
 
+        def _issue_dependencies(
+            issue: dict, work_item_id: str
+        ) -> list[WorkItemDependency]:
+            # PR/MR -> issue edges from linked attachments. If the issue's
+            # attachment page was truncated, fetch the full set so a link past
+            # the first page is not silently dropped.
+            att_page = issue.get("attachments") or {}
+            if (att_page.get("pageInfo") or {}).get("hasNextPage") and issue.get("id"):
+                full = client.get_issue_attachments(str(issue["id"]))
+                source: dict = {"attachments": {"nodes": full}}
+            else:
+                source = issue
+            return extract_linear_dependencies(issue=source, work_item_id=work_item_id)
+
         fetch_comments = _env_flag("LINEAR_FETCH_COMMENTS", True)
         fetch_history = _env_flag("LINEAR_FETCH_HISTORY", True)
         fetch_cycles = _env_flag("LINEAR_FETCH_CYCLES", True)
@@ -192,9 +206,7 @@ class LinearProvider(ProviderWithClient[LinearClient]):
                         page_items.append(wi)
                         page_transitions.extend(wi_transitions)
                         page_dependencies.extend(
-                            extract_linear_dependencies(
-                                issue=issue, work_item_id=wi.work_item_id
-                            )
+                            _issue_dependencies(issue, wi.work_item_id)
                         )
 
                         if history:
@@ -274,9 +286,7 @@ class LinearProvider(ProviderWithClient[LinearClient]):
                             page_items.append(wi)
                             page_transitions.extend(wi_transitions)
                             page_dependencies.extend(
-                                extract_linear_dependencies(
-                                    issue=issue, work_item_id=wi.work_item_id
-                                )
+                                _issue_dependencies(issue, wi.work_item_id)
                             )
                             if history:
                                 page_reopen_events.extend(

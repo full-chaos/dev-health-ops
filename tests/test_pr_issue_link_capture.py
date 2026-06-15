@@ -9,12 +9,16 @@ the captured edge drives the existing linked-issue team inheritance.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
+
+import pytest
 
 from dev_health_ops.metrics.compute_work_items import build_linked_issue_team_resolver
 from dev_health_ops.models.work_items import WorkItem
 from dev_health_ops.providers.github.normalize import (
     extract_github_comment_dependencies,
 )
+from dev_health_ops.providers.linear.client import LinearAuth, LinearClient
 from dev_health_ops.providers.linear.normalize import (
     _work_item_id_from_pr_url,
     extract_linear_dependencies,
@@ -70,6 +74,37 @@ def test_pr_url_parser_ignores_non_pr_urls() -> None:
         None,
     ):
         assert _work_item_id_from_pr_url(url) is None
+
+
+def test_pr_url_parser_rejects_non_scm_host_unless_sourcetype() -> None:
+    # A non-GitHub/GitLab host with a PR-shaped path must NOT be trusted...
+    assert _work_item_id_from_pr_url("https://evil.example/owner/repo/pull/1") is None
+    # ...unless the integration sourceType marks it as a GitHub/GitLab link.
+    assert (
+        _work_item_id_from_pr_url("https://evil.example/owner/repo/pull/1", "github")
+        == "ghpr:owner/repo#1"
+    )
+    # Self-hosted hosts named github.*/gitlab.* are trusted by host alone.
+    assert (
+        _work_item_id_from_pr_url("https://gitlab.acme.internal/g/p/-/merge_requests/3")
+        == "gitlab:g/p!3"
+    )
+
+
+def test_linear_attachment_gated_by_sourcetype_or_host() -> None:
+    # A non-SCM attachment whose URL happens to look like a PR is dropped.
+    issue = {
+        "attachments": {
+            "nodes": [
+                {"url": "https://notion.so/o/r/pull/9", "sourceType": "notion"},
+            ]
+        }
+    }
+    assert extract_linear_dependencies(issue=issue, work_item_id="linear:CHAOS-1") == []
+    # Same path but flagged as a github source -> captured.
+    issue["attachments"]["nodes"][0]["sourceType"] = "github"
+    deps = extract_linear_dependencies(issue=issue, work_item_id="linear:CHAOS-1")
+    assert [d.source_work_item_id for d in deps] == ["ghpr:o/r#9"]
 
 
 # --------------------------------------------------------------------------- #
@@ -150,6 +185,57 @@ def test_github_comment_capture_preserves_blocking_intent() -> None:
     assert len(deps) == 1
     assert deps[0].target_work_item_id == "extkey:CHAOS-9"
     assert deps[0].relationship_type == "blocked_by"  # excluded by the resolver
+
+
+def test_github_comment_blocking_intent_preserved_for_url_links() -> None:
+    # "blocked by <linear url>" must stay non-inheritable, not default to
+    # relates_to just because the reference is a URL.
+    deps = extract_github_comment_dependencies(
+        work_item_id="ghpr:o/r#1",
+        comment_bodies=[
+            "This PR is blocked by https://linear.app/x/issue/ABC-123/needs-infra"
+        ],
+    )
+    assert len(deps) == 1
+    assert deps[0].target_work_item_id == "extkey:ABC-123"
+    assert deps[0].relationship_type == "blocked_by"
+
+
+def test_client_paginates_issue_attachments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # When an issue's attachment page is truncated, the full set is fetched so a
+    # PR/MR link past the first page is not silently dropped.
+    client = LinearClient(auth=LinearAuth(api_key="test-key"))
+    pages = [
+        {
+            "issue": {
+                "attachments": {
+                    "nodes": [{"url": "u1"}],
+                    "pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+                }
+            }
+        },
+        {
+            "issue": {
+                "attachments": {
+                    "nodes": [{"url": "u2"}],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                }
+            }
+        },
+    ]
+    calls: list[dict[str, Any] | None] = []
+
+    def _fake_execute(query: str, variables: dict[str, Any] | None = None) -> Any:
+        calls.append(variables)
+        return pages[len(calls) - 1]
+
+    monkeypatch.setattr(client, "_execute", _fake_execute)
+    nodes = client.get_issue_attachments("issue-1")
+    assert [n["url"] for n in nodes] == ["u1", "u2"]
+    assert len(calls) == 2
+    assert calls[1] is not None and calls[1]["after"] == "c1"
 
 
 def test_github_comment_capture_ignores_incidental_and_versionish_tokens() -> None:

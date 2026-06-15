@@ -1029,9 +1029,17 @@ def extract_github_comment_dependencies(
         if not body:
             continue
         text = str(body)
-        # Linear bot/integration URL — strongest signal, an explicit link.
+        # Linear bot/integration URL — an explicit link. Honour blocking
+        # phrasing immediately before the URL so "blocked by <linear url>"
+        # stays non-inheritable rather than defaulting to relates_to.
         for match in _COMMENT_LINEAR_URL_PATTERN.finditer(text):
-            _emit(match.group(1), "relates_to", "github_comment_linear_url")
+            preceding = text[max(0, match.start() - 40) : match.start()].lower()
+            relationship = "relates_to"
+            if "blocked by" in preceding or "depends on" in preceding:
+                relationship = "blocked_by"
+            elif "blocks" in preceding:
+                relationship = "blocks"
+            _emit(match.group(1), relationship, "github_comment_linear_url")
         # Explicit linkage keyword + key; intent preserved via keyword mapping.
         for match in _COMMENT_KEYWORD_KEY_PATTERN.finditer(text):
             _emit(

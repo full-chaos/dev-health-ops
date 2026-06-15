@@ -128,6 +128,29 @@ def test_inheritance_never_overrides_a_real_team() -> None:
     assert resolve_base_team(owned_pr, None, pkr) == ("CHAOS", "Chaos Team")
 
 
+def test_blocking_relationships_do_not_drive_inheritance() -> None:
+    # blocks / blocked_by / is_blocked_by routinely span teams, so they must
+    # NOT transfer a team. Only "does-the-work-of"/duplicate links do.
+    donor = _wi("linear:CHAOS-1", "linear", project_key="CHAOS")
+    pkr = _chaos_resolver()
+    for rel in ("blocks", "blocked_by", "is_blocked_by", "other"):
+        pr = _wi("ghpr:x/y#1", "github", type="pr", project_id="x/y")
+        deps = [WorkItemDependency(pr.work_item_id, donor.work_item_id, rel, rel)]
+        resolver = build_linked_issue_team_resolver(
+            work_items=[donor, pr], dependencies=deps, project_key_resolver=pkr
+        )
+        assert resolver.resolve(pr.work_item_id) == (None, None), rel
+    # ...but a relates/closing edge to the same donor does inherit.
+    pr = _wi("ghpr:x/y#1", "github", type="pr", project_id="x/y")
+    deps = [
+        WorkItemDependency(pr.work_item_id, donor.work_item_id, "relates_to", "fixes")
+    ]
+    resolver = build_linked_issue_team_resolver(
+        work_items=[donor, pr], dependencies=deps, project_key_resolver=pkr
+    )
+    assert resolver.resolve(pr.work_item_id) == ("CHAOS", "Chaos Team")
+
+
 def test_unresolvable_extkey_yields_no_inheritance() -> None:
     pr = _wi("ghpr:x/y#1", "github", type="pr", project_id="x/y")
     deps = [

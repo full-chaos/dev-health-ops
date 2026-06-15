@@ -450,9 +450,13 @@ def run_work_items_sync_job(
         # the sink can't be queried.
         donor_by_id: dict[str, Any] = {}
         merged_deps: dict[tuple[str, str, str], Any] = {}
-        if hasattr(primary_sink, "query_dicts"):
-            _org_where = " WHERE org_id = {org_id:String}" if org_id else ""
-            _org_params = {"org_id": org_id} if org_id else {}
+        # Only widen to the persisted superset when scoped to a tenant. Without
+        # org_id the query would read EVERY tenant's work items/edges and a PR
+        # could inherit another org's team, so fall back to this run's freshly-
+        # synced (already tenant-scoped) items/edges instead.
+        if org_id and hasattr(primary_sink, "query_dicts"):
+            _org_where = " WHERE org_id = {org_id:String}"
+            _org_params = {"org_id": org_id}
             try:
                 for r in primary_sink.query_dicts(
                     "SELECT * FROM work_items FINAL" + _org_where, _org_params

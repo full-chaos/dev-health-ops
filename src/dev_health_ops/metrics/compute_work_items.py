@@ -88,6 +88,17 @@ def resolve_base_team(
     return team_id, team_name
 
 
+# Relationship types that mean "this item does (or duplicates) the work of the
+# linked issue" — the only edges from which it is sound to inherit a team. A
+# blocking relationship (`blocks`/`blocked_by`/`is_blocked_by`) connects items
+# that are frequently owned by *different* teams, so it must NOT drive
+# attribution. `external_issue_key` is the provider-neutral cross-provider edge
+# emitted by the PR parsers (a PR closing a Linear/Jira issue).
+_INHERITABLE_RELATIONSHIP_TYPES = frozenset(
+    {"relates_to", "relates", "duplicates", "external_issue_key"}
+)
+
+
 def build_linked_issue_team_resolver(
     *,
     work_items: Sequence[WorkItem],
@@ -138,6 +149,10 @@ def build_linked_issue_team_resolver(
     # tiebreak. The common case is a single donor, where the choice is moot.
     candidates: dict[str, list[tuple[str, tuple[str, str]]]] = {}
     for dep in dependencies:
+        # Only "does-the-work-of"/duplicate links transfer a team; skip blocking
+        # and other relationships that routinely span teams.
+        if dep.relationship_type not in _INHERITABLE_RELATIONSHIP_TYPES:
+            continue
         source_id = dep.source_work_item_id
         # Only items that resolve to no team of their own need a donor; never
         # override a real attribution. (missing => treat as unresolved.)

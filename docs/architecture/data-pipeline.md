@@ -134,9 +134,11 @@ Cross-provider links are captured during sync as provider-neutral
 GitLab: issue/MR description magic-words; Jira: native `issuelinks`). The
 key is resolved to the real `linear:`/`jira:` work item at inheritance time,
 so over-capturing is harmless — a key with no matching issue never resolves.
-When several donors match one source, the lexicographically smallest
-canonical target wins (a stable tiebreak, since ClickHouse rows are
-unordered).
+Only **inheritance-safe relationship types** (`relates_to`, `relates`,
+`duplicates`, `external_issue_key`) transfer a team; blocking links
+(`blocks`/`blocked_by`), which routinely span teams, are ignored. When
+several donors match one source, the lexicographically smallest canonical
+target wins (a stable tiebreak, since ClickHouse rows are unordered).
 
 The resolver (`build_linked_issue_team_resolver`) is built **once per run**
 and applied to *every* work-item metric family — cycle-times
@@ -156,14 +158,21 @@ It must see a **donor-complete** set, not just the active window:
   the persisted ClickHouse superset (`FINAL`), so an incremental run that
   re-fetches only the PR still finds a donor synced earlier.
 
+All donor reads are **tenant-scoped**: the org-wide donor/edge queries run
+only under an explicit `org_id`, so a PR can never inherit a team from another
+organization's issue. An unscoped (dev/CLI) run skips inheritance rather than
+reading across tenants.
+
 Because the edges are written during a **work-items sync**, a sync (not just a
 metrics recompute) is required for newly-captured links to take effect.
 
 > Note: branch-name capture trusts the head branch (the Linear convention),
 > so a contributor could in principle name a branch to force a team
 > inheritance. This is an analytics-attribution signal, not an authorization
-> boundary — the worst case is a self-inflicted mis-attribution of one PR's
-> team — so it is accepted rather than gated.
+> boundary, and it is bounded to the contributor's own org (tenant-scoped
+> donors) and to inheritance-safe relationship types — the worst case is a
+> self-inflicted mis-attribution of one PR's team within the org — so it is
+> accepted rather than gated.
 
 ---
 

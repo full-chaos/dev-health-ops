@@ -755,17 +755,21 @@ async def run_daily_metrics_job(
     # table) simply skip inheritance instead of failing the daily job.
     work_item_dependencies: list[Any] = []
     linked_issue_resolver = None
-    if load_work_items_enabled and load_work_items_from_db and days:
+    # Linked-issue inheritance reads org-wide (repo_id=None), so it is only
+    # safe under an explicit tenant scope: without org_id the loader's filter
+    # is empty and the donor/edge queries would span every tenant, letting a
+    # PR inherit another org's team. Production workers always pass org_id;
+    # an unscoped (dev/CLI) run simply skips inheritance.
+    if load_work_items_enabled and load_work_items_from_db and days and org_id:
         _load_deps = getattr(loader, "load_work_item_dependencies", None)
         if _load_deps is not None:
             work_item_dependencies = await _load_deps()
-        # Build the linked-issue team-inheritance resolver ONCE from a
-        # donor-complete superset. A PR can link to an issue that completed
-        # before any metrics day, or to a Linear/Jira issue that has no
-        # repo_id — so load org-wide (repo_id=None) and window-independent
+        # Build the resolver ONCE from a donor-complete superset. A PR can link
+        # to an issue that completed before any metrics day, or to a Linear/Jira
+        # issue that has no repo_id — so load org-wide and window-independent
         # (from the epoch) for donor resolution, NOT the per-day repo-scoped
-        # slice used for the metrics themselves. Reused across every day so a
-        # PR is attributed identically regardless of which day it lands on.
+        # slice used for the metrics themselves. Reused across every day so a PR
+        # is attributed identically regardless of which day it lands on.
         donor_start = datetime(1970, 1, 1, tzinfo=timezone.utc)
         donor_end = _utc_day_window(max(days))[1]
         donor_items, _ = await loader.load_work_items(

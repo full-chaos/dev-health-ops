@@ -128,7 +128,9 @@ _MISSING_CASES = [
     (("billing", "reconcile"), ("PostgreSQL",)),
     (("migrate", "postgres", "upgrade"), ("PostgreSQL",)),
     (("migrate", "clickhouse", "status"), ("ClickHouse",)),
-    (("backfill", "run", "--config-id", "x"), ("organization",)),
+    # backfill run reads the SyncConfiguration from Postgres; the org is
+    # derived from --config-id, so the missing input is PostgreSQL, not --org.
+    (("backfill", "run", "--config-id", "x"), ("PostgreSQL",)),
     # Bare migrate forms default to upgrade and must be guarded too.
     (("migrate", "postgres"), ("PostgreSQL",)),
     (("migrate", "clickhouse"), ("ClickHouse",)),

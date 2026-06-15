@@ -404,7 +404,7 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     ("admin", "bundles", "assign-plan"): frozenset({_REQ_POSTGRES}),
     ("admin", "bundles", "assign-org"): frozenset({_REQ_POSTGRES}),
     ("billing", "reconcile"): frozenset({_REQ_POSTGRES}),
-    ("backfill", "run"): frozenset({_REQ_ORG}),
+    ("backfill", "run"): frozenset({_REQ_POSTGRES}),
     # --- migrations that connect to a live database ---
     ("migrate", "clickhouse", "upgrade"): frozenset({_REQ_CLICKHOUSE}),
     ("migrate", "clickhouse", "status"): frozenset({_REQ_CLICKHOUSE}),

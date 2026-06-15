@@ -27,7 +27,9 @@ def register_backfill_commands(subparsers: argparse._SubParsersAction) -> None:
 
     run_parser = backfill_subparsers.add_parser("run", help="Run historical backfill.")
     run_parser.add_argument(
-        "--config-id", required=True, help="Sync configuration UUID"
+        "--config-id",
+        required=True,
+        help="Sync configuration UUID (its organization is used; --org is optional)",
     )
     add_date_range_args(run_parser)
     add_sink_arg(run_parser)
@@ -40,9 +42,9 @@ def _cmd_backfill_run(ns: argparse.Namespace) -> int:
         end_day, backfill_days = resolve_date_range(ns)
         since = end_day - timedelta(days=backfill_days - 1)
         before = end_day
-        org_id = str(getattr(ns, "org", "") or "")
-        if not org_id:
-            raise ValueError("Organization ID is required")
+        # org is derived from the sync configuration (--config-id); --org is an
+        # optional assertion validated inside run_backfill_for_config.
+        org_id = str(getattr(ns, "org", "") or "") or None
 
         def _progress(index: int, total: int, window_since, window_before) -> None:
             print(

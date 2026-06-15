@@ -223,7 +223,12 @@ async def discover_teams(
                     status_code=401, detail="GitHub App authentication failed"
                 ) from exc
         else:
-            token = github_credentials.token
+            token_value = github_credentials.token
+            if not token_value:
+                raise HTTPException(
+                    status_code=400, detail="GitHub credential missing token"
+                )
+            token = token_value
         if not token:
             raise HTTPException(
                 status_code=400, detail="GitHub credential missing token"
@@ -254,14 +259,15 @@ async def discover_teams(
             )
         teams = _dedupe_teams(discovered)
     elif provider == "gitlab":
-        token = decrypted.get("token")
+        token_value = decrypted.get("token")
         url_value = config.get("url", "https://gitlab.com")
         url = url_value if isinstance(url_value, str) else "https://gitlab.com"
-        if not token:
+        if not isinstance(token_value, str) or not token_value:
             raise HTTPException(
                 status_code=400,
                 detail="GitLab credentials require a token",
             )
+        token = token_value
         if group:
             group_paths = [group]
         elif _string_value(config.get("group")):

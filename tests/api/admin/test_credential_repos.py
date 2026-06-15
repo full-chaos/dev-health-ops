@@ -190,7 +190,7 @@ async def test_list_repos_accepts_github_app_credentials(client):
     ac, state = client
     app_credentials = {
         "app_id": "12345",
-        "private_key": "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----",
+        "private_key": "not-a-real-github-app-private-key",
         "installation_id": "67890",
     }
 
@@ -241,7 +241,7 @@ async def test_github_app_test_connection_accepts_camel_case_fields():
         success, details = await credentials_router_module._test_github_connection(
             {
                 "appId": "12345",
-                "privateKey": "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----",
+                "privateKey": "not-a-real-github-app-private-key",
                 "installationId": "67890",
                 "baseUrl": "https://api.github.com",
             }

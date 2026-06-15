@@ -111,6 +111,9 @@ async def write_batch(records: List[Model], session: AsyncSession) -> int:
 
 ### Work-item team attribution
 
+> See [Team Attribution](team-attribution.md) for the full architecture with
+> sequence, flowchart, ER, and component diagrams.
+
 Every work item is stamped with a `team_id` at compute time
 (`metrics/compute_work_items.py`). Resolution is a fallback cascade
 (`resolve_base_team` + one inheritance tier), first match wins:

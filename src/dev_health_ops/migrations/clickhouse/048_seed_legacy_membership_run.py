@@ -63,16 +63,21 @@ _LEGACY_RUN_ID = "__legacy__"
 
 
 def _table_exists(client, table: str) -> bool:
-    try:
-        res = client.query(
-            "SELECT count() FROM system.tables "
-            "WHERE database = currentDatabase() AND name = {name:String}",
-            parameters={"name": table},
-        )
-        rows = getattr(res, "result_rows", None) or []
-        return bool(rows and rows[0] and rows[0][0] > 0)
-    except Exception:
-        return False
+    """Return whether ``table`` exists — FAIL CLOSED (CHAOS-2433 round-6).
+
+    Let an unexpected system.tables probe error PROPAGATE so the migration RAISES
+    and is NOT recorded as applied (retryable), rather than being swallowed into a
+    silent "table absent" skip that marks the seed migration applied without
+    seeding. The table is treated as absent ONLY when a SUCCESSFUL probe returns
+    zero rows (the genuine fresh-DB / dry-run no-op path).
+    """
+    res = client.query(
+        "SELECT count() FROM system.tables "
+        "WHERE database = currentDatabase() AND name = {name:String}",
+        parameters={"name": table},
+    )
+    rows = getattr(res, "result_rows", None) or []
+    return bool(rows and rows[0] and rows[0][0] > 0)
 
 
 def upgrade(client):

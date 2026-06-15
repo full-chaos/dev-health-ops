@@ -58,6 +58,14 @@ leftover shadow). Ops note: run during a quiet period / with sync workers paused
 writes that race the EXCHANGE are preserved (catch-up), version ties resolve
 arbitrarily.
 
+FAIL CLOSED (CHAOS-2433 round-6): a structural migration must never be recorded
+as applied without actually rebuilding the key. The existence probe and the
+sorting-key reads let unexpected ClickHouse errors PROPAGATE (so the migration
+RAISES and is NOT recorded as applied, and can be retried) instead of being
+swallowed into a silent "table absent" skip. The table is treated as absent ONLY
+when a SUCCESSFUL probe returns zero rows. A final post-rebuild check re-reads the
+LIVE main-table key and raises unless run_id is last, proving the rebuild landed.
+
 DEPLOY ORDERING (why the snapshot copy is lossless): 047 (add column), 048 (seed
 legacy marker) and 049 (this rebuild) all apply in the SAME migration pass
 (_apply_sql_migrations runs the whole pending set before the app serves traffic
@@ -113,16 +121,25 @@ def _replace_order_by(ddl: str, new_order_by: str) -> str:
 
 
 def _table_exists(client, table: str) -> bool:
-    try:
-        res = client.query(
-            "SELECT count() FROM system.tables "
-            "WHERE database = currentDatabase() AND name = {name:String}",
-            parameters={"name": table},
-        )
-        rows = getattr(res, "result_rows", None) or []
-        return bool(rows and rows[0] and rows[0][0] > 0)
-    except Exception:
-        return False
+    """Return whether ``table`` exists — FAIL CLOSED (CHAOS-2433 round-6).
+
+    A structural migration must NEVER be recorded as applied without actually
+    rebuilding the dedup key. The previous version caught ANY exception from the
+    system.tables probe and returned False ("table absent"), so a transient probe
+    failure or a restricted ClickHouse user made ``upgrade()`` return early and the
+    runner marked 049 applied — leaving work_unit_membership keyed WITHOUT run_id
+    while the app starts run-scoped reads/writes (reintroducing the round-2
+    background-merge eviction). We therefore let an unexpected probe error
+    PROPAGATE so the migration RAISES (not recorded as applied, retryable). The
+    table is treated as absent ONLY when a SUCCESSFUL existence check returns zero.
+    """
+    res = client.query(
+        "SELECT count() FROM system.tables "
+        "WHERE database = currentDatabase() AND name = {name:String}",
+        parameters={"name": table},
+    )
+    rows = getattr(res, "result_rows", None) or []
+    return bool(rows and rows[0] and rows[0][0] > 0)
 
 
 def _sorting_key(client, table: str) -> str:
@@ -252,5 +269,17 @@ def upgrade(client):
     # From here on the shadow is the OLD table; never drop it without the
     # catch-up. If this fails, the rerun skip path converges it.
     _catch_up_and_drop(client, _TABLE, _SHADOW)
+
+    # FAIL CLOSED (CHAOS-2433 round-6): prove the rebuild actually landed before
+    # letting the runner record 049 as applied. Re-read the LIVE main-table key
+    # and require run_id to be last; raise otherwise so the migration is NOT
+    # recorded as applied and can be retried. _run_id_last_in_order_by reads
+    # system.tables and propagates any probe failure (no swallowed exceptions).
+    if not _run_id_last_in_order_by(client, _TABLE):
+        raise RuntimeError(
+            f"{_TABLE}: post-rebuild verification failed — run_id is NOT last in "
+            f"the sorting key after EXCHANGE; refusing to mark migration applied "
+            f"(actual key: {_sorting_key(client, _TABLE)!r})"
+        )
 
     log.info("=== Migration 049: Complete ===")

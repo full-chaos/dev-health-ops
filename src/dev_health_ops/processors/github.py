@@ -655,16 +655,15 @@ def _enrich_prs_with_reviews_batch(
                 )
             )
 
-        try:
-            object.__setattr__(pr_obj, "first_review_at", first_review_at)
-            object.__setattr__(pr_obj, "reviews_count", reviews_count)
-            object.__setattr__(
-                pr_obj,
-                "changes_requested_count",
-                changes_requested_count,
-            )
-        except (AttributeError, TypeError):
-            pass  # frozen dataclass; fields stay at default
+        # ``GitPullRequest`` is a SQLAlchemy ORM model, so plain instrumented
+        # assignment is the correct way to write the derived review metrics
+        # (matches the GitLab path, CHAOS-2378). The previous
+        # ``object.__setattr__`` indirection bypassed SQLAlchemy instrumentation
+        # under a stale "frozen dataclass" assumption and silently swallowed
+        # write failures, which would zero the AI Rework signal (CHAOS-2436).
+        pr_obj.first_review_at = first_review_at
+        pr_obj.reviews_count = reviews_count
+        pr_obj.changes_requested_count = changes_requested_count
 
     return all_review_objects
 

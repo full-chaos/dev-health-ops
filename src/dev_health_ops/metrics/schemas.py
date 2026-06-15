@@ -755,9 +755,10 @@ class WorkUnitMembershipRecord:
     category of each kind (``is_dominant=1``) even if below threshold.
 
     ``category_kind`` is ``'theme'`` or ``'subcategory'``. Readers MUST scope to
-    the latest run per work unit (rows whose ``computed_at`` equals the max
-    ``computed_at`` for that ``work_unit_id``) to exclude stale below-threshold
-    categories that ReplacingMergeTree did not overwrite.
+    each node's latest run (rows whose ``computed_at`` equals the max
+    ``computed_at`` for that ``(org_id, node_type, node_id)``) — NOT per
+    ``work_unit_id`` — to exclude stale rows left behind when edge churn moves a
+    node into a new component (the old work_unit_id is never re-emitted).
     """
 
     org_id: str

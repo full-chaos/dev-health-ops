@@ -315,21 +315,34 @@ def _row_to_edge(
 
 
 # work_unit_membership is multi-membership (one row per node-category) on a
-# ReplacingMergeTree keyed by (org, node, category_kind, category). A category
-# that drops below threshold on a later run is simply not re-emitted, so its old
-# row is NOT overwritten and lingers. Every read therefore restricts to the
-# latest run per work unit: all rows from one materialization share a single
-# computed_at, so keeping only rows whose computed_at equals the max
-# computed_at for their work_unit_id excludes stale below-threshold categories.
-# This mirrors the latest-row-per-work-unit pattern in
-# api/queries/work_unit_investments.py.
-_LATEST_RUN_PER_UNIT_CTE = """
-    WITH latest AS (
-        SELECT work_unit_id, max(computed_at) AS max_computed_at
+# ReplacingMergeTree keyed by (org, node, category_kind, category).
+#
+# STALENESS IS SCOPED PER NODE, NOT PER WORK UNIT. work_unit_id is a hash of the
+# connected component, so when edge churn moves a node into a new component the
+# OLD work_unit_id is never re-emitted — a per-work_unit_id "latest run" guard
+# would keep that dead unit's rows alive forever (the node would keep matching
+# obsolete categories, and annotation would see multiple is_dominant rows). A
+# node belongs to exactly one component per run and emits its rows with one
+# computed_at, so restricting to rows whose computed_at equals the max
+# computed_at for that (org_id, node_type, node_id) makes the node's most recent
+# materialization always supersede its prior component's rows. This fixes
+# split/merge and below-threshold drop-off in one guard.
+#
+# ORPHANS: a node removed from the graph entirely is never re-emitted, so its
+# last-known rows linger. The materialization job can run repo/team-scoped (see
+# workers/work_graph_tasks.py) — it is NOT guaranteed to be a global org sweep
+# each run — so a "latest global run per org" backstop would wrongly hide nodes
+# whose repo was not in the most recent scoped run, and tombstoning vanished
+# nodes would require a full-graph diff a scoped run cannot produce. We
+# therefore intentionally let an orphaned node retain its last categories until
+# it is re-materialized (or its edges age out of work_graph_edges, at which
+# point no edge references it anyway). This matches how the rest of the work
+# graph treats vanished nodes (no tombstones).
+_LATEST_RUN_PER_NODE_SUBQUERY = """
+        SELECT node_type, node_id, max(computed_at) AS max_computed_at
         FROM work_unit_membership
         WHERE org_id = %(org_id)s
-        GROUP BY work_unit_id
-    )
+        GROUP BY node_type, node_id
 """
 
 
@@ -341,8 +354,9 @@ async def _batch_resolve_membership(
     """Batch-lookup the dominant theme/subcategory per edge endpoint in ONE query.
 
     Returns {(node_type, node_id) -> {"dominant_theme": ..., "dominant_subcategory": ...}}
-    built from the is_dominant=1 rows of the latest run per work unit (stale
-    below-threshold rows excluded via the latest-run join). Scoped to org_id.
+    built from the is_dominant=1 rows of each node's latest run (stale rows from
+    a prior component excluded via the per-node latest-run join — see
+    _LATEST_RUN_PER_NODE_SUBQUERY). Scoped to org_id.
     """
     from dev_health_ops.api.queries.client import query_dicts
 
@@ -367,8 +381,8 @@ async def _batch_resolve_membership(
     try:
         membership_rows = await query_dicts(
             client,
-            _LATEST_RUN_PER_UNIT_CTE
-            + """
+            f"""
+            WITH latest AS ({_LATEST_RUN_PER_NODE_SUBQUERY})
             SELECT
                 m.node_type AS node_type,
                 m.node_id AS node_id,
@@ -376,7 +390,8 @@ async def _batch_resolve_membership(
                 m.category AS category
             FROM work_unit_membership AS m
             INNER JOIN latest
-                ON m.work_unit_id = latest.work_unit_id
+                ON m.node_type = latest.node_type
+               AND m.node_id = latest.node_id
                AND m.computed_at = latest.max_computed_at
             WHERE m.org_id = %(org_id)s
               AND m.node_type IN %(node_types)s
@@ -411,67 +426,99 @@ async def _batch_resolve_membership(
     return result
 
 
-async def _fetch_theme_matching_nodes(
-    client: Any,
-    org_id: str,
+def _theme_membership_exists_clause() -> str:
+    """SQL EXISTS clause: edge endpoint is a member of ALL requested categories.
+
+    A correlated semi-join pushed INTO the edge query so the membership filter,
+    the repo_id/edge_type/source filters, AND the LIMIT all execute in one
+    ClickHouse plan (no unbounded Python IN set; the before-LIMIT guarantee
+    holds because this lives in the edge WHERE). Per-node latest-run guard
+    excludes stale rows from a prior component (split/merge safe). The
+    uniqExact HAVING enforces "member of EVERY requested (kind, category)", so a
+    theme+subcategory filter requires membership in BOTH. An edge matches when
+    EITHER endpoint satisfies the subquery.
+    """
+    return f"""
+        EXISTS (
+            SELECT 1
+            FROM work_unit_membership AS m
+            INNER JOIN ({_LATEST_RUN_PER_NODE_SUBQUERY}) AS latest
+                ON m.node_type = latest.node_type
+               AND m.node_id = latest.node_id
+               AND m.computed_at = latest.max_computed_at
+            WHERE m.org_id = %(org_id)s
+              AND (
+                (m.node_type, m.node_id) = (work_graph_edges.source_type, work_graph_edges.source_id)
+                OR (m.node_type, m.node_id) = (work_graph_edges.target_type, work_graph_edges.target_id)
+              )
+              AND (m.category_kind, m.category) IN %(category_tuples)s
+            GROUP BY m.node_type, m.node_id
+            HAVING uniqExact((m.category_kind, m.category)) = %(wanted_count)s
+        )
+    """
+
+
+def _build_theme_filter(
     theme: str | None,
     subcategory: str | None,
-) -> set[tuple[str, str]]:
-    """Return the set of (node_type, node_id) whose work unit is a MEMBER of the
-    requested theme/subcategory.
+) -> tuple[str | None, dict[str, Any]]:
+    """Return (exists_clause_sql, params) for the active theme/subcategory filter.
 
-    Multi-membership semantics: a node matches when, in the latest run of its
-    work unit, there is a membership row for the requested category (theme or
-    subcategory) — i.e. the category cleared the weight threshold (or is the
-    dominant). This is what makes a 45/40 unit findable under BOTH themes. The
-    returned set drives the BEFORE-LIMIT edge constraint so a sparse theme's
-    edges are never hidden behind the row cap.
-
-    Stale rows are excluded by joining to the latest run per work unit (see
-    _LATEST_RUN_PER_UNIT_CTE). When both theme and subcategory are supplied the
-    node must be a member of BOTH (the more specific subcategory plus its theme).
-    Scoped to org_id.
+    Returns (None, {}) when no theme filter is active. ``params`` carries the
+    requested ``(category_kind, category)`` tuples and the count that the
+    endpoint must match (1 for theme-only or subcategory-only, 2 for both).
     """
-    from dev_health_ops.api.queries.client import query_dicts
-
-    # Build the set of (category_kind, category) the node must be a member of.
     wanted: list[tuple[str, str]] = []
-    sql_params: dict[str, Any] = {"org_id": org_id}
     if theme:
         wanted.append(("theme", theme))
     if subcategory:
         wanted.append(("subcategory", subcategory))
     if not wanted:
-        return set()
-    sql_params["category_tuples"] = wanted
-    # A node matches each requested category via a member row in the latest run.
-    # Require membership in ALL requested categories: count distinct matched
-    # (kind, category) >= number requested.
-    rows = await query_dicts(
-        client,
-        _LATEST_RUN_PER_UNIT_CTE
-        + """
-        SELECT
-            m.node_type AS node_type,
-            m.node_id AS node_id
-        FROM work_unit_membership AS m
-        INNER JOIN latest
-            ON m.work_unit_id = latest.work_unit_id
-           AND m.computed_at = latest.max_computed_at
-        WHERE m.org_id = %(org_id)s
-          AND (m.category_kind, m.category) IN %(category_tuples)s
-        GROUP BY m.node_type, m.node_id
-        HAVING uniqExact((m.category_kind, m.category)) = %(wanted_count)s
-        """,
-        {**sql_params, "wanted_count": len(wanted)},
-    )
-    matched: set[tuple[str, str]] = set()
-    for r in rows:
-        nt = str(r.get("node_type") or "")
-        ni = str(r.get("node_id") or "")
-        if nt and ni:
-            matched.add((nt, ni))
-    return matched
+        return None, {}
+    return _theme_membership_exists_clause(), {
+        "category_tuples": wanted,
+        "wanted_count": len(wanted),
+    }
+
+
+async def _warn_if_membership_unpopulated(client: Any, org_id: str) -> None:
+    """Log a diagnostic when a theme filter returns nothing but the org HAS
+    categorized work units — i.e. work_unit_membership is likely unpopulated
+    because the post-migration investment materialization rerun has not run yet
+    (CHAOS-2430 rollout). Observability only; never changes the response.
+    """
+    from dev_health_ops.api.queries.client import query_dicts
+
+    try:
+        rows = await query_dicts(
+            client,
+            """
+            SELECT
+                (SELECT count() FROM work_unit_membership WHERE org_id = %(org_id)s)
+                    AS membership_rows,
+                (SELECT count() FROM work_unit_investments WHERE org_id = %(org_id)s)
+                    AS investment_rows
+            """,
+            {"org_id": org_id},
+        )
+    except Exception:
+        # Never let an observability probe affect the request.
+        logger.debug("membership-population probe failed", exc_info=True)
+        return
+
+    if not rows:
+        return
+    membership_rows = int(rows[0].get("membership_rows") or 0)
+    investment_rows = int(rows[0].get("investment_rows") or 0)
+    if membership_rows == 0 and investment_rows > 0:
+        logger.warning(
+            "Theme filter returned no edges and work_unit_membership is empty "
+            "for org %s while work_unit_investments has %d rows — the "
+            "post-migration investment materialization rerun that populates "
+            "work_unit_membership has likely not run yet (CHAOS-2430).",
+            org_id,
+            investment_rows,
+        )
 
 
 async def resolve_work_graph_edges(
@@ -494,34 +541,6 @@ async def resolve_work_graph_edges(
     subcategory_filter = filters.subcategory if filters else None
     theme_filter_active = bool(theme_filter or subcategory_filter)
 
-    # --- Server-side theme/subcategory filter (CHAOS-2430) --------------------
-    # When a theme (and/or subcategory) filter is active, resolve the set of
-    # matching node keys FIRST, then constrain the edge SELECT so the LIMIT is
-    # enforced AFTER the theme constraint. This is the whole point: a sparse
-    # theme's edges may all sit beyond the row cap, so filtering after the cap
-    # (e.g. client-side) would produce false-empty graphs. An edge matches if
-    # EITHER endpoint belongs to a work unit that is a MEMBER of the requested
-    # theme/subcategory (multi-membership: a mixed unit is findable under each
-    # of its significant categories, not just its dominant).
-    matched_nodes: set[tuple[str, str]] = set()
-    if theme_filter_active:
-        matched_nodes = await _fetch_theme_matching_nodes(
-            client, org_id, theme_filter, subcategory_filter
-        )
-        if not matched_nodes:
-            # No node matches the theme → no edge can touch it. Return empty
-            # without issuing the edge query.
-            return WorkGraphEdgesResult(
-                edges=[],
-                total_count=0,
-                page_info=PageInfo(
-                    has_next_page=False,
-                    has_previous_page=False,
-                    start_cursor=None,
-                    end_cursor=None,
-                ),
-            )
-
     if filters:
         if filters.repo_ids:
             where_clauses.append("repo_id IN %(repo_ids)s")
@@ -543,19 +562,23 @@ async def resolve_work_graph_edges(
             where_clauses.append("(source_id = %(node_id)s OR target_id = %(node_id)s)")
             params["node_id"] = filters.node_id
 
-    if theme_filter_active and matched_nodes:
-        # Tuple-membership predicate: edge matches if its source OR target node
-        # key is in the matched set. ClickHouse supports IN over a tuple list.
-        # Applied as a WHERE clause so it constrains the candidate set BEFORE
-        # the LIMIT below.
-        node_tuples = sorted(matched_nodes)
-        params["matched_nodes"] = node_tuples
-        where_clauses.append(
-            "("
-            "(source_type, source_id) IN %(matched_nodes)s"
-            " OR (target_type, target_id) IN %(matched_nodes)s"
-            ")"
+    # --- Server-side theme/subcategory filter (CHAOS-2430) --------------------
+    # The membership constraint is pushed INTO the edge query as a correlated
+    # EXISTS semi-join, so repo_id/edge_type/source filters AND the membership
+    # filter AND the LIMIT all execute in ONE ClickHouse plan. This keeps the
+    # before-LIMIT guarantee (a sparse theme's edges are never hidden behind the
+    # row cap) WITHOUT round-tripping an unbounded matched-node set through
+    # Python (which could blow param limits / time out at tenant scale and
+    # ignored repo/edge filters). An edge matches if EITHER endpoint is a member
+    # of the requested theme/subcategory (multi-membership), with the
+    # theme+subcategory "both required" semantics enforced inside the subquery.
+    if theme_filter_active:
+        exists_clause, theme_params = _build_theme_filter(
+            theme_filter, subcategory_filter
         )
+        if exists_clause:
+            where_clauses.append(exists_clause)
+            params.update(theme_params)
 
     where_sql = f"WHERE {' AND '.join(where_clauses)}"
 
@@ -578,6 +601,15 @@ async def resolve_work_graph_edges(
     """
 
     rows = await query_dicts(client, query, params)
+
+    # Observability (CHAOS-2430 rollout): a theme filter that yields zero edges
+    # is a legitimate empty state, but immediately after deploy it can instead
+    # mean work_unit_membership has not been populated yet (the table is empty
+    # until the next investment materialization rerun). Emit a one-line signal
+    # in that case so an all-empty-filter situation is diagnosable. Observability
+    # only — behavior is unchanged (no silent fallback that masks real empties).
+    if theme_filter_active and not rows:
+        await _warn_if_membership_unpopulated(client, org_id)
     resolved = await _batch_resolve_display_names(client, org_id, rows)
 
     if theme_filter_active:

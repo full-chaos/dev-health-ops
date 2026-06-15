@@ -19,11 +19,27 @@
 -- STALE ROWS: ReplacingMergeTree dedups by the full sort key, which includes
 -- (category_kind, category). If a category drops below threshold on a later run
 -- its row is simply not re-emitted, so the old row is NOT overwritten and
--- lingers. Readers MUST therefore scope to the latest run per work unit: all
--- rows from one materialization run share a single computed_at, so filtering to
--- rows whose computed_at equals max(computed_at) per work_unit_id excludes
--- stale categories. This mirrors the latest-row-per-work-unit argMax/max
--- pattern used by api/queries/work_unit_investments.py.
+-- lingers. Readers MUST therefore scope to each node's latest run, NOT the
+-- latest run per work_unit_id. work_unit_id is a hash of the connected
+-- component, so when edge churn moves a node into a new component the OLD
+-- work_unit_id is never re-emitted and a per-work_unit_id guard would keep that
+-- dead unit alive forever (the node keeps matching obsolete categories). A node
+-- belongs to exactly one component per run and stamps one computed_at, so
+-- keeping only rows whose computed_at equals max(computed_at) per
+-- (org_id, node_type, node_id) makes the node's most recent run supersede its
+-- prior component rows. This fixes split/merge and below-threshold drop-off.
+-- An orphaned node (removed from the graph entirely) is never re-emitted and
+-- retains its last categories. The materialization job can run repo/team-scoped
+-- (NOT a guaranteed global org sweep) so no global-run backstop or tombstone is
+-- used. No edge references an orphaned node anyway once its edges age out.
+--
+-- ROLLOUT: this table is EMPTY until the next investment materialization
+-- populates it, so existing tenants would see empty theme-filtered graphs right
+-- after migrating. Deploy sequence MUST be: apply this migration, then RE-RUN
+-- the investment materialization (which now writes work_unit_membership), then
+-- serve theme-filtered queries. Do NOT add a fallback that masks real empties.
+-- The resolver logs a one-line diagnostic when a theme filter returns nothing
+-- while work_unit_investments is non-empty (observability only).
 CREATE TABLE IF NOT EXISTS work_unit_membership (
     org_id String,
     node_type String,

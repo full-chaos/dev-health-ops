@@ -123,8 +123,12 @@ def build_linked_issue_team_resolver(
     donor_team: dict[str, tuple[str, str]] = {}
     base_resolved: dict[str, str | None] = {}
     # Issue KEY (e.g. CHAOS-2400, PROJ-12) -> work_item_id, for resolving the
-    # provider-neutral ``extkey:`` targets emitted by PR parsers.
+    # provider-neutral ``extkey:`` targets emitted by PR parsers. ``extkey``
+    # carries no provider, so if the SAME key exists in both Linear and Jira it
+    # is genuinely ambiguous — those keys are tracked separately and never
+    # resolve, so an ambiguous link is dropped rather than guessed.
     key_index: dict[str, str] = {}
+    ambiguous_keys: set[str] = set()
 
     for item in work_items:
         wid = item.work_item_id
@@ -135,10 +139,19 @@ def build_linked_issue_team_resolver(
         if team_id:
             donor_team[wid] = (team_id, team_name or team_id)
         if item.provider in ("linear", "jira") and ":" in wid:
-            key_index[wid.split(":", 1)[1].strip().upper()] = wid
+            k = wid.split(":", 1)[1].strip().upper()
+            if k in ambiguous_keys:
+                continue
+            existing = key_index.get(k)
+            if existing is not None and existing != wid:
+                del key_index[k]
+                ambiguous_keys.add(k)  # same key in two providers — ambiguous
+            else:
+                key_index[k] = wid
 
     def _canonical_target(target_id: str) -> str | None:
         if target_id.startswith("extkey:"):
+            # Missing or ambiguous keys both return None → no inheritance.
             return key_index.get(target_id.split(":", 1)[1].strip().upper())
         return target_id
 

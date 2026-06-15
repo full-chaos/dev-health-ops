@@ -466,17 +466,21 @@ def run_work_items_sync_job(
             )
 
         # Persisted edges complete the picture when an incremental run re-fetched
-        # only the PR. Only query under an explicit tenant scope — an unscoped
-        # query would read EVERY tenant's edges and let a PR inherit another
-        # org's team — and degrade gracefully on failure.
-        if org_id and hasattr(primary_sink, "query_dicts"):
+        # only the PR. The read is bounded to edges whose SOURCE is a work item
+        # synced this run — the only items we attribute — so it is never a
+        # full-org graph scan. Only query under an explicit tenant scope (an
+        # unscoped query would read every tenant's edges and let a PR inherit
+        # another org's team) and degrade gracefully on failure.
+        synced_ids = sorted({wi.work_item_id for wi in work_items})
+        if org_id and synced_ids and hasattr(primary_sink, "query_dicts"):
             try:
                 for r in primary_sink.query_dicts(
                     "SELECT source_work_item_id, target_work_item_id, "
                     "relationship_type, relationship_type_raw, last_synced, org_id "
                     "FROM work_item_dependencies FINAL "
-                    "WHERE org_id = {org_id:String}",
-                    {"org_id": org_id},
+                    "WHERE org_id = {org_id:String} "
+                    "AND source_work_item_id IN {sources:Array(String)}",
+                    {"org_id": org_id, "sources": synced_ids},
                 ):
                     dep = to_dataclass(WorkItemDependency, r)
                     merged_deps[_dep_key(dep)] = dep

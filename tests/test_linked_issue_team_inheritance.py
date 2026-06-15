@@ -195,6 +195,23 @@ def test_newer_blocking_edge_supersedes_stale_inheritable_edge() -> None:
     assert resolver.resolve(pr.work_item_id) == ("CHAOS", "Chaos Team")
 
 
+def test_ambiguous_extkey_across_providers_is_dropped() -> None:
+    # extkey carries no provider. If the same key exists in BOTH Linear and
+    # Jira, the link is genuinely ambiguous and must not be guessed.
+    linear = _wi("linear:CHAOS-1", "linear", project_key="CHAOS")
+    jira = _wi("jira:CHAOS-1", "jira", project_key="CHAOS")
+    pr = _wi("ghpr:x/y#1", "github", type="pr", project_id="x/y")
+    deps = [WorkItemDependency(pr.work_item_id, "extkey:CHAOS-1", "relates_to", "k")]
+    pkr = ProjectKeyTeamResolver(project_key_to_team={"CHAOS": ("CHAOS", "Chaos Team")})
+    # Order-independent: ambiguity is detected regardless of which item is seen
+    # first.
+    for items in ([linear, jira, pr], [jira, linear, pr]):
+        resolver = build_linked_issue_team_resolver(
+            work_items=items, dependencies=deps, project_key_resolver=pkr
+        )
+        assert resolver.resolve(pr.work_item_id) == (None, None)
+
+
 def test_unresolvable_extkey_yields_no_inheritance() -> None:
     pr = _wi("ghpr:x/y#1", "github", type="pr", project_id="x/y")
     deps = [

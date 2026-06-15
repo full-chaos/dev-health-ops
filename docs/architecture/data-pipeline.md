@@ -133,7 +133,9 @@ Cross-provider links are captured during sync as provider-neutral
 `extkey:KEY` dependency edges (GitHub: PR body magic-words + head branch;
 GitLab: issue/MR description magic-words; Jira: native `issuelinks`). The
 key is resolved to the real `linear:`/`jira:` work item at inheritance time,
-so over-capturing is harmless — a key with no matching issue never resolves.
+so over-capturing is harmless — a key with no matching issue never resolves,
+and a key that exists in **both** Linear and Jira is treated as ambiguous and
+dropped rather than guessed.
 Only **inheritance-safe relationship types** (`relates_to`, `relates`,
 `duplicates`, `external_issue_key`) transfer a team; blocking links
 (`blocks`/`blocked_by`), which routinely span teams, are ignored. When

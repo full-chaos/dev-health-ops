@@ -35,6 +35,9 @@ from tests._helpers import tables_of
 
 admin_router_module = importlib.import_module("dev_health_ops.api.admin")
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
+credentials_router_module = importlib.import_module(
+    "dev_health_ops.api.admin.routers.credentials"
+)
 
 _TABLES = tables_of(User, Organization, OrgLicense, IntegrationCredential)
 
@@ -142,14 +145,15 @@ _FAKE_REPOS = [
 
 _DECRYPT_PATCH = "dev_health_ops.api.services.configuration.IntegrationCredentialsService.get_decrypted_credentials_by_id"
 _GH_CONNECTOR = "dev_health_ops.connectors.github.GitHubConnector"
+_GH_APP_PROVIDER = "dev_health_ops.connectors.utils.github_app.GitHubAppTokenProvider"
 
 
-def _mock_credential(provider="github", config=None):
+def _mock_credential(provider="github", config=None, credentials=None):
     """Return a (decrypted_creds, credential_obj) tuple for mocking."""
     cred = MagicMock()
     cred.provider = provider
     cred.config = {"org": "my-org"} if config is None else config
-    return {"token": "ghp_fake123"}, cred
+    return credentials or {"token": "ghp_fake123"}, cred
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +183,77 @@ async def test_list_repos_success(client):
     assert body["total"] == 2
     assert body["repos"][0]["name"] == "api-gateway"
     assert body["repos"][1]["name"] == "web-app"
+
+
+@pytest.mark.asyncio
+async def test_list_repos_accepts_github_app_credentials(client):
+    ac, state = client
+    app_credentials = {
+        "app_id": "12345",
+        "private_key": "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----",
+        "installation_id": "67890",
+    }
+
+    with (
+        patch(
+            _DECRYPT_PATCH,
+            return_value=_mock_credential(credentials=app_credentials),
+        ),
+        patch(_GH_CONNECTOR) as MockConnector,
+    ):
+        MockConnector.return_value.list_repositories.return_value = _FAKE_REPOS
+
+        resp = await ac.get(
+            f"/api/v1/admin/credentials/{state['cred_id']}/repos",
+            params={"owner": "my-org"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 2
+    _, kwargs = MockConnector.call_args
+    assert kwargs["credentials"].is_app_auth is True
+    assert kwargs["credentials"].installation_id == "67890"
+
+
+@pytest.mark.asyncio
+async def test_github_app_test_connection_accepts_camel_case_fields():
+    class _Response:
+        status_code = 200
+
+        def json(self):
+            return {"total_count": 3}
+
+    class _AsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, *args, **kwargs):
+            return _Response()
+
+    with (
+        patch(_GH_APP_PROVIDER) as MockProvider,
+        patch("httpx.AsyncClient", return_value=_AsyncClient()),
+    ):
+        MockProvider.return_value.get_token.return_value = "ghs_installation"
+        success, details = await credentials_router_module._test_github_connection(
+            {
+                "appId": "12345",
+                "privateKey": "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----",
+                "installationId": "67890",
+                "baseUrl": "https://api.github.com",
+            }
+        )
+
+    assert success is True
+    assert details == {
+        "auth_mode": "github_app",
+        "installation_id": "67890",
+        "repository_count": 3,
+    }
+    MockProvider.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -362,4 +437,4 @@ async def test_missing_token_returns_400(client):
         )
 
     assert resp.status_code == 400
-    assert "missing token" in resp.json()["detail"].lower()
+    assert "require either token" in resp.json()["detail"].lower()

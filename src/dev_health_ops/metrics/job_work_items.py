@@ -353,6 +353,9 @@ def run_work_items_sync_job(
                 reopen_events.extend(batch.reopen_events)
                 interactions.extend(batch.interactions)
                 sprints.extend(batch.sprints)
+                # PR/MR -> issue edges from Linear attachments (links to source
+                # control) drive linked-issue team inheritance for the PR/MR.
+                dependencies.extend(batch.dependencies)
                 # Collect any AI attribution records in the batch.
                 if hasattr(batch, "ai_attributions"):
                     ai_attributions.extend(batch.ai_attributions)

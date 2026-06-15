@@ -635,7 +635,9 @@ class TestLinearProviderRegistration:
         provider = LinearProvider()
         assert provider.capabilities.work_items is True
         assert provider.capabilities.status_transitions is True
-        assert provider.capabilities.dependencies is False
+        # Linear emits PR/MR -> issue edges from issue attachments (links to
+        # source control), so it now reports the dependencies capability.
+        assert provider.capabilities.dependencies is True
         assert provider.capabilities.interactions is True
         assert provider.capabilities.sprints is True
         assert provider.capabilities.reopen_events is True

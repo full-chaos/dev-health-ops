@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import logging
+import os
+import re
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlsplit
 
 from dev_health_ops.models.work_items import (
     Sprint,
     WorkItem,
+    WorkItemDependency,
     WorkItemInteractionEvent,
     WorkItemReopenEvent,
     WorkItemStatusCategory,
@@ -59,6 +63,128 @@ def _status_from_state_type(state_type: str | None) -> WorkItemStatusCategory:
     if not state_type:
         return "unknown"
     return LINEAR_STATE_TYPE_MAP.get(state_type.lower(), "unknown")
+
+
+# Linear's GitHub/GitLab integration records a linked PR/MR as an issue
+# *attachment* whose ``url`` points at the PR/MR. This is the authoritative
+# link (Linear -> source control), unlike a PR body/branch which often only
+# references the issue in a bot comment. The URL host+path is provider-agnostic:
+# GitHub uses ``/{owner}/{repo}/pull/{n}`` (any host, incl. Enterprise),
+# GitLab uses ``/{group/.../project}/-/merge_requests/{n}`` (incl. self-hosted).
+_GITHUB_PR_URL_RE = re.compile(r"^/(?P<repo>.+?)/pull/(?P<num>\d+)/?$")
+_GITLAB_MR_URL_RE = re.compile(r"^/(?P<project>.+?)/-/merge_requests/(?P<num>\d+)/?$")
+
+
+# Public SaaS hosts where a ``/pull/N`` / ``/-/merge_requests/N`` URL can only
+# be a real GitHub/GitLab PR/MR. Exact-match (anchored) — a substring check
+# would accept a forged host like ``github.evil.example``.
+_PUBLIC_SCM_HOSTS = frozenset(
+    {"github.com", "www.github.com", "gitlab.com", "www.gitlab.com"}
+)
+
+
+def _trusted_scm_hosts() -> frozenset[str]:
+    """Public SCM hosts plus any operator-configured self-hosted hosts.
+
+    Self-hosted GitHub Enterprise / GitLab live on arbitrary hosts that cannot
+    be trusted by name alone, so they must be opted in explicitly via the
+    ``LINEAR_TRUSTED_SCM_HOSTS`` env var (comma-separated). That is operator
+    config, NOT user-controlled attachment data.
+    """
+    raw = os.getenv("LINEAR_TRUSTED_SCM_HOSTS", "")
+    extra = {h.strip().lower() for h in raw.split(",") if h.strip()}
+    return _PUBLIC_SCM_HOSTS | frozenset(extra)
+
+
+def _is_scm_attachment(url: str, source_type: str | None) -> bool:
+    """True only for an integration-created GitHub/GitLab PR/MR attachment.
+
+    Two factors are BOTH required, because attachment data is user-controlled:
+
+    - ``sourceType`` must name the GitHub/GitLab integration — this is the
+      provenance signal that distinguishes an integration-created PR/MR
+      attachment from a link a user pasted manually onto an issue; and
+    - the URL host must be on the trusted allowlist (public SaaS +
+      operator-configured) — so the link cannot be redirected to a forged host.
+
+    Requiring both means a casual user-added link is dropped (no integration
+    sourceType) and a forged host is dropped (not allowlisted). A user who links
+    a *real* PR on a trusted host to their own issue is the feature working as
+    intended, not a forgery.
+    """
+    st = (source_type or "").lower()
+    if "github" not in st and "gitlab" not in st:
+        return False
+    try:
+        host = (urlsplit(str(url)).netloc or "").lower()
+    except ValueError:
+        return False
+    return host in _trusted_scm_hosts()
+
+
+def _work_item_id_from_pr_url(
+    url: str | None, source_type: str | None = None
+) -> str | None:
+    """Map a linked PR/MR URL to the matching work-item id, or None.
+
+    Returns ``ghpr:{owner}/{repo}#{n}`` for a GitHub PR and
+    ``gitlab:{project_path}!{n}`` for a GitLab MR — the same ids those
+    providers mint — so the edge resolves directly to the PR/MR work item.
+    Requires both integration ``sourceType`` provenance and a trusted host.
+    """
+    if not url or not _is_scm_attachment(url, source_type):
+        return None
+    try:
+        path = urlsplit(str(url)).path
+    except ValueError:
+        return None
+    if not path:
+        return None
+    gh = _GITHUB_PR_URL_RE.match(path)
+    if gh:
+        return f"ghpr:{gh.group('repo')}#{gh.group('num')}"
+    gl = _GITLAB_MR_URL_RE.match(path)
+    if gl:
+        return f"gitlab:{gl.group('project')}!{gl.group('num')}"
+    return None
+
+
+def extract_linear_dependencies(
+    *, issue: Any, work_item_id: str
+) -> list[WorkItemDependency]:
+    """Emit PR/MR -> Linear-issue edges from an issue's linked attachments.
+
+    The PR/MR is the EDGE SOURCE and the Linear issue (which carries the team)
+    is the TARGET, so the linked-issue inheritance resolver attributes the
+    unassigned PR/MR to this issue's team. Provider-agnostic via URL parsing;
+    non-PR attachments (Figma, Slack, plain links) are ignored.
+    """
+    deps: list[WorkItemDependency] = []
+    seen: set[str] = set()
+    attachments = _get(issue, "attachments", "nodes") or []
+    for att in attachments:
+        pr_id = _work_item_id_from_pr_url(_get(att, "url"), _get(att, "sourceType"))
+        if not pr_id or pr_id in seen:
+            continue
+        seen.add(pr_id)
+        deps.append(
+            WorkItemDependency(
+                source_work_item_id=pr_id,
+                target_work_item_id=work_item_id,
+                relationship_type="relates_to",
+                relationship_type_raw="linear_attachment",
+            )
+        )
+    # The attachments connection is fetched as a single page; if it is
+    # truncated, a PR/MR link beyond the page is silently missed. Surface that
+    # so a missed link is observable rather than a silent attribution gap.
+    if _get(issue, "attachments", "pageInfo", "hasNextPage"):
+        logger.warning(
+            "Linear issue %s has more attachments than fetched; a PR/MR link "
+            "may be missed for team inheritance.",
+            work_item_id,
+        )
+    return deps
 
 
 def _type_from_labels(labels: list[str]) -> WorkItemType:

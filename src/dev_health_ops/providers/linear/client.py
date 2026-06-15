@@ -137,6 +137,16 @@ query Issues($first: Int!, $after: String, $filter: IssueFilter) {
           }
         }
       }
+      attachments(first: 50) {
+        nodes {
+          id
+          url
+          sourceType
+        }
+        pageInfo {
+          hasNextPage
+        }
+      }
     }
     pageInfo {
       hasNextPage
@@ -271,6 +281,24 @@ query Comments($issueId: String!, $first: Int!, $after: String) {
           name
           email
         }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+}
+"""
+
+ATTACHMENTS_QUERY = """
+query Attachments($issueId: String!, $first: Int!, $after: String) {
+  issue(id: $issueId) {
+    attachments(first: $first, after: $after) {
+      nodes {
+        id
+        url
+        sourceType
       }
       pageInfo {
         hasNextPage
@@ -561,6 +589,37 @@ class LinearClient:
             cursor = page_info.get("endCursor")
 
         return comments[:limit]
+
+    def get_issue_attachments(
+        self,
+        issue_id: str,
+        *,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Fetch ALL of an issue's attachments, paginating the connection.
+
+        Used only when the bulk ``ISSUES_QUERY`` page is truncated, so a linked
+        PR/MR attachment past the first page is still captured for team
+        inheritance instead of being silently dropped.
+        """
+        cursor: str | None = None
+        attachments: list[dict[str, Any]] = []
+        while len(attachments) < limit:
+            variables = {
+                "issueId": issue_id,
+                "first": min(100, limit - len(attachments)),
+                "after": cursor,
+            }
+            data = self._execute(ATTACHMENTS_QUERY, variables)
+            conn = (data.get("issue") or {}).get("attachments") or {}
+            attachments.extend(conn.get("nodes", []))
+            page_info = conn.get("pageInfo", {})
+            if not page_info.get("hasNextPage"):
+                break
+            cursor = page_info.get("endCursor")
+            if not cursor:
+                break
+        return attachments[:limit]
 
     def get_issue_history(self, issue_id: str) -> list[dict[str, Any]]:
         data = self._execute(ISSUE_HISTORY_QUERY, {"issueId": issue_id})

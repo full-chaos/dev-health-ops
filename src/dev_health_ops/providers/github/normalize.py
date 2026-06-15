@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from collections.abc import Sequence
 from datetime import datetime, timezone
@@ -977,6 +978,84 @@ def extract_github_dependencies(
         )
 
     return dependencies
+
+
+# A Linear link in a PR comment is captured only from the integration bot's
+# ``linear.app/.../issue/KEY`` URL — the single high-confidence, hard-to-forge
+# signal. Bare tokens and natural-language keywords from third-party comments
+# are intentionally not trusted (they could force an unrelated inheritance).
+_COMMENT_LINEAR_URL_PATTERN = re.compile(
+    r"linear\.app/[^/\s]+/issue/([A-Za-z][A-Za-z0-9]+-\d+)", re.IGNORECASE
+)
+
+
+# Exact login(s) of the Linear GitHub App actor. An exact allowlist (not a
+# substring match) so another app like "linear-helper[bot]" cannot pass.
+# Overridable for self-managed Linear app installs via env.
+_LINEAR_LINKBACK_BOTS = frozenset(
+    b.strip().lower()
+    for b in (os.getenv("GITHUB_LINEAR_LINKBACK_BOTS") or "linear[bot]").split(",")
+    if b.strip()
+)
+
+
+def _is_linear_integration_author(author_login: str | None) -> bool:
+    """True only for the exact Linear GitHub App actor login(s).
+
+    The ``[bot]`` login is reserved for GitHub App actors (a human cannot
+    register a bracketed login), and the match is EXACT against the trusted
+    allowlist — a different bot whose login merely contains ``linear`` is
+    rejected. Gating comment capture to this actor closes the forge-a-URL
+    vector: a normal user typing a ``linear.app`` URL in a comment is ignored.
+    """
+    return (author_login or "").strip().lower() in _LINEAR_LINKBACK_BOTS
+
+
+def extract_github_comment_dependencies(
+    *, work_item_id: str, comments: Sequence[tuple[str | None, str | None]]
+) -> list[WorkItemDependency]:
+    """Secondary capture: Linear issue links in a PR's comments.
+
+    ``comments`` is a sequence of ``(body, author_login)``. Only comments from
+    the Linear integration bot (``linear[bot]``) are trusted, and within those,
+    only an explicit ``linear.app/.../issue/KEY`` URL — natural-language
+    keywords are never captured from comments. Both guards exist because PR
+    comments are third-party authored: without the actor gate a contributor
+    could type a Linear URL to force an unrelated inheritance. Blocking phrasing
+    before the URL is honoured (kept non-inheritable); per key the highest-risk
+    relationship wins. Fallback to the authoritative Linear attachment.
+    """
+    _RANK = {"blocked_by": 3, "blocks": 2, "relates_to": 1}
+    best: dict[str, tuple[str, str]] = {}  # key -> (relationship_type, raw)
+
+    for body, author_login in comments:
+        if not body or not _is_linear_integration_author(author_login):
+            continue
+        text = str(body)
+        for match in _COMMENT_LINEAR_URL_PATTERN.finditer(text):
+            preceding = text[max(0, match.start() - 40) : match.start()].lower()
+            relationship = "relates_to"
+            if "blocked by" in preceding or "depends on" in preceding:
+                relationship = "blocked_by"
+            elif "blocks" in preceding:
+                relationship = "blocks"
+            key = match.group(1).strip().upper()
+            if not key:
+                continue
+            current = best.get(key)
+            if current is None or _RANK.get(relationship, 0) > _RANK.get(current[0], 0):
+                best[key] = (relationship, "github_comment_linear_url")
+
+    return [
+        WorkItemDependency(
+            source_work_item_id=work_item_id,
+            target_work_item_id=f"extkey:{key}",
+            relationship_type=relationship_type,
+            relationship_type_raw=raw,
+            last_synced=datetime.now(timezone.utc),
+        )
+        for key, (relationship_type, raw) in best.items()
+    ]
 
 
 def enrich_work_item_with_priority(

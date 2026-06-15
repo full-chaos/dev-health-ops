@@ -183,42 +183,6 @@ def run_investment_materialize(
         raise self.retry(exc=exc, countdown=120 * (2**self.request.retries))
 
 
-def _orgs_with_work_graph_data(db_url: str, org_ids: list[str]) -> set[str]:
-    """Return the subset of ``org_ids`` that have any ``work_graph_edges`` rows.
-
-    Scopes the daily floor-cadence fan-out to orgs that actually have a work
-    graph, so empty / never-synced orgs are not churned every night. Sourced
-    from ClickHouse ``work_graph_edges`` — the exact input that the
-    build->materialize chain reads — mirroring how the recommendations job
-    scopes to tables that hold data (``_discover_team_ids``). On any ClickHouse
-    error, returns all candidate orgs (fail open): the per-org chain is itself a
-    no-op for an empty org, so a transient probe failure must not silently skip
-    the safety net it exists to provide.
-    """
-    if not org_ids:
-        return set()
-    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
-
-    try:
-        sink = ClickHouseMetricsSink(db_url)
-        rows = sink.client.query(
-            """
-            SELECT DISTINCT org_id
-            FROM work_graph_edges
-            WHERE org_id IN %(org_ids)s
-            """,
-            parameters={"org_ids": org_ids},
-        ).result_rows
-        return {str(row[0]) for row in rows if row and row[0]}
-    except Exception:
-        logger.warning(
-            "work_graph_edges org-with-data probe failed; "
-            "falling back to all candidate orgs",
-            exc_info=True,
-        )
-        return set(org_ids)
-
-
 @celery_app.task(
     bind=True,
     max_retries=3,
@@ -247,35 +211,40 @@ def dispatch_investment_materialize(
     ``computed_at`` (ReplacingMergeTree) and re-running simply refreshes the
     latest run.
 
+    GATING: the chain is dispatched for EVERY active org — it is deliberately NOT
+    gated on ``work_graph_edges`` existence. That table is the build's OUTPUT, so
+    gating on it would permanently skip exactly the tenants the safety net must
+    repair: an org with raw synced data but no edges yet (a failed prior
+    post-sync build, a truncated/migrated-empty graph table, or a brand-new
+    tenant that synced but never built). The build is a cheap no-op for an org
+    with no source data (it scans a 30-day window and produces zero edges), and
+    materialize then short-circuits on zero components — so fanning out to all
+    active orgs is both correct and inexpensive (CHAOS-2439 review).
+
     Org selection mirrors the other daily fan-out dispatchers
     (``_discover_active_org_ids`` — active orgs from Postgres, the source of
-    truth, ``["default"]`` fallback for single-tenant installs), then narrows to
-    orgs that actually have ``work_graph_edges`` so empty orgs are not churned.
+    truth, ``["default"]`` fallback only for the positively-detected
+    single-tenant case). It uses ``strict=True`` so a Postgres outage RAISES and
+    triggers retry rather than silently dispatching zero orgs as a clean success.
 
     Returns:
-        dict with the list of dispatched org_ids and a skipped count.
+        dict with the list of dispatched org_ids.
     """
     from dev_health_ops.workers.recommendations_tasks import _discover_active_org_ids
 
     db_url = db_url or _get_db_url()
 
     try:
-        candidate_org_ids = _discover_active_org_ids()
+        # strict=True: a Postgres enumeration failure must RAISE (not collapse to
+        # ["default"]) so the once-daily run retries instead of reporting a clean
+        # empty-success on a multi-tenant DB outage (CHAOS-2439).
+        candidate_org_ids = _discover_active_org_ids(strict=True)
     except Exception as exc:
-        # A transient Postgres/enumeration failure at the once-daily run must not
-        # report success while computing zero orgs (mirrors dispatch_release_impact):
-        # retry, then surface as a FAILED task rather than a silent empty success.
         logger.exception("dispatch_investment_materialize failed to enumerate orgs")
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
 
-    with_data = _orgs_with_work_graph_data(db_url, candidate_org_ids)
-
     dispatched: list[str] = []
-    skipped = 0
     for org_id in candidate_org_ids:
-        if org_id not in with_data:
-            skipped += 1
-            continue
         # Mirror the post-sync immutable chain exactly (CHAOS-2374): build FIRST,
         # then materialize, on the metrics queue. ``.si()``-equivalent immutability
         # keeps the build's return value out of materialize's positional args.
@@ -293,9 +262,5 @@ def dispatch_investment_materialize(
         chain(build_sig, materialize_sig).apply_async()
         dispatched.append(org_id)
 
-    logger.info(
-        "Investment materialize dispatch: dispatched=%d skipped=%d",
-        len(dispatched),
-        skipped,
-    )
-    return {"dispatched": dispatched, "skipped": skipped}
+    logger.info("Investment materialize dispatch: dispatched=%d", len(dispatched))
+    return {"dispatched": dispatched}

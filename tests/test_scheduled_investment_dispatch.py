@@ -66,16 +66,16 @@ def test_beat_entry_does_not_collide_with_neighbours() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _run_dispatch(
-    *,
-    active_org_ids: list[str],
-    orgs_with_data: set[str] | None = None,
-):
+def _run_dispatch(*, active_org_ids: list[str]):
     """Drive dispatch_investment_materialize with chain/signature/sources patched.
 
     Returns (signature_mock, chain_mock, chain_instances, result).
     ``chain_instances`` is the list of per-call chain instances (one per org
     that was dispatched), so tests can assert apply_async per org.
+
+    The dispatcher fans out to ALL active orgs (no output-table gate), so the
+    discovery patch is the only org source. ``strict=True`` is exercised
+    separately in the enumeration-failure test.
     """
     chain_instances: list[MagicMock] = []
 
@@ -101,12 +101,6 @@ def _run_dispatch(
             return_value=active_org_ids,
         ),
         patch(
-            "dev_health_ops.workers.work_graph_tasks._orgs_with_work_graph_data",
-            return_value=(
-                orgs_with_data if orgs_with_data is not None else set(active_org_ids)
-            ),
-        ),
-        patch(
             "dev_health_ops.workers.work_graph_tasks._get_db_url",
             return_value="clickhouse://x",
         ),
@@ -120,7 +114,7 @@ def _run_dispatch(
 
 
 def test_dispatch_queues_build_then_materialize_chain_per_org() -> None:
-    """Each org with data gets a build -> materialize chain in chained order."""
+    """Each active org gets a build -> materialize chain in chained order."""
     mock_signature, mock_chain, chain_instances, result = _run_dispatch(
         active_org_ids=["org-1", "org-2"],
     )
@@ -154,35 +148,46 @@ def test_dispatch_queues_build_then_materialize_chain_per_org() -> None:
     assert dispatched_orgs == ["org-1", "org-2"]
 
     assert result["dispatched"] == ["org-1", "org-2"]
-    assert result["skipped"] == 0
 
 
-def test_dispatch_skips_orgs_without_work_graph_data() -> None:
-    """Active orgs with no work_graph_edges are skipped (not churned)."""
-    _, mock_chain, chain_instances, result = _run_dispatch(
-        active_org_ids=["org-has-data", "org-empty"],
-        orgs_with_data={"org-has-data"},
+def test_dispatch_does_not_gate_on_work_graph_edges_output_table() -> None:
+    """CHAOS-2439 [HIGH] regression: an active org with raw synced inputs but
+    ZERO work_graph_edges rows (failed prior build / truncated graph / brand-new
+    synced-but-never-built tenant) MUST still be dispatched — the rebuild is
+    exactly what repairs it. The dispatcher therefore must NOT gate on the
+    build's own OUTPUT table.
+
+    We prove the gate is gone two ways: (1) the module exposes no
+    work_graph_edges probe helper, and (2) every active org is dispatched even
+    though no ClickHouse edge data exists in this unit context.
+    """
+    import dev_health_ops.workers.work_graph_tasks as wgt
+
+    # The output-table gate helper no longer exists.
+    assert not hasattr(wgt, "_orgs_with_work_graph_data")
+
+    _, mock_chain, _, result = _run_dispatch(
+        active_org_ids=["org-synced-no-edges-yet"],
     )
 
-    # Only the org with data gets a chain.
+    # Dispatched despite having no work_graph_edges rows.
     assert mock_chain.call_count == 1
     build_sig, _ = mock_chain.call_args.args
-    assert build_sig.sig_kwargs["kwargs"]["org_id"] == "org-has-data"
-    assert result["dispatched"] == ["org-has-data"]
-    assert result["skipped"] == 1
+    assert build_sig.sig_kwargs["kwargs"]["org_id"] == "org-synced-no-edges-yet"
+    assert result["dispatched"] == ["org-synced-no-edges-yet"]
+    # No "skipped" accounting — there is no skip path anymore.
+    assert "skipped" not in result
 
 
-def test_dispatch_no_orgs_with_data_dispatches_nothing() -> None:
-    """When no candidate org has data, nothing is queued (clean no-op)."""
-    _, mock_chain, chain_instances, result = _run_dispatch(
-        active_org_ids=["org-1", "org-2"],
-        orgs_with_data=set(),
-    )
+def test_dispatch_single_tenant_default_org() -> None:
+    """A positively-detected single-tenant install (['default']) is dispatched
+    like any other org — a cheap no-op build/materialize if it has no data."""
+    _, mock_chain, _, result = _run_dispatch(active_org_ids=["default"])
 
-    mock_chain.assert_not_called()
-    assert chain_instances == []
-    assert result["dispatched"] == []
-    assert result["skipped"] == 2
+    assert mock_chain.call_count == 1
+    build_sig, _ = mock_chain.call_args.args
+    assert build_sig.sig_kwargs["kwargs"]["org_id"] == "default"
+    assert result["dispatched"] == ["default"]
 
 
 def test_dispatch_chain_shape_matches_post_sync_dispatch() -> None:
@@ -203,9 +208,30 @@ def test_dispatch_chain_shape_matches_post_sync_dispatch() -> None:
     }
 
 
+def test_dispatch_uses_strict_discovery() -> None:
+    """The dispatcher calls discovery with strict=True so a DB outage raises
+    rather than collapsing to ['default']."""
+    with (
+        patch(
+            "dev_health_ops.workers.recommendations_tasks._discover_active_org_ids",
+            return_value=["org-1"],
+        ) as mock_discover,
+        patch("dev_health_ops.workers.work_graph_tasks.chain"),
+        patch("dev_health_ops.workers.work_graph_tasks.celery_app.signature"),
+        patch(
+            "dev_health_ops.workers.work_graph_tasks._get_db_url",
+            return_value="clickhouse://x",
+        ),
+    ):
+        dispatch_investment_materialize.run()
+
+    mock_discover.assert_called_once_with(strict=True)
+
+
 def test_dispatch_retries_on_org_enumeration_failure() -> None:
-    """A transient org-enumeration failure retries rather than reporting a silent
-    empty success (mirrors dispatch_release_impact)."""
+    """A transient org-enumeration failure (strict discovery RAISES) triggers
+    retry rather than reporting a silent empty success (mirrors
+    dispatch_release_impact)."""
 
     class _Retry(Exception):
         pass
@@ -233,31 +259,75 @@ def test_dispatch_retries_on_org_enumeration_failure() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Org-with-data probe (fail-open)
+# Strict org discovery (CHAOS-2439 finding 2)
 # ---------------------------------------------------------------------------
 
 
-def test_orgs_with_work_graph_data_fails_open_on_clickhouse_error() -> None:
-    """If the ClickHouse probe errors, return all candidate orgs (fail open) so
-    the safety net still runs."""
-    from dev_health_ops.workers.work_graph_tasks import _orgs_with_work_graph_data
+def test_discover_active_org_ids_strict_raises_on_db_error() -> None:
+    """strict=True: a Postgres enumeration error RAISES (so the once-daily
+    dispatcher retries) instead of silently returning ['default']."""
+    from dev_health_ops.workers.recommendations_tasks import _discover_active_org_ids
 
-    class _BoomSink:
-        def __init__(self, *_a: Any, **_k: Any) -> None:
-            self.client = self
+    class _BoomSession:
+        def __enter__(self):
+            raise RuntimeError("postgres down")
 
-        def query(self, *_a: Any, **_k: Any):
-            raise RuntimeError("clickhouse unreachable")
+        def __exit__(self, *a):
+            return False
+
+    import pytest
 
     with patch(
-        "dev_health_ops.metrics.sinks.clickhouse.ClickHouseMetricsSink",
-        _BoomSink,
+        "dev_health_ops.db.get_postgres_session_sync",
+        return_value=_BoomSession(),
     ):
-        out = _orgs_with_work_graph_data("clickhouse://x", ["org-1", "org-2"])
-    assert out == {"org-1", "org-2"}
+        with pytest.raises(RuntimeError, match="postgres down"):
+            _discover_active_org_ids(strict=True)
 
 
-def test_orgs_with_work_graph_data_empty_input_returns_empty() -> None:
-    from dev_health_ops.workers.work_graph_tasks import _orgs_with_work_graph_data
+def test_discover_active_org_ids_non_strict_falls_back_on_db_error() -> None:
+    """strict=False (default): a DB error still falls back to ['default'] so the
+    best-effort recommendations job is unaffected."""
+    from dev_health_ops.workers.recommendations_tasks import _discover_active_org_ids
 
-    assert _orgs_with_work_graph_data("clickhouse://x", []) == set()
+    class _BoomSession:
+        def __enter__(self):
+            raise RuntimeError("postgres down")
+
+        def __exit__(self, *a):
+            return False
+
+    with patch(
+        "dev_health_ops.db.get_postgres_session_sync",
+        return_value=_BoomSession(),
+    ):
+        assert _discover_active_org_ids() == ["default"]
+
+
+def test_discover_active_org_ids_strict_empty_table_returns_default() -> None:
+    """strict=True: a SUCCESSFUL query that finds zero active orgs still returns
+    ['default'] — the positively-detected single-tenant case is NOT an error."""
+    from dev_health_ops.workers.recommendations_tasks import _discover_active_org_ids
+
+    class _Query:
+        def filter(self, *_a: Any):
+            return self
+
+        def all(self):
+            return []
+
+    class _Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def query(self, *_a: Any):
+            return _Query()
+
+    with patch(
+        "dev_health_ops.db.get_postgres_session_sync",
+        return_value=_Session(),
+    ):
+        assert _discover_active_org_ids(strict=True) == ["default"]

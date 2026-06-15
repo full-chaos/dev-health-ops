@@ -82,12 +82,23 @@ def _daily_metrics_ready(org_id: str, day: Any) -> bool:
         return True
 
 
-def _discover_active_org_ids() -> list[str]:
+def _discover_active_org_ids(*, strict: bool = False) -> list[str]:
     """Return the IDs of all active organisations (Postgres source of truth).
 
-    Mirrors how ``dispatch_scheduled_metrics`` scopes work to live orgs. Falls
-    back to ``["default"]`` (single-tenant / community installs) when the
-    organizations table is empty or unavailable.
+    Mirrors how ``dispatch_scheduled_metrics`` scopes work to live orgs.
+
+    The ``["default"]`` fallback is only for the *positively-detected*
+    single-tenant / community case: the query SUCCEEDS but returns zero active
+    orgs. A Postgres failure is a different condition and must not be
+    indistinguishable from "no orgs".
+
+    - ``strict=False`` (default): on enumeration failure, log and fall back to
+      ``["default"]`` (preserves the existing best-effort recommendations-job
+      behaviour).
+    - ``strict=True``: on enumeration failure, RAISE so a caller wrapped in
+      Celery retry treats a multi-tenant DB outage as a retryable failure rather
+      than a silent empty-success (CHAOS-2439). The empty-table fallback still
+      applies because that is a successful query, not an error.
     """
     from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.models.users import Organization
@@ -102,6 +113,10 @@ def _discover_active_org_ids() -> list[str]:
         org_ids = [str(row[0]) for row in rows]
     except Exception:
         logger.exception("Failed to enumerate active organizations")
+        if strict:
+            # Re-raise so the once-daily dispatcher retries instead of computing
+            # zero orgs and reporting a clean success on a DB outage.
+            raise
         org_ids = []
 
     return org_ids or ["default"]

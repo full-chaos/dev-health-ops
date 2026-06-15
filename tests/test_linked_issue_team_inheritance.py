@@ -371,6 +371,52 @@ def test_github_captures_external_keys_from_body_and_branch() -> None:
     assert "gh:full-chaos/ops#5" in targets  # same-repo ref preserved
 
 
+def test_github_external_key_relationship_type_follows_keyword() -> None:
+    # Blocking intent must produce a non-inheritable relationship; closing /
+    # branch keys must produce inheritable ones.
+    class _Head:
+        ref = "user/eng-7-feature"
+
+    class _PR:
+        body = "Blocked by CHAOS-1. Fixes PROJ-2."
+        head = _Head()
+
+    deps = extract_github_dependencies(
+        work_item_id="ghpr:o/r#1", issue_or_pr=_PR(), repo_full_name="o/r"
+    )
+    rel_by_target = {
+        d.target_work_item_id: d.relationship_type
+        for d in deps
+        if d.target_work_item_id.startswith("extkey:")
+    }
+    assert rel_by_target["extkey:CHAOS-1"] == "blocked_by"  # not inheritable
+    assert rel_by_target["extkey:PROJ-2"] == "relates_to"  # inheritable
+    assert rel_by_target["extkey:ENG-7"] == "external_issue_key"  # branch, inheritable
+
+
+def test_blocked_by_external_key_does_not_drive_inheritance_end_to_end() -> None:
+    # The capture types it blocked_by and the resolver excludes that type, so a
+    # PR that merely says "blocked by CHAOS-1" never inherits the CHAOS team.
+    class _Head:
+        ref = ""
+
+    class _PR:
+        body = "Blocked by CHAOS-1."
+        head = _Head()
+
+    deps = extract_github_dependencies(
+        work_item_id="ghpr:o/r#1", issue_or_pr=_PR(), repo_full_name="o/r"
+    )
+    donor = _wi("linear:CHAOS-1", "linear", project_key="CHAOS")
+    pr = _wi("ghpr:o/r#1", "github", type="pr", project_id="o/r")
+    resolver = build_linked_issue_team_resolver(
+        work_items=[donor, pr],
+        dependencies=deps,
+        project_key_resolver=_chaos_resolver(),
+    )
+    assert resolver.resolve(pr.work_item_id) == (None, None)
+
+
 def test_gitlab_captures_external_key_from_description() -> None:
     wi = _wi(
         "gitlab:grp/proj#7",

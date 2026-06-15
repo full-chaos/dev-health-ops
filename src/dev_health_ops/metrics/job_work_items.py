@@ -450,49 +450,81 @@ def run_work_items_sync_job(
         # the sink can't be queried.
         donor_by_id: dict[str, Any] = {}
         merged_deps: dict[tuple[str, str, str], Any] = {}
-        # Only widen to the persisted superset when scoped to a tenant. Without
-        # org_id the query would read EVERY tenant's work items/edges and a PR
-        # could inherit another org's team, so fall back to this run's freshly-
-        # synced (already tenant-scoped) items/edges instead.
+
+        def _dep_key(dep: Any) -> tuple[str, str, str]:
+            return (
+                dep.source_work_item_id,
+                dep.target_work_item_id,
+                dep.relationship_type,
+            )
+
+        # Persisted edges complete the picture when an incremental run re-fetched
+        # only the PR. Only query under an explicit tenant scope — an unscoped
+        # query would read EVERY tenant's edges and let a PR inherit another
+        # org's team — and degrade gracefully on failure.
         if org_id and hasattr(primary_sink, "query_dicts"):
-            _org_where = " WHERE org_id = {org_id:String}"
-            _org_params = {"org_id": org_id}
             try:
-                for r in primary_sink.query_dicts(
-                    "SELECT * FROM work_items FINAL" + _org_where, _org_params
-                ):
-                    wi = to_dataclass(WorkItem, r)
-                    donor_by_id[wi.work_item_id] = wi
                 for r in primary_sink.query_dicts(
                     "SELECT source_work_item_id, target_work_item_id, "
                     "relationship_type, relationship_type_raw, last_synced, org_id "
-                    "FROM work_item_dependencies FINAL" + _org_where,
-                    _org_params,
+                    "FROM work_item_dependencies FINAL "
+                    "WHERE org_id = {org_id:String}",
+                    {"org_id": org_id},
                 ):
                     dep = to_dataclass(WorkItemDependency, r)
-                    merged_deps[
-                        (
-                            dep.source_work_item_id,
-                            dep.target_work_item_id,
-                            dep.relationship_type,
-                        )
-                    ] = dep
+                    merged_deps[_dep_key(dep)] = dep
             except Exception:
                 logger.warning(
-                    "Donor superset load failed; linked-issue inheritance "
-                    "limited to the sync window",
+                    "Persisted dependency load failed; inheritance limited to "
+                    "the sync window",
                     exc_info=True,
                 )
+        # Freshly-synced edges win (newest version).
+        for dep in dependencies:
+            merged_deps[_dep_key(dep)] = dep
+
+        # Load only the donor items referenced by an edge target — bounded to
+        # the linked surface, not the tenant's whole history.
+        if org_id and hasattr(primary_sink, "query_dicts"):
+            _ids: set[str] = set()
+            _keys: set[str] = set()
+            for dep in merged_deps.values():
+                target = dep.target_work_item_id
+                if target.startswith("extkey:"):
+                    _keys.add(target.split(":", 1)[1].strip().upper())
+                elif target:
+                    _ids.add(target)
+            if _ids or _keys:
+                _clauses: list[str] = []
+                _params: dict[str, Any] = {"org_id": org_id}
+                if _ids:
+                    _params["donor_ids"] = sorted(_ids)
+                    _clauses.append("work_item_id IN {donor_ids:Array(String)}")
+                if _keys:
+                    _params["donor_keys"] = sorted(_keys)
+                    _clauses.append(
+                        "upper(splitByChar(':', work_item_id)[-1]) "
+                        "IN {donor_keys:Array(String)}"
+                    )
+                try:
+                    for r in primary_sink.query_dicts(
+                        "SELECT * FROM work_items FINAL "
+                        "WHERE org_id = {org_id:String} AND ("
+                        + " OR ".join(_clauses)
+                        + ")",
+                        _params,
+                    ):
+                        wi = to_dataclass(WorkItem, r)
+                        donor_by_id[wi.work_item_id] = wi
+                except Exception:
+                    logger.warning(
+                        "Donor item load failed; inheritance limited to the "
+                        "sync window",
+                        exc_info=True,
+                    )
+        # Freshly-synced items win (newest attribution fields).
         for wi in work_items:
             donor_by_id[wi.work_item_id] = wi
-        for dep in dependencies:
-            merged_deps[
-                (
-                    dep.source_work_item_id,
-                    dep.target_work_item_id,
-                    dep.relationship_type,
-                )
-            ] = dep
 
         linked_issue_resolver = build_linked_issue_team_resolver(
             work_items=list(donor_by_id.values()),

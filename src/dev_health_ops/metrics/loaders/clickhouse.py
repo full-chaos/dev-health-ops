@@ -256,6 +256,49 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
 
         return items, transitions
 
+    async def load_work_item_dependencies_donors(
+        self,
+        work_item_ids: Any,
+        issue_keys: Any,
+    ) -> list[Any]:
+        """Load only the donor work items referenced by dependency targets.
+
+        This bounds the linked-issue inheritance donor read to the items
+        actually linked from a dependency edge, instead of hydrating the whole
+        tenant's history. ``work_item_ids`` are full target ids
+        (``gh:…``/``gitlab:…``/``jira:…``/``linear:…``); ``issue_keys`` are the
+        bare keys (e.g. ``CHAOS-2400``) from ``extkey:`` targets, matched against
+        the key suffix of Linear/Jira work-item ids. ``FINAL`` reads the latest
+        version. Returns ``[]`` when nothing is referenced.
+        """
+        from dev_health_ops.models.work_items import WorkItem
+
+        ids = sorted({str(i) for i in work_item_ids if i})
+        keys = sorted({str(k).strip().upper() for k in issue_keys if k})
+        if not ids and not keys:
+            return []
+
+        org_filter = self._org_filter()
+        params = self._inject_org_id({})
+        clauses: list[str] = []
+        if ids:
+            params["donor_ids"] = ids
+            clauses.append("work_item_id IN {donor_ids:Array(String)}")
+        if keys:
+            params["donor_keys"] = keys
+            clauses.append(
+                "upper(splitByChar(':', work_item_id)[-1]) "
+                "IN {donor_keys:Array(String)}"
+            )
+        ref_filter = " OR ".join(clauses)
+        query = f"""
+        SELECT * FROM work_items FINAL
+        WHERE ({ref_filter})
+        {org_filter}
+        """
+        rows = await _clickhouse_query_dicts(self.client, query, params)
+        return [to_dataclass(WorkItem, r) for r in rows]
+
     async def load_work_item_dependencies(self) -> list[Any]:
         """Load PR/issue dependency edges for linked-issue team inheritance.
 

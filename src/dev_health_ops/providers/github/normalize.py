@@ -857,12 +857,28 @@ _GITHUB_ISSUE_REF_PATTERN = re.compile(
 # the PR can borrow that issue's team. A 2+ letter prefix avoids matching
 # version-ish tokens like ``v1-2``; spurious keys simply never resolve.
 _EXTERNAL_KEY = r"[A-Za-z]{2,}-\d+"
+# Capture the keyword so blocking intent is preserved: "blocked by CHAOS-1"
+# must NOT become an inheritable edge (a blocker is often a different team).
 _EXTERNAL_KEY_BODY_PATTERN = re.compile(
-    r"(?:depends\s+on|blocked\s+by|blocks|fixes|closes|resolves|relates\s+to|"
+    r"(depends\s+on|blocked\s+by|blocks|fixes|closes|resolves|relates\s+to|"
     r"part\s+of|see)\s*:?\s*(" + _EXTERNAL_KEY + r")\b",
     re.IGNORECASE,
 )
 _EXTERNAL_KEY_BRANCH_PATTERN = re.compile("(" + _EXTERNAL_KEY + r")")
+
+
+def _external_key_relationship(keyword: str) -> str:
+    """Map an external-key magic word to a dependency relationship type.
+
+    Blocking words yield blocking relationships, which the inheritance resolver
+    excludes from team transfer; closing/relating words yield ``relates_to``.
+    """
+    kw = keyword.strip().lower()
+    if kw == "blocks":
+        return "blocks"
+    if kw in {"blocked by", "depends on"}:
+        return "blocked_by"
+    return "relates_to"
 
 
 def extract_github_dependencies(
@@ -934,11 +950,18 @@ def extract_github_dependencies(
     branch_ref = getattr(getattr(issue_or_pr, "head", None), "ref", "")
     if not isinstance(branch_ref, str):
         branch_ref = ""  # issues have no head; guard against mocks/None
-    external_candidates = [
-        m.group(1) for m in _EXTERNAL_KEY_BODY_PATTERN.finditer(body)
+    # (relationship_type, key) candidates. Body keys carry their keyword's
+    # intent (blocking words stay non-inheritable); branch keys are the Linear
+    # "implements this issue" convention and are inheritance-safe.
+    external_candidates: list[tuple[str, str]] = [
+        (_external_key_relationship(m.group(1)), m.group(2))
+        for m in _EXTERNAL_KEY_BODY_PATTERN.finditer(body)
     ]
-    external_candidates += _EXTERNAL_KEY_BRANCH_PATTERN.findall(branch_ref)
-    for raw_key in external_candidates:
+    external_candidates += [
+        ("external_issue_key", k)
+        for k in _EXTERNAL_KEY_BRANCH_PATTERN.findall(branch_ref)
+    ]
+    for rel_type, raw_key in external_candidates:
         key = raw_key.strip().upper()
         if not key or key in seen_external:
             continue
@@ -947,7 +970,7 @@ def extract_github_dependencies(
             WorkItemDependency(
                 source_work_item_id=work_item_id,
                 target_work_item_id=f"extkey:{key}",
-                relationship_type="relates_to",
+                relationship_type=rel_type,
                 relationship_type_raw="external_issue_key",
                 last_synced=datetime.now(timezone.utc),
             )

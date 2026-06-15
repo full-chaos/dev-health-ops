@@ -147,16 +147,21 @@ and applied to *every* work-item metric family — cycle-times
 rollups (via `_get_team`) — so a PR reads with the same team in every table
 and cross-table joins stay consistent.
 
-It must see a **donor-complete** set, not just the active window:
+It must see a **donor-complete** set, not just the active window — but the
+read is **bounded to the linked surface** (the work items actually referenced
+by a dependency edge), not the tenant's whole history, and is best-effort (a
+failed donor read degrades to no inheritance rather than aborting the run):
 
-- `job_daily` loads donor work items org-wide (`repo_id=None`) and
-  window-independent — a PR can link to an issue that completed long before
-  the metrics day, or to a repo-less Linear/Jira issue that a per-repo window
-  would exclude. Dependency edges come from
-  `ClickHouseDataLoader.load_work_item_dependencies` (`FINAL`, latest version).
+- `job_daily` reads dependency edges
+  (`ClickHouseDataLoader.load_work_item_dependencies`, `FINAL`), collects the
+  referenced target ids / external keys, and loads only those donor items via
+  `load_work_item_dependencies_donors`. This still spans repos and time (a PR
+  can close an issue completed long before the metrics day, or a repo-less
+  Linear/Jira issue) without hydrating the full history.
 - `job_work_items` (the sync) **unions** the freshly-synced items/edges with
-  the persisted ClickHouse superset (`FINAL`), so an incremental run that
-  re-fetches only the PR still finds a donor synced earlier.
+  the persisted ClickHouse edges (`FINAL`) and loads only the referenced donor
+  items, so an incremental run that re-fetches only the PR still finds a donor
+  synced earlier.
 
 All donor reads are **tenant-scoped**: the org-wide donor/edge queries run
 only under an explicit `org_id`, so a PR can never inherit a team from another

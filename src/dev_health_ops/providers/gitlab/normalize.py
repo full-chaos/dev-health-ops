@@ -448,10 +448,20 @@ _BLOCKING_KEYWORDS = {"blocks", "blocked by", "is blocked by", "blocking"}
 # Linear/Jira work item at team-inheritance time so the GitLab item can borrow
 # that issue's team — the same cross-provider recovery the GitHub path provides.
 _GITLAB_EXTERNAL_KEY_BODY_PATTERN = re.compile(
-    r"(?:depends\s+on|blocked\s+by|blocks|fixes|closes|resolves|relates\s+to|"
+    r"(depends\s+on|blocked\s+by|blocks|fixes|closes|resolves|relates\s+to|"
     r"part\s+of|see)\s*:?\s*([A-Za-z]{2,}-\d+)\b",
     re.IGNORECASE,
 )
+
+
+def _gitlab_external_key_relationship(keyword: str) -> str:
+    """Blocking words → blocking relationship (non-inheritable); else relates_to."""
+    kw = keyword.strip().lower()
+    if kw == "blocks":
+        return "blocks"
+    if kw in {"blocked by", "depends on"}:
+        return "blocked_by"
+    return "relates_to"
 
 
 def extract_gitlab_dependencies(
@@ -548,7 +558,7 @@ def extract_gitlab_dependencies(
     if description:
         seen_external: set[str] = set()
         for match in _GITLAB_EXTERNAL_KEY_BODY_PATTERN.finditer(str(description)):
-            key = match.group(1).strip().upper()
+            key = match.group(2).strip().upper()
             if not key or key in seen_external:
                 continue
             seen_external.add(key)
@@ -556,7 +566,7 @@ def extract_gitlab_dependencies(
                 WorkItemDependency(
                     source_work_item_id=work_item_id,
                     target_work_item_id=f"extkey:{key}",
-                    relationship_type="relates_to",
+                    relationship_type=_gitlab_external_key_relationship(match.group(1)),
                     relationship_type_raw="external_issue_key",
                 )
             )

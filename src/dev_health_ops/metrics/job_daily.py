@@ -761,26 +761,39 @@ async def run_daily_metrics_job(
     # PR inherit another org's team. Production workers always pass org_id;
     # an unscoped (dev/CLI) run simply skips inheritance.
     if load_work_items_enabled and load_work_items_from_db and days and org_id:
+        # Build the linked-issue inheritance resolver ONCE for the run. The
+        # donor set is bounded to the work items actually referenced by a
+        # dependency edge (not the tenant's whole history) and the read is
+        # best-effort: a failure degrades to no inheritance rather than
+        # aborting the daily job. A PR can reference a donor that completed
+        # before any metrics day, or a repo-less Linear/Jira issue, so the
+        # bounded lookup is org-wide and window-independent.
         _load_deps = getattr(loader, "load_work_item_dependencies", None)
-        if _load_deps is not None:
-            work_item_dependencies = await _load_deps()
-        # Build the resolver ONCE from a donor-complete superset. A PR can link
-        # to an issue that completed before any metrics day, or to a Linear/Jira
-        # issue that has no repo_id — so load org-wide and window-independent
-        # (from the epoch) for donor resolution, NOT the per-day repo-scoped
-        # slice used for the metrics themselves. Reused across every day so a PR
-        # is attributed identically regardless of which day it lands on.
-        donor_start = datetime(1970, 1, 1, tzinfo=timezone.utc)
-        donor_end = _utc_day_window(max(days))[1]
-        donor_items, _ = await loader.load_work_items(
-            donor_start, donor_end, None, None
-        )
-        linked_issue_resolver = build_linked_issue_team_resolver(
-            work_items=donor_items,
-            dependencies=work_item_dependencies,
-            team_resolver=team_resolver,
-            project_key_resolver=project_key_resolver,
-        )
+        _load_donors = getattr(loader, "load_work_item_dependencies_donors", None)
+        if _load_deps is not None and _load_donors is not None:
+            try:
+                work_item_dependencies = await _load_deps()
+                _target_ids: set[str] = set()
+                _issue_keys: set[str] = set()
+                for _dep in work_item_dependencies:
+                    _t = _dep.target_work_item_id
+                    if _t.startswith("extkey:"):
+                        _issue_keys.add(_t.split(":", 1)[1])
+                    elif _t:
+                        _target_ids.add(_t)
+                donor_items = await _load_donors(_target_ids, _issue_keys)
+                linked_issue_resolver = build_linked_issue_team_resolver(
+                    work_items=donor_items,
+                    dependencies=work_item_dependencies,
+                    team_resolver=team_resolver,
+                    project_key_resolver=project_key_resolver,
+                )
+            except Exception:
+                logger.warning(
+                    "Linked-issue donor load failed; skipping inheritance for this run",
+                    exc_info=True,
+                )
+                linked_issue_resolver = None
 
     for d in days:
         logger.info("Computing metrics for day=%s", d.isoformat())

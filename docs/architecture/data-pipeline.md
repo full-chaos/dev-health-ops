@@ -109,9 +109,92 @@ async def write_batch(records: List[Model], session: AsyncSession) -> int:
 - Use `argMax(<metric>, computed_at)` to get latest value
 - Re-computation is safe (idempotent via compound keys)
 
----
+### Work-item team attribution
 
-## 5. Visualization (dev-health-web)
+> See [Team Attribution](team-attribution.md) for the full architecture with
+> sequence, flowchart, ER, and component diagrams.
+
+Every work item is stamped with a `team_id` at compute time
+(`metrics/compute_work_items.py`). Resolution is a fallback cascade
+(`resolve_base_team` + one inheritance tier), first match wins:
+
+1. **Scope key** — `ProjectKeyTeamResolver.resolve(work_scope_id)`: the Jira
+   project key, GitHub/GitLab repo path, or Linear project name.
+2. **Project key** — retry with `WorkItem.project_key` (Linear's TEAM key,
+   which differs from the project name when an issue sits in a project).
+3. **Assignee membership** — `TeamResolver` maps the primary assignee's
+   canonical identity to a team via `IdentityMapping.team_ids`.
+4. **Linked-issue inheritance** — `LinkedIssueTeamResolver`: an item that
+   still resolved to no team borrows the team of an issue it links to via
+   `work_item_dependencies`. This is **provider-agnostic** — a GitHub/GitLab
+   PR inherits the team of the Linear/Jira issue it closes — and is what lets
+   PRs (which match none of tiers 1–3) share a team dimension with the issue
+   trackers in the investment allocation-coverage and team-exchange views.
+5. **`unassigned`** — the normalized sentinel when every tier misses.
+
+Cross-provider links are captured during sync as provider-neutral
+`extkey:KEY` dependency edges (GitHub: PR body magic-words + head branch;
+GitLab: issue/MR description magic-words; Jira: native `issuelinks`). The
+key is resolved to the real `linear:`/`jira:` work item at inheritance time,
+so over-capturing is harmless — a key with no matching issue never resolves,
+and a key that exists in **both** Linear and Jira is treated as ambiguous and
+dropped rather than guessed.
+Only **inheritance-safe relationship types** (`relates_to`, `relates`,
+`duplicates`, `external_issue_key`) transfer a team; blocking links
+(`blocks`/`blocked_by`), which routinely span teams, are ignored. When
+several donors match one source, the lexicographically smallest canonical
+target wins (a stable tiebreak, since ClickHouse rows are unordered).
+
+The resolver (`build_linked_issue_team_resolver`) is built **once per run**
+and applied to *every* work-item metric family — cycle-times
+(`compute_work_item_metrics_daily`), state-durations
+(`compute_work_item_state_durations_daily`), and the issue-type / investment
+rollups (via `_get_team`) — so a PR reads with the same team in every table
+and cross-table joins stay consistent.
+
+It must see a **donor-complete** set, not just the active window — but the
+read is **bounded to the linked surface** (the work items actually referenced
+by a dependency edge), not the tenant's whole history, and is best-effort (a
+failed donor read degrades to no inheritance rather than aborting the run):
+
+- `job_daily` reads dependency edges
+  (`ClickHouseDataLoader.load_work_item_dependencies`, `FINAL`) **bounded to
+  the source ids evaluated this run** (the run-window work items), collects the
+  referenced target ids / external keys, and loads only those donor items via
+  `load_work_item_dependencies_donors`. This still spans repos and time (a PR
+  can close an issue completed long before the metrics day, or a repo-less
+  Linear/Jira issue) without scanning the full graph.
+- `job_work_items` (the sync) treats the **freshly-extracted edges as
+  authoritative** for the items it synced — they are the current
+  source-of-truth, so a link removed from a PR is simply absent and stops
+  granting inheritance — and loads only the referenced donor *items* from
+  ClickHouse (bounded), so an incremental run that re-fetches only the PR still
+  finds a donor synced earlier.
+
+All donor reads are **tenant-scoped**: the org-wide donor/edge queries run
+only under an explicit `org_id`, so a PR can never inherit a team from another
+organization's issue. An unscoped (dev/CLI) run skips inheritance rather than
+reading across tenants.
+
+Because the edges are written during a **work-items sync**, a sync (not just a
+metrics recompute) is required for newly-captured links to take effect.
+
+> Note: branch-name capture trusts the head branch (the Linear convention),
+> so a contributor could in principle name a branch to force a team
+> inheritance. This is an analytics-attribution signal, not an authorization
+> boundary, and it is bounded to the contributor's own org (tenant-scoped
+> donors) and to inheritance-safe relationship types — the worst case is a
+> self-inflicted mis-attribution of one PR's team within the org — so it is
+> accepted rather than gated.
+
+> Known limitation: `work_item_dependencies` is append-only and has no
+> tombstone, so a *removed* link is not deleted from the table. The **sync**
+> path is unaffected — it re-extracts the PR's current edges, so a removed link
+> stops inheriting immediately. But a standalone **`job_daily` recompute** reads
+> persisted edges and can keep honoring a removed link until the next sync
+> re-stamps the source. A general link-lifecycle/tombstone for
+> `work_item_dependencies` (which also affects the work-graph) is tracked as a
+> follow-up.
 
 **Purpose:** Render persisted data for exploration.
 

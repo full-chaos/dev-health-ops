@@ -12,12 +12,17 @@ from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.metrics.compute_work_item_state_durations import (
     compute_work_item_state_durations_daily,
 )
-from dev_health_ops.metrics.compute_work_items import compute_work_item_metrics_daily
+from dev_health_ops.metrics.compute_work_items import (
+    build_linked_issue_team_resolver,
+    compute_work_item_metrics_daily,
+    resolve_base_team,
+)
 from dev_health_ops.metrics.job_daily import (
     REPO_ROOT,
     _discover_repos,
     _to_utc,
 )
+from dev_health_ops.metrics.loaders.base import to_dataclass
 from dev_health_ops.metrics.schemas import (
     InvestmentClassificationRecord,
     InvestmentMetricsRecord,
@@ -30,12 +35,16 @@ from dev_health_ops.metrics.work_items import (
     fetch_jira_work_items_with_extras,
     parse_github_projects_v2_env,
 )
-from dev_health_ops.models.work_items import WorkItemType
+from dev_health_ops.models.work_items import (
+    WorkItem,
+    WorkItemType,
+)
 from dev_health_ops.providers.identity import load_identity_resolver
 from dev_health_ops.providers.status_mapping import load_status_mapping
 from dev_health_ops.providers.teams import (
     build_project_key_resolver,
     load_team_resolver,
+    normalize_team_id,
 )
 from dev_health_ops.storage import detect_db_type
 from dev_health_ops.utils.cli import (
@@ -296,6 +305,22 @@ def run_work_items_sync_job(
             work_items.extend(items)
             transitions.extend(tr)
             ai_attributions.extend(gl_ai_attributions)
+            # Extract dependency edges (same-provider refs + cross-provider
+            # external keys) from each GitLab work item's description so GitLab
+            # items participate in linked-issue team inheritance like GitHub.
+            # get_attr-based extractor reads WorkItem.description directly.
+            from dev_health_ops.providers.gitlab.normalize import (
+                extract_gitlab_dependencies,
+            )
+
+            for wi in items:
+                dependencies.extend(
+                    extract_gitlab_dependencies(
+                        work_item_id=wi.work_item_id,
+                        issue=wi,
+                        project_full_path=(wi.project_id or wi.project_key or ""),
+                    )
+                )
 
         if "synthetic" in provider_set:
             from dev_health_ops.metrics.work_items import fetch_synthetic_work_items
@@ -367,7 +392,10 @@ def run_work_items_sync_job(
                 "%s: extracted %d sprint records", providers_label, len(sprints)
             )
 
-        # Stamp org_id on work items and transitions before writing to sinks
+        # Stamp org_id on work items, transitions AND dependencies before
+        # writing to sinks. Dependencies must be tagged too: the work_item_dependencies
+        # table is tenant-partitioned and the donor-read path filters by org_id,
+        # so unstamped edges would be invisible to tenant-scoped inheritance.
         if org_id:
             work_items = [
                 replace(wi, org_id=org_id) if hasattr(wi, "org_id") else wi
@@ -376,6 +404,10 @@ def run_work_items_sync_job(
             transitions = [
                 replace(t, org_id=org_id) if hasattr(t, "org_id") else t
                 for t in transitions
+            ]
+            dependencies = [
+                replace(dep, org_id=org_id) if hasattr(dep, "org_id") else dep
+                for dep in dependencies
             ]
 
         # Write raw work items and transitions to sinks
@@ -410,6 +442,79 @@ def run_work_items_sync_job(
                 )
                 s.write_ai_attribution(ai_attributions)
 
+        # Build the linked-issue team-inheritance fallback once for the whole
+        # run: PRs/MRs that map to no team of their own inherit the team of an
+        # issue they link to (provider-agnostic — e.g. a GitHub PR closing a
+        # Linear issue).
+        #
+        # Freshly-extracted edges are AUTHORITATIVE for the items synced this
+        # run — they are the current source-of-truth, so a link removed from a
+        # PR is simply absent and stops granting inheritance (no append-only
+        # stale-edge problem on the sync path). We therefore use the fresh edges
+        # only. The donor *items* they point at may have been synced earlier, so
+        # those are loaded from ClickHouse — bounded to the referenced targets,
+        # never a full-history scan — and unioned with the fresh items.
+        donor_by_id: dict[str, Any] = {}
+        merged_deps: dict[tuple[str, str, str], Any] = {}
+        for dep in dependencies:
+            merged_deps[
+                (
+                    dep.source_work_item_id,
+                    dep.target_work_item_id,
+                    dep.relationship_type,
+                )
+            ] = dep
+
+        # Load only the donor items referenced by a fresh edge target — bounded
+        # to the linked surface, under tenant scope, degrading gracefully.
+        if org_id and merged_deps and hasattr(primary_sink, "query_dicts"):
+            _ids: set[str] = set()
+            _keys: set[str] = set()
+            for dep in merged_deps.values():
+                target = dep.target_work_item_id
+                if target.startswith("extkey:"):
+                    _keys.add(target.split(":", 1)[1].strip().upper())
+                elif target:
+                    _ids.add(target)
+            if _ids or _keys:
+                _clauses: list[str] = []
+                _params: dict[str, Any] = {"org_id": org_id}
+                if _ids:
+                    _params["donor_ids"] = sorted(_ids)
+                    _clauses.append("work_item_id IN {donor_ids:Array(String)}")
+                if _keys:
+                    _params["donor_keys"] = sorted(_keys)
+                    _clauses.append(
+                        "upper(splitByChar(':', work_item_id)[-1]) "
+                        "IN {donor_keys:Array(String)}"
+                    )
+                try:
+                    for r in primary_sink.query_dicts(
+                        "SELECT * FROM work_items FINAL "
+                        "WHERE org_id = {org_id:String} AND ("
+                        + " OR ".join(_clauses)
+                        + ")",
+                        _params,
+                    ):
+                        wi = to_dataclass(WorkItem, r)
+                        donor_by_id[wi.work_item_id] = wi
+                except Exception:
+                    logger.warning(
+                        "Donor item load failed; inheritance limited to the "
+                        "sync window",
+                        exc_info=True,
+                    )
+        # Freshly-synced items win (newest attribution fields).
+        for wi in work_items:
+            donor_by_id[wi.work_item_id] = wi
+
+        linked_issue_resolver = build_linked_issue_team_resolver(
+            work_items=list(donor_by_id.values()),
+            dependencies=list(merged_deps.values()),
+            team_resolver=team_resolver,
+            project_key_resolver=pk_resolver,
+        )
+
         for d in days:
             wi_metrics, wi_user_metrics, wi_cycle_times = (
                 compute_work_item_metrics_daily(
@@ -419,6 +524,7 @@ def run_work_items_sync_job(
                     computed_at=computed_at,
                     team_resolver=team_resolver,
                     project_key_resolver=pk_resolver,
+                    linked_issue_resolver=linked_issue_resolver,
                 )
             )
             wi_state_durations = compute_work_item_state_durations_daily(
@@ -428,6 +534,7 @@ def run_work_items_sync_job(
                 computed_at=computed_at,
                 team_resolver=team_resolver,
                 project_key_resolver=pk_resolver,
+                linked_issue_resolver=linked_issue_resolver,
             )
 
             # --- Issue Type Metrics ---
@@ -436,18 +543,15 @@ def run_work_items_sync_job(
             ] = {}
 
             def _get_team(wi: Any) -> str:
-                if pk_resolver:
-                    t_id, _ = pk_resolver.resolve(
-                        getattr(wi, "work_scope_id", None)
-                        or getattr(wi, "project_key", None)
+                # Same cascade as cycle-time / state-duration compute, including
+                # the linked-issue inheritance fallback, so issue-type and
+                # investment tables never disagree with the others on a PR's team.
+                team_id, _ = resolve_base_team(wi, team_resolver, pk_resolver)
+                if team_id is None:
+                    team_id, _ = linked_issue_resolver.resolve(
+                        getattr(wi, "work_item_id", None)
                     )
-                    if t_id:
-                        return t_id
-                if getattr(wi, "assignees", None):
-                    t_id, _ = team_resolver.resolve(wi.assignees[0])
-                    if t_id:
-                        return t_id
-                return "unassigned"
+                return normalize_team_id(team_id)
 
             def _normalize_investment_team_id(team_id: str | None) -> str | None:
                 if not team_id or team_id == "unassigned":

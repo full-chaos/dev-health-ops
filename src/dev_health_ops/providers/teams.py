@@ -112,6 +112,38 @@ class RepoPatternTeamResolver:
         return None, None
 
 
+@dataclass(frozen=True)
+class LinkedIssueTeamResolver:
+    """Inherit team attribution from a linked work item.
+
+    This is the final fallback after scope-key, project-key and membership
+    resolution. A work item that itself resolves to no team — e.g. a
+    GitHub/GitLab PR whose repo maps to no team and whose author is not a
+    team member — borrows the team of an issue it links to via
+    ``work_item_dependencies``.
+
+    The mechanism is provider-agnostic: the donor issue may live in a
+    different provider than the borrowing PR (a GitHub PR inheriting from a
+    Linear or Jira issue it closes). That is exactly the cross-provider
+    recovery the team-exchange chord and allocation-coverage views need,
+    since PRs otherwise always land as ``unassigned`` and never share a team
+    dimension with the issue trackers.
+
+    Instances are cheap dict lookups; the edge walking happens once at build
+    time. Build with
+    :func:`dev_health_ops.metrics.compute_work_items.build_linked_issue_team_resolver`.
+    """
+
+    # source work_item_id -> (team_id, team_name) inherited from a linked,
+    # already-team-attributed target.
+    _inherited: Mapping[str, tuple[str, str]]
+
+    def resolve(self, work_item_id: str | None) -> tuple[str | None, str | None]:
+        if not work_item_id:
+            return None, None
+        return self._inherited.get(work_item_id, (None, None))
+
+
 def _build_member_to_team(teams_data: list) -> dict[str, tuple[str, str]]:
     """Shared helper to build identity map from a list of team-like objects or dicts."""
     member_to_team: dict[str, tuple[str, str]] = {}

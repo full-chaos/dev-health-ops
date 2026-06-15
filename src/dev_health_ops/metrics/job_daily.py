@@ -40,7 +40,10 @@ from dev_health_ops.metrics.compute_wellbeing import (
 from dev_health_ops.metrics.compute_work_item_state_durations import (
     compute_work_item_state_durations_daily,
 )
-from dev_health_ops.metrics.compute_work_items import compute_work_item_metrics_daily
+from dev_health_ops.metrics.compute_work_items import (
+    build_linked_issue_team_resolver,
+    compute_work_item_metrics_daily,
+)
 from dev_health_ops.metrics.dependencies import get_metrics_dependencies
 from dev_health_ops.metrics.hotspots import (
     compute_file_hotspots,
@@ -745,6 +748,65 @@ async def run_daily_metrics_job(
     # Rolling buffer for pipeline stability (7-day window)
     pipeline_metrics_buffer: list[Any] = []
 
+    # Work-item dependency edges are org-scoped and time-independent (a PR's
+    # link to the issue it closes does not expire), so load them once for the
+    # whole run rather than per day. They power linked-issue team inheritance.
+    # Defensive getattr: loaders without the method (or deployments missing the
+    # table) simply skip inheritance instead of failing the daily job.
+    work_item_dependencies: list[Any] = []
+    linked_issue_resolver = None
+    # Linked-issue inheritance reads org-wide (repo_id=None), so it is only
+    # safe under an explicit tenant scope: without org_id the loader's filter
+    # is empty and the donor/edge queries would span every tenant, letting a
+    # PR inherit another org's team. Production workers always pass org_id;
+    # an unscoped (dev/CLI) run simply skips inheritance.
+    if load_work_items_enabled and load_work_items_from_db and days and org_id:
+        # Build the linked-issue inheritance resolver ONCE for the run. The
+        # donor set is bounded to the work items actually referenced by a
+        # dependency edge (not the tenant's whole history) and the read is
+        # best-effort: a failure degrades to no inheritance rather than
+        # aborting the daily job. A PR can reference a donor that completed
+        # before any metrics day, or a repo-less Linear/Jira issue, so the
+        # bounded lookup is org-wide and window-independent.
+        _load_deps = getattr(loader, "load_work_item_dependencies", None)
+        _load_donors = getattr(loader, "load_work_item_dependencies_donors", None)
+        if _load_deps is not None and _load_donors is not None:
+            try:
+                # Bound the dependency read to edges whose SOURCE is a work item
+                # evaluated this run — load the run-window items once to collect
+                # those source ids — so this is never a full-graph scan on the
+                # critical daily path.
+                run_start = datetime.combine(min(days), time.min, tzinfo=timezone.utc)
+                run_end = _utc_day_window(max(days))[1]
+                run_items, _ = await loader.load_work_items(
+                    run_start, run_end, repo_id, repo_name
+                )
+                source_ids = {wi.work_item_id for wi in run_items}
+                work_item_dependencies = (
+                    await _load_deps(source_ids) if source_ids else []
+                )
+                _target_ids: set[str] = set()
+                _issue_keys: set[str] = set()
+                for _dep in work_item_dependencies:
+                    _t = _dep.target_work_item_id
+                    if _t.startswith("extkey:"):
+                        _issue_keys.add(_t.split(":", 1)[1])
+                    elif _t:
+                        _target_ids.add(_t)
+                donor_items = await _load_donors(_target_ids, _issue_keys)
+                linked_issue_resolver = build_linked_issue_team_resolver(
+                    work_items=donor_items,
+                    dependencies=work_item_dependencies,
+                    team_resolver=team_resolver,
+                    project_key_resolver=project_key_resolver,
+                )
+            except Exception:
+                logger.warning(
+                    "Linked-issue donor load failed; skipping inheritance for this run",
+                    exc_info=True,
+                )
+                linked_issue_resolver = None
+
     for d in days:
         logger.info("Computing metrics for day=%s", d.isoformat())
         start, end = _utc_day_window(d)
@@ -925,6 +987,8 @@ async def run_daily_metrics_job(
                     transitions=work_item_transitions,
                     computed_at=computed_at,
                     team_resolver=team_resolver,
+                    project_key_resolver=project_key_resolver,
+                    linked_issue_resolver=linked_issue_resolver,
                 )
             )
             # CHAOS-2377: the state-duration rollup powers /metrics Flow Sankey +
@@ -940,6 +1004,7 @@ async def run_daily_metrics_job(
                 computed_at=computed_at,
                 team_resolver=team_resolver,
                 project_key_resolver=project_key_resolver,
+                linked_issue_resolver=linked_issue_resolver,
             )
 
         review_edges = compute_review_edges_daily(

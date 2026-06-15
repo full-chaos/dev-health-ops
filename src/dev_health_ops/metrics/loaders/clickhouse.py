@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, cast
@@ -34,6 +35,8 @@ from dev_health_ops.models.atlassian_ops import (
     AtlassianOpsSchedule,
 )
 from dev_health_ops.models.teams import JiraProjectOpsTeamLink
+
+logger = logging.getLogger(__name__)
 
 
 async def _clickhouse_query_dicts(
@@ -252,6 +255,101 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         transitions = [to_dataclass(WorkItemStatusTransition, t) for t in trans_dicts]
 
         return items, transitions
+
+    async def load_work_item_dependencies_donors(
+        self,
+        work_item_ids: Any,
+        issue_keys: Any,
+    ) -> list[Any]:
+        """Load only the donor work items referenced by dependency targets.
+
+        This bounds the linked-issue inheritance donor read to the items
+        actually linked from a dependency edge, instead of hydrating the whole
+        tenant's history. ``work_item_ids`` are full target ids
+        (``gh:…``/``gitlab:…``/``jira:…``/``linear:…``); ``issue_keys`` are the
+        bare keys (e.g. ``CHAOS-2400``) from ``extkey:`` targets, matched against
+        the key suffix of Linear/Jira work-item ids. ``FINAL`` reads the latest
+        version. Returns ``[]`` when nothing is referenced.
+        """
+        from dev_health_ops.models.work_items import WorkItem
+
+        ids = sorted({str(i) for i in work_item_ids if i})
+        keys = sorted({str(k).strip().upper() for k in issue_keys if k})
+        if not ids and not keys:
+            return []
+
+        org_filter = self._org_filter()
+        params = self._inject_org_id({})
+        clauses: list[str] = []
+        if ids:
+            params["donor_ids"] = ids
+            clauses.append("work_item_id IN {donor_ids:Array(String)}")
+        if keys:
+            params["donor_keys"] = keys
+            clauses.append(
+                "upper(splitByChar(':', work_item_id)[-1]) "
+                "IN {donor_keys:Array(String)}"
+            )
+        ref_filter = " OR ".join(clauses)
+        query = f"""
+        SELECT * FROM work_items FINAL
+        WHERE ({ref_filter})
+        {org_filter}
+        """
+        rows = await _clickhouse_query_dicts(self.client, query, params)
+        return [to_dataclass(WorkItem, r) for r in rows]
+
+    async def load_work_item_dependencies(
+        self, source_work_item_ids: Any = None
+    ) -> list[Any]:
+        """Load PR/issue dependency edges for linked-issue team inheritance.
+
+        ``source_work_item_ids`` bounds the read to edges whose source is a work
+        item that will actually be evaluated this run (the only items we
+        attribute), so the daily path never scans the full org graph; passing
+        ``None`` loads all org edges. Edges are otherwise time-independent (a
+        PR's link to the issue it closes does not expire), so no date window is
+        applied — a PR can still reach a donor issue outside the metrics window.
+        ``FINAL`` collapses the ``ReplacingMergeTree(last_synced)`` table to the
+        latest version of each edge so stale/duplicate rows can't drive
+        attribution. Returns an empty list when the table is absent (older
+        deployments) rather than failing the daily job.
+        """
+        from dev_health_ops.models.work_items import WorkItemDependency
+
+        org_filter = self._org_filter()
+        params = self._inject_org_id({})
+        source_filter = ""
+        if source_work_item_ids is not None:
+            ids = sorted({str(i) for i in source_work_item_ids if i})
+            if not ids:
+                return []
+            params["dep_sources"] = ids
+            source_filter = " AND source_work_item_id IN {dep_sources:Array(String)}"
+        query = f"""
+        SELECT
+            source_work_item_id,
+            target_work_item_id,
+            relationship_type,
+            relationship_type_raw,
+            last_synced,
+            org_id
+        FROM work_item_dependencies FINAL
+        WHERE 1 = 1
+        {org_filter}
+        {source_filter}
+        ORDER BY source_work_item_id, target_work_item_id, last_synced
+        """
+        try:
+            dep_dicts = await _clickhouse_query_dicts(self.client, query, params)
+        except Exception:
+            logger.warning(
+                "load_work_item_dependencies: query failed; "
+                "skipping linked-issue inheritance",
+                exc_info=True,
+            )
+            return []
+        return [to_dataclass(WorkItemDependency, d) for d in dep_dicts]
 
     async def load_cicd_data(
         self,

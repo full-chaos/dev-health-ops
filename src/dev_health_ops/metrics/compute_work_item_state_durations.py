@@ -4,6 +4,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta, timezone
 
+from dev_health_ops.metrics.compute_work_items import resolve_base_team
 from dev_health_ops.metrics.schemas import WorkItemStateDurationDailyRecord
 from dev_health_ops.models.work_items import (
     WorkItem,
@@ -11,6 +12,7 @@ from dev_health_ops.models.work_items import (
     WorkItemStatusTransition,
 )
 from dev_health_ops.providers.teams import (
+    LinkedIssueTeamResolver,
     ProjectKeyTeamResolver,
     TeamResolver,
     normalize_team_id,
@@ -26,17 +28,21 @@ def _utc_day_window(day: date) -> tuple[datetime, datetime]:
 
 
 def _resolve_team(
+    item: WorkItem,
     team_resolver: TeamResolver | None,
     project_key_resolver: ProjectKeyTeamResolver | None,
-    work_scope_id: str | None,
-    identity: str | None,
+    linked_issue_resolver: LinkedIssueTeamResolver | None,
 ) -> tuple[str, str]:
-    team_id: str | None = None
-    team_name: str | None = None
-    if project_key_resolver is not None:
-        team_id, team_name = project_key_resolver.resolve(work_scope_id)
-    if not team_id and team_resolver is not None:
-        team_id, team_name = team_resolver.resolve(identity)
+    """Resolve an item's team using the same cascade as the cycle-time compute.
+
+    Shares ``resolve_base_team`` (scope key → project_key → assignee) and the
+    linked-issue inheritance fallback so a PR is attributed to the SAME team in
+    state-duration rows as in ``work_item_cycle_times`` — otherwise the same
+    item could read as a donor team in one table and ``unassigned`` in another.
+    """
+    team_id, team_name = resolve_base_team(item, team_resolver, project_key_resolver)
+    if team_id is None and linked_issue_resolver is not None:
+        team_id, team_name = linked_issue_resolver.resolve(item.work_item_id)
     return normalize_team_id(team_id), normalize_team_name(team_name)
 
 
@@ -100,6 +106,7 @@ def compute_work_item_state_durations_daily(
     computed_at: datetime,
     team_resolver: TeamResolver | None = None,
     project_key_resolver: ProjectKeyTeamResolver | None = None,
+    linked_issue_resolver: LinkedIssueTeamResolver | None = None,
 ) -> list[WorkItemStateDurationDailyRecord]:
     """
     Compute per-day time-in-state totals from status transitions.
@@ -130,12 +137,11 @@ def compute_work_item_state_durations_daily(
         if not item_transitions:
             continue
 
-        assignee = item.assignees[0] if item.assignees else None
         team_id, team_name = _resolve_team(
+            item,
             team_resolver,
             project_key_resolver,
-            item.work_scope_id,
-            assignee,
+            linked_issue_resolver,
         )
         work_scope_id = item.work_scope_id or ""
         team_name_by_key[(item.provider, work_scope_id, team_id)] = team_name

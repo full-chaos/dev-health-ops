@@ -10,8 +10,13 @@ from dev_health_ops.metrics.schemas import (
     WorkItemMetricsDailyRecord,
     WorkItemUserMetricsDailyRecord,
 )
-from dev_health_ops.models.work_items import WorkItem, WorkItemStatusTransition
+from dev_health_ops.models.work_items import (
+    WorkItem,
+    WorkItemDependency,
+    WorkItemStatusTransition,
+)
 from dev_health_ops.providers.teams import (
+    LinkedIssueTeamResolver,
     ProjectKeyTeamResolver,
     TeamResolver,
     normalize_team_id,
@@ -49,6 +54,162 @@ def _resolve_team(
     if team_resolver is None:
         return None, None
     return team_resolver.resolve(identity)
+
+
+def resolve_base_team(
+    item: WorkItem,
+    team_resolver: TeamResolver | None,
+    project_key_resolver: ProjectKeyTeamResolver | None,
+) -> tuple[str | None, str | None]:
+    """Resolve a work item's team via scope key, then project_key, then assignee.
+
+    Returns ``(None, None)`` when no mapping matches (i.e. the item would
+    normalize to ``unassigned``). This is the first three attribution tiers;
+    linked-issue inheritance is layered on top by callers. Shared by the
+    per-day metrics loop and :func:`build_linked_issue_team_resolver` so both
+    apply identical rules — an item only becomes an inheritance donor if it
+    resolves to a real team here.
+    """
+    work_scope_id = item.work_scope_id or ""
+    team_id: str | None = None
+    team_name: str | None = None
+    if project_key_resolver is not None:
+        team_id, team_name = project_key_resolver.resolve(work_scope_id)
+        # Linear: work_scope_id is the project name when the issue sits in a
+        # project, but team mappings carry the TEAM key (the item's
+        # project_key) — retry with it before the membership fallback.
+        if team_id is None and item.project_key:
+            project_key = str(item.project_key)
+            if project_key != work_scope_id:
+                team_id, team_name = project_key_resolver.resolve(project_key)
+    if team_id is None:
+        assignee = item.assignees[0] if item.assignees else None
+        team_id, team_name = _resolve_team(team_resolver, assignee)
+    return team_id, team_name
+
+
+# Relationship types that mean "this item does (or duplicates) the work of the
+# linked issue" — the only edges from which it is sound to inherit a team. A
+# blocking relationship (`blocks`/`blocked_by`/`is_blocked_by`) connects items
+# that are frequently owned by *different* teams, so it must NOT drive
+# attribution. `external_issue_key` is the provider-neutral cross-provider edge
+# emitted by the PR parsers (a PR closing a Linear/Jira issue).
+_INHERITABLE_RELATIONSHIP_TYPES = frozenset(
+    {"relates_to", "relates", "duplicates", "external_issue_key"}
+)
+
+
+def build_linked_issue_team_resolver(
+    *,
+    work_items: Sequence[WorkItem],
+    dependencies: Sequence[WorkItemDependency],
+    team_resolver: TeamResolver | None = None,
+    project_key_resolver: ProjectKeyTeamResolver | None = None,
+) -> LinkedIssueTeamResolver:
+    """Build the cross-item team-inheritance fallback from dependency edges.
+
+    Any work item that resolves to a real team via :func:`resolve_base_team`
+    becomes an attribution *donor*. A linked work item that resolves to no
+    team inherits the first donor team reachable through a
+    ``work_item_dependencies`` edge where it is the ``source`` (PRs are the
+    source of their ``fixes``/``closes``/``relates_to`` edges).
+
+    ``extkey:KEY`` targets — emitted by the PR parsers for cross-provider
+    references such as a Linear/Jira issue key mentioned in a PR body or
+    branch name — are matched against Linear/Jira work-item keys so a GitHub
+    PR can inherit from the Linear issue it closes even though the two live in
+    different providers.
+    """
+    donor_team: dict[str, tuple[str, str]] = {}
+    base_resolved: dict[str, str | None] = {}
+    # Issue KEY (e.g. CHAOS-2400, PROJ-12) -> work_item_id, for resolving the
+    # provider-neutral ``extkey:`` targets emitted by PR parsers. ``extkey``
+    # carries no provider, so if the SAME key exists in both Linear and Jira it
+    # is genuinely ambiguous — those keys are tracked separately and never
+    # resolve, so an ambiguous link is dropped rather than guessed.
+    key_index: dict[str, str] = {}
+    ambiguous_keys: set[str] = set()
+
+    for item in work_items:
+        wid = item.work_item_id
+        team_id, team_name = resolve_base_team(
+            item, team_resolver, project_key_resolver
+        )
+        base_resolved[wid] = team_id
+        if team_id:
+            donor_team[wid] = (team_id, team_name or team_id)
+        if item.provider in ("linear", "jira") and ":" in wid:
+            k = wid.split(":", 1)[1].strip().upper()
+            if k in ambiguous_keys:
+                continue
+            existing = key_index.get(k)
+            if existing is not None and existing != wid:
+                del key_index[k]
+                ambiguous_keys.add(k)  # same key in two providers — ambiguous
+            else:
+                key_index[k] = wid
+
+    def _canonical_target(target_id: str) -> str | None:
+        if target_id.startswith("extkey:"):
+            # Missing or ambiguous keys both return None → no inheritance.
+            return key_index.get(target_id.split(":", 1)[1].strip().upper())
+        return target_id
+
+    def _recency(dep: WorkItemDependency) -> float:
+        last = dep.last_synced
+        try:
+            return last.timestamp() if last is not None else 0.0
+        except (ValueError, OverflowError, OSError):
+            return 0.0
+
+    # Collapse to one edge per (source, target), keeping the latest by
+    # last_synced — so a relationship-type change (e.g. relates_to -> blocked_by)
+    # supersedes the stale row instead of leaving an old inheritable edge alive
+    # alongside the new one. On identical timestamps the lexicographically
+    # smaller relationship_type wins, which deterministically prefers the safer
+    # blocking type (`blocked_by`/`blocks` < `relates_to`) over inheriting.
+    latest_edge: dict[tuple[str, str], WorkItemDependency] = {}
+    for dep in dependencies:
+        pair = (dep.source_work_item_id, dep.target_work_item_id)
+        cur = latest_edge.get(pair)
+        if (
+            cur is None
+            or _recency(dep) > _recency(cur)
+            or (
+                _recency(dep) == _recency(cur)
+                and dep.relationship_type < cur.relationship_type
+            )
+        ):
+            latest_edge[pair] = dep
+
+    # Collect every valid donor candidate per source, then pick deterministically
+    # so attribution never depends on edge/storage order (ClickHouse rows have no
+    # inherent ordering). When a source links several team-attributed issues, the
+    # lexicographically smallest canonical target wins — a stable, run-independent
+    # tiebreak. The common case is a single donor, where the choice is moot.
+    candidates: dict[str, list[tuple[str, tuple[str, str]]]] = {}
+    for dep in latest_edge.values():
+        # Only "does-the-work-of"/duplicate links transfer a team; skip blocking
+        # and other relationships that routinely span teams.
+        if dep.relationship_type not in _INHERITABLE_RELATIONSHIP_TYPES:
+            continue
+        source_id = dep.source_work_item_id
+        # Only items that resolve to no team of their own need a donor; never
+        # override a real attribution. (missing => treat as unresolved.)
+        if base_resolved.get(source_id) is not None:
+            continue
+        target_id = _canonical_target(dep.target_work_item_id)
+        if not target_id:
+            continue
+        donor = donor_team.get(target_id)
+        if donor is not None:
+            candidates.setdefault(source_id, []).append((target_id, donor))
+
+    inherited: dict[str, tuple[str, str]] = {
+        source_id: min(cands, key=lambda c: c[0])[1]
+        for source_id, cands in candidates.items()
+    }
+    return LinkedIssueTeamResolver(_inherited=inherited)
 
 
 WAIT_STATUSES = {
@@ -169,6 +330,7 @@ def compute_work_item_metrics_daily(
     computed_at: datetime,
     team_resolver: TeamResolver | None = None,
     project_key_resolver: ProjectKeyTeamResolver | None = None,
+    linked_issue_resolver: LinkedIssueTeamResolver | None = None,
 ) -> tuple[
     list[WorkItemMetricsDailyRecord],
     list[WorkItemUserMetricsDailyRecord],
@@ -210,18 +372,14 @@ def compute_work_item_metrics_daily(
             continue
 
         assignee = item.assignees[0] if item.assignees else None
-        team_id, team_name = None, None
-        if project_key_resolver is not None:
-            team_id, team_name = project_key_resolver.resolve(work_scope_id)
-            # Linear: work_scope_id is the project name when the issue sits
-            # in a project, but team mappings carry the TEAM key (the item's
-            # project_key) — retry with it before the membership fallback.
-            if team_id is None and item.project_key:
-                project_key = str(item.project_key)
-                if project_key != work_scope_id:
-                    team_id, team_name = project_key_resolver.resolve(project_key)
-        if team_id is None:
-            team_id, team_name = _resolve_team(team_resolver, assignee)
+        team_id, team_name = resolve_base_team(
+            item, team_resolver, project_key_resolver
+        )
+        # Final fallback: inherit team from a linked issue (e.g. a PR that
+        # closes a Linear/Jira issue). Provider-agnostic; only fills items
+        # that resolved to no team of their own.
+        if team_id is None and linked_issue_resolver is not None:
+            team_id, team_name = linked_issue_resolver.resolve(item.work_item_id)
         team_id_norm = normalize_team_id(team_id)
         team_name_norm = normalize_team_name(team_name)
 

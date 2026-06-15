@@ -1,0 +1,515 @@
+"""Tests for cross-provider linked-issue team inheritance.
+
+A PR/MR that maps to no team of its own inherits the team of an issue it links
+to via ``work_item_dependencies``. The mechanism is provider-agnostic: a GitHub
+PR or GitLab MR can inherit from a Linear or Jira issue (matched through a
+``extkey:KEY`` edge), and same-provider links work too. This is the recovery
+path that lets PRs share a team dimension with the issue trackers in the
+allocation-coverage and team-exchange views.
+"""
+
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, cast
+
+from dev_health_ops.metrics.compute_work_item_state_durations import (
+    compute_work_item_state_durations_daily,
+)
+from dev_health_ops.metrics.compute_work_items import (
+    build_linked_issue_team_resolver,
+    compute_work_item_metrics_daily,
+    resolve_base_team,
+)
+from dev_health_ops.models.work_items import (
+    WorkItem,
+    WorkItemDependency,
+    WorkItemStatusTransition,
+)
+from dev_health_ops.providers.github.normalize import extract_github_dependencies
+from dev_health_ops.providers.gitlab.normalize import extract_gitlab_dependencies
+from dev_health_ops.providers.teams import ProjectKeyTeamResolver, TeamResolver
+
+START = datetime(2026, 6, 1, tzinfo=timezone.utc)
+
+
+def _wi(work_item_id: str, provider: str, **kw: object) -> WorkItem:
+    defaults: dict[str, object] = dict(
+        title="t",
+        type="task",
+        status="done",
+        status_raw="Done",
+        created_at=START - timedelta(days=2),
+        updated_at=START + timedelta(hours=2),
+        started_at=START,
+        completed_at=START + timedelta(hours=2),
+        closed_at=START + timedelta(hours=2),
+        labels=[],
+    )
+    defaults.update(kw)
+    return WorkItem(work_item_id=work_item_id, provider=provider, **defaults)  # type: ignore[arg-type]
+
+
+def _chaos_resolver() -> ProjectKeyTeamResolver:
+    return ProjectKeyTeamResolver(
+        project_key_to_team={"CHAOS": ("CHAOS", "Chaos Team")}
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Resolver / builder unit behaviour
+# --------------------------------------------------------------------------- #
+
+
+def test_pr_inherits_team_from_linked_linear_issue_via_extkey() -> None:
+    linear = _wi("linear:CHAOS-2400", "linear", project_key="CHAOS")
+    pr = _wi("ghpr:full-chaos/ops#12", "github", type="pr", project_id="full-chaos/ops")
+    deps = [
+        WorkItemDependency(
+            source_work_item_id=pr.work_item_id,
+            target_work_item_id="extkey:CHAOS-2400",
+            relationship_type="relates_to",
+            relationship_type_raw="external_issue_key",
+        )
+    ]
+    resolver = build_linked_issue_team_resolver(
+        work_items=[linear, pr],
+        dependencies=deps,
+        project_key_resolver=_chaos_resolver(),
+    )
+    assert resolver.resolve(pr.work_item_id) == ("CHAOS", "Chaos Team")
+    # The donor itself resolves to a real team directly, so it needs no
+    # inherited entry.
+    assert resolver.resolve(linear.work_item_id) == (None, None)
+
+
+def test_same_provider_github_pr_to_issue_inheritance() -> None:
+    # GitHub issue mapped to a team by repo-keyed project resolver; the PR lives
+    # in a different, unmapped repo (so it can't self-resolve) and links to it.
+    issue = _wi("gh:team-a/svc#5", "github", project_id="team-a/svc")
+    pr = _wi("ghpr:contrib/forks#9", "github", type="pr", project_id="contrib/forks")
+    pkr = ProjectKeyTeamResolver(
+        project_key_to_team={"team-a/svc": ("team-a", "Team A")}
+    )
+    deps = [
+        WorkItemDependency(
+            source_work_item_id=pr.work_item_id,
+            target_work_item_id=issue.work_item_id,
+            relationship_type="relates_to",
+            relationship_type_raw="relates_to",
+        )
+    ]
+    resolver = build_linked_issue_team_resolver(
+        work_items=[issue, pr], dependencies=deps, project_key_resolver=pkr
+    )
+    assert resolver.resolve(pr.work_item_id) == ("team-a", "Team A")
+
+
+def test_inheritance_never_overrides_a_real_team() -> None:
+    # Source already resolves to its own team; the edge must not change it.
+    owned_pr = _wi("ghpr:x/y#1", "github", project_id="x/y", project_key="CHAOS")
+    other = _wi("linear:OTHER-1", "linear", project_key="OTHER")
+    deps = [
+        WorkItemDependency(
+            source_work_item_id=owned_pr.work_item_id,
+            target_work_item_id="extkey:OTHER-1",
+            relationship_type="relates_to",
+            relationship_type_raw="external_issue_key",
+        )
+    ]
+    pkr = ProjectKeyTeamResolver(
+        project_key_to_team={"CHAOS": ("CHAOS", "Chaos Team"), "OTHER": ("OTHER", "O")}
+    )
+    resolver = build_linked_issue_team_resolver(
+        work_items=[owned_pr, other], dependencies=deps, project_key_resolver=pkr
+    )
+    # resolve_base_team already returns CHAOS, so the source isn't in the
+    # inherited map at all.
+    assert resolver.resolve(owned_pr.work_item_id) == (None, None)
+    assert resolve_base_team(owned_pr, None, pkr) == ("CHAOS", "Chaos Team")
+
+
+def test_blocking_relationships_do_not_drive_inheritance() -> None:
+    # blocks / blocked_by / is_blocked_by routinely span teams, so they must
+    # NOT transfer a team. Only "does-the-work-of"/duplicate links do.
+    donor = _wi("linear:CHAOS-1", "linear", project_key="CHAOS")
+    pkr = _chaos_resolver()
+    for rel in ("blocks", "blocked_by", "is_blocked_by", "other"):
+        pr = _wi("ghpr:x/y#1", "github", type="pr", project_id="x/y")
+        deps = [WorkItemDependency(pr.work_item_id, donor.work_item_id, rel, rel)]
+        resolver = build_linked_issue_team_resolver(
+            work_items=[donor, pr], dependencies=deps, project_key_resolver=pkr
+        )
+        assert resolver.resolve(pr.work_item_id) == (None, None), rel
+    # ...but a relates/closing edge to the same donor does inherit.
+    pr = _wi("ghpr:x/y#1", "github", type="pr", project_id="x/y")
+    deps = [
+        WorkItemDependency(pr.work_item_id, donor.work_item_id, "relates_to", "fixes")
+    ]
+    resolver = build_linked_issue_team_resolver(
+        work_items=[donor, pr], dependencies=deps, project_key_resolver=pkr
+    )
+    assert resolver.resolve(pr.work_item_id) == ("CHAOS", "Chaos Team")
+
+
+def test_newer_blocking_edge_supersedes_stale_inheritable_edge() -> None:
+    # An edge corrected from relates_to -> blocked_by must stop inheriting, even
+    # if the stale relates_to row is still present (different ReplacingMergeTree
+    # version). Latest last_synced per (source,target) wins.
+    donor = _wi("linear:CHAOS-1", "linear", project_key="CHAOS")
+    pr = _wi("ghpr:x/y#1", "github", type="pr", project_id="x/y")
+    old = WorkItemDependency(
+        pr.work_item_id,
+        donor.work_item_id,
+        "relates_to",
+        "fixes",
+        last_synced=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    new = WorkItemDependency(
+        pr.work_item_id,
+        donor.work_item_id,
+        "blocked_by",
+        "blocked by",
+        last_synced=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    # Order-independent: stale relates_to never wins once superseded.
+    for deps in ([old, new], [new, old]):
+        resolver = build_linked_issue_team_resolver(
+            work_items=[donor, pr],
+            dependencies=deps,
+            project_key_resolver=_chaos_resolver(),
+        )
+        assert resolver.resolve(pr.work_item_id) == (None, None)
+    # The reverse correction (blocking -> relates) re-enables inheritance.
+    newer_relates = WorkItemDependency(
+        pr.work_item_id,
+        donor.work_item_id,
+        "relates_to",
+        "fixes",
+        last_synced=datetime(2026, 7, 1, tzinfo=timezone.utc),
+    )
+    resolver = build_linked_issue_team_resolver(
+        work_items=[donor, pr],
+        dependencies=[new, newer_relates],
+        project_key_resolver=_chaos_resolver(),
+    )
+    assert resolver.resolve(pr.work_item_id) == ("CHAOS", "Chaos Team")
+
+
+def test_ambiguous_extkey_across_providers_is_dropped() -> None:
+    # extkey carries no provider. If the same key exists in BOTH Linear and
+    # Jira, the link is genuinely ambiguous and must not be guessed.
+    linear = _wi("linear:CHAOS-1", "linear", project_key="CHAOS")
+    jira = _wi("jira:CHAOS-1", "jira", project_key="CHAOS")
+    pr = _wi("ghpr:x/y#1", "github", type="pr", project_id="x/y")
+    deps = [WorkItemDependency(pr.work_item_id, "extkey:CHAOS-1", "relates_to", "k")]
+    pkr = ProjectKeyTeamResolver(project_key_to_team={"CHAOS": ("CHAOS", "Chaos Team")})
+    # Order-independent: ambiguity is detected regardless of which item is seen
+    # first.
+    for items in ([linear, jira, pr], [jira, linear, pr]):
+        resolver = build_linked_issue_team_resolver(
+            work_items=items, dependencies=deps, project_key_resolver=pkr
+        )
+        assert resolver.resolve(pr.work_item_id) == (None, None)
+
+
+def test_unresolvable_extkey_yields_no_inheritance() -> None:
+    pr = _wi("ghpr:x/y#1", "github", type="pr", project_id="x/y")
+    deps = [
+        WorkItemDependency(
+            source_work_item_id=pr.work_item_id,
+            target_work_item_id="extkey:GHOST-9",  # no such issue in the batch
+            relationship_type="relates_to",
+            relationship_type_raw="external_issue_key",
+        )
+    ]
+    resolver = build_linked_issue_team_resolver(
+        work_items=[pr], dependencies=deps, project_key_resolver=_chaos_resolver()
+    )
+    assert resolver.resolve(pr.work_item_id) == (None, None)
+
+
+def test_multiple_donors_resolved_deterministically_regardless_of_order() -> None:
+    # ClickHouse rows have no inherent order; multi-donor selection must not
+    # depend on edge order. Smallest canonical target wins, both orderings.
+    pr = _wi("ghpr:x/y#1", "github", type="pr", project_id="x/y")
+    a = _wi("linear:AAA-1", "linear", project_key="AAA")
+    b = _wi("linear:BBB-1", "linear", project_key="BBB")
+    pkr = ProjectKeyTeamResolver(
+        project_key_to_team={"AAA": ("aaa", "A"), "BBB": ("bbb", "B")}
+    )
+    forward = [
+        WorkItemDependency(pr.work_item_id, "extkey:AAA-1", "relates_to", "k"),
+        WorkItemDependency(pr.work_item_id, "extkey:BBB-1", "relates_to", "k"),
+    ]
+    reverse = list(reversed(forward))
+    r1 = build_linked_issue_team_resolver(
+        work_items=[pr, a, b], dependencies=forward, project_key_resolver=pkr
+    )
+    r2 = build_linked_issue_team_resolver(
+        work_items=[pr, a, b], dependencies=reverse, project_key_resolver=pkr
+    )
+    # linear:AAA-1 < linear:BBB-1, so 'aaa' wins for both input orders.
+    assert r1.resolve(pr.work_item_id) == ("aaa", "A")
+    assert r2.resolve(pr.work_item_id) == ("aaa", "A")
+
+
+def test_donor_completed_outside_metrics_window_still_attributes() -> None:
+    # Regression for the daily-path donor-completeness fix: the donor issue
+    # completed long before the metrics day. The resolver is built from a
+    # window-independent donor superset, so the PR (computed on a later day)
+    # still inherits. The resolver itself is date-agnostic; this documents the
+    # contract the job relies on by supplying an old donor + a recent PR.
+    old_donor = _wi(
+        "linear:CHAOS-1",
+        "linear",
+        project_key="CHAOS",
+        created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        completed_at=datetime(2025, 1, 2, tzinfo=timezone.utc),
+    )
+    pr = _wi("ghpr:full-chaos/ops#99", "github", type="pr", project_id="full-chaos/ops")
+    deps = [WorkItemDependency(pr.work_item_id, "extkey:CHAOS-1", "relates_to", "k")]
+    resolver = build_linked_issue_team_resolver(
+        work_items=[old_donor, pr],
+        dependencies=deps,
+        project_key_resolver=_chaos_resolver(),
+    )
+    assert resolver.resolve(pr.work_item_id) == ("CHAOS", "Chaos Team")
+
+
+# --------------------------------------------------------------------------- #
+# End-to-end through the per-day metrics compute (the cycle-times producer)
+# --------------------------------------------------------------------------- #
+
+
+def test_compute_stamps_inherited_team_on_cycle_times() -> None:
+    day = date(2026, 6, 1)
+    linear = _wi("linear:CHAOS-2400", "linear", project_key="CHAOS")
+    pr = _wi("ghpr:full-chaos/ops#12", "github", type="pr", project_id="full-chaos/ops")
+    deps = [
+        WorkItemDependency(
+            source_work_item_id=pr.work_item_id,
+            target_work_item_id="extkey:CHAOS-2400",
+            relationship_type="relates_to",
+            relationship_type_raw="external_issue_key",
+        )
+    ]
+    pkr = _chaos_resolver()
+    resolver = build_linked_issue_team_resolver(
+        work_items=[linear, pr], dependencies=deps, project_key_resolver=pkr
+    )
+
+    _, _, cycle_times = compute_work_item_metrics_daily(
+        day=day,
+        work_items=[linear, pr],
+        transitions=[],
+        computed_at=START,
+        project_key_resolver=pkr,
+        linked_issue_resolver=resolver,
+    )
+    by_id = {c.work_item_id: c for c in cycle_times}
+    assert by_id[pr.work_item_id].team_id == "CHAOS"
+    assert by_id[pr.work_item_id].team_name == "Chaos Team"
+    assert by_id[linear.work_item_id].team_id == "CHAOS"
+
+
+def test_cycle_times_and_state_durations_agree_on_inherited_team() -> None:
+    # The same PR must read with the SAME team in both work_item_cycle_times
+    # and work_item_state_durations — otherwise BI rollups that join the two
+    # see contradictory team slices.
+    day = date(2026, 6, 1)
+    linear = _wi("linear:CHAOS-2400", "linear", project_key="CHAOS")
+    pr = _wi("ghpr:full-chaos/ops#12", "github", type="pr", project_id="full-chaos/ops")
+    deps = [WorkItemDependency(pr.work_item_id, "extkey:CHAOS-2400", "relates_to", "k")]
+    pkr = _chaos_resolver()
+    resolver = build_linked_issue_team_resolver(
+        work_items=[linear, pr], dependencies=deps, project_key_resolver=pkr
+    )
+    # state-durations needs a transition to emit a row.
+    transitions = [
+        WorkItemStatusTransition(
+            work_item_id=pr.work_item_id,
+            provider="github",
+            occurred_at=START + timedelta(hours=1),
+            from_status_raw=None,
+            to_status_raw="closed",
+            from_status="in_progress",
+            to_status="done",
+        )
+    ]
+    _, _, cycle_times = compute_work_item_metrics_daily(
+        day=day,
+        work_items=[pr],
+        transitions=transitions,
+        computed_at=START,
+        project_key_resolver=pkr,
+        linked_issue_resolver=resolver,
+    )
+    state_rows = compute_work_item_state_durations_daily(
+        day=day,
+        work_items=[pr],
+        transitions=transitions,
+        computed_at=START + timedelta(hours=6),
+        project_key_resolver=pkr,
+        linked_issue_resolver=resolver,
+    )
+    assert cycle_times[0].team_id == "CHAOS"
+    assert state_rows, "expected at least one state-duration row"
+    assert {r.team_id for r in state_rows} == {"CHAOS"}
+
+
+def test_compute_without_resolver_leaves_pr_unassigned() -> None:
+    # Regression guard: absent the resolver, the PR is still 'unassigned'
+    # (proves the inheritance — not some other path — is what fixes it).
+    day = date(2026, 6, 1)
+    pr = _wi("ghpr:full-chaos/ops#12", "github", type="pr", project_id="full-chaos/ops")
+    _, _, cycle_times = compute_work_item_metrics_daily(
+        day=day,
+        work_items=[pr],
+        transitions=[],
+        computed_at=START,
+        project_key_resolver=_chaos_resolver(),
+        linked_issue_resolver=None,
+    )
+    assert cycle_times[0].team_id == "unassigned"
+
+
+def test_membership_team_still_wins_over_inheritance() -> None:
+    # A PR whose author is a team member resolves via membership; inheritance
+    # is only a fallback and must not run.
+    day = date(2026, 6, 1)
+    pr = _wi(
+        "ghpr:full-chaos/ops#12",
+        "github",
+        type="pr",
+        project_id="full-chaos/ops",
+        assignees=["bob@example.com"],
+    )
+    other = _wi("linear:OTHER-1", "linear", project_key="OTHER")
+    deps = [WorkItemDependency(pr.work_item_id, "extkey:OTHER-1", "relates_to", "k")]
+    pkr = ProjectKeyTeamResolver(project_key_to_team={"OTHER": ("other", "Other")})
+    team_resolver = TeamResolver(
+        member_to_team={"bob@example.com": ("platform", "Platform")}
+    )
+    resolver = build_linked_issue_team_resolver(
+        work_items=[pr, other],
+        dependencies=deps,
+        team_resolver=team_resolver,
+        project_key_resolver=pkr,
+    )
+    _, _, cycle_times = compute_work_item_metrics_daily(
+        day=day,
+        work_items=[pr],
+        transitions=[],
+        computed_at=START,
+        team_resolver=team_resolver,
+        project_key_resolver=pkr,
+        linked_issue_resolver=resolver,
+    )
+    assert cycle_times[0].team_id == "platform"
+
+
+# --------------------------------------------------------------------------- #
+# Provider link capture emits the edges the mechanism consumes
+# --------------------------------------------------------------------------- #
+
+
+def test_github_captures_external_keys_from_body_and_branch() -> None:
+    class _Head:
+        ref = "chris/chaos-2400-fix"
+
+    class _PR:
+        body = "This PR closes CHAOS-2401 and fixes #5."
+        head = _Head()
+
+    deps = extract_github_dependencies(
+        work_item_id="ghpr:full-chaos/ops#12",
+        issue_or_pr=cast(Any, _PR()),
+        repo_full_name="full-chaos/ops",
+    )
+    targets = {d.target_work_item_id for d in deps}
+    assert "extkey:CHAOS-2400" in targets  # from branch name
+    assert "extkey:CHAOS-2401" in targets  # from body magic word
+    assert "gh:full-chaos/ops#5" in targets  # same-repo ref preserved
+
+
+def test_github_external_key_relationship_type_follows_keyword() -> None:
+    # Blocking intent must produce a non-inheritable relationship; closing /
+    # branch keys must produce inheritable ones.
+    class _Head:
+        ref = "user/eng-7-feature"
+
+    class _PR:
+        body = "Blocked by CHAOS-1. Fixes PROJ-2."
+        head = _Head()
+
+    deps = extract_github_dependencies(
+        work_item_id="ghpr:o/r#1", issue_or_pr=cast(Any, _PR()), repo_full_name="o/r"
+    )
+    rel_by_target = {
+        d.target_work_item_id: d.relationship_type
+        for d in deps
+        if d.target_work_item_id.startswith("extkey:")
+    }
+    assert rel_by_target["extkey:CHAOS-1"] == "blocked_by"  # not inheritable
+    assert rel_by_target["extkey:PROJ-2"] == "relates_to"  # inheritable
+    assert rel_by_target["extkey:ENG-7"] == "external_issue_key"  # branch, inheritable
+
+
+def test_blocked_by_external_key_does_not_drive_inheritance_end_to_end() -> None:
+    # The capture types it blocked_by and the resolver excludes that type, so a
+    # PR that merely says "blocked by CHAOS-1" never inherits the CHAOS team.
+    class _Head:
+        ref = ""
+
+    class _PR:
+        body = "Blocked by CHAOS-1."
+        head = _Head()
+
+    deps = extract_github_dependencies(
+        work_item_id="ghpr:o/r#1", issue_or_pr=cast(Any, _PR()), repo_full_name="o/r"
+    )
+    donor = _wi("linear:CHAOS-1", "linear", project_key="CHAOS")
+    pr = _wi("ghpr:o/r#1", "github", type="pr", project_id="o/r")
+    resolver = build_linked_issue_team_resolver(
+        work_items=[donor, pr],
+        dependencies=deps,
+        project_key_resolver=_chaos_resolver(),
+    )
+    assert resolver.resolve(pr.work_item_id) == (None, None)
+
+
+def test_gitlab_captures_external_key_from_description() -> None:
+    wi = _wi(
+        "gitlab:grp/proj#7",
+        "gitlab",
+        type="issue",
+        description="Depends on PROJ-99 for the backend work",
+    )
+    deps = extract_gitlab_dependencies(
+        work_item_id=wi.work_item_id,
+        issue=wi,
+        project_full_path="grp/proj",
+    )
+    assert any(d.target_work_item_id == "extkey:PROJ-99" for d in deps)
+
+
+def test_jira_native_link_drives_inheritance() -> None:
+    # Jira issues link to each other natively; an unassigned Jira issue inherits
+    # from a linked, team-attributed Jira issue.
+    owned = _wi("jira:CHAOS-1", "jira", project_key="CHAOS")
+    orphan = _wi("jira:LOOSE-9", "jira", project_key="LOOSE")  # no team mapping
+    deps = [
+        WorkItemDependency(
+            source_work_item_id=orphan.work_item_id,
+            target_work_item_id=owned.work_item_id,
+            relationship_type="relates_to",
+            relationship_type_raw="relates",
+        )
+    ]
+    resolver = build_linked_issue_team_resolver(
+        work_items=[owned, orphan],
+        dependencies=deps,
+        project_key_resolver=_chaos_resolver(),
+    )
+    assert resolver.resolve(orphan.work_item_id) == ("CHAOS", "Chaos Team")

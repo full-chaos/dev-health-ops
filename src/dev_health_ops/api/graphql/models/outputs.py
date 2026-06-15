@@ -552,11 +552,23 @@ class WorkGraphEdgeResult:
 
 @strawberry.type
 class WorkGraphEdgesResult:
-    """Result for work graph edges query."""
+    """Result for work graph edges query.
+
+    ``degraded_reason`` (wire: ``degradedReason``) is non-null only when a
+    theme/subcategory filter was requested, the matched set is empty, and the
+    org has ``work_unit_investments`` rows but ZERO ``work_unit_membership`` rows
+    (latest-run scoped) — i.e. the post-migration investment materialization
+    that populates ``work_unit_membership`` has not run yet. In that case it is
+    ``"MEMBERSHIP_NOT_MATERIALIZED"`` so the client can distinguish a transient
+    rollout state from a genuine empty result. It is ``None`` in every other
+    case, including a genuine empty result when membership data exists
+    (CHAOS-2430).
+    """
 
     edges: list[WorkGraphEdgeResult]
     total_count: int
     page_info: PageInfo
+    degraded_reason: str | None = None
 
 
 # =============================================================================

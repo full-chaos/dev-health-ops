@@ -13,8 +13,12 @@ tests prove:
 - Staleness scopes per NODE (max(computed_at) per (org, node_type, node_id)),
   fixing split/merge; an obsolete category from a prior component disappears.
 - The no-filter path is unchanged (issue>pr precedence annotation preserved).
-- Org isolation; AND-composition with repo/edge_type; the empty-membership
-  rollout probe fires only when the filter yields nothing.
+- Annotation ALWAYS reports the node's DOMINANT category on both paths — the
+  theme filter selects which edges show, never what edge.theme reports (a unit
+  matched under its secondary theme still reports its dominant).
+- Org isolation; AND-composition with repo/edge_type; degraded_reason is
+  MEMBERSHIP_NOT_MATERIALIZED only when a filter yields nothing AND investments
+  exist with zero membership rows, else None.
 """
 
 from __future__ import annotations
@@ -67,6 +71,29 @@ def make_edge_row(
     return base
 
 
+def dominant_rows(
+    node_type: str,
+    node_id: str,
+    theme: str,
+    subcategory: str,
+) -> list[dict[str, Any]]:
+    """The is_dominant rows the annotation query returns for one node."""
+    return [
+        {
+            "node_type": node_type,
+            "node_id": node_id,
+            "category_kind": "theme",
+            "category": theme,
+        },
+        {
+            "node_type": node_type,
+            "node_id": node_id,
+            "category_kind": "subcategory",
+            "category": subcategory,
+        },
+    ]
+
+
 class TestThemeFilterServerSide:
     @pytest.mark.asyncio
     async def test_exists_semijoin_and_limit_in_one_query(self, mock_context):
@@ -89,17 +116,22 @@ class TestThemeFilterServerSide:
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
-            # Single edge query (human-readable ids → no display-name lookup;
-            # rows non-empty → no empty-membership probe).
-            mock_query.side_effect = [edge_rows]
+            # Call 0 = the single combined edge+membership SELECT (EXISTS + LIMIT).
+            # Call 1 = the dominant-annotation lookup for the returned endpoints.
+            # (Human-readable ids → no display-name lookup; rows non-empty → no
+            # degraded probe.)
+            mock_query.side_effect = [
+                edge_rows,
+                dominant_rows("issue", "SPARSE-1", "feature_delivery", "x.y"),
+            ]
             filters = WorkGraphEdgeFilterInput(theme="feature_delivery", limit=1000)
             result = await resolve_work_graph_edges(mock_context, filters)
 
         assert len(result.edges) == 1
         assert result.edges[0].edge_id == "sparse-edge"
 
-        # Exactly one query: the edge SELECT carrying the EXISTS + LIMIT.
-        assert mock_query.call_count == 1
+        # The EDGE selection itself is ONE combined plan (EXISTS + LIMIT in the
+        # first query); the second call is annotation-only, not a filter prefetch.
         edge_sql = mock_query.call_args_list[0][0][1]
         edge_params = mock_query.call_args_list[0][0][2]
         # The membership semi-join is correlated on both endpoints, in the WHERE.
@@ -133,7 +165,8 @@ class TestThemeFilterServerSide:
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
-            mock_query.side_effect = [edge_rows]
+            # edge query + dominant-annotation lookup.
+            mock_query.side_effect = [edge_rows, []]
             filters = WorkGraphEdgeFilterInput(theme="feature_delivery")
             await resolve_work_graph_edges(mock_context, filters)
 
@@ -148,33 +181,45 @@ class TestThemeFilterServerSide:
         assert "GROUP BY work_unit_id" not in edge_sql
 
     @pytest.mark.asyncio
-    async def test_theme_filter_returns_matching_edges(self, mock_context):
-        """Edges returned are annotated with the requested theme (filtered path)."""
+    async def test_theme_filter_returns_matching_edges_annotated_with_dominant(
+        self, mock_context
+    ):
+        """The filter selects which edges show; annotation reports each node's
+        actual DOMINANT category (from the is_dominant rows), not the request."""
         edge_rows = [
             make_edge_row(edge_id="e1", source_type="issue", source_id="FD-1"),
             make_edge_row(edge_id="e2", source_type="issue", source_id="FD-2"),
         ]
+        # Both nodes matched feature_delivery, but their DOMINANT differs.
+        annotation_rows = dominant_rows(
+            "issue", "FD-1", "feature_delivery", "feature_delivery.roadmap"
+        ) + dominant_rows("issue", "FD-2", "maintenance", "maintenance.refactor")
 
         with patch(
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
-            mock_query.side_effect = [edge_rows]
+            mock_query.side_effect = [edge_rows, annotation_rows]
             filters = WorkGraphEdgeFilterInput(theme="feature_delivery")
             result = await resolve_work_graph_edges(mock_context, filters)
 
         assert {e.edge_id for e in result.edges} == {"e1", "e2"}
-        assert all(e.theme == "feature_delivery" for e in result.edges)
+        by_id = {e.edge_id: e for e in result.edges}
+        # e1's dominant matches the filter; e2 matched feature_delivery as a
+        # SECONDARY theme but still reports its dominant (maintenance).
+        assert by_id["e1"].theme == "feature_delivery"
+        assert by_id["e2"].theme == "maintenance"
 
     @pytest.mark.asyncio
-    async def test_empty_result_fires_membership_probe(self, mock_context):
-        """A theme filter that returns no edges triggers the rollout probe
-        (observability), which queries membership/investment counts."""
+    async def test_degraded_state_when_membership_unmaterialized(self, mock_context):
+        """Empty filter result + investments>0 + membership==0 (latest-run
+        scoped) → edges=[] with degraded_reason=MEMBERSHIP_NOT_MATERIALIZED."""
         with patch(
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
-            # Edge query empty → probe runs (2nd call), returns counts.
+            # Edge query empty → degraded probe runs (2nd call) and reports
+            # zero membership rows but non-zero investments.
             mock_query.side_effect = [
                 [],
                 [{"membership_rows": 0, "investment_rows": 5}],
@@ -184,11 +229,73 @@ class TestThemeFilterServerSide:
 
         assert result.edges == []
         assert result.total_count == 0
-        # The edge query plus the observability probe.
+        assert result.degraded_reason == "MEMBERSHIP_NOT_MATERIALIZED"
+        # The edge query plus the degraded-state probe.
         assert mock_query.call_count == 2
         probe_sql = mock_query.call_args_list[1][0][1]
         assert "work_unit_membership" in probe_sql
         assert "work_unit_investments" in probe_sql
+        # The probe counts membership scoped to each node's latest run.
+        assert "max(computed_at) AS max_computed_at" in probe_sql
+
+    @pytest.mark.asyncio
+    async def test_genuine_empty_is_not_degraded(self, mock_context):
+        """Empty filter result but membership rows EXIST (no match) → not a
+        degraded state: degraded_reason is None."""
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [
+                [],
+                [{"membership_rows": 42, "investment_rows": 100}],
+            ]
+            filters = WorkGraphEdgeFilterInput(theme="risk")
+            result = await resolve_work_graph_edges(mock_context, filters)
+
+        assert result.edges == []
+        assert result.degraded_reason is None
+
+    @pytest.mark.asyncio
+    async def test_no_investments_empty_is_not_degraded(self, mock_context):
+        """Empty filter result with no investments at all → None (nothing to
+        materialize, so not a rollout-degraded state)."""
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [
+                [],
+                [{"membership_rows": 0, "investment_rows": 0}],
+            ]
+            filters = WorkGraphEdgeFilterInput(theme="risk")
+            result = await resolve_work_graph_edges(mock_context, filters)
+
+        assert result.edges == []
+        assert result.degraded_reason is None
+
+    @pytest.mark.asyncio
+    async def test_non_empty_result_has_no_degraded_reason(self, mock_context):
+        """When the filter returns edges, degraded_reason is None and no probe
+        runs."""
+        edge_rows = [make_edge_row(edge_id="e1", source_type="issue", source_id="FD-1")]
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [
+                edge_rows,
+                dominant_rows(
+                    "issue", "FD-1", "feature_delivery", "feature_delivery.roadmap"
+                ),
+            ]
+            filters = WorkGraphEdgeFilterInput(theme="feature_delivery")
+            result = await resolve_work_graph_edges(mock_context, filters)
+
+        assert [e.edge_id for e in result.edges] == ["e1"]
+        assert result.degraded_reason is None
+        # Calls: edge query + annotation. No degraded probe (rows non-empty).
+        assert mock_query.call_count == 2
 
     @pytest.mark.asyncio
     async def test_theme_and_subcategory_requires_both(self, mock_context):
@@ -199,7 +306,12 @@ class TestThemeFilterServerSide:
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
-            mock_query.side_effect = [edge_rows]
+            mock_query.side_effect = [
+                edge_rows,
+                dominant_rows(
+                    "issue", "FD-1", "feature_delivery", "feature_delivery.roadmap"
+                ),
+            ]
             filters = WorkGraphEdgeFilterInput(
                 theme="feature_delivery", subcategory="feature_delivery.roadmap"
             )
@@ -212,28 +324,32 @@ class TestThemeFilterServerSide:
             "feature_delivery.roadmap",
         ) in edge_params["category_tuples"]
         assert edge_params["wanted_count"] == 2
-        # Annotated with both the theme and subcategory.
+        # Annotated with the node's dominant theme and subcategory.
         assert result.edges[0].theme == "feature_delivery"
         assert result.edges[0].subcategory == "feature_delivery.roadmap"
 
     @pytest.mark.asyncio
     async def test_subcategory_only_matches_on_subcategory_tuple(self, mock_context):
-        """A subcategory-only filter matches on the subcategory tuple (wanted=1)
-        and derives the theme prefix for display annotation."""
+        """A subcategory-only filter matches on the subcategory tuple (wanted=1).
+        Annotation reports the node's actual dominant (from membership), not the
+        requested subcategory."""
         edge_rows = [make_edge_row(edge_id="e1", source_type="issue", source_id="FD-1")]
 
         with patch(
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
-            mock_query.side_effect = [edge_rows]
+            mock_query.side_effect = [
+                edge_rows,
+                dominant_rows("issue", "FD-1", "quality", "quality.testing"),
+            ]
             filters = WorkGraphEdgeFilterInput(subcategory="quality.testing")
             result = await resolve_work_graph_edges(mock_context, filters)
 
         edge_params = mock_query.call_args_list[0][0][2]
         assert edge_params["category_tuples"] == [("subcategory", "quality.testing")]
         assert edge_params["wanted_count"] == 1
-        # Display annotation derives the theme prefix from 'theme.sub'.
+        # Annotation comes from the node's dominant is_dominant rows.
         assert result.edges[0].theme == "quality"
         assert result.edges[0].subcategory == "quality.testing"
 
@@ -246,7 +362,7 @@ class TestThemeFilterServerSide:
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
-            mock_query.side_effect = [edge_rows]
+            mock_query.side_effect = [edge_rows, []]
             filters = WorkGraphEdgeFilterInput(theme="feature_delivery")
             await resolve_work_graph_edges(mock_context, filters)
 
@@ -327,7 +443,7 @@ class TestThemeFilterServerSide:
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
-            mock_query.side_effect = [edge_rows]
+            mock_query.side_effect = [edge_rows, []]
             filters = WorkGraphEdgeFilterInput(
                 theme="feature_delivery",
                 repo_ids=["repo-a"],
@@ -344,26 +460,34 @@ class TestThemeFilterServerSide:
         assert edge_params["edge_type"] == "implements"
 
     @pytest.mark.asyncio
-    async def test_mixed_unit_findable_under_both_themes(self, mock_context):
-        """Multi-membership: a node on a 45/40 unit matches under EITHER theme.
-        The edge query returns the edge under both theme filters (the DB EXISTS
-        enforces the membership; the resolver annotates with the requested
-        theme)."""
+    async def test_mixed_unit_matched_under_secondary_reports_dominant(
+        self, mock_context
+    ):
+        """Multi-membership: a node on a 45%-feature / 40%-maintenance unit is
+        findable under EITHER theme — but its annotation ALWAYS reports the
+        DOMINANT (feature_delivery), even when matched under the secondary
+        (maintenance). The filter selects the edge; it never changes edge.theme.
+        """
         edge_rows = [
             make_edge_row(edge_id="e1", source_type="issue", source_id="MIX-1")
         ]
+        # The node's dominant is feature_delivery regardless of which theme matched.
+        annotation = dominant_rows(
+            "issue", "MIX-1", "feature_delivery", "feature_delivery.roadmap"
+        )
 
         for theme in ("feature_delivery", "maintenance"):
             with patch(
                 "dev_health_ops.api.queries.client.query_dicts",
                 new_callable=AsyncMock,
             ) as mock_query:
-                mock_query.side_effect = [edge_rows]
+                mock_query.side_effect = [edge_rows, annotation]
                 filters = WorkGraphEdgeFilterInput(theme=theme)
                 result = await resolve_work_graph_edges(mock_context, filters)
 
+            # Found under both themes (DB EXISTS enforces membership)...
             assert [e.edge_id for e in result.edges] == ["e1"]
-            assert result.edges[0].theme == theme
             edge_params = mock_query.call_args_list[0][0][2]
-            assert (theme, theme) != edge_params  # sanity: params populated
             assert ("theme", theme) in edge_params["category_tuples"]
+            # ...but always reports the DOMINANT, not the requested filter theme.
+            assert result.edges[0].theme == "feature_delivery"

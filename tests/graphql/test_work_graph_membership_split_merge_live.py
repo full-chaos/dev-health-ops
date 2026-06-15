@@ -176,6 +176,7 @@ async def test_split_merge_old_categories_disappear(sink):
     )
     sink.client.insert("work_graph_edges", edge_rows, column_names=_edge_cols())
 
+    assert CLICKHOUSE_URI is not None  # narrowed by pytestmark.skipif
     context = GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink)
 
     try:

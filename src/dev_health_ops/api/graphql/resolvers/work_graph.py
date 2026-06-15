@@ -258,9 +258,6 @@ def _row_to_edge(
     row: dict[str, Any],
     resolved: dict[str, str] | None = None,
     membership: dict[tuple[str, str], dict[str, str]] | None = None,
-    *,
-    filter_theme: str | None = None,
-    filter_subcategory: str | None = None,
 ) -> WorkGraphEdgeResult:
     source_id = str(row.get("source_id", ""))
     target_id = str(row.get("target_id", ""))
@@ -270,17 +267,15 @@ def _row_to_edge(
     theme: str | None = None
     subcategory: str | None = None
 
-    if filter_theme is not None or filter_subcategory is not None:
-        # Filtered path: every returned edge touches a work unit of the
-        # requested theme by construction, so annotate with the matched filter
-        # value to keep display consistent with what the caller asked for.
-        theme = filter_theme
-        subcategory = filter_subcategory
-    elif membership is not None:
-        # Unfiltered path: resolve theme/subcategory from work_unit_membership.
-        # Precedence: ISSUE endpoint > PR endpoint > other endpoint types.
-        # Both source and target are checked; when types differ the issue wins.
-        # If neither endpoint has membership data, fields remain None.
+    # edge.theme / edge.subcategory ALWAYS report the node's DOMINANT category
+    # (the is_dominant row), on BOTH the filtered and unfiltered paths. A theme
+    # filter only selects WHICH edges are shown — it never changes what the
+    # annotation reports — so a mixed-membership unit matched under its secondary
+    # theme still reports its dominant theme here (not the requested filter
+    # value). Precedence: ISSUE endpoint > PR endpoint > other endpoint types;
+    # both endpoints are checked and the issue wins when types differ. Fields
+    # stay None when neither endpoint has membership data.
+    if membership is not None:
         endpoint_preference = [
             (source_type_raw, source_id),
             (target_type_raw, target_id),
@@ -481,11 +476,23 @@ def _build_theme_filter(
     }
 
 
-async def _warn_if_membership_unpopulated(client: Any, org_id: str) -> None:
-    """Log a diagnostic when a theme filter returns nothing but the org HAS
-    categorized work units — i.e. work_unit_membership is likely unpopulated
-    because the post-migration investment materialization rerun has not run yet
-    (CHAOS-2430 rollout). Observability only; never changes the response.
+# Wire value consumed by the web client to distinguish a transient rollout state
+# (membership table not yet populated) from a genuine empty theme-filter result.
+MEMBERSHIP_NOT_MATERIALIZED = "MEMBERSHIP_NOT_MATERIALIZED"
+
+
+async def _detect_membership_degraded_reason(client: Any, org_id: str) -> str | None:
+    """Return MEMBERSHIP_NOT_MATERIALIZED when a theme filter yielded nothing
+    because work_unit_membership is unpopulated for an org that HAS categorized
+    work units, else None.
+
+    Degraded iff: the org has >= 1 work_unit_investments row AND ZERO
+    work_unit_membership rows. The membership count is scoped to each node's
+    latest run (a row is "live" only if its computed_at equals the node's max)
+    so leftover rows from a prior component never mask a truly empty table —
+    consistent with the per-node staleness used everywhere else (CHAOS-2430).
+    Also emits the rollout warning log (observability retained). Never raises:
+    on probe failure it returns None so the request is unaffected.
     """
     from dev_health_ops.api.queries.client import query_dicts
 
@@ -494,20 +501,35 @@ async def _warn_if_membership_unpopulated(client: Any, org_id: str) -> None:
             client,
             """
             SELECT
-                (SELECT count() FROM work_unit_membership WHERE org_id = %(org_id)s)
-                    AS membership_rows,
-                (SELECT count() FROM work_unit_investments WHERE org_id = %(org_id)s)
-                    AS investment_rows
+                (
+                    SELECT count()
+                    FROM work_unit_membership AS m
+                    INNER JOIN (
+                        SELECT node_type, node_id, max(computed_at) AS max_computed_at
+                        FROM work_unit_membership
+                        WHERE org_id = %(org_id)s
+                        GROUP BY node_type, node_id
+                    ) AS latest
+                        ON m.node_type = latest.node_type
+                       AND m.node_id = latest.node_id
+                       AND m.computed_at = latest.max_computed_at
+                    WHERE m.org_id = %(org_id)s
+                ) AS membership_rows,
+                (
+                    SELECT count()
+                    FROM work_unit_investments
+                    WHERE org_id = %(org_id)s
+                ) AS investment_rows
             """,
             {"org_id": org_id},
         )
     except Exception:
-        # Never let an observability probe affect the request.
+        # Never let the degraded-state probe affect the request.
         logger.debug("membership-population probe failed", exc_info=True)
-        return
+        return None
 
     if not rows:
-        return
+        return None
     membership_rows = int(rows[0].get("membership_rows") or 0)
     investment_rows = int(rows[0].get("investment_rows") or 0)
     if membership_rows == 0 and investment_rows > 0:
@@ -519,6 +541,8 @@ async def _warn_if_membership_unpopulated(client: Any, org_id: str) -> None:
             org_id,
             investment_rows,
         )
+        return MEMBERSHIP_NOT_MATERIALIZED
+    return None
 
 
 async def resolve_work_graph_edges(
@@ -602,37 +626,24 @@ async def resolve_work_graph_edges(
 
     rows = await query_dicts(client, query, params)
 
-    # Observability (CHAOS-2430 rollout): a theme filter that yields zero edges
-    # is a legitimate empty state, but immediately after deploy it can instead
-    # mean work_unit_membership has not been populated yet (the table is empty
-    # until the next investment materialization rerun). Emit a one-line signal
-    # in that case so an all-empty-filter situation is diagnosable. Observability
-    # only — behavior is unchanged (no silent fallback that masks real empties).
+    # Degraded-state signal (CHAOS-2430 rollout): a theme filter that yields zero
+    # edges is normally a legitimate empty state, but immediately after deploy it
+    # can instead mean work_unit_membership has not been populated yet (the table
+    # is empty until the next investment materialization rerun). Surface that as
+    # degraded_reason=MEMBERSHIP_NOT_MATERIALIZED so the client distinguishes a
+    # transient rollout state from a genuine empty result. No silent fallback —
+    # edges stay [] either way.
+    degraded_reason: str | None = None
     if theme_filter_active and not rows:
-        await _warn_if_membership_unpopulated(client, org_id)
+        degraded_reason = await _detect_membership_degraded_reason(client, org_id)
+
     resolved = await _batch_resolve_display_names(client, org_id, rows)
 
-    if theme_filter_active:
-        # On the filtered path, annotate each returned edge with the matched
-        # filter value (theme + subcategory if supplied) rather than the
-        # issue>pr precedence value, so display stays consistent with what the
-        # caller asked for. Every returned edge touches the matched set by
-        # construction, so no extra membership round-trip is needed.
-        filter_theme = theme_filter or (
-            subcategory_filter.split(".", 1)[0] if subcategory_filter else None
-        )
-        edges = [
-            _row_to_edge(
-                row,
-                resolved,
-                filter_theme=filter_theme,
-                filter_subcategory=subcategory_filter,
-            )
-            for row in rows
-        ]
-    else:
-        membership = await _batch_resolve_membership(client, org_id, rows)
-        edges = [_row_to_edge(row, resolved, membership) for row in rows]
+    # Annotation ALWAYS reports each edge's dominant theme/subcategory (the
+    # is_dominant rows), on both the filtered and unfiltered paths — the theme
+    # filter only selects which edges are shown, never what is reported.
+    membership = await _batch_resolve_membership(client, org_id, rows)
+    edges = [_row_to_edge(row, resolved, membership) for row in rows]
 
     return WorkGraphEdgesResult(
         edges=edges,
@@ -643,4 +654,5 @@ async def resolve_work_graph_edges(
             start_cursor=edges[0].edge_id if edges else None,
             end_cursor=edges[-1].edge_id if edges else None,
         ),
+        degraded_reason=degraded_reason,
     )

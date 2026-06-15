@@ -956,6 +956,24 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                     ):
                         sink.write_work_unit_investments(work_unit_investments)
 
+                    # Populate work_unit_membership so fixtures/e2e exercise theme
+                    # filtering and the degraded path is only hit pre-materialization
+                    # (CHAOS-2430). Derived from the investment distributions above.
+                    generate_work_unit_memberships = getattr(
+                        metric_gen, "generate_work_unit_memberships", None
+                    )
+                    if (
+                        callable(generate_work_unit_memberships)
+                        and hasattr(sink, "write_work_unit_memberships")
+                        and work_unit_investments
+                    ):
+                        work_unit_memberships = generate_work_unit_memberships(
+                            work_unit_investments,
+                            org_id=org_id,
+                        )
+                        if work_unit_memberships:
+                            sink.write_work_unit_memberships(work_unit_memberships)
+
                     hotspot_records = metric_gen.generate_file_hotspot_daily(
                         days=ns.days
                     )

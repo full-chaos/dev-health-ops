@@ -188,18 +188,32 @@ class ClickHouseCore(BaseMetricsSink):
             row[0] for row in (getattr(applied_result, "result_rows", []) or [])
         )
 
-        # Collect all migration files
+        # Collect all migration files using the same sort order as the apply loop
+        # so the fast-path "latest" comparison is consistent.
         migration_files = sorted(
             list(migrations_dir.glob("*.sql")) + list(migrations_dir.glob("*.py"))
         )
 
+        # Fast-path: if the DB has already applied every file on disk, skip the
+        # per-file loop entirely.  We compare the last element of the sorted
+        # file list (latest migration on disk) against applied_versions, which
+        # is the single cheapest check possible (O(1) set lookup after the
+        # already-necessary full SELECT).  This avoids ~50 log lines and the
+        # iteration overhead on every CLI invocation when the schema is current.
+        if migration_files and migration_files[-1].name in applied_versions:
+            logger.debug(
+                "ClickHouse schema is current (latest: %s) — skipping migration loop",
+                migration_files[-1].name,
+            )
+            return
+
         for path in migration_files:
             version = path.name
             if version in applied_versions:
-                logger.info(f"Skipping already applied migration: {version}")
+                logger.debug("Skipping already applied migration: %s", version)
                 continue
 
-            logger.info(f"Applying migration: {version}")
+            logger.info("Applying migration: %s", version)
 
             if path.suffix == ".sql":
                 try:

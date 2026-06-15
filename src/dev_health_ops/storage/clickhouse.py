@@ -135,14 +135,27 @@ class ClickHouseStore:
                 row[0] for row in (getattr(applied_result, "result_rows", []) or [])
             )
 
-            # Collect all migration files
+            # Collect all migration files using the same sort order as the apply
+            # loop so the fast-path "latest" comparison is consistent with it.
             migration_files = sorted(
                 list(migrations_dir.glob("*.sql")) + list(migrations_dir.glob("*.py"))
             )
 
+            # Fast-path: if the last file in the sorted list (latest migration on
+            # disk) is already in applied_versions, the schema is current — skip
+            # the per-file loop entirely.  This avoids iteration and log noise on
+            # every CLI invocation when no migrations are pending.
+            if migration_files and migration_files[-1].name in applied_versions:
+                logger.debug(
+                    "ClickHouse schema is current (latest: %s) — skipping migration loop",
+                    migration_files[-1].name,
+                )
+                return
+
             for path in migration_files:
                 version = path.name
                 if version in applied_versions:
+                    logger.debug("Skipping already applied migration: %s", version)
                     continue
 
                 if path.suffix == ".sql":

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlsplit
 
 from dev_health_ops.models.work_items import (
     Sprint,
     WorkItem,
+    WorkItemDependency,
     WorkItemInteractionEvent,
     WorkItemReopenEvent,
     WorkItemStatusCategory,
@@ -59,6 +62,69 @@ def _status_from_state_type(state_type: str | None) -> WorkItemStatusCategory:
     if not state_type:
         return "unknown"
     return LINEAR_STATE_TYPE_MAP.get(state_type.lower(), "unknown")
+
+
+# Linear's GitHub/GitLab integration records a linked PR/MR as an issue
+# *attachment* whose ``url`` points at the PR/MR. This is the authoritative
+# link (Linear -> source control), unlike a PR body/branch which often only
+# references the issue in a bot comment. The URL host+path is provider-agnostic:
+# GitHub uses ``/{owner}/{repo}/pull/{n}`` (any host, incl. Enterprise),
+# GitLab uses ``/{group/.../project}/-/merge_requests/{n}`` (incl. self-hosted).
+_GITHUB_PR_URL_RE = re.compile(r"^/(?P<repo>.+?)/pull/(?P<num>\d+)/?$")
+_GITLAB_MR_URL_RE = re.compile(r"^/(?P<project>.+?)/-/merge_requests/(?P<num>\d+)/?$")
+
+
+def _work_item_id_from_pr_url(url: str | None) -> str | None:
+    """Map a linked PR/MR URL to the matching work-item id, or None.
+
+    Returns ``ghpr:{owner}/{repo}#{n}`` for a GitHub PR and
+    ``gitlab:{project_path}!{n}`` for a GitLab MR — the same ids those
+    providers mint — so the edge resolves directly to the PR/MR work item.
+    """
+    if not url:
+        return None
+    try:
+        path = urlsplit(str(url)).path
+    except ValueError:
+        return None
+    if not path:
+        return None
+    gh = _GITHUB_PR_URL_RE.match(path)
+    if gh:
+        return f"ghpr:{gh.group('repo')}#{gh.group('num')}"
+    gl = _GITLAB_MR_URL_RE.match(path)
+    if gl:
+        return f"gitlab:{gl.group('project')}!{gl.group('num')}"
+    return None
+
+
+def extract_linear_dependencies(
+    *, issue: Any, work_item_id: str
+) -> list[WorkItemDependency]:
+    """Emit PR/MR -> Linear-issue edges from an issue's linked attachments.
+
+    The PR/MR is the EDGE SOURCE and the Linear issue (which carries the team)
+    is the TARGET, so the linked-issue inheritance resolver attributes the
+    unassigned PR/MR to this issue's team. Provider-agnostic via URL parsing;
+    non-PR attachments (Figma, Slack, plain links) are ignored.
+    """
+    deps: list[WorkItemDependency] = []
+    seen: set[str] = set()
+    attachments = _get(issue, "attachments", "nodes") or []
+    for att in attachments:
+        pr_id = _work_item_id_from_pr_url(_get(att, "url"))
+        if not pr_id or pr_id in seen:
+            continue
+        seen.add(pr_id)
+        deps.append(
+            WorkItemDependency(
+                source_work_item_id=pr_id,
+                target_work_item_id=work_item_id,
+                relationship_type="relates_to",
+                relationship_type_raw="linear_attachment",
+            )
+        )
+    return deps
 
 
 def _type_from_labels(labels: list[str]) -> WorkItemType:

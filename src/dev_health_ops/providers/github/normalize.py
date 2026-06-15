@@ -979,6 +979,45 @@ def extract_github_dependencies(
     return dependencies
 
 
+# Bare external (Linear/Jira) issue keys as they appear in a PR comment — e.g.
+# the Linear integration bot's "CHAOS-2400" linkback. Uppercase-only to avoid
+# matching version-ish tokens; resolution still drops keys with no matching
+# issue, so over-capture is harmless.
+_EXTERNAL_KEY_COMMENT_PATTERN = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b")
+
+
+def extract_github_comment_dependencies(
+    *, work_item_id: str, comment_bodies: Sequence[str | None]
+) -> list[WorkItemDependency]:
+    """Secondary capture: external issue keys mentioned in a PR's comments.
+
+    The Linear/Jira reference on a GitHub PR frequently lives only in an
+    integration bot comment, not the PR body or branch. Emitted as ``extkey:``
+    edges (inheritable ``relates_to``) so the PR can inherit the linked issue's
+    team when the authoritative Linear-attachment edge is unavailable.
+    """
+    deps: list[WorkItemDependency] = []
+    seen: set[str] = set()
+    for body in comment_bodies:
+        if not body:
+            continue
+        for match in _EXTERNAL_KEY_COMMENT_PATTERN.finditer(str(body)):
+            key = match.group(1).strip().upper()
+            if key in seen:
+                continue
+            seen.add(key)
+            deps.append(
+                WorkItemDependency(
+                    source_work_item_id=work_item_id,
+                    target_work_item_id=f"extkey:{key}",
+                    relationship_type="relates_to",
+                    relationship_type_raw="github_comment",
+                    last_synced=datetime.now(timezone.utc),
+                )
+            )
+    return deps
+
+
 def enrich_work_item_with_priority(
     work_item: WorkItem,
     labels: Sequence[str],

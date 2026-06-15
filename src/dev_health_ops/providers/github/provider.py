@@ -103,6 +103,7 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
             detect_github_reopen_events,
             detect_pr_attributions,
             enrich_work_item_with_priority,
+            extract_github_comment_dependencies,
             extract_github_dependencies,
             github_comment_to_interaction_event,
             github_issue_to_work_item,
@@ -356,6 +357,17 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                                 )
                                 if event:
                                     interactions.append(event)
+                            # Secondary link capture: a Linear/Jira key in a PR
+                            # comment (e.g. the integration bot linkback) when the
+                            # PR body/branch carries no reference.
+                            dependencies.extend(
+                                extract_github_comment_dependencies(
+                                    work_item_id=wi.work_item_id,
+                                    comment_bodies=[
+                                        getattr(c, "body", None) for c in comments
+                                    ],
+                                )
+                            )
                         except Exception as exc:
                             logger.debug(
                                 "GitHub: failed to fetch comments for PR %s: %s",

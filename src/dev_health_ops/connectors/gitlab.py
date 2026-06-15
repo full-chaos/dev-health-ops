@@ -359,10 +359,32 @@ class GitLabConnector(GitConnector):
         flags: list[dict[str, Any]] = []
 
         while True:
-            batch = self.rest_client.get_list(
-                endpoint,
-                params={"page": page, "per_page": effective_per_page},
-            )
+            try:
+                batch = self.rest_client.get_list(
+                    endpoint,
+                    params={"page": page, "per_page": effective_per_page},
+                )
+            except APIException as exc:
+                # GitLab returns 403 when the Feature Flags feature is disabled
+                # for the project or the token lacks Developer+ access. Neither
+                # is transient (GitLab rate-limits are 429, never 403), so we
+                # re-raise as a non-retryable AuthenticationException — the
+                # retry decorator only retries RateLimitException/APIException,
+                # so this short-circuits the otherwise-wasteful 3x spin and
+                # gives callers a precise type to degrade on. Mirrors the
+                # GitHub connector's permission-403 handling (CHAOS-2383).
+                if str(exc).startswith("Forbidden:"):
+                    logger.warning(
+                        "GitLab feature flags forbidden (403) for project %s: "
+                        "feature disabled or token lacks Developer access",
+                        project_id_or_path,
+                    )
+                    raise AuthenticationException(
+                        "GitLab feature flags forbidden (403): the Feature "
+                        "Flags feature is disabled for this project or the "
+                        "token lacks the required scope/Developer role."
+                    ) from exc
+                raise
             if not batch:
                 break
             flags.extend(batch)

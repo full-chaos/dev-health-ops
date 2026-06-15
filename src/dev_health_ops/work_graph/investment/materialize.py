@@ -708,12 +708,43 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
             # A run with membership rows but no marker is incomplete (in-flight)
             # and is invisible to readers until the marker is written (CHAOS-2433).
             sink.write_work_unit_memberships(membership_records)
+
+        # Publish the completion marker (CHAOS-2433).  Reaching here means the
+        # org HAS work-graph components (the `if not components` early-return
+        # above handles the genuine no-op org).
+        #
+        # FINDING #1 (empty-but-complete run MUST supersede): a run that produced
+        # zero membership rows (every component fell outside the time window or
+        # had no distribution) still publishes a marker so it becomes the latest
+        # complete run and retires the previous run's stale rows — the
+        # no-tombstone design relies on an empty complete run to drop churned
+        # nodes.
+        #
+        # FINDING #2 (scoped runs must not publish an org-wide marker): a run
+        # scoped to specific repos/teams writes its rows but does NOT publish the
+        # org-wide marker — otherwise it would become the org's latest complete
+        # run while covering only that scope, blanking every other repo's
+        # membership for unscoped reads.  The org-wide post-sync / daily run
+        # publishes.  (The post-sync dispatcher is org-wide, so the normal path
+        # always publishes; only manual/CLI repo_ids/team_ids runs skip.)
+        is_org_wide = not config.repo_ids and not config.team_ids
+        if is_org_wide:
             sink.write_membership_run(
                 WorkUnitMembershipRunRecord(
                     org_id=config.org_id or "",
                     run_id=run_id,
                     completed_at=computed_at,
                 )
+            )
+        else:
+            logger.info(
+                "Investment materialize org=%s is scoped (repos=%s teams=%s) — "
+                "wrote %d membership rows but NOT publishing an org-wide "
+                "completion marker (CHAOS-2433); an org-wide run publishes",
+                config.org_id or "",
+                config.repo_ids,
+                config.team_ids,
+                len(membership_records),
             )
         logger.info("Sink write complete")
 

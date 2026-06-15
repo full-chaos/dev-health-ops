@@ -354,20 +354,51 @@ def test_backfill_completion_marker_written_last() -> None:
     assert marker.org_id == "org-1"
 
 
-def test_backfill_no_marker_written_when_nothing_matched() -> None:
-    """When no components matched (all churned), no membership rows and no
-    completion marker are written — there is nothing to mark complete."""
-    # Two nodes in an unknown component (no investment row).
+def test_backfill_all_skipped_run_writes_empty_marker_to_supersede() -> None:
+    """FINDING #1 (empty-but-complete run MUST supersede): when the org HAS
+    work-graph components but ALL are churned (no matching investment row), the
+    backfill writes ZERO membership rows but STILL publishes a completion marker.
+
+    The no-tombstone design relies on an empty complete run to retire the
+    PREVIOUS complete run's stale rows: without this marker the reader would keep
+    using the old run and churned nodes would stay filterable with stale
+    categories. The marker is the empty-but-complete run.
+    """
+    # One component, churned (no investment row) → org has data but nothing
+    # matched. Distinct from the genuine no-component no-op (empty edges).
     edges = [_edge("issue", "CHURNED", "pr", "CP-1")]
     sink = _FakeSink(edges=edges, investments=[])
 
     stats = _run_backfill(sink)
 
+    assert stats["components"] == 1
     assert stats["matched"] == 0
     assert stats["skipped"] == 1
     assert stats["memberships"] == 0
     assert sink.written == []
-    assert sink.run_markers == [], "no marker written when no membership rows"
+    # The empty-but-complete run MUST publish a marker so it supersedes the
+    # previous complete run (CHAOS-2433 finding #1).
+    assert len(sink.run_markers) == 1, (
+        "an all-skipped run over an org WITH components must publish an empty "
+        "completion marker to supersede the previous run"
+    )
+    assert sink.run_markers[0].org_id == "org-1"
+    # Write order: even with zero rows, only the marker is written.
+    assert sink._write_order == ["run_marker"]
+
+
+def test_backfill_genuine_no_component_org_writes_no_marker() -> None:
+    """An org with NO work-graph components at all (no edges) is a genuine no-op:
+    no membership rows AND no marker (nothing to supersede). This is the case the
+    early-return guards — distinct from an all-skipped run over an org WITH
+    components, which DOES publish an empty marker (see the test above)."""
+    sink = _FakeSink(edges=[], investments=[])
+
+    stats = _run_backfill(sink)
+
+    assert stats["components"] == 0
+    assert sink.written == []
+    assert sink.run_markers == [], "no marker for a genuine no-component org"
 
 
 def test_backfill_churned_component_skipped_no_tombstones() -> None:
@@ -408,6 +439,66 @@ def test_backfill_churned_component_skipped_no_tombstones() -> None:
 
     # Completion marker written for the run (covers the matched component).
     assert len(sink.run_markers) == 1
+
+
+def test_backfill_repo_scoped_run_does_not_publish_org_marker() -> None:
+    """FINDING #2 (scoped runs must not publish an org-wide marker): a
+    repo-scoped backfill writes its membership rows but does NOT write a
+    completion marker — otherwise it would become the org's latest complete run
+    while covering only that scope, blanking every other repo for unscoped reads.
+    The org-wide daily backfill publishes the marker."""
+    edges = [_edge("issue", "I-1", "pr", "P-1")]
+    uid = work_unit_id([("issue", "I-1"), ("pr", "P-1")])
+    sink = _FakeSink(
+        edges=edges,
+        investments=[
+            _investment_row(
+                work_unit_id=uid,
+                theme={"feature_delivery": 1.0},
+                subcategory={"feature_delivery.roadmap": 1.0},
+            )
+        ],
+    )
+
+    with (
+        patch(
+            "dev_health_ops.work_graph.investment.backfill.create_sink",
+            return_value=sink,
+        ),
+        patch(
+            "dev_health_ops.work_graph.investment.backfill.fetch_work_graph_edges",
+            side_effect=lambda s, repo_ids=None, org_id="": sink._edges,
+        ),
+    ):
+        stats = backfill_memberships(
+            MembershipBackfillConfig(
+                dsn="clickhouse://x",
+                org_id="org-1",
+                repo_ids=["repo-a"],  # SCOPED run
+            )
+        )
+
+    # Rows ARE written for the scoped repo.
+    assert stats["memberships"] > 0
+    assert sink.written
+    # But NO org-wide completion marker is published.
+    assert sink.run_markers == [], (
+        "a repo-scoped backfill must not publish an org-wide completion marker "
+        "(CHAOS-2433 finding #2)"
+    )
+    assert sink._write_order == ["memberships"]
+
+
+def test_backfill_config_is_org_wide_flag() -> None:
+    """MembershipBackfillConfig.is_org_wide is True only when no repo scoping."""
+    assert MembershipBackfillConfig(dsn="x", org_id="o").is_org_wide is True
+    assert (
+        MembershipBackfillConfig(dsn="x", org_id="o", repo_ids=[]).is_org_wide is True
+    )
+    assert (
+        MembershipBackfillConfig(dsn="x", org_id="o", repo_ids=["r"]).is_org_wide
+        is False
+    )
 
 
 # ---------------------------------------------------------------------------

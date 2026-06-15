@@ -19,7 +19,13 @@ Per org, with NO categorizer/LLM call:
    the rows are byte-for-byte identical (except run_id / computed_at) to what the
    LLM materializer would emit for the same distributions.
 5. Write ALL membership rows first, THEN write one ``work_unit_membership_runs``
-   row (the completion marker) as the LAST step (CHAOS-2433 protocol).
+   row (the completion marker) as the LAST step (CHAOS-2433 protocol).  The
+   marker is published whenever the org HAS work-graph components, even when the
+   run emits ZERO membership rows (all components churned) — an empty complete
+   run correctly retires the previous run's stale rows (no tombstones).  Only a
+   genuine no-component org publishes no marker.  A repo-SCOPED run never
+   publishes the org-wide marker (it would blank other repos for unscoped
+   reads); it relies on the org-wide daily run to publish.
 
 RUN_ID PROTOCOL (CHAOS-2433):
   Every backfill run generates its own ``run_id`` (uuid hex). ALL membership rows
@@ -81,6 +87,20 @@ class MembershipBackfillConfig:
     dsn: str
     org_id: str | None = None
     repo_ids: list[str] | None = None
+
+    @property
+    def is_org_wide(self) -> bool:
+        """True when this run covers the WHOLE org (no repo scoping).
+
+        Only an org-wide run may publish an org-wide completion marker
+        (CHAOS-2433 finding #2): a repo-scoped run that wrote a marker would
+        become the org's "latest complete run" while containing only that
+        scope's rows, blanking every other repo's membership for unscoped
+        reads.  A scoped run therefore writes its rows but NOT a marker,
+        relying on a subsequent org-wide run (the daily backfill is org-wide)
+        to publish.
+        """
+        return not self.repo_ids
 
 
 def _build_components_for_backfill(
@@ -253,12 +273,40 @@ def backfill_memberships(config: MembershipBackfillConfig) -> dict[str, int]:
         # to readers.
         if membership_records:
             sink.write_work_unit_memberships(membership_records)
+
+        # Publish the completion marker (CHAOS-2433).
+        #
+        # FINDING #1 (empty-but-complete run MUST supersede): we reached here
+        # only when the org HAS work-graph components (the `if not components`
+        # early-return above handles the genuine no-op org).  An ALL-SKIPPED
+        # run — every current component churned past its last categorization —
+        # legitimately has ZERO membership rows.  It MUST still publish a marker
+        # so it becomes the latest complete run and the stale rows from the
+        # PREVIOUS complete run stop matching (the no-tombstone design relies on
+        # an empty complete run to retire churned nodes).  We therefore write the
+        # marker whenever components were evaluated, even with zero rows.  Only a
+        # genuine no-component org (handled above) writes no marker.
+        #
+        # FINDING #2 (scoped runs must not publish an org-wide marker): a
+        # repo-scoped backfill writes its rows but does NOT publish the org-wide
+        # marker — otherwise it would become the org's latest complete run while
+        # covering only that scope, blanking other repos for unscoped reads.
+        if config.is_org_wide:
             sink.write_membership_run(
                 WorkUnitMembershipRunRecord(
                     org_id=org_id,
                     run_id=backfill_run_id,
                     completed_at=computed_at,
                 )
+            )
+        else:
+            logger.info(
+                "Membership backfill org=%s is repo-scoped (repos=%s) — wrote "
+                "%d rows but NOT publishing an org-wide completion marker "
+                "(CHAOS-2433); the org-wide daily backfill publishes",
+                org_id,
+                config.repo_ids,
+                len(membership_records),
             )
 
         logger.info(

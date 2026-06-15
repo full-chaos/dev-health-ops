@@ -339,11 +339,37 @@ def _row_to_edge(
 #
 # When NO complete run exists for the org (table empty or all runs incomplete),
 # readers treat it as no membership at all — degraded state if investments exist.
+#
+# LEGACY ROLLOUT (CHAOS-2433 finding #3):
+# Migration 048 seeds ONE synthetic "legacy" marker per org that already had
+# membership rows before migration 047 (run_id defaulted to '' on those rows,
+# and no real run had published a marker yet).  The legacy marker uses the
+# reserved run_id _LEGACY_RUN_ID and completed_at = max(existing computed_at).
+# When the selected latest run IS the legacy marker, readers must match the
+# PRE-EXISTING rows (run_id = '') instead of looking for rows tagged with the
+# literal '__legacy__'.  The join condition below therefore matches a row when
+# its run_id equals the latest run OR (the latest run is the legacy marker AND
+# the row carries the empty default run_id).  As soon as a real org-wide run
+# publishes a marker, its completed_at exceeds the legacy marker's, argMax
+# selects it, and the legacy path retires automatically (no cleanup needed; the
+# legacy marker simply stops being the latest).
+_LEGACY_RUN_ID = "__legacy__"
+
 _LATEST_COMPLETE_RUN_SUBQUERY = """
         SELECT argMax(run_id, completed_at) AS latest_run_id
         FROM work_unit_membership_runs
         WHERE org_id = %(org_id)s
 """
+
+# Join predicate that scopes membership rows to the latest complete run, with
+# the legacy fallback baked in.  ``m`` is the work_unit_membership alias and
+# ``latest_run`` is the _LATEST_COMPLETE_RUN_SUBQUERY alias.  The empty-string
+# guard (latest_run.latest_run_id != '') stays the caller's responsibility so
+# orgs with no complete run still resolve to "no membership".
+_RUN_SCOPE_JOIN_ON = (
+    "m.run_id = latest_run.latest_run_id "
+    f"OR (latest_run.latest_run_id = '{_LEGACY_RUN_ID}' AND m.run_id = '')"
+)
 
 
 async def _batch_resolve_membership(
@@ -391,7 +417,7 @@ async def _batch_resolve_membership(
                 m.category AS category
             FROM work_unit_membership AS m
             INNER JOIN latest_run
-                ON m.run_id = latest_run.latest_run_id
+                ON {_RUN_SCOPE_JOIN_ON}
             WHERE m.org_id = %(org_id)s
               AND m.node_type IN %(node_types)s
               AND m.node_id IN %(node_ids)s
@@ -458,7 +484,7 @@ def _theme_membership_exists_clause() -> str:
             SELECT 1
             FROM work_unit_membership AS m
             INNER JOIN ({_LATEST_COMPLETE_RUN_SUBQUERY}) AS latest_run
-                ON m.run_id = latest_run.latest_run_id
+                ON {_RUN_SCOPE_JOIN_ON}
             WHERE m.org_id = %(org_id)s
               AND latest_run.latest_run_id != ''
               AND (
@@ -559,7 +585,7 @@ async def _detect_membership_degraded_reason(client: Any, org_id: str) -> str | 
                     SELECT count()
                     FROM work_unit_membership AS m
                     INNER JOIN ({_LATEST_COMPLETE_RUN_SUBQUERY}) AS latest_run
-                        ON m.run_id = latest_run.latest_run_id
+                        ON {_RUN_SCOPE_JOIN_ON}
                     WHERE m.org_id = %(org_id)s
                       AND latest_run.latest_run_id != ''
                 ) AS membership_rows,

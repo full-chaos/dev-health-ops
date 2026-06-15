@@ -181,6 +181,10 @@ class TestThemeFilterServerSide:
         assert "m.run_id = latest_run.latest_run_id" in edge_sql
         # Guard: incomplete/empty runs (latest_run_id='') are excluded.
         assert "latest_run.latest_run_id != ''" in edge_sql
+        # Legacy fallback (CHAOS-2433 finding #3): when the latest run is the
+        # seeded __legacy__ marker, pre-existing rows (run_id='') still match.
+        assert "latest_run.latest_run_id = '__legacy__'" in edge_sql
+        assert "m.run_id = ''" in edge_sql
         # Must NOT use old per-node max(computed_at) guard.
         assert "max(computed_at) AS max_computed_at" not in edge_sql
         assert "GROUP BY node_type, node_id" not in edge_sql
@@ -859,4 +863,90 @@ class TestRunIdConcurrencyRace:
         # Not in the filter result (split/merge safe).
         assert result.edges == []
         # Not degraded — other nodes have membership in the latest complete run.
+        assert result.degraded_reason is None
+
+
+class TestLegacyRolloutFallback:
+    """CHAOS-2433 finding #3: migration 047 added run_id DEFAULT '' to existing
+    rows but no marker existed for them, so the run-scoped reader would treat
+    them as invisible immediately post-deploy. Migration 048 seeds one
+    '__legacy__' marker per org (completed_at = max existing computed_at), and
+    every reader join recognises the legacy marker and matches the pre-existing
+    rows (run_id=''). A real run (completed_at = now()) supersedes via argMax.
+
+    These tests assert the legacy fallback predicate is present in ALL THREE
+    reader paths so existing membership stays readable until a real run lands.
+    """
+
+    @pytest.mark.asyncio
+    async def test_filter_path_has_legacy_fallback(self, mock_context):
+        """The theme-filter EXISTS semijoin matches pre-existing rows (run_id='')
+        when the latest complete run is the seeded '__legacy__' marker."""
+        edge_rows = [make_edge_row(edge_id="e1", source_id="LEGACY-NODE")]
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [edge_rows, []]
+            filters = WorkGraphEdgeFilterInput(theme="feature_delivery")
+            await resolve_work_graph_edges(mock_context, filters)
+
+        edge_sql = mock_query.call_args_list[0][0][1]
+        assert "latest_run.latest_run_id = '__legacy__'" in edge_sql
+        assert "m.run_id = ''" in edge_sql
+
+    @pytest.mark.asyncio
+    async def test_annotation_path_has_legacy_fallback(self, mock_context):
+        """The dominant-annotation lookup also matches pre-existing rows under the
+        legacy marker — so edges keep their theme/subcategory post-deploy."""
+        edge_rows = [
+            make_edge_row(
+                edge_id="e1",
+                source_type="issue",
+                source_id="LEGACY-1",
+                target_type="pr",
+                target_id="PR-1",
+            )
+        ]
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            # Unfiltered path: edge query + annotation lookup. The annotation
+            # lookup is call index 1.
+            mock_query.side_effect = [
+                edge_rows,
+                dominant_rows(
+                    "issue", "LEGACY-1", "feature_delivery", "feature_delivery.roadmap"
+                ),
+            ]
+            result = await resolve_work_graph_edges(mock_context)
+
+        annotation_sql = mock_query.call_args_list[1][0][1]
+        assert "work_unit_membership_runs" in annotation_sql
+        assert "latest_run.latest_run_id = '__legacy__'" in annotation_sql
+        assert "m.run_id = ''" in annotation_sql
+        # Annotation actually applied from the legacy rows.
+        assert result.edges[0].theme == "feature_delivery"
+
+    @pytest.mark.asyncio
+    async def test_degraded_probe_has_legacy_fallback(self, mock_context):
+        """The degraded probe counts pre-existing rows under the legacy marker, so
+        an org with only legacy membership is NOT falsely reported degraded."""
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [
+                [],
+                # Legacy rows counted → membership_rows > 0 → not degraded.
+                [{"membership_rows": 7, "investment_rows": 10}],
+            ]
+            filters = WorkGraphEdgeFilterInput(theme="feature_delivery")
+            result = await resolve_work_graph_edges(mock_context, filters)
+
+        probe_sql = mock_query.call_args_list[1][0][1]
+        assert "latest_run.latest_run_id = '__legacy__'" in probe_sql
+        assert "m.run_id = ''" in probe_sql
+        # Legacy rows present → genuine empty filter, not degraded.
         assert result.degraded_reason is None

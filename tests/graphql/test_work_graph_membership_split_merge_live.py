@@ -434,3 +434,284 @@ async def test_concurrency_race_incomplete_run_invisible(sink):
                 "SETTINGS mutations_sync=2",
                 parameters={"o": org_id},
             )
+
+
+@pytest.mark.asyncio
+async def test_empty_complete_run_supersedes_previous(sink):
+    """FINDING #1 (empty-but-complete run MUST supersede): an OLD complete run
+    with real membership rows, then a NEWER ALL-SKIPPED run that wrote ONLY a
+    completion marker (zero membership rows). The newer empty marker is the
+    latest complete run, so the OLD run's categories no longer match — the node
+    is absent from the latest complete run. This is the no-tombstone retirement
+    path: an empty complete run drops churned nodes.
+    """
+    org_id = f"test-chaos-2433-empty-{uuid.uuid4()}"
+    node_id = f"ISSUE-{uuid.uuid4()}"
+    pr_id = f"PR-{uuid.uuid4()}"
+    edge_id = f"edge-{uuid.uuid4()}"
+    repo_uuid = str(uuid.uuid4())
+    old_run_ts = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    empty_run_ts = datetime(2026, 3, 1, tzinfo=timezone.utc)
+    old_run_id = uuid.uuid4().hex
+    empty_run_id = uuid.uuid4().hex
+
+    # OLD run: complete, real rows (maintenance dominant).
+    membership_rows = [
+        [
+            org_id,
+            "issue",
+            node_id,
+            "U_OLD",
+            "theme",
+            "maintenance",
+            0.9,
+            1,
+            "ok",
+            old_run_ts,
+            old_run_id,
+        ],
+        [
+            org_id,
+            "issue",
+            node_id,
+            "U_OLD",
+            "subcategory",
+            "maintenance.refactor",
+            0.9,
+            1,
+            "ok",
+            old_run_ts,
+            old_run_id,
+        ],
+    ]
+    # Two markers: OLD (real rows) and EMPTY (later completed_at, ZERO rows).
+    run_marker_rows = [
+        [org_id, old_run_id, old_run_ts],
+        [org_id, empty_run_id, empty_run_ts],  # all-skipped run: marker, no rows
+    ]
+    edge_rows = [
+        [
+            org_id,
+            edge_id,
+            "issue",
+            node_id,
+            "pr",
+            pr_id,
+            "implements",
+            repo_uuid,
+            "github",
+            "native",
+            1.0,
+            "",
+            empty_run_ts,
+            empty_run_ts,
+            empty_run_ts,
+            empty_run_ts.date(),
+        ]
+    ]
+
+    sink.client.insert(
+        "work_unit_membership", membership_rows, column_names=_membership_cols()
+    )
+    sink.client.insert(
+        "work_unit_membership_runs",
+        run_marker_rows,
+        column_names=_membership_run_cols(),
+    )
+    sink.client.insert("work_graph_edges", edge_rows, column_names=_edge_cols())
+
+    assert CLICKHOUSE_URI is not None
+    context = GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink)
+
+    try:
+        # The empty run (empty_run_id) is the latest complete run. The OLD run's
+        # maintenance rows are no longer in scope → no edge matches.
+        result = await resolve_work_graph_edges(
+            context, WorkGraphEdgeFilterInput(theme="maintenance")
+        )
+        assert result.edges == [], (
+            "an empty-but-complete newer run must supersede the previous run; "
+            "the stale OLD-run categories must stop matching (CHAOS-2433 #1)"
+        )
+
+        # Unfiltered annotation also shows no category (node absent from the
+        # latest complete run, which has zero rows).
+        unfiltered = await resolve_work_graph_edges(context)
+        edge = next(e for e in unfiltered.edges if e.edge_id == edge_id)
+        assert edge.theme is None
+        assert edge.subcategory is None
+    finally:
+        for table in (
+            "work_unit_membership",
+            "work_unit_membership_runs",
+            "work_graph_edges",
+        ):
+            sink.client.command(
+                f"ALTER TABLE {table} DELETE WHERE org_id = {{o:String}} "
+                "SETTINGS mutations_sync=2",
+                parameters={"o": org_id},
+            )
+
+
+@pytest.mark.asyncio
+async def test_legacy_rows_readable_then_superseded_by_real_run(sink):
+    """FINDING #3 (migration orphans existing rows): simulate PRE-existing
+    membership rows (run_id='') with the seeded '__legacy__' marker (migration
+    048). Those rows must remain filterable/annotated. Once a REAL marked run
+    lands (later completed_at), it supersedes the legacy path.
+    """
+    org_id = f"test-chaos-2433-legacy-{uuid.uuid4()}"
+    node_id = f"ISSUE-{uuid.uuid4()}"
+    pr_id = f"PR-{uuid.uuid4()}"
+    edge_id = f"edge-{uuid.uuid4()}"
+    repo_uuid = str(uuid.uuid4())
+    # Legacy marker completed_at = max(existing computed_at) — in the past.
+    legacy_ts = datetime(2026, 1, 15, tzinfo=timezone.utc)
+    real_ts = datetime(2026, 4, 1, tzinfo=timezone.utc)
+    real_run_id = uuid.uuid4().hex
+
+    # Pre-existing rows: run_id='' (the 047 default), maintenance dominant.
+    legacy_rows = [
+        [
+            org_id,
+            "issue",
+            node_id,
+            "U_LEGACY",
+            "theme",
+            "maintenance",
+            0.9,
+            1,
+            "ok",
+            legacy_ts,
+            "",  # run_id default from migration 047
+        ],
+        [
+            org_id,
+            "issue",
+            node_id,
+            "U_LEGACY",
+            "subcategory",
+            "maintenance.refactor",
+            0.9,
+            1,
+            "ok",
+            legacy_ts,
+            "",
+        ],
+    ]
+    # Migration 048 seeds ONE '__legacy__' marker per org, completed_at=max
+    # existing computed_at.
+    legacy_marker = [[org_id, "__legacy__", legacy_ts]]
+
+    edge_rows = [
+        [
+            org_id,
+            edge_id,
+            "issue",
+            node_id,
+            "pr",
+            pr_id,
+            "implements",
+            repo_uuid,
+            "github",
+            "native",
+            1.0,
+            "",
+            real_ts,
+            real_ts,
+            real_ts,
+            real_ts.date(),
+        ]
+    ]
+
+    sink.client.insert(
+        "work_unit_membership", legacy_rows, column_names=_membership_cols()
+    )
+    sink.client.insert(
+        "work_unit_membership_runs", legacy_marker, column_names=_membership_run_cols()
+    )
+    sink.client.insert("work_graph_edges", edge_rows, column_names=_edge_cols())
+
+    assert CLICKHOUSE_URI is not None
+    context = GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink)
+
+    try:
+        # PHASE 1: legacy marker is the latest complete run → pre-existing rows
+        # (run_id='') are matched via the legacy fallback.
+        legacy_result = await resolve_work_graph_edges(
+            context, WorkGraphEdgeFilterInput(theme="maintenance")
+        )
+        assert [e.edge_id for e in legacy_result.edges] == [edge_id], (
+            "pre-existing membership rows (run_id='') must stay filterable under "
+            "the seeded __legacy__ marker (CHAOS-2433 #3)"
+        )
+        # Annotation also resolves from the legacy rows.
+        unfiltered = await resolve_work_graph_edges(context)
+        edge = next(e for e in unfiltered.edges if e.edge_id == edge_id)
+        assert edge.theme == "maintenance"
+        assert edge.subcategory == "maintenance.refactor"
+
+        # PHASE 2: a REAL run lands (later completed_at), different dominant.
+        real_rows = [
+            [
+                org_id,
+                "issue",
+                node_id,
+                "U_REAL",
+                "theme",
+                "feature_delivery",
+                0.95,
+                1,
+                "ok",
+                real_ts,
+                real_run_id,
+            ],
+            [
+                org_id,
+                "issue",
+                node_id,
+                "U_REAL",
+                "subcategory",
+                "feature_delivery.roadmap",
+                0.95,
+                1,
+                "ok",
+                real_ts,
+                real_run_id,
+            ],
+        ]
+        sink.client.insert(
+            "work_unit_membership", real_rows, column_names=_membership_cols()
+        )
+        sink.client.insert(
+            "work_unit_membership_runs",
+            [[org_id, real_run_id, real_ts]],
+            column_names=_membership_run_cols(),
+        )
+
+        # The real run supersedes the legacy path (argMax picks real_ts > legacy_ts).
+        after = await resolve_work_graph_edges(
+            context, WorkGraphEdgeFilterInput(theme="feature_delivery")
+        )
+        assert [e.edge_id for e in after.edges] == [edge_id]
+        assert after.edges[0].theme == "feature_delivery"
+
+        # Legacy theme no longer matches (real run is now latest complete).
+        old = await resolve_work_graph_edges(
+            context, WorkGraphEdgeFilterInput(theme="maintenance")
+        )
+        assert old.edges == [], (
+            "once a real run lands, the legacy path retires automatically via "
+            "argMax(run_id, completed_at)"
+        )
+    finally:
+        for table in (
+            "work_unit_membership",
+            "work_unit_membership_runs",
+            "work_graph_edges",
+        ):
+            sink.client.command(
+                f"ALTER TABLE {table} DELETE WHERE org_id = {{o:String}} "
+                "SETTINGS mutations_sync=2",
+                parameters={"o": org_id},
+            )

@@ -251,13 +251,23 @@ def _patch_queries(monkeypatch, edges, work_items, commits, repo_id):
     )
 
 
-def _make_config(repo_id: str, org_id: str = "test-org") -> MaterializeConfig:
+def _make_config(
+    repo_id: str, org_id: str = "test-org", *, repo_ids: list[str] | None = None
+) -> MaterializeConfig:
+    """Build a MaterializeConfig.
+
+    NOTE: org-wide by default (``repo_ids=None``).  CHAOS-2433 finding #2: only
+    an org-wide run publishes a completion marker — a repo-scoped run writes its
+    rows but NOT the org-wide marker.  These membership/marker tests must run
+    org-wide so the marker is published (the patched edge fetch ignores repo_ids
+    anyway).  Pass ``repo_ids=[...]`` to exercise the scoped (no-marker) path.
+    """
     now = datetime.now(timezone.utc)
     return MaterializeConfig(
         dsn="clickhouse://localhost:8123/default",
         from_ts=now - timedelta(days=5),
         to_ts=now,
-        repo_ids=[repo_id],
+        repo_ids=repo_ids,
         llm_provider="mock",
         persist_evidence_snippets=False,
         llm_model="test-model",
@@ -601,3 +611,44 @@ async def test_completion_marker_written_after_membership_rows(monkeypatch):
 
     # Marker's org_id matches the config.
     assert marker.org_id == "test-org"
+
+
+@pytest.mark.asyncio
+async def test_materialize_scoped_run_writes_no_org_marker(monkeypatch):
+    """FINDING #2 (scoped runs must not publish an org-wide marker): a
+    repo-scoped materialize writes membership rows but does NOT publish the
+    org-wide completion marker — otherwise it would become the org's latest
+    complete run while covering only that scope, blanking other repos for
+    unscoped reads. The org-wide post-sync run publishes."""
+    repo_id, edges, work_items, commits = _sample_two_node_data()
+    sink = FakeSink()
+
+    async def _fake_categorize(bundle, llm_provider, llm_model=None, provider=None):
+        return CategorizationOutcome(
+            subcategories={"feature_delivery.roadmap": 1.0},
+            evidence_quotes=[],
+            uncertainty="",
+            status="ok",
+            errors=[],
+        )
+
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
+    )
+    _patch_queries(monkeypatch, edges, work_items, commits, repo_id)
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.categorize_text_bundle",
+        _fake_categorize,
+    )
+
+    # Repo-SCOPED run.
+    await materialize_investments(_make_config(repo_id, repo_ids=[repo_id]))
+
+    # Membership rows ARE written for the scoped repo.
+    assert sink.membership_rows
+    # But NO org-wide completion marker is published.
+    assert sink.membership_run_records == [], (
+        "a repo-scoped materialize must not publish an org-wide completion "
+        "marker (CHAOS-2433 finding #2)"
+    )
+    assert sink._write_order == ["memberships"]

@@ -601,6 +601,66 @@ async def test_no_owner_gitlab_search_uses_membership_scoped_with_pattern(client
 
 
 # ---------------------------------------------------------------------------
+# Tests — GitLab base_url key fallback (review round 3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_gitlab_base_url_key_used_for_self_hosted(client):
+    """Credential with only base_url (no url) → discovery uses that host, not gitlab.com.
+
+    CHAOS-2449 review round 3: the GitLab url resolution previously only checked
+    decrypted['url'] and config['url'], so a self-hosted credential stored with
+    base_url would silently fall back to gitlab.com, disclosing the token to the
+    wrong host.
+    """
+    ac, state = client
+
+    gl_repos = [
+        Repository(
+            id=20,
+            name="self-hosted-repo",
+            full_name="mygroup/self-hosted-repo",
+            default_branch="main",
+            description=None,
+            url="https://gitlab.example.com/mygroup/self-hosted-repo",
+        ),
+    ]
+
+    with (
+        patch(
+            _DECRYPT_PATCH,
+            return_value=_mock_credential(
+                provider="gitlab",
+                config={},
+                credentials={
+                    "token": "glpat_selfhosted",
+                    "base_url": "https://gitlab.example.com",  # only base_url, no url
+                },
+            ),
+        ) as _,
+        patch(_GL_CONNECTOR) as MockGLConnector,
+        patch(_GL_MEMBERSHIP_HELPER, return_value=gl_repos) as MockMembership,
+    ):
+        resp = await ac.get(
+            f"/api/v1/admin/credentials/{state['cred_id']}/repos",
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["repos"][0]["name"] == "self-hosted-repo"
+    # Membership helper must be called with the self-hosted URL, NOT gitlab.com
+    MockMembership.assert_called_once_with(
+        url="https://gitlab.example.com",
+        token="glpat_selfhosted",
+        search=None,
+        max_repos=100,
+    )
+    MockGLConnector.return_value.list_repositories.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # Tests — App installation helper error handling (review finding 1)
 # ---------------------------------------------------------------------------
 

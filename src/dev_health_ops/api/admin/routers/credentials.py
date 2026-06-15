@@ -182,7 +182,9 @@ async def list_credential_repos(
         token = decrypted.get("token")
         url = (
             _string_value(decrypted.get("url"))
+            or _string_value(decrypted.get("base_url"))
             or _string_value(config.get("url"))
+            or _string_value(config.get("base_url"))
             or "https://gitlab.com"
         )
         if not token:

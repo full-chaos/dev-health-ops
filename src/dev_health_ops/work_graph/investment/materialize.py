@@ -25,7 +25,6 @@ from dev_health_ops.work_graph.investment.categorize import (
     fallback_outcome,
 )
 from dev_health_ops.work_graph.investment.constants import (
-    MEMBERSHIP_WEIGHT_THRESHOLD,
     MIN_EVIDENCE_CHARS,
 )
 from dev_health_ops.work_graph.investment.evidence import (
@@ -33,6 +32,11 @@ from dev_health_ops.work_graph.investment.evidence import (
     build_text_bundle,
     compute_evidence_quality,
     compute_time_bounds,
+)
+from dev_health_ops.work_graph.investment.membership import (
+    build_membership_records,
+    lexical_argmax,
+    membership_categories,
 )
 from dev_health_ops.work_graph.investment.queries import (
     fetch_commit_churn,
@@ -80,47 +84,12 @@ def _float_value(value: object) -> float:
     return 0.0
 
 
-def _lexical_argmax(distribution: dict[str, float]) -> str:
-    """Return the key with the highest value; break ties lexically (smallest key wins).
-
-    An empty distribution returns "unknown". The lexical tie-break ensures
-    deterministic output across Python runs regardless of dict insertion order.
-    """
-    if not distribution:
-        return "unknown"
-    # Smallest-key-wins on ties: order by (-value, key) and take the min, so the
-    # highest weight comes first and the lexically smallest key breaks ties.
-    return min(distribution, key=lambda k: (-_float_value(distribution[k]), k))
-
-
-def _membership_categories(
-    distribution: dict[str, float],
-) -> list[tuple[str, float, int]]:
-    """Return (category, weight, is_dominant) rows to emit for one distribution.
-
-    Multi-membership: every category with weight >= MEMBERSHIP_WEIGHT_THRESHOLD
-    is emitted, so a mixed unit is findable under each significant category. The
-    argmax category (lexical tie-break) is ALWAYS included even when below the
-    threshold and is flagged is_dominant=1, so every node is findable under at
-    least its dominant category. Returns at least one row whenever the
-    distribution is non-empty.
-    """
-    if not distribution:
-        return []
-    dominant = _lexical_argmax(distribution)
-    out: list[tuple[str, float, int]] = []
-    seen: set[str] = set()
-    for category, raw_weight in distribution.items():
-        weight = _float_value(raw_weight)
-        is_dominant = 1 if category == dominant else 0
-        if weight >= MEMBERSHIP_WEIGHT_THRESHOLD or is_dominant:
-            out.append((category, weight, is_dominant))
-            seen.add(category)
-    # Defensive: ensure the dominant row is present even if it was filtered
-    # (e.g. dominant key absent from the dict view due to mutation).
-    if dominant not in seen:
-        out.append((dominant, _float_value(distribution.get(dominant, 0.0)), 1))
-    return out
+# Thin re-exports of the shared membership projection (CHAOS-2439): the daily
+# no-LLM backfill and this LLM materializer MUST emit identical rows, so the
+# threshold + is_dominant logic lives in one place. Kept as module-level aliases
+# so existing imports/tests of these names continue to resolve.
+_lexical_argmax = lexical_argmax
+_membership_categories = membership_categories
 
 
 @dataclass(frozen=True)
@@ -642,42 +611,20 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
 
             # Emit membership rows so the work graph resolver can join
             # theme/subcategory onto edges in O(nodes) without scanning
-            # work_unit_investments (CHAOS-2429/2430). Multi-membership: one row
-            # per (node, category) for each theme and subcategory at/above the
-            # weight threshold, plus the argmax of each kind (is_dominant=1).
-            theme_categories = _membership_categories(theme_distribution)
-            subcategory_categories = _membership_categories(outcome.subcategories)
-            for node_type, node_id in unit_nodes:
-                for category, weight, is_dominant in theme_categories:
-                    membership_records.append(
-                        WorkUnitMembershipRecord(
-                            org_id=config.org_id or "",
-                            node_type=node_type,
-                            node_id=node_id,
-                            work_unit_id=unit_id,
-                            category_kind="theme",
-                            category=category,
-                            weight=weight,
-                            is_dominant=is_dominant,
-                            categorization_status=outcome.status,
-                            computed_at=computed_at,
-                        )
-                    )
-                for category, weight, is_dominant in subcategory_categories:
-                    membership_records.append(
-                        WorkUnitMembershipRecord(
-                            org_id=config.org_id or "",
-                            node_type=node_type,
-                            node_id=node_id,
-                            work_unit_id=unit_id,
-                            category_kind="subcategory",
-                            category=category,
-                            weight=weight,
-                            is_dominant=is_dominant,
-                            categorization_status=outcome.status,
-                            computed_at=computed_at,
-                        )
-                    )
+            # work_unit_investments (CHAOS-2429/2430). Uses the SHARED projection
+            # so the daily no-LLM backfill produces identical rows for the same
+            # persisted distributions (CHAOS-2439).
+            membership_records.extend(
+                build_membership_records(
+                    unit_nodes=unit_nodes,
+                    work_unit_id=unit_id,
+                    theme_distribution=theme_distribution,
+                    subcategory_distribution=outcome.subcategories,
+                    categorization_status=outcome.status,
+                    computed_at=computed_at,
+                    org_id=config.org_id or "",
+                )
+            )
 
             if config.persist_evidence_snippets and outcome.evidence_quotes:
                 for quote in outcome.evidence_quotes:

@@ -10,7 +10,37 @@ into its own statement and break a migration with a ClickHouse SYNTAX_ERROR
 
 from __future__ import annotations
 
-__all__ = ["strip_line_comments", "split_sql_statements"]
+from collections.abc import Iterable
+
+__all__ = [
+    "strip_line_comments",
+    "split_sql_statements",
+    "all_migrations_applied",
+]
+
+
+def all_migrations_applied(
+    migration_filenames: Iterable[str],
+    applied_versions: Iterable[str],
+) -> bool:
+    """Return True iff every on-disk migration is already recorded as applied.
+
+    This is the single source of truth for the migration runners' fast-path
+    short-circuit (CHAOS-2440). It must be a FULL-SET completeness check, not a
+    "latest filename applied" check: this repo has inserted / mixed-ordering
+    migrations (e.g. ``023b_dora_metrics.sql`` sorts between ``023_*`` and
+    ``024_*``, and duplicate numeric prefixes like ``002_phase2_metrics.sql`` /
+    ``002_teams.sql`` exist). A database can hold the row for the
+    lexicographically-latest migration while still missing an *intermediate*
+    one — a latest-only check would falsely report "current" and silently skip
+    the missing migration, causing schema drift.
+
+    Comparing the full set of on-disk filenames against the applied set is still
+    O(n) in memory over the single ``SELECT version FROM schema_migrations`` that
+    the runner already issues — no per-file DB query, no logging loop — so the
+    fast-path stays both fast and quiet while being correct.
+    """
+    return set(migration_filenames) <= set(applied_versions)
 
 
 def strip_line_comments(sql: str) -> str:

@@ -258,20 +258,29 @@ def _row_to_edge(
     row: dict[str, Any],
     resolved: dict[str, str] | None = None,
     membership: dict[tuple[str, str], dict[str, str]] | None = None,
+    *,
+    filter_theme: str | None = None,
+    filter_subcategory: str | None = None,
 ) -> WorkGraphEdgeResult:
     source_id = str(row.get("source_id", ""))
     target_id = str(row.get("target_id", ""))
     source_type_raw = str(row.get("source_type", "issue"))
     target_type_raw = str(row.get("target_type", "issue"))
 
-    # Resolve theme/subcategory from work_unit_membership.
-    # Precedence: ISSUE endpoint > PR endpoint > other endpoint types.
-    # Both source and target are checked; when types differ the issue wins.
-    # If neither endpoint has membership data, fields remain None.
     theme: str | None = None
     subcategory: str | None = None
-    if membership is not None:
-        # Ordered preference: issue first, then pr, then whatever is available.
+
+    if filter_theme is not None or filter_subcategory is not None:
+        # Filtered path: every returned edge touches a work unit of the
+        # requested theme by construction, so annotate with the matched filter
+        # value to keep display consistent with what the caller asked for.
+        theme = filter_theme
+        subcategory = filter_subcategory
+    elif membership is not None:
+        # Unfiltered path: resolve theme/subcategory from work_unit_membership.
+        # Precedence: ISSUE endpoint > PR endpoint > other endpoint types.
+        # Both source and target are checked; when types differ the issue wins.
+        # If neither endpoint has membership data, fields remain None.
         endpoint_preference = [
             (source_type_raw, source_id),
             (target_type_raw, target_id),
@@ -374,6 +383,57 @@ async def _batch_resolve_membership(
     return result
 
 
+async def _fetch_theme_matching_nodes(
+    client: Any,
+    org_id: str,
+    theme: str | None,
+    subcategory: str | None,
+) -> set[tuple[str, str]]:
+    """Return the set of (node_type, node_id) whose work unit matches the filter.
+
+    A node matches when the latest ``work_unit_membership`` row for it has
+    ``dominant_theme = theme`` (and ``dominant_subcategory = subcategory`` when
+    that filter is also supplied). This set drives the BEFORE-LIMIT edge
+    constraint so a sparse theme's edges are never hidden behind the row cap.
+
+    Latest-row-per-node semantics use argMax(..., computed_at) consistent with
+    the ReplacingMergeTree. The theme/subcategory predicate is applied via
+    HAVING on the argMax result (not WHERE) so a superseded row of a different
+    theme can never leak a node into the match set. Scoped to org_id.
+    """
+    from dev_health_ops.api.queries.client import query_dicts
+
+    having_clauses = ["argMax(dominant_theme, computed_at) = %(theme)s"]
+    sql_params: dict[str, Any] = {"org_id": org_id, "theme": theme}
+    if subcategory:
+        having_clauses.append(
+            "argMax(dominant_subcategory, computed_at) = %(subcategory)s"
+        )
+        sql_params["subcategory"] = subcategory
+    having_sql = " AND ".join(having_clauses)
+
+    rows = await query_dicts(
+        client,
+        f"""
+        SELECT
+            node_type,
+            node_id
+        FROM work_unit_membership
+        WHERE org_id = %(org_id)s
+        GROUP BY node_type, node_id
+        HAVING {having_sql}
+        """,
+        sql_params,
+    )
+    matched: set[tuple[str, str]] = set()
+    for r in rows:
+        nt = str(r.get("node_type") or "")
+        ni = str(r.get("node_id") or "")
+        if nt and ni:
+            matched.add((nt, ni))
+    return matched
+
+
 async def resolve_work_graph_edges(
     context: GraphQLContext,
     filters: WorkGraphEdgeFilterInput | None = None,
@@ -389,6 +449,42 @@ async def resolve_work_graph_edges(
     limit = filters.limit if filters else 1000
     params: dict[str, Any] = {"limit": int(limit), "org_id": org_id}
     where_clauses: list[str] = ["org_id = %(org_id)s"]
+
+    theme_filter = filters.theme if filters else None
+    subcategory_filter = filters.subcategory if filters else None
+    theme_filter_active = bool(theme_filter or subcategory_filter)
+
+    # --- Server-side theme/subcategory filter (CHAOS-2430) --------------------
+    # When a theme (and/or subcategory) filter is active, resolve the set of
+    # matching node keys FIRST, then constrain the edge SELECT so the LIMIT is
+    # enforced AFTER the theme constraint. This is the whole point: a sparse
+    # theme's edges may all sit beyond the row cap, so filtering after the cap
+    # (e.g. client-side) would produce false-empty graphs. An edge matches if
+    # EITHER endpoint belongs to a work unit of the requested theme.
+    matched_nodes: set[tuple[str, str]] = set()
+    if theme_filter_active:
+        # A subcategory implies a theme via "theme.sub" naming; if the caller
+        # supplied only a subcategory, derive the theme prefix so the HAVING
+        # theme predicate is always present and the two are mutually consistent.
+        effective_theme = theme_filter
+        if effective_theme is None and subcategory_filter:
+            effective_theme = subcategory_filter.split(".", 1)[0]
+        matched_nodes = await _fetch_theme_matching_nodes(
+            client, org_id, effective_theme, subcategory_filter
+        )
+        if not matched_nodes:
+            # No node matches the theme → no edge can touch it. Return empty
+            # without issuing the edge query.
+            return WorkGraphEdgesResult(
+                edges=[],
+                total_count=0,
+                page_info=PageInfo(
+                    has_next_page=False,
+                    has_previous_page=False,
+                    start_cursor=None,
+                    end_cursor=None,
+                ),
+            )
 
     if filters:
         if filters.repo_ids:
@@ -410,6 +506,20 @@ async def resolve_work_graph_edges(
         if filters.node_id:
             where_clauses.append("(source_id = %(node_id)s OR target_id = %(node_id)s)")
             params["node_id"] = filters.node_id
+
+    if theme_filter_active and matched_nodes:
+        # Tuple-membership predicate: edge matches if its source OR target node
+        # key is in the matched set. ClickHouse supports IN over a tuple list.
+        # Applied as a WHERE clause so it constrains the candidate set BEFORE
+        # the LIMIT below.
+        node_tuples = sorted(matched_nodes)
+        params["matched_nodes"] = node_tuples
+        where_clauses.append(
+            "("
+            "(source_type, source_id) IN %(matched_nodes)s"
+            " OR (target_type, target_id) IN %(matched_nodes)s"
+            ")"
+        )
 
     where_sql = f"WHERE {' AND '.join(where_clauses)}"
 
@@ -433,8 +543,28 @@ async def resolve_work_graph_edges(
 
     rows = await query_dicts(client, query, params)
     resolved = await _batch_resolve_display_names(client, org_id, rows)
-    membership = await _batch_resolve_membership(client, org_id, rows)
-    edges = [_row_to_edge(row, resolved, membership) for row in rows]
+
+    if theme_filter_active:
+        # On the filtered path, annotate each returned edge with the matched
+        # filter value (theme + subcategory if supplied) rather than the
+        # issue>pr precedence value, so display stays consistent with what the
+        # caller asked for. Every returned edge touches the matched set by
+        # construction, so no extra membership round-trip is needed.
+        filter_theme = theme_filter or (
+            subcategory_filter.split(".", 1)[0] if subcategory_filter else None
+        )
+        edges = [
+            _row_to_edge(
+                row,
+                resolved,
+                filter_theme=filter_theme,
+                filter_subcategory=subcategory_filter,
+            )
+            for row in rows
+        ]
+    else:
+        membership = await _batch_resolve_membership(client, org_id, rows)
+        edges = [_row_to_edge(row, resolved, membership) for row in rows]
 
     return WorkGraphEdgesResult(
         edges=edges,

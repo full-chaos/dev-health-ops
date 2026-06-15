@@ -38,7 +38,7 @@ class LinearProvider(ProviderWithClient[LinearClient]):
     Capabilities:
     - work_items: yes (issues)
     - status_transitions: yes (via issue history)
-    - dependencies: no (Linear doesn't expose blocking relationships in API)
+    - dependencies: yes (PR/MR links via issue attachments; not blocking relations)
     - interactions: yes (via comments)
     - sprints: yes (via cycles)
     - reopen_events: yes (via issue history)

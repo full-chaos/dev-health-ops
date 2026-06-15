@@ -432,10 +432,11 @@ async def _list_github_app_installation_repos(
     GitHub search.
     """
     import fnmatch
+
     import httpx
 
-    from dev_health_ops.connectors.utils.github_app import GitHubAppTokenProvider
     from dev_health_ops.connectors.models import Repository
+    from dev_health_ops.connectors.utils.github_app import GitHubAppTokenProvider
 
     assert github_credentials.app_id is not None
     assert github_credentials.private_key is not None

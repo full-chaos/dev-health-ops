@@ -376,12 +376,12 @@ async def test_materialize_does_not_call_membership_sink_methods(monkeypatch):
     repo_id, edges, work_items, commits = _sample_two_node_data()
 
     class _NoMembershipSink(FakeSink):
-        def write_work_unit_memberships(self, rows):  # type: ignore[override]
+        def write_work_unit_memberships(self, rows):
             raise AssertionError(
                 "materializer must not write membership rows (round-3 #2)"
             )
 
-        def write_membership_run(self, record):  # type: ignore[override]
+        def write_membership_run(self, record):
             raise AssertionError("materializer must not publish a marker (round-3 #2)")
 
     sink = _NoMembershipSink()

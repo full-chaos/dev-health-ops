@@ -219,6 +219,26 @@ def run_investment_materialization(ns: argparse.Namespace) -> int:
         org_id=org_id,
     )
 
+    # CHAOS-2433 round-4 finding #1: the materializer writes work_unit_investments
+    # ONLY — membership rows + the completion marker are published EXCLUSIVELY by
+    # the no-LLM full-coverage projection (the post-sync Celery chain runs it as a
+    # 3rd step). This operator CLI entry point must do the same, or
+    # `dev-hops investment materialize` would persist new investments WITHOUT
+    # publishing a membership run/marker and GraphQL theme filters would keep
+    # reading the stale/previous marker (or none). We therefore run the projection
+    # synchronously after a successful materialization (a direct call, not a
+    # Celery dispatch, so the CLI is complete on return).
+    #
+    # COVERAGE RULE (finding #2, unchanged): only an ORG-WIDE FULL-COVERAGE run may
+    # publish the org-wide marker. A repo/team-SCOPED OR date-WINDOWED manual
+    # materialize must NOT publish an org marker (it would blank out-of-scope /
+    # out-of-window components under the new latest marker). We detect a
+    # date-windowed run by whether the operator explicitly bounded the window via
+    # --from/--to/--window-days. Such scoped/windowed runs refresh investments
+    # only; the org-wide daily projection republishes the full-coverage marker.
+    explicitly_windowed = bool(ns.from_date or ns.to_date or ns.window_days)
+    is_full_org_wide = not repo_ids and not team_ids and not explicitly_windowed
+
     logging.info(f"Materializing investments from {config.from_ts} to {config.to_ts}")
     try:
         stats = asyncio.run(materialize_investments(config))
@@ -228,10 +248,47 @@ def run_investment_materialization(ns: argparse.Namespace) -> int:
             stats.get("records", 0),
             stats.get("quotes", 0),
         )
-        return 0
     except Exception as e:
         logging.error(f"Investment materialization failed: {e}")
         return 1
+
+    if is_full_org_wide:
+        # Publish a fresh full-coverage membership run + marker so theme filters
+        # read the new investments. The projection is no-LLM and synchronous.
+        from dev_health_ops.work_graph.investment.backfill import (
+            MembershipBackfillConfig,
+            backfill_memberships,
+        )
+
+        logging.info(
+            "Projecting work_unit_membership (no-LLM) to publish a full-coverage "
+            "completion marker after org-wide materialization"
+        )
+        try:
+            mstats = backfill_memberships(
+                MembershipBackfillConfig(dsn=ns.db, org_id=org_id, repo_ids=None)
+            )
+            logging.info(
+                "Membership projection complete. Components=%d Matched=%d "
+                "Memberships=%d",
+                mstats.get("components", 0),
+                mstats.get("matched", 0),
+                mstats.get("memberships", 0),
+            )
+        except Exception as e:
+            logging.error(f"Membership projection failed: {e}")
+            return 1
+    else:
+        logging.info(
+            "Scoped/windowed materialization (repos=%s teams=%s windowed=%s) — "
+            "NOT publishing an org-wide membership marker; the org-wide daily "
+            "projection republishes full coverage (CHAOS-2433).",
+            repo_ids or None,
+            team_ids or None,
+            explicitly_windowed,
+        )
+
+    return 0
 
 
 async def materialize_fixture_investments(
@@ -346,8 +403,11 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     investment_materialize.add_argument(
         "--window-days",
         type=int,
-        default=30,
-        help="Window size in days when --from is not set (default: 30).",
+        default=None,
+        help="Window size in days when --from is not set (default: 30). "
+        "Passing this (or --from/--to) marks the run as date-windowed, so it "
+        "refreshes investments only and does NOT publish an org-wide membership "
+        "marker (CHAOS-2433 coverage rule).",
     )
     investment_materialize.add_argument(
         "--repo-id",

@@ -526,6 +526,11 @@ class WorkGraphEdgeResult:
     a non-UUID id passes through verbatim; a UUID that cannot be looked up
     is None so the client renders a controlled Unresolved badge (never a
     bare UUID).
+
+    theme / subcategory are the dominant investment theme and subcategory of
+    the work unit that contains an endpoint of this edge, looked up from
+    work_unit_membership (CHAOS-2430). Null when neither endpoint belongs to
+    a known work unit.
     """
 
     edge_id: str
@@ -541,6 +546,8 @@ class WorkGraphEdgeResult:
     evidence: str
     repo_id: str | None = None
     provider: str | None = None
+    theme: str | None = None
+    subcategory: str | None = None
 
 
 @strawberry.type

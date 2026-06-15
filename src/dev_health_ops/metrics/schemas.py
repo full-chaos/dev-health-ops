@@ -746,6 +746,24 @@ class WorkUnitInvestmentRecord:
 
 
 @dataclass(frozen=True)
+class WorkUnitMembershipRecord:
+    """One row per node in a work unit — reverse index for theme/subcategory filtering.
+
+    Persisted into ``work_unit_membership`` (CHAOS-2429).
+    Read with FINAL or ``argMax(<col>, computed_at)`` for ReplacingMergeTree dedup.
+    """
+
+    org_id: str
+    node_type: str
+    node_id: str
+    work_unit_id: str
+    dominant_theme: str
+    dominant_subcategory: str
+    categorization_status: str
+    computed_at: datetime
+
+
+@dataclass(frozen=True)
 class WorkUnitInvestmentEvidenceQuoteRecord:
     work_unit_id: str
     quote: str

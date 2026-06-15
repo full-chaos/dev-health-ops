@@ -15,6 +15,7 @@ from dev_health_ops.llm import get_provider
 from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
+    WorkUnitMembershipRecord,
 )
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.metrics.sinks.factory import create_sink
@@ -74,6 +75,20 @@ def _float_value(value: object) -> float:
         except ValueError:
             return 0.0
     return 0.0
+
+
+def _lexical_argmax(distribution: dict[str, float]) -> str:
+    """Return the key with the highest value; break ties lexically (smallest key wins).
+
+    An empty distribution returns "unknown". The lexical tie-break ensures
+    deterministic output across Python runs regardless of dict insertion order.
+    """
+    if not distribution:
+        return "unknown"
+    # max() with a (score, inverted_key) tuple: highest score first, then
+    # smallest key for ties (negate string comparison by reversing the pair).
+    # We achieve smallest-key-wins by using (-value, key) and taking the min.
+    return min(distribution, key=lambda k: (-_float_value(distribution[k]), k))
 
 
 @dataclass(frozen=True)
@@ -392,6 +407,7 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
 
         records: list[WorkUnitInvestmentRecord] = []
         quote_records: list[WorkUnitInvestmentEvidenceQuoteRecord] = []
+        membership_records: list[WorkUnitMembershipRecord] = []
         run_id = uuid.uuid4().hex
         computed_at = datetime.now(timezone.utc)
         model_version = config.llm_model or config.llm_provider
@@ -592,6 +608,25 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
                 )
             )
 
+            # Emit one membership row per node in the component so the work
+            # graph resolver can join theme/subcategory onto edges in O(nodes)
+            # without scanning all of work_unit_investments (CHAOS-2429).
+            dominant_theme = _lexical_argmax(theme_distribution)
+            dominant_subcategory = _lexical_argmax(outcome.subcategories)
+            for node_type, node_id in unit_nodes:
+                membership_records.append(
+                    WorkUnitMembershipRecord(
+                        org_id=config.org_id or "",
+                        node_type=node_type,
+                        node_id=node_id,
+                        work_unit_id=unit_id,
+                        dominant_theme=dominant_theme,
+                        dominant_subcategory=dominant_subcategory,
+                        categorization_status=outcome.status,
+                        computed_at=computed_at,
+                    )
+                )
+
             if config.persist_evidence_snippets and outcome.evidence_quotes:
                 for quote in outcome.evidence_quotes:
                     quote_records.append(
@@ -611,12 +646,15 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
             sink.write_work_unit_investments(records)
         if quote_records:
             sink.write_work_unit_investment_quotes(quote_records)
+        if membership_records:
+            sink.write_work_unit_memberships(membership_records)
         logger.info("Sink write complete")
 
         return {
             "components": len(components),
             "records": len(records),
             "quotes": len(quote_records),
+            "memberships": len(membership_records),
         }
     finally:
         sink.close()

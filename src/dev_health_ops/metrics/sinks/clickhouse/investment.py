@@ -20,6 +20,7 @@ from dev_health_ops.metrics.schemas import (
     IssueTypeMetricsRecord,
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
+    WorkUnitMembershipRecord,
 )
 
 if TYPE_CHECKING:
@@ -152,6 +153,26 @@ class InvestmentMixin(_ClickHouseSinkBase):
                 "computed_at",
                 "categorization_run_id",
                 "org_id",
+            ],
+            rows,
+        )
+
+    def write_work_unit_memberships(
+        self, rows: Sequence[WorkUnitMembershipRecord]
+    ) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "work_unit_membership",
+            [
+                "org_id",
+                "node_type",
+                "node_id",
+                "work_unit_id",
+                "dominant_theme",
+                "dominant_subcategory",
+                "categorization_status",
+                "computed_at",
             ],
             rows,
         )

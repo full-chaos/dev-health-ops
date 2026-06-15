@@ -27,6 +27,7 @@ class FakeSink:
         self.client = object()
         self.investment_rows: list[WorkUnitInvestmentRecord] = []
         self.quote_rows: list[WorkUnitInvestmentEvidenceQuoteRecord] = []
+        self.membership_rows: list = []
 
     def ensure_schema(self) -> None:
         return None
@@ -36,6 +37,9 @@ class FakeSink:
 
     def write_work_unit_investment_quotes(self, rows) -> None:
         self.quote_rows.extend(rows)
+
+    def write_work_unit_memberships(self, rows) -> None:
+        self.membership_rows.extend(rows)
 
     def close(self) -> None:
         return None

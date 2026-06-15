@@ -255,16 +255,43 @@ async def _batch_resolve_display_names(
 
 
 def _row_to_edge(
-    row: dict[str, Any], resolved: dict[str, str] | None = None
+    row: dict[str, Any],
+    resolved: dict[str, str] | None = None,
+    membership: dict[tuple[str, str], dict[str, str]] | None = None,
 ) -> WorkGraphEdgeResult:
     source_id = str(row.get("source_id", ""))
     target_id = str(row.get("target_id", ""))
+    source_type_raw = str(row.get("source_type", "issue"))
+    target_type_raw = str(row.get("target_type", "issue"))
+
+    # Resolve theme/subcategory from work_unit_membership.
+    # Precedence: ISSUE endpoint > PR endpoint > other endpoint types.
+    # Both source and target are checked; when types differ the issue wins.
+    # If neither endpoint has membership data, fields remain None.
+    theme: str | None = None
+    subcategory: str | None = None
+    if membership is not None:
+        # Ordered preference: issue first, then pr, then whatever is available.
+        endpoint_preference = [
+            (source_type_raw, source_id),
+            (target_type_raw, target_id),
+        ]
+        # Sort so issue endpoints are tried before pr, and pr before others.
+        _type_rank = {"issue": 0, "pr": 1}
+        endpoint_preference.sort(key=lambda ep: _type_rank.get(ep[0].lower(), 2))
+        for ep_type, ep_id in endpoint_preference:
+            m = membership.get((ep_type, ep_id))
+            if m:
+                theme = m.get("dominant_theme") or None
+                subcategory = m.get("dominant_subcategory") or None
+                break
+
     return WorkGraphEdgeResult(
         edge_id=str(row.get("edge_id", "")),
-        source_type=_map_node_type(str(row.get("source_type", "issue"))),
+        source_type=_map_node_type(source_type_raw),
         source_id=source_id,
         source_display_name=_display_name_for(source_id, resolved),
-        target_type=_map_node_type(str(row.get("target_type", "issue"))),
+        target_type=_map_node_type(target_type_raw),
         target_id=target_id,
         target_display_name=_display_name_for(target_id, resolved),
         edge_type=_map_edge_type(str(row.get("edge_type", "relates"))),
@@ -273,7 +300,78 @@ def _row_to_edge(
         evidence=str(row.get("evidence", "")),
         repo_id=str(row.get("repo_id")) if row.get("repo_id") else None,
         provider=str(row.get("provider")) if row.get("provider") else None,
+        theme=theme,
+        subcategory=subcategory,
     )
+
+
+async def _batch_resolve_membership(
+    client: Any,
+    org_id: str,
+    rows: list[dict[str, Any]],
+) -> dict[tuple[str, str], dict[str, str]]:
+    """Batch-lookup work_unit_membership for all edge endpoints in ONE query.
+
+    Returns a mapping {(node_type, node_id) -> {"dominant_theme": ..., "dominant_subcategory": ...}}.
+    Uses argMax(col, computed_at) to read the latest row per node consistent
+    with ReplacingMergeTree semantics (same pattern as work_unit_investments readers).
+    Scoped to org_id to prevent cross-tenant leaks.
+    """
+    from dev_health_ops.api.queries.client import query_dicts
+
+    # Collect unique (node_type, node_id) pairs from both endpoints of every edge.
+    endpoints: set[tuple[str, str]] = set()
+    for row in rows:
+        for id_field, type_field in (
+            ("source_id", "source_type"),
+            ("target_id", "target_type"),
+        ):
+            node_id = str(row.get(id_field) or "").strip()
+            node_type = str(row.get(type_field) or "").strip()
+            if node_id and node_type:
+                endpoints.add((node_type, node_id))
+
+    if not endpoints:
+        return {}
+
+    node_types = sorted({t for t, _ in endpoints})
+    node_ids = sorted({i for _, i in endpoints})
+
+    try:
+        membership_rows = await query_dicts(
+            client,
+            """
+            SELECT
+                node_type,
+                node_id,
+                argMax(dominant_theme, computed_at) AS dominant_theme,
+                argMax(dominant_subcategory, computed_at) AS dominant_subcategory
+            FROM work_unit_membership
+            WHERE org_id = %(org_id)s
+              AND node_type IN %(node_types)s
+              AND node_id IN %(node_ids)s
+            GROUP BY node_type, node_id
+            """,
+            {
+                "org_id": org_id,
+                "node_types": node_types,
+                "node_ids": node_ids,
+            },
+        )
+    except Exception:
+        logger.warning("work_unit_membership batch lookup failed", exc_info=True)
+        return {}
+
+    result: dict[tuple[str, str], dict[str, str]] = {}
+    for r in membership_rows:
+        nt = str(r.get("node_type") or "")
+        ni = str(r.get("node_id") or "")
+        if nt and ni:
+            result[(nt, ni)] = {
+                "dominant_theme": str(r.get("dominant_theme") or ""),
+                "dominant_subcategory": str(r.get("dominant_subcategory") or ""),
+            }
+    return result
 
 
 async def resolve_work_graph_edges(
@@ -335,7 +433,8 @@ async def resolve_work_graph_edges(
 
     rows = await query_dicts(client, query, params)
     resolved = await _batch_resolve_display_names(client, org_id, rows)
-    edges = [_row_to_edge(row, resolved) for row in rows]
+    membership = await _batch_resolve_membership(client, org_id, rows)
+    edges = [_row_to_edge(row, resolved, membership) for row in rows]
 
     return WorkGraphEdgesResult(
         edges=edges,

@@ -1506,3 +1506,130 @@ async def test_retention_bounds_row_count_across_many_runs(sink):
                 "SETTINGS mutations_sync=2",
                 parameters={"o": org_id},
             )
+
+
+@pytest.mark.asyncio
+async def test_out_of_window_previously_categorized_component_stays_visible(sink):
+    """ROUND-7 false-positive proof (live): a current, UNCHURNED component whose
+    only investment row is OLD (out of any 30-day materialize window) remains
+    filterable after the real org-wide backfill projection. The backfill reads
+    work_unit_investments by work_unit_id with NO date window, so the org-wide
+    marker COVERS it — it is not hidden.
+
+    End-to-end: seed work_graph_edges + an OLD-computed_at work_unit_investments
+    row, run the REAL backfill_memberships (no LLM), then assert the resolver
+    returns the component under its theme.
+    """
+    from dev_health_ops.metrics.schemas import WorkUnitInvestmentRecord
+    from dev_health_ops.work_graph.investment.backfill import (
+        MembershipBackfillConfig,
+        backfill_memberships,
+    )
+    from dev_health_ops.work_graph.investment.utils import work_unit_id
+
+    org_id = f"test-chaos-2433-oow-{uuid.uuid4()}"
+    issue_id = f"ISSUE-{uuid.uuid4()}"
+    pr_node = f"PRNODE-{uuid.uuid4()}"
+    edge_id = f"edge-{uuid.uuid4()}"
+    repo_uuid = str(uuid.uuid4())
+    # An OLD timestamp — well outside any default 30-day materialize window.
+    old_ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+    # The component: issue + pr. Its work_unit_id is the hash of those nodes.
+    unit_nodes = [("issue", issue_id), ("pr", pr_node)]
+    uid = work_unit_id(unit_nodes)
+
+    # Seed the current work graph edge (unwindowed: backfill reads ALL edges).
+    sink.client.insert(
+        "work_graph_edges",
+        [
+            [
+                org_id,
+                edge_id,
+                "issue",
+                issue_id,
+                "pr",
+                pr_node,
+                "implements",
+                repo_uuid,
+                "github",
+                "native",
+                1.0,
+                "",
+                old_ts,
+                old_ts,
+                old_ts,
+                old_ts.date(),
+            ]
+        ],
+        column_names=_edge_cols(),
+    )
+
+    # Seed a PREVIOUSLY-categorized investment row with an OLD computed_at.
+    sink.write_work_unit_investments(
+        [
+            WorkUnitInvestmentRecord(
+                work_unit_id=uid,
+                work_unit_type="issue",
+                work_unit_name="old categorized unit",
+                from_ts=old_ts,
+                to_ts=old_ts,
+                repo_id=uuid.UUID(repo_uuid),
+                provider="github",
+                effort_metric="churn_loc",
+                effort_value=1.0,
+                theme_distribution_json={"maintenance": 1.0},
+                subcategory_distribution_json={"maintenance.refactor": 1.0},
+                structural_evidence_json="{}",
+                evidence_quality=0.9,
+                evidence_quality_band="high",
+                categorization_status="ok",
+                categorization_errors_json="[]",
+                categorization_model_version="test",
+                categorization_input_hash="hash",
+                categorization_run_id=uuid.uuid4().hex,
+                computed_at=old_ts,
+                org_id=org_id,
+            )
+        ]
+    )
+
+    assert CLICKHOUSE_URI is not None
+    context = GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink)
+
+    try:
+        # Run the REAL org-wide backfill projection (no LLM, no date window).
+        stats = backfill_memberships(
+            MembershipBackfillConfig(dsn=CLICKHOUSE_URI, org_id=org_id)
+        )
+        assert stats["matched"] == 1, (
+            "the previously-categorized OLD component must be matched/covered, "
+            "not skipped — the backfill read is not date-windowed (round-7)"
+        )
+        _wait_for_mutations(sink, "work_unit_membership")
+        _wait_for_mutations(sink, "work_unit_membership_runs")
+
+        # The resolver returns the component under its theme — NOT hidden by the
+        # (irrelevant) materialize window. The org-wide marker covers it.
+        result = await resolve_work_graph_edges(
+            context, WorkGraphEdgeFilterInput(theme="maintenance")
+        )
+        assert [e.edge_id for e in result.edges] == [edge_id], (
+            "an out-of-window but previously-categorized, unchurned component "
+            "MUST remain filterable after the org-wide backfill (round-7 false "
+            "positive: the org-wide marker does NOT hide it)"
+        )
+        assert result.edges[0].theme == "maintenance"
+        assert not result.degraded_reason
+    finally:
+        for table in (
+            "work_unit_membership",
+            "work_unit_membership_runs",
+            "work_graph_edges",
+            "work_unit_investments",
+        ):
+            sink.client.command(
+                f"ALTER TABLE {table} DELETE WHERE org_id = {{o:String}} "
+                "SETTINGS mutations_sync=2",
+                parameters={"o": org_id},
+            )

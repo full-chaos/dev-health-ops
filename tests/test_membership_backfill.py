@@ -293,6 +293,95 @@ def test_backfill_uses_latest_per_work_unit_query() -> None:
     assert "FROM work_unit_investments" in q
 
 
+def test_backfill_investment_read_is_not_date_windowed() -> None:
+    """ROUND-7 (false-positive guard): the investment read is NOT date-windowed.
+
+    The claimed coverage hole was that a 30-day post-sync materialize would let
+    the backfill hide previously-visible OUT-OF-WINDOW components. It cannot: the
+    distribution read filters ONLY on org_id + work_unit_id (latest-per-unit via
+    argMax) — there is NO from_ts/to_ts/computed_at window predicate, and the
+    edge fetch that builds the component set is unwindowed too. So a
+    previously-categorized component is projected regardless of how old its
+    investment row is. This asserts the SQL carries no window clause."""
+    edges = [_edge("issue", "I-1", "pr", "P-1")]
+    uid = work_unit_id([("issue", "I-1"), ("pr", "P-1")])
+    sink = _FakeSink(
+        edges=edges,
+        investments=[
+            _investment_row(
+                work_unit_id=uid,
+                theme={"feature_delivery": 1.0},
+                subcategory={"feature_delivery.roadmap": 1.0},
+            )
+        ],
+    )
+
+    _run_backfill(sink)
+
+    q = sink.query_calls[0]
+    # The WHERE clause is org_id + work_unit_id only — NO temporal window.
+    assert "from_ts" not in q
+    assert "to_ts" not in q
+    # No computed_at lower/upper bound (argMax(... , computed_at) is fine; a
+    # BETWEEN/>=/<= window is not present).
+    assert "computed_at >=" not in q
+    assert "computed_at <=" not in q
+    assert "computed_at BETWEEN" not in q
+    # The only predicates are org_id + work_unit_id.
+    assert "WHERE org_id = %(org_id)s" in q
+    assert "AND work_unit_id IN %(work_unit_ids)s" in q
+
+
+def test_backfill_covers_previously_categorized_out_of_window_component() -> None:
+    """ROUND-7 (false-positive proof): a current, UNCHURNED component that was
+    categorized in a PRIOR run (its investment row exists, however old) is
+    PROJECTED — matched, not skipped — by an org-wide backfill. So a 30-day
+    post-sync materialize->backfill does NOT hide it; the org-wide marker covers
+    it. This is the load-bearing fact behind the false-positive assessment.
+
+    We model the out-of-window component as one whose only signal is its existing
+    investment row (the materialize window is irrelevant to the backfill, which
+    reads ALL investments by work_unit_id). A SECOND component is genuinely
+    uncategorized (no investment row) and is correctly skipped — proving skip is
+    'never categorized', not 'out of window'."""
+    # Component A: previously categorized (has an investment row) — must be COVERED.
+    a_nodes = [("issue", "OLD-CATEGORIZED"), ("pr", "OLD-PR")]
+    # Component B: never categorized (no investment row) — correctly SKIPPED.
+    edges = [
+        _edge("issue", "OLD-CATEGORIZED", "pr", "OLD-PR"),
+        _edge("issue", "NEVER-CAT", "pr", "NEW-PR"),
+    ]
+    a_uid = work_unit_id(a_nodes)
+    sink = _FakeSink(
+        edges=edges,
+        investments=[
+            # Only component A has a (prior-run) investment row.
+            _investment_row(
+                work_unit_id=a_uid,
+                theme={"maintenance": 1.0},
+                subcategory={"maintenance.refactor": 1.0},
+            )
+        ],
+    )
+
+    stats = _run_backfill(sink, org_id="org-1")
+
+    # A is projected (covered), B is skipped (never categorized).
+    assert stats["components"] == 2
+    assert stats["matched"] == 1
+    assert stats["skipped"] == 1
+    covered_nodes = {r.node_id for r in sink.written}
+    assert {"OLD-CATEGORIZED", "OLD-PR"} <= covered_nodes, (
+        "a previously-categorized unchurned component MUST be projected — it is "
+        "NOT hidden by the materialize window (round-7 false positive)"
+    )
+    # The genuinely-uncategorized component's nodes are absent (correct: no theme).
+    assert "NEVER-CAT" not in covered_nodes
+    # A full-coverage org-wide marker is still published (covers component A).
+    assert len(sink.run_markers) == 1
+    assert sink.run_markers[0].org_id == "org-1"
+
+
 # ---------------------------------------------------------------------------
 # run_id / completion-marker protocol tests (CHAOS-2433)
 # ---------------------------------------------------------------------------

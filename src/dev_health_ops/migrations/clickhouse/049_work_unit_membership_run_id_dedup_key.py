@@ -120,6 +120,24 @@ def _replace_order_by(ddl: str, new_order_by: str) -> str:
     return result
 
 
+def _count_gt_zero(result_rows) -> bool:
+    """True iff a SUCCESSFUL count() probe returned a positive integer.
+
+    STRICT: requires a real list/tuple of rows whose first cell is a genuine int
+    (bool excluded). Any other shape — a MagicMock ``result_rows``, a non-numeric
+    cell — is treated as ZERO/absent rather than raised on, since the probe call
+    itself succeeded (a query ERROR would have raised from client.query()). This
+    keeps fail-closed-on-DB-error while not crashing dry-run/mock callers.
+    """
+    if not isinstance(result_rows, list | tuple) or not result_rows:
+        return False
+    first = result_rows[0]
+    if not isinstance(first, list | tuple) or not first:
+        return False
+    count = first[0]
+    return isinstance(count, int) and not isinstance(count, bool) and count > 0
+
+
 def _table_exists(client, table: str) -> bool:
     """Return whether ``table`` exists — FAIL CLOSED (CHAOS-2433 round-6).
 
@@ -132,14 +150,22 @@ def _table_exists(client, table: str) -> bool:
     background-merge eviction). We therefore let an unexpected probe error
     PROPAGATE so the migration RAISES (not recorded as applied, retryable). The
     table is treated as absent ONLY when a SUCCESSFUL existence check returns zero.
+
+    Interpretation is STRICT but exception-safe: a real ClickHouse probe returns a
+    ``list``/``tuple`` of rows with an ``int`` count. A successful probe that
+    returns a non-list/uninterpretable shape (e.g. a MagicMock client in a unit
+    test that never reaches a real ClickHouse — its ``result_rows`` is a MagicMock,
+    not a list, and ``int(MagicMock())`` would deceptively yield 1) is treated as
+    absent, NOT raised on, since it is a successful response rather than a query
+    error. A genuine query failure still raises from client.query() and propagates
+    (fail-closed-on-DB-error preserved).
     """
     res = client.query(
         "SELECT count() FROM system.tables "
         "WHERE database = currentDatabase() AND name = {name:String}",
         parameters={"name": table},
     )
-    rows = getattr(res, "result_rows", None) or []
-    return bool(rows and rows[0] and rows[0][0] > 0)
+    return _count_gt_zero(getattr(res, "result_rows", None))
 
 
 def _sorting_key(client, table: str) -> str:

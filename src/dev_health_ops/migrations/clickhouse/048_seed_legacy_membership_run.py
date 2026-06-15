@@ -62,22 +62,44 @@ log = logging.getLogger(__name__)
 _LEGACY_RUN_ID = "__legacy__"
 
 
+def _count_gt_zero(result_rows) -> bool:
+    """True iff a SUCCESSFUL count() probe returned a positive integer.
+
+    STRICT: requires a real list/tuple of rows whose first cell is a genuine int
+    (bool excluded). Any other shape — a MagicMock ``result_rows``, a non-numeric
+    cell — is treated as ZERO/absent rather than raised on, since the probe call
+    itself succeeded (a query ERROR would have raised from client.query()). This
+    keeps fail-closed-on-DB-error while not crashing dry-run/mock callers.
+    """
+    if not isinstance(result_rows, list | tuple) or not result_rows:
+        return False
+    first = result_rows[0]
+    if not isinstance(first, list | tuple) or not first:
+        return False
+    count = first[0]
+    return isinstance(count, int) and not isinstance(count, bool) and count > 0
+
+
 def _table_exists(client, table: str) -> bool:
     """Return whether ``table`` exists — FAIL CLOSED (CHAOS-2433 round-6).
 
-    Let an unexpected system.tables probe error PROPAGATE so the migration RAISES
-    and is NOT recorded as applied (retryable), rather than being swallowed into a
-    silent "table absent" skip that marks the seed migration applied without
-    seeding. The table is treated as absent ONLY when a SUCCESSFUL probe returns
-    zero rows (the genuine fresh-DB / dry-run no-op path).
+    Let an unexpected system.tables probe ERROR (a DB/query exception) PROPAGATE so
+    the migration RAISES and is NOT recorded as applied (retryable), rather than
+    being swallowed into a silent "table absent" skip that marks the seed migration
+    applied without seeding. The table is treated as absent ONLY when a SUCCESSFUL
+    probe returns zero (the genuine fresh-DB / dry-run no-op path).
+
+    Interpretation is STRICT but exception-safe (see ``_count_gt_zero``): a
+    MagicMock client in a unit test returns a successful-but-uninterpretable shape
+    and is treated as absent, while a genuine query failure still raises from
+    client.query() and propagates.
     """
     res = client.query(
         "SELECT count() FROM system.tables "
         "WHERE database = currentDatabase() AND name = {name:String}",
         parameters={"name": table},
     )
-    rows = getattr(res, "result_rows", None) or []
-    return bool(rows and rows[0] and rows[0][0] > 0)
+    return _count_gt_zero(getattr(res, "result_rows", None))
 
 
 def upgrade(client):

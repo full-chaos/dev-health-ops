@@ -87,3 +87,30 @@ def test_present_tables_seed_marker() -> None:
     client = _FakeClient(present=True)
     module.upgrade(client)
     assert any("INSERT INTO work_unit_membership_runs" in c for c in client.commands)
+
+
+def test_magicmock_client_is_treated_as_absent_not_crash() -> None:
+    """REGRESSION (CI red, run 27579877858): a bare MagicMock client returns a
+    successful-but-uninterpretable result_rows. 048's fail-closed _table_exists
+    must treat it as absent and skip the seed (no INSERT), NOT crash on
+    int(MagicMock)/comparison."""
+    from unittest.mock import MagicMock
+
+    module = _load()
+    client = MagicMock()
+
+    module.upgrade(client)  # must not raise
+    issued = [c.args[0] for c in client.command.call_args_list if c.args]
+    assert not any("INSERT INTO work_unit_membership_runs" in c for c in issued)
+
+
+def test_count_gt_zero_is_type_strict() -> None:
+    from unittest.mock import MagicMock
+
+    module = _load()
+    assert module._count_gt_zero([[1]]) is True
+    assert module._count_gt_zero([[0]]) is False
+    assert module._count_gt_zero(None) is False
+    assert module._count_gt_zero(MagicMock()) is False
+    assert module._count_gt_zero([[MagicMock()]]) is False
+    assert module._count_gt_zero([[True]]) is False

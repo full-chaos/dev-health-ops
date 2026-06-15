@@ -179,3 +179,40 @@ def test_already_migrated_is_idempotent_skip() -> None:
 
     module.upgrade(client)
     assert not any("EXCHANGE TABLES" in c for c in client.commands)
+
+
+def test_magicmock_client_is_treated_as_absent_not_crash() -> None:
+    """REGRESSION (CI red, run 27579877858): a bare MagicMock client (e.g.
+    test_teams::test_clickhouse_store_teams drives ALL migrations through
+    ClickHouseStore.__aenter__ with a MagicMock) returns a successful-but-
+    uninterpretable result_rows. The round-6 fail-closed change must NOT crash on
+    it: a successful probe with a non-list/non-int shape is treated as absent
+    (genuine skip), while only a real query EXCEPTION fails closed. int(MagicMock)
+    deceptively yields 1, so the interpretation must be type-strict."""
+    from unittest.mock import MagicMock
+
+    module = _load()
+    client = MagicMock()  # query() returns a MagicMock; .result_rows is a MagicMock
+
+    # Must NOT raise (no TypeError from '>' or regex on a MagicMock) and must NOT
+    # attempt a rebuild — the migration treats the mock as 'table absent' and skips.
+    module.upgrade(client)
+    issued = [c.args[0] for c in client.command.call_args_list if c.args]
+    assert not any("EXCHANGE TABLES" in c for c in issued)
+
+
+def test_count_gt_zero_is_type_strict() -> None:
+    """_count_gt_zero accepts only a real list/tuple of rows with an int count;
+    anything else (MagicMock, non-numeric, empty, bool) is False/absent."""
+    from unittest.mock import MagicMock
+
+    module = _load()
+    assert module._count_gt_zero([[1]]) is True
+    assert module._count_gt_zero([(5,)]) is True
+    assert module._count_gt_zero([[0]]) is False
+    assert module._count_gt_zero([]) is False
+    assert module._count_gt_zero(None) is False
+    assert module._count_gt_zero(MagicMock()) is False  # the CI-red shape
+    assert module._count_gt_zero([[MagicMock()]]) is False
+    assert module._count_gt_zero([["3"]]) is False  # non-int cell
+    assert module._count_gt_zero([[True]]) is False  # bool excluded

@@ -580,8 +580,10 @@ def _list_gitlab_membership_repos(
             if not gl_projects:
                 break
             for p in gl_projects:
-                full_name = getattr(p, "path_with_namespace", None) or getattr(
-                    p, "name", ""
+                full_name = str(
+                    getattr(p, "path_with_namespace", None)
+                    or getattr(p, "name", "")
+                    or ""
                 )
                 if pattern and not fnmatch.fnmatch(full_name.lower(), pattern.lower()):
                     continue

@@ -715,3 +715,162 @@ async def test_legacy_rows_readable_then_superseded_by_real_run(sink):
                 "SETTINGS mutations_sync=2",
                 parameters={"o": org_id},
             )
+
+
+@pytest.mark.asyncio
+async def test_optimize_final_preserves_prior_complete_run_row(sink):
+    """ROUND-2 FINDING #1 (run_id in the dedup key): a background merge / OPTIMIZE
+    FINAL must NOT collapse rows for the same (org, node, category) across runs.
+
+    Without run_id in the ORDER BY, ReplacingMergeTree(computed_at) would keep
+    only the max-computed_at version, so a newer INCOMPLETE run (no marker) would
+    EVICT the prior COMPLETE run's row — after which the resolver scoped to the
+    complete run_id reads nothing. With migration 049 (run_id appended to the
+    sort key), per-run rows coexist: the complete run's row survives OPTIMIZE
+    FINAL and the resolver scoped to it still returns the node.
+
+    This test MUST fail on the 046 sort key and pass after the 049 rebuild
+    (the fixture's ensure_schema(force=True) applies all migrations incl. 049).
+    """
+    org_id = f"test-chaos-2433-optfinal-{uuid.uuid4()}"
+    node_id = f"ISSUE-{uuid.uuid4()}"
+    pr_id = f"PR-{uuid.uuid4()}"
+    edge_id = f"edge-{uuid.uuid4()}"
+    repo_uuid = str(uuid.uuid4())
+    complete_ts = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    incomplete_ts = datetime(2026, 2, 1, tzinfo=timezone.utc)  # newer computed_at
+    complete_run_id = uuid.uuid4().hex
+    incomplete_run_id = uuid.uuid4().hex
+
+    # SAME node + SAME (category_kind, category) under two runs:
+    #   COMPLETE run (older computed_at, marker published) — maintenance.
+    #   INCOMPLETE run (newer computed_at, NO marker) — same category, lower weight.
+    # On the old key these collapse to the newer (incomplete) version on merge.
+    membership_rows = [
+        [
+            org_id,
+            "issue",
+            node_id,
+            "U_C",
+            "theme",
+            "maintenance",
+            0.9,
+            1,
+            "ok",
+            complete_ts,
+            complete_run_id,
+        ],
+        [
+            org_id,
+            "issue",
+            node_id,
+            "U_C",
+            "subcategory",
+            "maintenance.refactor",
+            0.9,
+            1,
+            "ok",
+            complete_ts,
+            complete_run_id,
+        ],
+        # In-flight run: same node + SAME categories, newer computed_at, no marker.
+        [
+            org_id,
+            "issue",
+            node_id,
+            "U_I",
+            "theme",
+            "maintenance",
+            0.5,
+            1,
+            "ok",
+            incomplete_ts,
+            incomplete_run_id,
+        ],
+        [
+            org_id,
+            "issue",
+            node_id,
+            "U_I",
+            "subcategory",
+            "maintenance.refactor",
+            0.5,
+            1,
+            "ok",
+            incomplete_ts,
+            incomplete_run_id,
+        ],
+    ]
+    # Only the COMPLETE run has a marker (the in-flight run has not published).
+    run_marker_rows = [[org_id, complete_run_id, complete_ts]]
+    edge_rows = [
+        [
+            org_id,
+            edge_id,
+            "issue",
+            node_id,
+            "pr",
+            pr_id,
+            "implements",
+            repo_uuid,
+            "github",
+            "native",
+            1.0,
+            "",
+            incomplete_ts,
+            incomplete_ts,
+            incomplete_ts,
+            incomplete_ts.date(),
+        ]
+    ]
+
+    sink.client.insert(
+        "work_unit_membership", membership_rows, column_names=_membership_cols()
+    )
+    sink.client.insert(
+        "work_unit_membership_runs",
+        run_marker_rows,
+        column_names=_membership_run_cols(),
+    )
+    sink.client.insert("work_graph_edges", edge_rows, column_names=_edge_cols())
+
+    # Force a merge: this is the operation that would EVICT the complete run's
+    # row under the old (run_id-less) dedup key.
+    sink.client.command("OPTIMIZE TABLE work_unit_membership FINAL")
+
+    assert CLICKHOUSE_URI is not None
+    context = GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink)
+
+    try:
+        # The COMPLETE run's row must STILL be physically present after the merge.
+        remaining = sink.client.query(
+            "SELECT run_id, weight FROM work_unit_membership "
+            "WHERE org_id = {o:String} AND run_id = {r:String}",
+            parameters={"o": org_id, "r": complete_run_id},
+        ).result_rows
+        assert remaining, (
+            "the prior COMPLETE run's membership rows were EVICTED by OPTIMIZE "
+            "FINAL — run_id must be in the dedup key (CHAOS-2433 finding #1)"
+        )
+
+        # The resolver (scoped to the COMPLETE run via its marker, since the
+        # in-flight run has no marker) still returns the node under maintenance.
+        result = await resolve_work_graph_edges(
+            context, WorkGraphEdgeFilterInput(theme="maintenance")
+        )
+        assert [e.edge_id for e in result.edges] == [edge_id], (
+            "after OPTIMIZE FINAL the resolver scoped to the complete run must "
+            "still return the node (the complete run's row survived)"
+        )
+        assert result.edges[0].theme == "maintenance"
+    finally:
+        for table in (
+            "work_unit_membership",
+            "work_unit_membership_runs",
+            "work_graph_edges",
+        ):
+            sink.client.command(
+                f"ALTER TABLE {table} DELETE WHERE org_id = {{o:String}} "
+                "SETTINGS mutations_sync=2",
+                parameters={"o": org_id},
+            )

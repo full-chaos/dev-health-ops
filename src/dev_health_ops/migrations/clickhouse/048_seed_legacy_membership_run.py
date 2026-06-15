@@ -79,14 +79,20 @@ def upgrade(client):
     """Seed one __legacy__ marker per org that has pre-existing membership rows."""
     log.info("=== Migration 048: seed legacy membership completion marker ===")
 
-    # 047 must have created both tables; if either is missing the database is in
-    # an unexpected state and we fail closed rather than guess.
+    # 046 creates work_unit_membership and 047 creates work_unit_membership_runs,
+    # both EARLIER in this same migration pass. If either is genuinely absent
+    # there is simply nothing to seed (no pre-existing membership rows to make
+    # readable) — a fresh database is a clean no-op, not an error. Skip
+    # gracefully rather than fail closed so the migration is safe to run against
+    # any database state (and against a dry-run / mocked client).
     for table in ("work_unit_membership", "work_unit_membership_runs"):
         if not _table_exists(client, table):
-            raise RuntimeError(
-                f"048: required table '{table}' does not exist — migration 047 "
-                f"must run first"
+            log.info(
+                "  %s does not exist yet — nothing to seed, skipping (no "
+                "pre-existing membership to make readable)",
+                table,
             )
+            return
 
     # One marker per org that HAS membership rows, stamped with that org's
     # newest existing computed_at.  ReplacingMergeTree(completed_at) on

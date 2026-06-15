@@ -22,7 +22,8 @@ tests prove:
   matched under its secondary theme still reports its dominant).
 - Org isolation; AND-composition with repo/edge_type; degraded_reason is
   MEMBERSHIP_NOT_MATERIALIZED only when a filter yields nothing AND investments
-  exist with zero membership rows in the latest complete run, else None.
+  exist AND NO complete-run marker exists (gated on marker existence, not row
+  count — an empty-but-complete run is a valid empty, not degraded), else None.
 """
 
 from __future__ import annotations
@@ -221,19 +222,18 @@ class TestThemeFilterServerSide:
 
     @pytest.mark.asyncio
     async def test_degraded_state_when_membership_unmaterialized(self, mock_context):
-        """Empty filter result + investments>0 + membership==0 in the latest
-        complete run → edges=[] with degraded_reason=MEMBERSHIP_NOT_MATERIALIZED.
-        The degraded probe uses run_id scoping (CHAOS-2433), not per-node
-        max(computed_at)."""
+        """Empty filter result + investments>0 + NO complete-run MARKER → edges=[]
+        with degraded_reason=MEMBERSHIP_NOT_MATERIALIZED. The degraded probe gates
+        on MARKER existence (CHAOS-2433 round-2 #2), not membership row count."""
         with patch(
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
             # Edge query empty → degraded probe runs (2nd call) and reports
-            # zero membership rows but non-zero investments.
+            # zero complete-run markers but non-zero investments.
             mock_query.side_effect = [
                 [],
-                [{"membership_rows": 0, "investment_rows": 5}],
+                [{"complete_run_markers": 0, "investment_rows": 5}],
             ]
             filters = WorkGraphEdgeFilterInput(theme="risk")
             result = await resolve_work_graph_edges(mock_context, filters)
@@ -244,18 +244,42 @@ class TestThemeFilterServerSide:
         # The edge query plus the degraded-state probe.
         assert mock_query.call_count == 2
         probe_sql = mock_query.call_args_list[1][0][1]
-        # Probe uses run_id scoping via work_unit_membership_runs.
-        assert "work_unit_membership" in probe_sql
+        # Probe gates on MARKER existence: counts work_unit_membership_runs rows.
         assert "work_unit_membership_runs" in probe_sql
+        assert "complete_run_markers" in probe_sql
         assert "work_unit_investments" in probe_sql
-        # Run-scoped, NOT per-node max(computed_at).
-        assert "argMax(run_id, completed_at) AS latest_run_id" in probe_sql
-        assert "m.run_id = latest_run.latest_run_id" in probe_sql
-        assert "max(computed_at) AS max_computed_at" not in probe_sql
+        # No longer counts membership rows / joins the membership table for the
+        # degraded signal (an empty complete run is a valid state, not degraded).
+        assert "argMax(run_id, completed_at) AS latest_run_id" not in probe_sql
+
+    @pytest.mark.asyncio
+    async def test_empty_complete_run_is_not_degraded(self, mock_context):
+        """CHAOS-2433 round-2 #2: an org with investments + a COMPLETE marker but
+        ZERO membership rows in the latest run (the all-skipped supersede case)
+        is a genuine empty, NOT degraded. The probe sees complete_run_markers>0 →
+        degraded_reason is None."""
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            # A complete marker exists (>0) even though the latest run has zero
+            # membership rows; investments exist. Must NOT be degraded.
+            mock_query.side_effect = [
+                [],
+                [{"complete_run_markers": 1, "investment_rows": 50}],
+            ]
+            filters = WorkGraphEdgeFilterInput(theme="risk")
+            result = await resolve_work_graph_edges(mock_context, filters)
+
+        assert result.edges == []
+        assert result.degraded_reason is None, (
+            "an empty-but-complete run (marker present) is a genuine empty, not "
+            "MEMBERSHIP_NOT_MATERIALIZED"
+        )
 
     @pytest.mark.asyncio
     async def test_genuine_empty_is_not_degraded(self, mock_context):
-        """Empty filter result but membership rows EXIST (no match) → not a
+        """Empty filter result but a complete marker EXISTS (no match) → not a
         degraded state: degraded_reason is None."""
         with patch(
             "dev_health_ops.api.queries.client.query_dicts",
@@ -263,7 +287,7 @@ class TestThemeFilterServerSide:
         ) as mock_query:
             mock_query.side_effect = [
                 [],
-                [{"membership_rows": 42, "investment_rows": 100}],
+                [{"complete_run_markers": 3, "investment_rows": 100}],
             ]
             filters = WorkGraphEdgeFilterInput(theme="risk")
             result = await resolve_work_graph_edges(mock_context, filters)
@@ -281,7 +305,7 @@ class TestThemeFilterServerSide:
         ) as mock_query:
             mock_query.side_effect = [
                 [],
-                [{"membership_rows": 0, "investment_rows": 0}],
+                [{"complete_run_markers": 0, "investment_rows": 0}],
             ]
             filters = WorkGraphEdgeFilterInput(theme="risk")
             result = await resolve_work_graph_edges(mock_context, filters)
@@ -815,20 +839,19 @@ class TestRunIdConcurrencyRace:
     async def test_no_complete_run_yields_degraded_when_investments_exist(
         self, mock_context
     ):
-        """When no completion marker exists at all (first-ever deploy, no run
+        """When NO completion marker exists at all (first-ever deploy, no run
         complete), a theme filter that returns empty AND investments exist
-        yields MEMBERSHIP_NOT_MATERIALIZED (degraded).  The probe checks
-        work_unit_membership_runs for the latest complete run (none → empty
-        join → membership_rows=0) and investments exist → degraded."""
+        yields MEMBERSHIP_NOT_MATERIALIZED (degraded). The probe gates on MARKER
+        existence: no marker (complete_run_markers=0) + investments → degraded."""
         with patch(
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
             # Edge query: empty (no complete run yet, filter finds nothing).
-            # Probe: no complete run → membership_rows=0; investments exist.
+            # Probe: no complete-run marker; investments exist.
             mock_query.side_effect = [
                 [],
-                [{"membership_rows": 0, "investment_rows": 10}],
+                [{"complete_run_markers": 0, "investment_rows": 10}],
             ]
             filters = WorkGraphEdgeFilterInput(theme="feature_delivery")
             result = await resolve_work_graph_edges(mock_context, filters)
@@ -851,18 +874,18 @@ class TestRunIdConcurrencyRace:
         ) as mock_query:
             # Edge query: ClickHouse correctly returns empty because OLD-NODE has
             # no rows in the latest complete run B.
-            # Probe: some membership rows exist (in run B, for other nodes), so
-            # membership_rows > 0 → not degraded (just a genuine filter miss).
+            # Probe: a complete-run marker exists (run B), so
+            # complete_run_markers > 0 → not degraded (just a genuine filter miss).
             mock_query.side_effect = [
                 [],
-                [{"membership_rows": 42, "investment_rows": 100}],
+                [{"complete_run_markers": 1, "investment_rows": 100}],
             ]
             filters = WorkGraphEdgeFilterInput(theme="feature_delivery")
             result = await resolve_work_graph_edges(mock_context, filters)
 
         # Not in the filter result (split/merge safe).
         assert result.edges == []
-        # Not degraded — other nodes have membership in the latest complete run.
+        # Not degraded — a complete run marker exists for the org.
         assert result.degraded_reason is None
 
 
@@ -930,23 +953,28 @@ class TestLegacyRolloutFallback:
         assert result.edges[0].theme == "feature_delivery"
 
     @pytest.mark.asyncio
-    async def test_degraded_probe_has_legacy_fallback(self, mock_context):
-        """The degraded probe counts pre-existing rows under the legacy marker, so
-        an org with only legacy membership is NOT falsely reported degraded."""
+    async def test_legacy_marker_counts_as_complete_run_not_degraded(
+        self, mock_context
+    ):
+        """The seeded '__legacy__' marker IS a complete-run marker, so the
+        marker-gated degraded probe (CHAOS-2433 round-2 #2) counts it: an org
+        with the legacy marker is NOT falsely reported MEMBERSHIP_NOT_MATERIALIZED
+        even on an empty filter result."""
         with patch(
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
             mock_query.side_effect = [
                 [],
-                # Legacy rows counted → membership_rows > 0 → not degraded.
-                [{"membership_rows": 7, "investment_rows": 10}],
+                # The legacy marker exists → complete_run_markers >= 1 → not degraded.
+                [{"complete_run_markers": 1, "investment_rows": 10}],
             ]
             filters = WorkGraphEdgeFilterInput(theme="feature_delivery")
             result = await resolve_work_graph_edges(mock_context, filters)
 
         probe_sql = mock_query.call_args_list[1][0][1]
-        assert "latest_run.latest_run_id = '__legacy__'" in probe_sql
-        assert "m.run_id = ''" in probe_sql
-        # Legacy rows present → genuine empty filter, not degraded.
+        # The probe gates purely on marker existence (no membership join).
+        assert "work_unit_membership_runs" in probe_sql
+        assert "complete_run_markers" in probe_sql
+        # Legacy marker present → genuine empty filter, not degraded.
         assert result.degraded_reason is None

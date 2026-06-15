@@ -563,14 +563,26 @@ MEMBERSHIP_NOT_MATERIALIZED = "MEMBERSHIP_NOT_MATERIALIZED"
 
 async def _detect_membership_degraded_reason(client: Any, org_id: str) -> str | None:
     """Return MEMBERSHIP_NOT_MATERIALIZED when a theme filter yielded nothing
-    because work_unit_membership has no complete run for an org that HAS
+    because NO complete membership run has been published for an org that HAS
     categorized work units, else None.
 
-    Degraded iff: the org has >= 1 work_unit_investments row AND no complete
-    membership run exists in work_unit_membership_runs (i.e. no marker has been
-    written yet, meaning the run_id / completion-marker protocol has not produced
-    a complete run — CHAOS-2433). Counts membership rows in the latest complete
-    run only (zero rows in the latest complete run = no usable membership).
+    Degraded iff: the org has >= 1 work_unit_investments row AND NO complete-run
+    MARKER exists in work_unit_membership_runs for the org (the run_id /
+    completion-marker protocol has not produced any complete run yet —
+    CHAOS-2433).
+
+    GATE ON MARKER EXISTENCE, NOT ROW COUNT (CHAOS-2433 round-2 finding #2):
+    an intentionally-EMPTY complete run (the all-skipped supersede case — every
+    current component churned past its last categorization) is a genuine
+    "this org currently has no memberships" state, NOT "not materialized". It
+    publishes a marker with zero membership rows. Keying the degraded signal on
+    count(membership rows in latest run) > 0 would mislabel that valid empty
+    complete run as a rollout failure. We therefore key on whether ANY complete
+    marker exists for the org: a marker present (even with zero rows) means the
+    pipeline HAS produced a complete run, so an empty filter result is a genuine
+    empty (degraded_reason=None). Only the total absence of a marker (pre-migration
+    / pre-first-run rollout window) while investments exist is degraded.
+
     Also emits the rollout warning log (observability retained). Never raises:
     on probe failure it returns None so the request is unaffected.
     """
@@ -579,16 +591,13 @@ async def _detect_membership_degraded_reason(client: Any, org_id: str) -> str | 
     try:
         rows = await query_dicts(
             client,
-            f"""
+            """
             SELECT
                 (
                     SELECT count()
-                    FROM work_unit_membership AS m
-                    INNER JOIN ({_LATEST_COMPLETE_RUN_SUBQUERY}) AS latest_run
-                        ON {_RUN_SCOPE_JOIN_ON}
-                    WHERE m.org_id = %(org_id)s
-                      AND latest_run.latest_run_id != ''
-                ) AS membership_rows,
+                    FROM work_unit_membership_runs
+                    WHERE org_id = %(org_id)s
+                ) AS complete_run_markers,
                 (
                     SELECT count()
                     FROM work_unit_investments
@@ -604,14 +613,15 @@ async def _detect_membership_degraded_reason(client: Any, org_id: str) -> str | 
 
     if not rows:
         return None
-    membership_rows = int(rows[0].get("membership_rows") or 0)
+    complete_run_markers = int(rows[0].get("complete_run_markers") or 0)
     investment_rows = int(rows[0].get("investment_rows") or 0)
-    if membership_rows == 0 and investment_rows > 0:
+    if complete_run_markers == 0 and investment_rows > 0:
         logger.warning(
-            "Theme filter returned no edges and no complete membership run "
-            "exists for org %s while work_unit_investments has %d rows — "
-            "the post-migration investment materialization rerun that populates "
-            "work_unit_membership has likely not run yet (CHAOS-2430/2433).",
+            "Theme filter returned no edges and NO complete membership run "
+            "marker exists for org %s while work_unit_investments has %d rows — "
+            "the post-migration investment materialization rerun that publishes "
+            "a work_unit_membership_runs completion marker has likely not run "
+            "yet (CHAOS-2430/2433).",
             org_id,
             investment_rows,
         )

@@ -74,14 +74,23 @@ _GITHUB_PR_URL_RE = re.compile(r"^/(?P<repo>.+?)/pull/(?P<num>\d+)/?$")
 _GITLAB_MR_URL_RE = re.compile(r"^/(?P<project>.+?)/-/merge_requests/(?P<num>\d+)/?$")
 
 
+# Public SaaS hosts where a ``/pull/N`` / ``/-/merge_requests/N`` URL can only
+# be a real GitHub/GitLab PR/MR. Exact-match (anchored) — a substring check
+# would accept a forged host like ``github.evil.example``.
+_PUBLIC_SCM_HOSTS = frozenset(
+    {"github.com", "www.github.com", "gitlab.com", "www.gitlab.com"}
+)
+
+
 def _is_scm_attachment(url: str, source_type: str | None) -> bool:
-    """True only when the attachment plausibly comes from GitHub/GitLab.
+    """True only when the attachment is a trustworthy GitHub/GitLab PR/MR link.
 
     Attachment data is user-controlled, so a non-code URL that merely contains
-    ``/pull/N`` (e.g. ``https://evil.example/x/pull/1``) must not be trusted to
-    mint a PR id. Require the integration ``sourceType`` or the URL host to
-    indicate GitHub/GitLab (covers github.com, gitlab.com, and self-hosted/
-    Enterprise hosts named ``github.*`` / ``gitlab.*``).
+    ``/pull/N`` (e.g. ``https://github.evil.example/x/pull/1``) must not be
+    trusted to mint a PR id. Trust requires either an exact **public** SCM host
+    or the Linear integration's ``sourceType`` (the latter is how self-hosted /
+    Enterprise instances on arbitrary hosts are recognised — there is no
+    hostname-only way to distinguish a real self-hosted host from a forged one).
     """
     st = (source_type or "").lower()
     if "github" in st or "gitlab" in st:
@@ -90,7 +99,7 @@ def _is_scm_attachment(url: str, source_type: str | None) -> bool:
         host = (urlsplit(str(url)).netloc or "").lower()
     except ValueError:
         return False
-    return "github" in host or "gitlab" in host
+    return host in _PUBLIC_SCM_HOSTS
 
 
 def _work_item_id_from_pr_url(

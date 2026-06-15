@@ -979,57 +979,36 @@ def extract_github_dependencies(
     return dependencies
 
 
-# A Linear issue link in a PR comment is only captured from an EXPLICIT linkage
-# signal, never a bare token: a ``linear.app/.../issue/KEY`` URL (the integration
-# bot's linkback) or a key preceded by a linkage keyword. This avoids turning an
-# incidental ticket mention (a security id, an unrelated Jira reference) into an
-# inheritable team edge.
+# A Linear link in a PR comment is captured only from the integration bot's
+# ``linear.app/.../issue/KEY`` URL — the single high-confidence, hard-to-forge
+# signal. Bare tokens and natural-language keywords from third-party comments
+# are intentionally not trusted (they could force an unrelated inheritance).
 _COMMENT_LINEAR_URL_PATTERN = re.compile(
     r"linear\.app/[^/\s]+/issue/([A-Za-z][A-Za-z0-9]+-\d+)", re.IGNORECASE
-)
-_COMMENT_KEYWORD_KEY_PATTERN = re.compile(
-    r"(depends\s+on|blocked\s+by|blocks|fixes|closes|resolves|relates\s+to|"
-    r"part\s+of|linked\s+to|see)\s*:?\s*([A-Za-z][A-Za-z0-9]+-\d+)\b",
-    re.IGNORECASE,
 )
 
 
 def extract_github_comment_dependencies(
     *, work_item_id: str, comment_bodies: Sequence[str | None]
 ) -> list[WorkItemDependency]:
-    """Secondary capture: external issue links in a PR's comments.
+    """Secondary capture: Linear issue links in a PR's comments.
 
-    The Linear/Jira reference on a GitHub PR frequently lives only in an
-    integration bot comment, not the PR body or branch. Only EXPLICIT linkage
-    signals are captured — a ``linear.app`` issue URL or a key after a linkage
-    keyword — so incidental ticket mentions can't mis-attribute the PR. Emitted
-    as ``extkey:`` edges; the keyword's intent is preserved (a blocking word
-    yields a non-inheritable relationship), with the URL link as inheritable
-    ``relates_to``. Used as a fallback to the authoritative Linear attachment.
+    PR comments are authored by anyone, so only the HIGH-CONFIDENCE signal is
+    trusted: an explicit ``linear.app/.../issue/KEY`` URL (the integration bot's
+    linkback). Natural-language keyword mentions (``see``/``fixes``/``part of``
+    …) are intentionally NOT captured from comments — a contributor could type
+    them to force an unrelated inheritance; the PR's own body still carries the
+    author's keyworded refs. Blocking phrasing immediately before the URL is
+    honoured (kept non-inheritable). Per key, the highest-risk relationship
+    across all comments wins. Fallback to the authoritative Linear attachment.
     """
-    # Collect every relationship signal per key, then keep the HIGHEST-RISK one
-    # so a blocking mention anywhere in the comments wins over a relates/URL
-    # mention of the same key (a blocking link must stay non-inheritable).
     _RANK = {"blocked_by": 3, "blocks": 2, "relates_to": 1}
     best: dict[str, tuple[str, str]] = {}  # key -> (relationship_type, raw)
-
-    def _consider(raw_key: str, relationship_type: str, raw: str) -> None:
-        key = raw_key.strip().upper()
-        if not key:
-            return
-        current = best.get(key)
-        if current is None or _RANK.get(relationship_type, 0) > _RANK.get(
-            current[0], 0
-        ):
-            best[key] = (relationship_type, raw)
 
     for body in comment_bodies:
         if not body:
             continue
         text = str(body)
-        # Linear bot/integration URL — an explicit link. Honour blocking
-        # phrasing immediately before the URL so "blocked by <linear url>"
-        # stays non-inheritable rather than defaulting to relates_to.
         for match in _COMMENT_LINEAR_URL_PATTERN.finditer(text):
             preceding = text[max(0, match.start() - 40) : match.start()].lower()
             relationship = "relates_to"
@@ -1037,14 +1016,12 @@ def extract_github_comment_dependencies(
                 relationship = "blocked_by"
             elif "blocks" in preceding:
                 relationship = "blocks"
-            _consider(match.group(1), relationship, "github_comment_linear_url")
-        # Explicit linkage keyword + key; intent preserved via keyword mapping.
-        for match in _COMMENT_KEYWORD_KEY_PATTERN.finditer(text):
-            _consider(
-                match.group(2),
-                _external_key_relationship(match.group(1)),
-                "github_comment",
-            )
+            key = match.group(1).strip().upper()
+            if not key:
+                continue
+            current = best.get(key)
+            if current is None or _RANK.get(relationship, 0) > _RANK.get(current[0], 0):
+                best[key] = (relationship, "github_comment_linear_url")
 
     return [
         WorkItemDependency(

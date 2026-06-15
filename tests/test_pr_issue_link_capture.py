@@ -51,9 +51,9 @@ def test_pr_url_parser_maps_github_and_gitlab() -> None:
         _work_item_id_from_pr_url("https://github.com/full-chaos/ops/pull/921")
         == "ghpr:full-chaos/ops#921"
     )
-    # GitHub Enterprise host -> same owner/repo id (host-agnostic).
+    # GitHub Enterprise host requires the integration sourceType to be trusted.
     assert (
-        _work_item_id_from_pr_url("https://github.example.com/o/r/pull/7")
+        _work_item_id_from_pr_url("https://github.example.com/o/r/pull/7", "github")
         == "ghpr:o/r#7"
     )
     # GitLab MR, nested groups, any host.
@@ -77,18 +77,19 @@ def test_pr_url_parser_ignores_non_pr_urls() -> None:
 
 
 def test_pr_url_parser_rejects_non_scm_host_unless_sourcetype() -> None:
-    # A non-GitHub/GitLab host with a PR-shaped path must NOT be trusted...
+    # A non-public host with a PR-shaped path is not trusted by host alone...
     assert _work_item_id_from_pr_url("https://evil.example/owner/repo/pull/1") is None
-    # ...unless the integration sourceType marks it as a GitHub/GitLab link.
+    # ...and a forged github-substring host is likewise rejected (no exact match).
+    assert _work_item_id_from_pr_url("https://github.evil.example/o/r/pull/1") is None
+    # The integration sourceType authorises a self-hosted/Enterprise host.
     assert (
-        _work_item_id_from_pr_url("https://evil.example/owner/repo/pull/1", "github")
-        == "ghpr:owner/repo#1"
-    )
-    # Self-hosted hosts named github.*/gitlab.* are trusted by host alone.
-    assert (
-        _work_item_id_from_pr_url("https://gitlab.acme.internal/g/p/-/merge_requests/3")
+        _work_item_id_from_pr_url(
+            "https://gitlab.acme.internal/g/p/-/merge_requests/3", "gitlab"
+        )
         == "gitlab:g/p!3"
     )
+    # Public hosts are trusted by exact host.
+    assert _work_item_id_from_pr_url("https://github.com/o/r/pull/9") == "ghpr:o/r#9"
 
 
 def test_linear_attachment_gated_by_sourcetype_or_host() -> None:
@@ -159,42 +160,41 @@ def test_linear_attachment_edge_drives_pr_inheritance_direct_target() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_github_comment_capture_from_linear_url_and_keyword() -> None:
+def test_github_comment_capture_from_linear_url_only() -> None:
+    # Only the linear.app integration URL is trusted; a bare keyword mention in
+    # a (third-party) comment is intentionally NOT captured.
     deps = extract_github_comment_dependencies(
         work_item_id="ghpr:o/r#1",
         comment_bodies=[
             "Linked to https://linear.app/full-chaos/issue/CHAOS-2400/title",
             None,
-            "Also fixes PROJ-7 per discussion",
+            "Also fixes PROJ-7 per discussion",  # keyword, no URL -> ignored
             "see https://linear.app/x/issue/CHAOS-2400/dup",  # duplicate -> one edge
         ],
     )
-    targets = {d.target_work_item_id for d in deps}
-    assert targets == {"extkey:CHAOS-2400", "extkey:PROJ-7"}
-    rel = {d.target_work_item_id: d.relationship_type for d in deps}
-    assert rel["extkey:CHAOS-2400"] == "relates_to"  # URL link
-    assert rel["extkey:PROJ-7"] == "relates_to"  # 'fixes'
+    assert [d.target_work_item_id for d in deps] == ["extkey:CHAOS-2400"]
+    assert deps[0].relationship_type == "relates_to"
+    assert deps[0].relationship_type_raw == "github_comment_linear_url"
 
 
-def test_github_comment_capture_preserves_blocking_intent() -> None:
-    # A blocking keyword must NOT yield an inheritable edge.
+def test_github_comment_capture_ignores_bare_keyword_mentions() -> None:
+    # Without a linear.app URL, nothing is captured even with linkage keywords —
+    # comments are third-party and keyword text is forgeable.
     deps = extract_github_comment_dependencies(
         work_item_id="ghpr:o/r#1",
-        comment_bodies=["This is blocked by CHAOS-9 until infra lands"],
+        comment_bodies=["This is blocked by CHAOS-9", "Fixes CHAOS-10 too"],
     )
-    assert len(deps) == 1
-    assert deps[0].target_work_item_id == "extkey:CHAOS-9"
-    assert deps[0].relationship_type == "blocked_by"  # excluded by the resolver
+    assert deps == []
 
 
 def test_github_comment_blocking_wins_over_relates_for_same_key() -> None:
-    # A URL relates-link and a later blocking keyword for the SAME key must
-    # resolve to the blocking (non-inheritable) relationship, not relates_to.
+    # Two URL links for the SAME key, one with blocking context, must resolve to
+    # the blocking (non-inheritable) relationship.
     deps = extract_github_comment_dependencies(
         work_item_id="ghpr:o/r#1",
         comment_bodies=[
             "Tracked in https://linear.app/x/issue/CHAOS-1/foo",
-            "Update: this is blocked by CHAOS-1 until the migration lands",
+            "Update: blocked by https://linear.app/x/issue/CHAOS-1/bar",
         ],
     )
     assert len(deps) == 1

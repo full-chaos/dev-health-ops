@@ -177,6 +177,82 @@ class TestDiscoverReposForConfig:
         assert result == [("my-org", "repo-a"), ("my-org", "repo-b")]
         mock_gh.assert_called_once()
 
+    @patch("requests.get")
+    @patch("dev_health_ops.connectors.utils.github_app.GitHubAppTokenProvider")
+    def test_github_app_all_repos_lists_installation_repositories(
+        self, mock_token_provider_cls, mock_get
+    ):
+        from dev_health_ops.discovery.repos import discover_repos_for_config
+
+        mock_token_provider_cls.return_value.get_token.return_value = (
+            "installation-token"
+        )
+        mock_response = MagicMock(status_code=200)
+        mock_response.json.return_value = {
+            "repositories": [
+                {"name": "api", "owner": {"login": "orgA"}},
+                {"name": "web", "owner": {"login": "orgA"}},
+                {"name": "api-worker", "owner": {"login": "orgA"}},
+                {"name": "api", "owner": {"login": "orgB"}},
+            ]
+        }
+        mock_get.return_value = mock_response
+        config = _make_config(
+            provider="github",
+            sync_options={"all_repos": True, "search": "orgA/api*"},
+        )
+
+        result = discover_repos_for_config(
+            config,
+            {
+                "app_id": "123",
+                "private_key": "private-key",
+                "installation_id": "456",
+                "base_url": "https://api.github.test",
+            },
+        )
+
+        assert result == [("orgA", "api"), ("orgA", "api-worker")]
+        mock_token_provider_cls.assert_called_once_with(
+            app_id="123",
+            private_key="private-key",
+            installation_id="456",
+            api_base_url="https://api.github.test",
+        )
+        mock_get.assert_called_once()
+        assert mock_get.call_args.args[0] == (
+            "https://api.github.test/installation/repositories"
+        )
+        assert mock_get.call_args.kwargs["headers"]["Authorization"] == (
+            "Bearer installation-token"
+        )
+
+    @patch("requests.get")
+    @patch("dev_health_ops.connectors.utils.github_app.GitHubAppTokenProvider")
+    def test_github_app_all_repos_installation_api_failure_raises(
+        self, mock_token_provider_cls, mock_get
+    ):
+        from dev_health_ops.discovery.repos import discover_repos_for_config
+
+        mock_token_provider_cls.return_value.get_token.return_value = (
+            "installation-token"
+        )
+        mock_get.return_value = MagicMock(status_code=401, text="bad credentials")
+        config = _make_config(
+            provider="github",
+            sync_options={"all_repos": True, "search": "orgA/*"},
+        )
+
+        with pytest.raises(RuntimeError, match="HTTP 401"):
+            discover_repos_for_config(
+                config,
+                {
+                    "app_id": "123",
+                    "private_key": "private-key",
+                    "installation_id": "456",
+                },
+            )
+
     @patch("dev_health_ops.discovery.repos.discover_gitlab_repos")
     def test_gitlab_delegates_to_gitlab_discovery(self, mock_gl):
         from dev_health_ops.discovery.repos import discover_repos_for_config

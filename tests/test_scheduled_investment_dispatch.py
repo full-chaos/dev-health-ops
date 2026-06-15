@@ -66,12 +66,21 @@ def test_beat_entry_does_not_collide_with_neighbours() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _run_dispatch(*, active_org_ids: list[str]):
+# The default db_url _get_db_url() resolves to on the scheduled (no-override) path.
+_SCHEDULED_DB_URL = "clickhouse://x"
+
+
+def _run_dispatch(*, active_org_ids: list[str], db_url: str | None = None):
     """Drive dispatch_investment_materialize with chain/signature/sources patched.
 
     Returns (signature_mock, chain_mock, chain_instances, result).
     ``chain_instances`` is the list of per-call chain instances (one per org
     that was dispatched), so tests can assert apply_async per org.
+
+    ``db_url`` is the explicit override passed to ``.run()`` (manual/backfill).
+    When ``None`` the scheduled path resolves ``_get_db_url()`` →
+    ``_SCHEDULED_DB_URL``. Either way the resolved value must be forwarded to
+    BOTH child signatures.
 
     The dispatcher fans out to ALL active orgs (no output-table gate), so the
     discovery patch is the only org source. ``strict=True`` is exercised
@@ -102,13 +111,18 @@ def _run_dispatch(*, active_org_ids: list[str]):
         ),
         patch(
             "dev_health_ops.workers.work_graph_tasks._get_db_url",
-            return_value="clickhouse://x",
+            return_value=_SCHEDULED_DB_URL,
         ),
     ):
         mock_signature.side_effect = _make_sig
         mock_chain.side_effect = _make_chain
-        # bind=True task: invoke .run() so `self` is supplied by Celery.
-        result = dispatch_investment_materialize.run()
+        # bind=True task: invoke .run() so `self` is supplied by Celery. Pass the
+        # explicit override only when given so the no-arg scheduled path is
+        # exercised exactly as Celery beat would call it.
+        if db_url is None:
+            result = dispatch_investment_materialize.run()
+        else:
+            result = dispatch_investment_materialize.run(db_url=db_url)
 
     return mock_signature, mock_chain, chain_instances, result
 
@@ -193,19 +207,58 @@ def test_dispatch_single_tenant_default_org() -> None:
 def test_dispatch_chain_shape_matches_post_sync_dispatch() -> None:
     """The scheduled chain is the SAME shape as the post-sync chain — idempotent
     and safe to coexist: same task names, same metrics queue, same immutable
-    link, same org-scoped kwargs."""
+    link, org-scoped kwargs, and the resolved db_url forwarded to both."""
     _, mock_chain, _, _ = _run_dispatch(active_org_ids=["org-1"])
 
     build_sig, materialize_sig = mock_chain.call_args.args
-    # Identical to _dispatch_post_sync_tasks' chain contract.
+    # The scheduled path forwards the _get_db_url()-resolved value to both children.
     assert build_sig.task_name == _WORK_GRAPH_TASK
-    assert build_sig.sig_kwargs == {"kwargs": {"org_id": "org-1"}, "queue": "metrics"}
+    assert build_sig.sig_kwargs == {
+        "kwargs": {"db_url": _SCHEDULED_DB_URL, "org_id": "org-1"},
+        "queue": "metrics",
+    }
     assert materialize_sig.task_name == _INVESTMENT_TASK
     assert materialize_sig.sig_kwargs == {
-        "kwargs": {"org_id": "org-1"},
+        "kwargs": {"db_url": _SCHEDULED_DB_URL, "org_id": "org-1"},
         "queue": "metrics",
         "immutable": True,
     }
+
+
+def test_dispatch_forwards_explicit_db_url_override_to_both_children() -> None:
+    """CHAOS-2439 [HIGH] regression: an explicit db_url override (manual/backfill)
+    must reach BOTH child signatures, so build+materialize target the requested
+    ClickHouse instead of the workers' ambient _get_db_url() default."""
+    override = "clickhouse://override"
+    _, mock_chain, _, result = _run_dispatch(
+        active_org_ids=["org-1", "org-2"], db_url=override
+    )
+
+    assert mock_chain.call_count == 2
+    for call in mock_chain.call_args_list:
+        build_sig, materialize_sig = call.args
+        org = build_sig.sig_kwargs["kwargs"]["org_id"]
+        # BOTH children carry the override db_url AND the org_id.
+        assert build_sig.sig_kwargs["kwargs"] == {"db_url": override, "org_id": org}
+        assert materialize_sig.sig_kwargs["kwargs"] == {
+            "db_url": override,
+            "org_id": org,
+        }
+        # The override never collapses to the ambient default.
+        assert build_sig.sig_kwargs["kwargs"]["db_url"] != _SCHEDULED_DB_URL
+        # Immutable link preserved on materialize.
+        assert materialize_sig.sig_kwargs.get("immutable") is True
+    assert result["dispatched"] == ["org-1", "org-2"]
+
+
+def test_dispatch_scheduled_path_forwards_resolved_default_db_url() -> None:
+    """Scheduled (no-override) path: the _get_db_url()-resolved default is
+    forwarded to both children — behaviour unchanged from today's default."""
+    _, mock_chain, _, _ = _run_dispatch(active_org_ids=["org-1"])
+
+    build_sig, materialize_sig = mock_chain.call_args.args
+    assert build_sig.sig_kwargs["kwargs"]["db_url"] == _SCHEDULED_DB_URL
+    assert materialize_sig.sig_kwargs["kwargs"]["db_url"] == _SCHEDULED_DB_URL
 
 
 def test_dispatch_uses_strict_discovery() -> None:

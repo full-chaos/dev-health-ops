@@ -248,14 +248,20 @@ def dispatch_investment_materialize(
         # Mirror the post-sync immutable chain exactly (CHAOS-2374): build FIRST,
         # then materialize, on the metrics queue. ``.si()``-equivalent immutability
         # keeps the build's return value out of materialize's positional args.
+        # Forward the resolved ``db_url`` to BOTH children: an explicit override
+        # (manual/backfill: dispatch_investment_materialize(db_url=...)) must
+        # target the requested ClickHouse, not the workers' ambient instance
+        # (the children otherwise default to _get_db_url()). The scheduled path
+        # passes the same value _get_db_url() already resolves, so behaviour is
+        # unchanged when no override is supplied (CHAOS-2439 review).
         build_sig = celery_app.signature(
             "dev_health_ops.workers.tasks.run_work_graph_build",
-            kwargs={"org_id": org_id},
+            kwargs={"db_url": db_url, "org_id": org_id},
             queue="metrics",
         )
         materialize_sig = celery_app.signature(
             "dev_health_ops.workers.tasks.run_investment_materialize",
-            kwargs={"org_id": org_id},
+            kwargs={"db_url": db_url, "org_id": org_id},
             queue="metrics",
             immutable=True,
         )

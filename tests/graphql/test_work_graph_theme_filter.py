@@ -568,13 +568,26 @@ class TestThemeSubcategoryCrossTaxonomy:
 
 
 class _UnknownTableError(Exception):
-    """Mimics clickhouse-connect's DatabaseError for a missing table (code 60)."""
+    """clickhouse-connect DatabaseError for a missing work_unit_membership (code 60)."""
 
     def __init__(self) -> None:
         super().__init__(
             "Received ClickHouse exception, code: 60, server response: "
             "Code: 60. DB::Exception: Unknown table expression identifier "
             "'work_unit_membership'. (UNKNOWN_TABLE)"
+        )
+        self.code = 60
+
+
+class _UnknownOtherTableError(Exception):
+    """code-60 UNKNOWN_TABLE for a DIFFERENT table (e.g. work_graph_edges) —
+    a genuine schema regression that must NOT be downgraded to degraded."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Received ClickHouse exception, code: 60, server response: "
+            "Code: 60. DB::Exception: Unknown table expression identifier "
+            "'work_graph_edges'. (UNKNOWN_TABLE)"
         )
         self.code = 60
 
@@ -653,3 +666,37 @@ class TestMissingMembershipTableDegrades:
             mock_query.side_effect = _UnknownTableError()
             with pytest.raises(Exception):
                 await resolve_work_graph_edges(mock_context)  # no filters
+
+    @pytest.mark.asyncio
+    async def test_other_missing_table_reraises_not_degraded(self, mock_context):
+        """A code-60 UNKNOWN_TABLE error naming a DIFFERENT table (e.g.
+        work_graph_edges) on the filtered path is a genuine schema regression —
+        it must RE-RAISE (fail loudly), NOT be downgraded to the benign degraded
+        state. This is the narrowing fix: only work_unit_membership degrades."""
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = _UnknownOtherTableError()
+            filters = WorkGraphEdgeFilterInput(theme="feature_delivery")
+            with pytest.raises(_UnknownOtherTableError):
+                await resolve_work_graph_edges(mock_context, filters)
+
+    @pytest.mark.asyncio
+    async def test_other_message_only_code60_reraises(self, mock_context):
+        """A message-only code-60 error not naming work_unit_membership also
+        re-raises (resilient to a missing `code` attr)."""
+
+        class _OtherMsgOnly(Exception):
+            pass
+
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = _OtherMsgOnly(
+                "Code: 60. DB::Exception: Unknown table 'deployments'. (UNKNOWN_TABLE)"
+            )
+            filters = WorkGraphEdgeFilterInput(theme="feature_delivery")
+            with pytest.raises(_OtherMsgOnly):
+                await resolve_work_graph_edges(mock_context, filters)

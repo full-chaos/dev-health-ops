@@ -580,19 +580,57 @@ async def _detect_membership_degraded_reason(client: Any, org_id: str) -> str | 
     return None
 
 
-def _is_unknown_table_error(exc: BaseException) -> bool:
-    """True when a ClickHouse error indicates a missing table (code 60).
+_MEMBERSHIP_TABLE = "work_unit_membership"
 
-    During a rolling deploy or before the work_unit_membership migration has
-    run, the filtered edge query references a table that does not exist yet.
-    The driver raises a DatabaseError carrying ``code == 60`` and an
-    ``UNKNOWN_TABLE`` server message; we match either form (the code attribute
-    is set by clickhouse-connect, the message is the resilient fallback).
+# ClickHouse names the actually-missing table in an "Unknown table ...
+# identifier '<name>'" clause. The full error ALSO echoes the entire failing
+# SQL (which mentions every table in the query), so a naive substring search for
+# the table name matches even when a DIFFERENT table is missing. We therefore
+# extract ONLY the quoted identifier from the dedicated clause and compare it.
+_UNKNOWN_TABLE_IDENTIFIER_RE = re.compile(
+    r"Unknown table(?: expression identifier)?\s+'([^']+)'",
+    re.IGNORECASE,
+)
+
+
+def _unknown_table_names(text: str) -> set[str]:
+    """Return the table identifiers ClickHouse reported as unknown.
+
+    Matches the "Unknown table expression identifier '<name>'" / "Unknown table
+    '<name>'" clauses only — NOT the echoed SQL — and strips any database
+    qualifier (``db.table`` -> ``table``).
     """
-    if getattr(exc, "code", None) == 60:
-        return True
+    names: set[str] = set()
+    for ident in _UNKNOWN_TABLE_IDENTIFIER_RE.findall(text):
+        names.add(ident.split(".")[-1].strip("`"))
+    return names
+
+
+def _is_missing_membership_table_error(exc: BaseException) -> bool:
+    """True ONLY when a ClickHouse missing-table (code 60) error names
+    ``work_unit_membership`` as the unknown table.
+
+    During a rolling deploy or before the membership migration has run, the
+    filtered edge query's EXISTS subquery references ``work_unit_membership``
+    before it exists; the driver raises a DatabaseError carrying ``code == 60``
+    with an ``UNKNOWN_TABLE`` server message whose identifier clause names the
+    offending table. We require the code-60/UNKNOWN_TABLE signal AND that the
+    reported-unknown identifier IS ``work_unit_membership`` — parsed from the
+    identifier clause, NOT the echoed SQL (which lists every table in the
+    query). So a code-60 error for any OTHER table (e.g. a missing
+    ``work_graph_edges`` or another schema regression on the filtered path)
+    re-raises and surfaces loudly instead of masquerading as the benign degraded
+    state.
+    """
     text = str(exc)
-    return "UNKNOWN_TABLE" in text or "code: 60" in text
+    is_unknown_table = (
+        getattr(exc, "code", None) == 60
+        or "UNKNOWN_TABLE" in text
+        or "code: 60" in text
+    )
+    if not is_unknown_table:
+        return False
+    return _MEMBERSHIP_TABLE in _unknown_table_names(text)
 
 
 def _empty_edges_result(degraded_reason: str | None = None) -> WorkGraphEdgesResult:
@@ -706,13 +744,15 @@ async def resolve_work_graph_edges(
     try:
         rows = await query_dicts(client, query, params)
     except Exception as exc:
-        # During a rolling deploy / before the work_unit_membership migration
-        # has run, the filtered edge query references a table that does not
-        # exist yet. Return the controlled degraded state instead of a 500 —
-        # the web client already handles MEMBERSHIP_NOT_MATERIALIZED. Only the
-        # filtered path touches work_unit_membership, so an unknown-table error
-        # on the unfiltered path is unexpected and re-raised.
-        if theme_filter_active and _is_unknown_table_error(exc):
+        # During a rolling deploy / before the membership migration has run, the
+        # filtered edge query's EXISTS subquery references work_unit_membership
+        # before it exists. Return the controlled degraded state instead of a
+        # 500 — the web client already handles MEMBERSHIP_NOT_MATERIALIZED. The
+        # check is NARROW: only a code-60 error that names work_unit_membership
+        # is downgraded. Any other missing-table / schema regression on this
+        # path (e.g. a missing work_graph_edges) re-raises so it fails loudly
+        # rather than masquerading as a benign empty state.
+        if theme_filter_active and _is_missing_membership_table_error(exc):
             logger.warning(
                 "work_unit_membership table missing for org %s during theme "
                 "filter — returning degraded state (CHAOS-2430).",

@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from dev_health_ops.connectors import GitLabConnector
+from dev_health_ops.exceptions import APIException, AuthenticationException
 
 
 class TestGitLabConnectorProjects:
@@ -430,3 +431,57 @@ class TestGitLabConnectorAdapterMethods:
         # Verify project_name was formatted correctly
         mock_gitlab_instance.projects.get.assert_called_once_with("mygroup/myproject")
         assert result.file_path == "path/to/file.py"
+
+
+class TestGitLabFeatureFlags403:
+    """get_feature_flags must treat a 403 as a non-retryable permission error."""
+
+    @pytest.fixture
+    def mock_gitlab_client(self):
+        with patch("dev_health_ops.connectors.gitlab.gitlab.Gitlab") as mock_gitlab:
+            yield mock_gitlab
+
+    @pytest.fixture
+    def mock_rest_client(self):
+        with patch("dev_health_ops.connectors.gitlab.GitLabRESTClient") as mock_rest:
+            yield mock_rest
+
+    def test_forbidden_raises_non_retryable_authentication_exception(
+        self, mock_gitlab_client, mock_rest_client
+    ):
+        """A 403 (feature disabled / token lacks access) is re-raised as a
+        non-retryable AuthenticationException so the sync can degrade and the
+        retry decorator does not spin on an unfixable permission error."""
+        mock_rest_instance = mock_rest_client.return_value
+        mock_rest_instance.get_list.side_effect = APIException(
+            'Forbidden: {"message":"403 Forbidden"}'
+        )
+
+        connector = GitLabConnector(
+            url="https://gitlab.com", private_token="test_token"
+        )
+
+        with pytest.raises(AuthenticationException, match="forbidden"):
+            connector.get_feature_flags("mygroup/myproject")
+
+        # Non-retryable: get_list is invoked once per inner attempt only, never
+        # multiplied by the outer get_feature_flags retry decorator.
+        assert mock_rest_instance.get_list.call_count == 1
+
+    def test_non_forbidden_api_error_is_not_swallowed(
+        self, mock_gitlab_client, mock_rest_client
+    ):
+        """A non-403 APIException (e.g. 500) must still propagate as-is so the
+        retry/normal error path is unaffected."""
+        mock_rest_instance = mock_rest_client.return_value
+        mock_rest_instance.get_list.side_effect = APIException("API error: 500 - boom")
+
+        connector = GitLabConnector(
+            url="https://gitlab.com", private_token="test_token"
+        )
+
+        # Patch sleep so the (correct) retry behaviour for real APIExceptions
+        # doesn't slow the test down.
+        with patch("dev_health_ops.connectors.utils.retry.time.sleep"):
+            with pytest.raises(APIException, match="API error"):
+                connector.get_feature_flags("mygroup/myproject")

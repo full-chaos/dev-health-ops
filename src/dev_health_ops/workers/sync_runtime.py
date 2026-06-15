@@ -12,6 +12,10 @@ from dev_health_ops.credentials.resolver import (
     gitlab_credentials_from_mapping,
     resolve_gitlab_url,
 )
+from dev_health_ops.exceptions import (
+    AuthenticationException,
+    ConnectorException,
+)
 from dev_health_ops.utils.datetime import utc_today
 from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
@@ -635,12 +639,41 @@ def run_sync_config(
                 if target not in {"feature-flags", "work-items"}
             ]
             if feature_flag_requested:
-                result_payload["feature_flags"] = _sync_gitlab_feature_flags(
-                    db_url=db_url,
-                    org_id=org_id,
-                    credentials=credentials,
-                    sync_options=sync_options,
-                )
+                # Feature flags are optional enrichment. A 403 (feature
+                # disabled or token lacks Developer access) or any other
+                # connector/config failure here must NOT abort the core
+                # git/MR sync — record an observable skip status and continue
+                # (CHAOS: GitLab 403 graceful degrade).
+                try:
+                    result_payload["feature_flags"] = _sync_gitlab_feature_flags(
+                        db_url=db_url,
+                        org_id=org_id,
+                        credentials=credentials,
+                        sync_options=sync_options,
+                    )
+                except AuthenticationException as exc:
+                    logger.warning(
+                        "Skipping GitLab feature-flag sync for org %s: %s",
+                        org_id,
+                        exc,
+                    )
+                    result_payload["feature_flags"] = {
+                        "status": "skipped",
+                        "reason": "forbidden",
+                        "detail": str(exc),
+                    }
+                except (ConnectorException, ValueError) as exc:
+                    logger.warning(
+                        "GitLab feature-flag sync failed for org %s: %s",
+                        org_id,
+                        exc,
+                        exc_info=True,
+                    )
+                    result_payload["feature_flags"] = {
+                        "status": "failed",
+                        "reason": type(exc).__name__,
+                        "detail": str(exc),
+                    }
 
             if not gitlab_targets:
                 pass  # feature-flags-only sync handled above

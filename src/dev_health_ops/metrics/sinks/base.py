@@ -376,6 +376,18 @@ class BaseMetricsSink(ABC):
         """
         pass
 
+    def prune_membership_runs(self, org_id: str, *, keep: int = 2) -> int:
+        """Retain only the latest ``keep`` COMPLETE membership runs for an org.
+
+        Deletes ``work_unit_membership`` rows AND their ``work_unit_membership_runs``
+        markers for runs older than the latest ``keep`` complete runs (ordered by
+        completion timestamp). Runs WITHOUT a completion marker (in-flight writes)
+        are NEVER touched. Returns the number of run generations pruned. No-op in
+        the base sink. See the ClickHouse implementation for the retention
+        contract (CHAOS-2433 round-5).
+        """
+        return 0
+
     # -------------------------------------------------------------------------
     # Investment explanation caching
     # -------------------------------------------------------------------------

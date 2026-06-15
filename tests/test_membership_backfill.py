@@ -54,6 +54,8 @@ class _FakeSink:
         self.query_calls: list[str] = []
         # Track write order to assert marker comes last.
         self._write_order: list[str] = []
+        # Retention: record (org_id, keep) of each prune call.
+        self.prune_calls: list[tuple[str, int]] = []
 
     def ensure_schema(self) -> None:
         return None
@@ -70,6 +72,11 @@ class _FakeSink:
     def write_membership_run(self, record: WorkUnitMembershipRunRecord) -> None:
         self.run_markers.append(record)
         self._write_order.append("run_marker")
+
+    def prune_membership_runs(self, org_id: str, *, keep: int = 2) -> int:
+        self.prune_calls.append((org_id, keep))
+        self._write_order.append("prune")
+        return 0
 
     def close(self) -> None:
         return None
@@ -346,9 +353,10 @@ def test_backfill_completion_marker_written_last() -> None:
     (row_run_id,) = {row.run_id for row in sink.written}
     assert marker.run_id == row_run_id
 
-    # Write order: membership rows before marker (run_id protocol).
-    assert sink._write_order == ["memberships", "run_marker"], (
-        f"expected [memberships, run_marker], got: {sink._write_order}"
+    # Write order: membership rows before marker (run_id protocol), then prune
+    # (retention runs after the new complete generation is published).
+    assert sink._write_order == ["memberships", "run_marker", "prune"], (
+        f"expected [memberships, run_marker, prune], got: {sink._write_order}"
     )
 
     # Marker's org_id matches.
@@ -384,8 +392,8 @@ def test_backfill_all_skipped_run_writes_empty_marker_to_supersede() -> None:
         "completion marker to supersede the previous run"
     )
     assert sink.run_markers[0].org_id == "org-1"
-    # Write order: even with zero rows, only the marker is written.
-    assert sink._write_order == ["run_marker"]
+    # Write order: even with zero rows, the marker is written then prune runs.
+    assert sink._write_order == ["run_marker", "prune"]
 
 
 def test_backfill_genuine_no_component_org_writes_no_marker() -> None:
@@ -500,6 +508,116 @@ def test_backfill_config_is_org_wide_flag() -> None:
         MembershipBackfillConfig(dsn="x", org_id="o", repo_ids=["r"]).is_org_wide
         is False
     )
+
+
+# ---------------------------------------------------------------------------
+# Round-5 finding: retention / unbounded growth — prune old generations
+# ---------------------------------------------------------------------------
+
+
+def test_backfill_prunes_old_runs_after_publishing_marker() -> None:
+    """An org-wide projection prunes old run generations AFTER publishing the new
+    marker (keep=2), so generations do not accumulate forever (CHAOS-2433 #5)."""
+    edges = [_edge("issue", "I-1", "pr", "P-1")]
+    uid = work_unit_id([("issue", "I-1"), ("pr", "P-1")])
+    sink = _FakeSink(
+        edges=edges,
+        investments=[
+            _investment_row(
+                work_unit_id=uid,
+                theme={"feature_delivery": 1.0},
+                subcategory={"feature_delivery.roadmap": 1.0},
+            )
+        ],
+    )
+
+    _run_backfill(sink, org_id="org-1")
+
+    # Retention ran exactly once, scoped to the org, keeping the latest 2 runs.
+    assert sink.prune_calls == [("org-1", 2)]
+    # And it ran AFTER the marker was published (retention prunes complete runs;
+    # the just-published run must already be a complete generation).
+    assert sink._write_order == ["memberships", "run_marker", "prune"], (
+        f"prune must run after the marker, got: {sink._write_order}"
+    )
+
+
+def test_backfill_empty_run_still_prunes() -> None:
+    """An all-skipped (zero-row) org-wide run still publishes a marker AND prunes,
+    so empty supersede generations also do not accumulate."""
+    # One churned component (no investment row) → zero membership rows.
+    edges = [_edge("issue", "CHURNED", "pr", "CP-1")]
+    sink = _FakeSink(edges=edges, investments=[])
+
+    _run_backfill(sink, org_id="org-1")
+
+    assert sink.written == []
+    assert len(sink.run_markers) == 1
+    assert sink.prune_calls == [("org-1", 2)]
+    assert sink._write_order == ["run_marker", "prune"]
+
+
+def test_backfill_scoped_run_does_not_prune() -> None:
+    """A repo-scoped run publishes no org-wide marker and therefore does NOT
+    prune (retention is tied to publishing a new complete generation)."""
+    edges = [_edge("issue", "I-1", "pr", "P-1")]
+    uid = work_unit_id([("issue", "I-1"), ("pr", "P-1")])
+    sink = _FakeSink(
+        edges=edges,
+        investments=[
+            _investment_row(
+                work_unit_id=uid,
+                theme={"feature_delivery": 1.0},
+                subcategory={"feature_delivery.roadmap": 1.0},
+            )
+        ],
+    )
+
+    with (
+        patch(
+            "dev_health_ops.work_graph.investment.backfill.create_sink",
+            return_value=sink,
+        ),
+        patch(
+            "dev_health_ops.work_graph.investment.backfill.fetch_work_graph_edges",
+            side_effect=lambda s, repo_ids=None, org_id="": sink._edges,
+        ),
+    ):
+        backfill_memberships(
+            MembershipBackfillConfig(
+                dsn="clickhouse://x", org_id="org-1", repo_ids=["repo-a"]
+            )
+        )
+
+    assert sink.prune_calls == [], "scoped runs must not prune (no marker published)"
+
+
+def test_backfill_prune_failure_is_non_fatal() -> None:
+    """A retention failure must NOT fail the projection — the marker is already
+    published and correct; the next run's idempotent prune catches up."""
+
+    class _PruneRaisesSink(_FakeSink):
+        def prune_membership_runs(self, org_id: str, *, keep: int = 2) -> int:
+            raise RuntimeError("prune boom")
+
+    edges = [_edge("issue", "I-1", "pr", "P-1")]
+    uid = work_unit_id([("issue", "I-1"), ("pr", "P-1")])
+    sink = _PruneRaisesSink(
+        edges=edges,
+        investments=[
+            _investment_row(
+                work_unit_id=uid,
+                theme={"feature_delivery": 1.0},
+                subcategory={"feature_delivery.roadmap": 1.0},
+            )
+        ],
+    )
+
+    # Must NOT raise despite prune failing.
+    stats = _run_backfill(sink, org_id="org-1")
+
+    assert stats["memberships"] > 0
+    assert len(sink.run_markers) == 1, "marker still published despite prune failure"
 
 
 # ---------------------------------------------------------------------------

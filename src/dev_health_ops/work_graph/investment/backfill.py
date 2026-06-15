@@ -310,6 +310,28 @@ def backfill_memberships(config: MembershipBackfillConfig) -> dict[str, int]:
                     completed_at=marker_completed_at,
                 )
             )
+            # RETENTION (CHAOS-2433 round-5 — unbounded growth): migration 049
+            # keeps run_id in the dedup key so old generations are NOT collapsed.
+            # Without pruning, every org-wide projection (daily beat + post-sync)
+            # adds a full copy of the org's memberships forever. Right after the
+            # new marker lands, prune to the latest 2 COMPLETE runs per org. This
+            # only ever deletes MARKERED runs (the candidate set comes from
+            # work_unit_membership_runs), so a markerless in-flight run is never
+            # touched. keep=2 leaves the current + one prior so an overlap reader
+            # against the immediately-previous complete run is not pulled out from
+            # under it.
+            try:
+                sink.prune_membership_runs(org_id, keep=2)
+            except Exception:
+                # Retention is best-effort: a prune failure must not fail the
+                # projection (the marker is already published and correct). The
+                # next run's prune is idempotent and will catch up.
+                logger.warning(
+                    "Membership run retention failed for org=%s (non-fatal); "
+                    "the next projection's prune will catch up",
+                    org_id,
+                    exc_info=True,
+                )
         else:
             logger.info(
                 "Membership backfill org=%s is repo-scoped (repos=%s) — wrote "

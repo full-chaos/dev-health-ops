@@ -1164,3 +1164,345 @@ async def test_full_coverage_projection_does_not_blank_out_of_window_nodes(sink)
                 "SETTINGS mutations_sync=2",
                 parameters={"o": org_id},
             )
+
+
+def _wait_for_mutations(sink, table: str) -> None:
+    """Block until all pending mutations on ``table`` complete.
+
+    ``prune_membership_runs`` issues ``ALTER TABLE ... DELETE`` mutations, which
+    are asynchronous by default. Tests must wait for them to materialize before
+    asserting row counts. Polls system.mutations for unfinished entries.
+    """
+    import time
+
+    for _ in range(100):  # ~10s max
+        res = sink.client.query(
+            "SELECT count() FROM system.mutations "
+            "WHERE database = currentDatabase() AND table = {t:String} "
+            "AND is_done = 0",
+            parameters={"t": table},
+        )
+        pending = int(res.result_rows[0][0]) if res.result_rows else 0
+        if pending == 0:
+            return
+        time.sleep(0.1)
+
+
+def _seed_run(sink, org_id, node_id, run_id, category, ts):
+    """Seed one membership row + its completion marker for a complete run."""
+    sink.client.insert(
+        "work_unit_membership",
+        [
+            [
+                org_id,
+                "issue",
+                node_id,
+                f"U_{run_id}",
+                "theme",
+                category,
+                0.9,
+                1,
+                "ok",
+                ts,
+                run_id,
+            ]
+        ],
+        column_names=_membership_cols(),
+    )
+    sink.client.insert(
+        "work_unit_membership_runs",
+        [[org_id, run_id, ts]],
+        column_names=_membership_run_cols(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_retention_keeps_latest_two_complete_runs(sink):
+    """ROUND-5 (unbounded growth): after multiple org-wide projections, only the
+    latest 2 COMPLETE runs' membership rows AND markers remain; older runs'
+    rows and markers are deleted."""
+    org_id = f"test-chaos-2433-retain-{uuid.uuid4()}"
+    node_id = f"ISSUE-{uuid.uuid4()}"
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    run_ids = [uuid.uuid4().hex for _ in range(4)]
+
+    # Seed 4 successive complete runs (older -> newer completed_at).
+    from datetime import timedelta
+
+    for i, rid in enumerate(run_ids):
+        _seed_run(
+            sink, org_id, node_id, rid, "feature_delivery", base + timedelta(days=i)
+        )
+
+    try:
+        # Retention keeps the latest 2 complete runs.
+        pruned = sink.prune_membership_runs(org_id, keep=2)
+        assert pruned == 2, "two oldest run generations should be pruned"
+        _wait_for_mutations(sink, "work_unit_membership")
+        _wait_for_mutations(sink, "work_unit_membership_runs")
+
+        # Only the latest 2 run_ids survive in BOTH tables.
+        kept = run_ids[2:]
+        dropped = run_ids[:2]
+
+        m_rows = sink.client.query(
+            "SELECT DISTINCT run_id FROM work_unit_membership "
+            "WHERE org_id = {o:String} ORDER BY run_id",
+            parameters={"o": org_id},
+        ).result_rows
+        surviving_m = {str(r[0]) for r in m_rows}
+        assert surviving_m == set(kept), (
+            f"membership rows: expected {set(kept)}, got {surviving_m}"
+        )
+        assert not (surviving_m & set(dropped)), "old runs' rows must be deleted"
+
+        r_rows = sink.client.query(
+            "SELECT run_id FROM work_unit_membership_runs FINAL "
+            "WHERE org_id = {o:String} ORDER BY run_id",
+            parameters={"o": org_id},
+        ).result_rows
+        surviving_r = {str(r[0]) for r in r_rows}
+        assert surviving_r == set(kept), (
+            f"markers: expected {set(kept)}, got {surviving_r}"
+        )
+    finally:
+        for table in ("work_unit_membership", "work_unit_membership_runs"):
+            sink.client.command(
+                f"ALTER TABLE {table} DELETE WHERE org_id = {{o:String}} "
+                "SETTINGS mutations_sync=2",
+                parameters={"o": org_id},
+            )
+
+
+@pytest.mark.asyncio
+async def test_retention_never_deletes_markerless_inflight_run(sink):
+    """An in-flight run (rows written, NO marker yet) must survive a concurrent
+    retention pass — retention only ever deletes MARKERED runs."""
+    org_id = f"test-chaos-2433-inflight-{uuid.uuid4()}"
+    node_id = f"ISSUE-{uuid.uuid4()}"
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    from datetime import timedelta
+
+    # 3 complete (markered) runs.
+    complete = [uuid.uuid4().hex for _ in range(3)]
+    for i, rid in enumerate(complete):
+        _seed_run(
+            sink, org_id, node_id, rid, "feature_delivery", base + timedelta(days=i)
+        )
+
+    # An in-flight run: rows ONLY, no marker — the next generation mid-write.
+    inflight = uuid.uuid4().hex
+    sink.client.insert(
+        "work_unit_membership",
+        [
+            [
+                org_id,
+                "issue",
+                node_id,
+                f"U_{inflight}",
+                "theme",
+                "maintenance",
+                0.5,
+                1,
+                "ok",
+                base + timedelta(days=10),
+                inflight,
+            ]
+        ],
+        column_names=_membership_cols(),
+    )
+
+    try:
+        sink.prune_membership_runs(org_id, keep=2)
+        _wait_for_mutations(sink, "work_unit_membership")
+        _wait_for_mutations(sink, "work_unit_membership_runs")
+
+        # The in-flight run's rows MUST still be present (never markered → never
+        # in the delete set).
+        inflight_count = sink.client.query(
+            "SELECT count() FROM work_unit_membership "
+            "WHERE org_id = {o:String} AND run_id = {r:String}",
+            parameters={"o": org_id, "r": inflight},
+        ).result_rows[0][0]
+        assert int(inflight_count) >= 1, (
+            "a markerless in-flight run must NEVER be deleted by retention"
+        )
+
+        # Of the markered runs, only the latest 2 survive.
+        surviving_complete = {
+            str(r[0])
+            for r in sink.client.query(
+                "SELECT DISTINCT run_id FROM work_unit_membership "
+                "WHERE org_id = {o:String} AND run_id IN {ids:Array(String)}",
+                parameters={"o": org_id, "ids": complete},
+            ).result_rows
+        }
+        assert surviving_complete == set(complete[1:]), (
+            "only the latest 2 markered runs survive"
+        )
+    finally:
+        for table in ("work_unit_membership", "work_unit_membership_runs"):
+            sink.client.command(
+                f"ALTER TABLE {table} DELETE WHERE org_id = {{o:String}} "
+                "SETTINGS mutations_sync=2",
+                parameters={"o": org_id},
+            )
+
+
+@pytest.mark.asyncio
+async def test_retention_resolver_still_correct_after_prune(sink):
+    """After retention, the resolver still returns the latest run's results, and
+    the immediately-previous complete run is still present (the keep=2 overlap
+    safety margin)."""
+    org_id = f"test-chaos-2433-retain-resolve-{uuid.uuid4()}"
+    node_id = f"ISSUE-{uuid.uuid4()}"
+    pr_id = f"PR-{uuid.uuid4()}"
+    edge_id = f"edge-{uuid.uuid4()}"
+    repo_uuid = str(uuid.uuid4())
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    from datetime import timedelta
+
+    # 3 complete runs; the LATEST is feature_delivery, the prior is maintenance.
+    old_runs = [uuid.uuid4().hex, uuid.uuid4().hex]
+    for i, rid in enumerate(old_runs):
+        _seed_run(sink, org_id, node_id, rid, "operational", base + timedelta(days=i))
+    prior_run = uuid.uuid4().hex
+    _seed_run(sink, org_id, node_id, prior_run, "maintenance", base + timedelta(days=5))
+    latest_run = uuid.uuid4().hex
+    _seed_run(
+        sink, org_id, node_id, latest_run, "feature_delivery", base + timedelta(days=6)
+    )
+
+    sink.client.insert(
+        "work_graph_edges",
+        [
+            [
+                org_id,
+                edge_id,
+                "issue",
+                node_id,
+                "pr",
+                pr_id,
+                "implements",
+                repo_uuid,
+                "github",
+                "native",
+                1.0,
+                "",
+                base,
+                base,
+                base,
+                base.date(),
+            ]
+        ],
+        column_names=_edge_cols(),
+    )
+
+    assert CLICKHOUSE_URI is not None
+    context = GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink)
+
+    try:
+        sink.prune_membership_runs(org_id, keep=2)
+        _wait_for_mutations(sink, "work_unit_membership")
+        _wait_for_mutations(sink, "work_unit_membership_runs")
+
+        # The latest run drives the resolver: feature_delivery matches.
+        latest = await resolve_work_graph_edges(
+            context, WorkGraphEdgeFilterInput(theme="feature_delivery")
+        )
+        assert [e.edge_id for e in latest.edges] == [edge_id]
+        assert latest.edges[0].theme == "feature_delivery"
+
+        # The immediately-previous complete run (maintenance) is STILL present
+        # (keep=2 overlap margin) — its rows were not pruned.
+        prior_rows = sink.client.query(
+            "SELECT count() FROM work_unit_membership "
+            "WHERE org_id = {o:String} AND run_id = {r:String}",
+            parameters={"o": org_id, "r": prior_run},
+        ).result_rows[0][0]
+        assert int(prior_rows) >= 1, "the prior complete run must survive (keep=2)"
+
+        # The two oldest 'operational' runs were pruned.
+        old_rows = sink.client.query(
+            "SELECT count() FROM work_unit_membership "
+            "WHERE org_id = {o:String} AND run_id IN {ids:Array(String)}",
+            parameters={"o": org_id, "ids": old_runs},
+        ).result_rows[0][0]
+        assert int(old_rows) == 0, "the two oldest runs must be pruned"
+    finally:
+        for table in (
+            "work_unit_membership",
+            "work_unit_membership_runs",
+            "work_graph_edges",
+        ):
+            sink.client.command(
+                f"ALTER TABLE {table} DELETE WHERE org_id = {{o:String}} "
+                "SETTINGS mutations_sync=2",
+                parameters={"o": org_id},
+            )
+
+
+@pytest.mark.asyncio
+async def test_retention_bounds_row_count_across_many_runs(sink):
+    """Live bound check: across N successive prune-after-publish cycles, the row
+    count stays bounded (it does NOT grow with N)."""
+    org_id = f"test-chaos-2433-bound-{uuid.uuid4()}"
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    from datetime import timedelta
+
+    # Each run seeds the SAME 5 nodes (a stable current graph), then prunes.
+    nodes = [f"ISSUE-{i}-{uuid.uuid4()}" for i in range(5)]
+    counts: list[int] = []
+    try:
+        for run_i in range(6):
+            rid = uuid.uuid4().hex
+            ts = base + timedelta(days=run_i)
+            rows = [
+                [
+                    org_id,
+                    "issue",
+                    n,
+                    f"U_{rid}",
+                    "theme",
+                    "feature_delivery",
+                    0.9,
+                    1,
+                    "ok",
+                    ts,
+                    rid,
+                ]
+                for n in nodes
+            ]
+            sink.client.insert(
+                "work_unit_membership", rows, column_names=_membership_cols()
+            )
+            sink.client.insert(
+                "work_unit_membership_runs",
+                [[org_id, rid, ts]],
+                column_names=_membership_run_cols(),
+            )
+            sink.prune_membership_runs(org_id, keep=2)
+            _wait_for_mutations(sink, "work_unit_membership")
+            _wait_for_mutations(sink, "work_unit_membership_runs")
+            total = sink.client.query(
+                "SELECT count() FROM work_unit_membership WHERE org_id = {o:String}",
+                parameters={"o": org_id},
+            ).result_rows[0][0]
+            counts.append(int(total))
+
+        # After the 2nd run onward, the count is bounded at keep(2) * 5 nodes = 10
+        # — it does NOT grow with the number of runs (would be 6*5=30 unpruned).
+        assert counts[-1] <= 2 * len(nodes), (
+            f"row count must be bounded by keep*nodes, got {counts}"
+        )
+        # And it never exceeds the bound at any steady-state step.
+        assert max(counts[1:]) <= 2 * len(nodes), (
+            f"steady-state row count must stay bounded, got {counts}"
+        )
+    finally:
+        for table in ("work_unit_membership", "work_unit_membership_runs"):
+            sink.client.command(
+                f"ALTER TABLE {table} DELETE WHERE org_id = {{o:String}} "
+                "SETTINGS mutations_sync=2",
+                parameters={"o": org_id},
+            )

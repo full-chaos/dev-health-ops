@@ -205,6 +205,21 @@ def _is_batch_eligible(config) -> bool:
 
     sync_options = dict(config.sync_options or {})
 
+    if provider == "github":
+        owner = sync_options.get("owner")
+        repo = sync_options.get("repo")
+        if owner and repo:
+            return False
+
+    if provider == "gitlab":
+        project = (
+            sync_options.get("project_id")
+            or sync_options.get("project")
+            or sync_options.get("repo")
+        )
+        if project:
+            return False
+
     if sync_options.get("discover") is True:
         return True
 
@@ -226,7 +241,11 @@ def _is_batch_eligible(config) -> bool:
 
     if provider == "gitlab":
         group = sync_options.get("group")
-        project = sync_options.get("project_id") or sync_options.get("repo")
+        project = (
+            sync_options.get("project_id")
+            or sync_options.get("project")
+            or sync_options.get("repo")
+        )
         if group and not project:
             return True
 
@@ -373,6 +392,8 @@ def dispatch_batch_sync(
         try:
             repos = discover_repos_for_config(config, credentials)
         except Exception as disc_exc:
+            if sync_options.get("all_repos") is True:
+                raise
             logger.warning(
                 "Discovery failed for config %s, falling back to single dispatch: %s",
                 config_id,
@@ -416,6 +437,7 @@ def dispatch_batch_sync(
         for repo_tuple in repos:
             per_repo_options = dict(sync_options)
             per_repo_options.pop("discover", None)
+            per_repo_options.pop("all_repos", None)
             per_repo_options.pop("batch_size", None)
 
             if provider == "github":

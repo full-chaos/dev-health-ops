@@ -87,6 +87,15 @@ class TestIsBatchEligible:
         )
         assert _is_batch_eligible(config) is True
 
+    def test_github_all_repos_with_concrete_repo_not_eligible(self):
+        from dev_health_ops.workers.sync_batch import _is_batch_eligible
+
+        config = _make_config(
+            provider="github",
+            sync_options={"all_repos": True, "owner": "org", "repo": "api"},
+        )
+        assert _is_batch_eligible(config) is False
+
     def test_github_bare_org_search_is_batch_eligible(self):
         from dev_health_ops.workers.sync_batch import _is_batch_eligible
 
@@ -134,6 +143,17 @@ class TestIsBatchEligible:
             sync_options={"all_repos": True},
         )
         assert _is_batch_eligible(config) is True
+
+    def test_gitlab_all_repos_with_concrete_project_not_eligible(self):
+        from dev_health_ops.workers.sync_batch import _is_batch_eligible
+
+        for sync_options in (
+            {"all_repos": True, "project_id": 100},
+            {"all_repos": True, "project": "api"},
+            {"all_repos": True, "repo": "api"},
+        ):
+            config = _make_config(provider="gitlab", sync_options=sync_options)
+            assert _is_batch_eligible(config) is False
 
     def test_jira_never_batch_eligible(self):
         from dev_health_ops.workers.sync_batch import _is_batch_eligible
@@ -406,6 +426,15 @@ class TestDiscoverGithubRepos:
         assert result == [("orgA", "api"), ("orgA", "web")]
 
     @patch("github.Github")
+    def test_all_repos_user_listing_failure_raises(self, mock_github_cls):
+        from dev_health_ops.discovery.repos import discover_github_repos
+
+        mock_github_cls.return_value.get_user.side_effect = RuntimeError("rate limited")
+
+        with pytest.raises(RuntimeError, match="rate limited"):
+            discover_github_repos({"all_repos": True, "search": "orgA/*"}, "token")
+
+    @patch("github.Github")
     def test_returns_empty_on_total_failure(self, mock_github_cls):
         from dev_health_ops.discovery.repos import discover_github_repos
 
@@ -524,6 +553,17 @@ class TestDiscoverGitlabRepos:
         result = discover_gitlab_repos({"all_repos": True, "owner": "grpA"}, "token")
 
         assert result == [("100",), ("200",)]
+
+    @patch("gitlab.Gitlab")
+    def test_all_repos_membership_listing_failure_raises(self, mock_gitlab_cls):
+        from dev_health_ops.discovery.repos import discover_gitlab_repos
+
+        mock_gitlab_cls.return_value.projects.list.side_effect = RuntimeError(
+            "token revoked"
+        )
+
+        with pytest.raises(RuntimeError, match="token revoked"):
+            discover_gitlab_repos({"all_repos": True, "search": "grpA/*"}, "token")
 
     def test_returns_empty_without_group_when_all_repos_false(self):
         from dev_health_ops.discovery.repos import discover_gitlab_repos
@@ -678,6 +718,42 @@ class TestDispatchBatchSync:
         mock_run_sync.apply_async.assert_called_once()
         # CHAOS-2299: the fallback dispatch stays on the provider's queue.
         assert mock_run_sync.apply_async.call_args.kwargs["queue"] == "sync.github"
+
+    @patch("dev_health_ops.workers.sync_batch.run_sync_config")
+    @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
+    @patch("dev_health_ops.workers.sync_batch._resolve_env_credentials")
+    @patch("dev_health_ops.db.get_postgres_session_sync")
+    def test_all_repos_discovery_failure_marks_error_without_fallback(
+        self,
+        mock_get_session,
+        mock_resolve_creds,
+        mock_discover,
+        mock_run_sync,
+        db_session,
+    ):
+        from dev_health_ops.workers.sync_batch import dispatch_batch_sync
+
+        config = _make_config(
+            provider="github",
+            sync_options={"all_repos": True, "search": "org/*"},
+        )
+        db_session.add(config)
+        db_session.flush()
+
+        mock_get_session.return_value = _fake_session_ctx(db_session)
+        mock_resolve_creds.return_value = {"token": "ghp_test"}
+        mock_discover.side_effect = RuntimeError("API rate limited")
+
+        task = dispatch_batch_sync
+        task.push_request(id="batch-dispatch-all-repos-failure")
+        try:
+            result = task(config_id=str(config.id), org_id="default")
+        finally:
+            task.pop_request()
+
+        assert result["status"] == "error"
+        assert "API rate limited" in result["error"]
+        mock_run_sync.apply_async.assert_not_called()
 
     @patch("dev_health_ops.workers.sync_batch.chord")
     @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
@@ -855,7 +931,7 @@ class TestDispatchBatchSync:
         mock_run_for_repo.s.side_effect = _capture_signature
         config = _make_config(
             provider="github",
-            sync_options={"search": "org/*"},
+            sync_options={"search": "org/*", "all_repos": True},
             sync_targets=["git", "work-items"],
         )
         db_session.add(config)
@@ -875,6 +951,7 @@ class TestDispatchBatchSync:
 
         assert result["status"] == "dispatched"
         assert captured_kwargs[0]["sync_options_override"]["search"] == "org/repo-1"
+        assert "all_repos" not in captured_kwargs[0]["sync_options_override"]
 
 
 class TestGitLabCredentialsFromMapping:
@@ -1072,6 +1149,7 @@ class TestGitLabDispatchBatchSync:
             provider="gitlab",
             sync_options={
                 "search": "my-group/*",
+                "all_repos": True,
                 "gitlab_url": "https://gitlab.example.com",
             },
             sync_targets=["git", "prs"],
@@ -1103,6 +1181,7 @@ class TestGitLabDispatchBatchSync:
         override = first["sync_options_override"]
         assert override["project_id"] == 100
         assert override["gitlab_url"] == "https://gitlab.example.com"
+        assert "all_repos" not in override
         assert "search" not in override
         assert "group" not in override
 

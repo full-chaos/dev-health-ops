@@ -97,10 +97,7 @@ def discover_github_repos(
             )
 
         g = Github(token) if token else Github()
-        try:
-            repos = g.get_user().get_repos()
-        except Exception:
-            return []
+        repos = g.get_user().get_repos()
 
         result: list[tuple[str, ...]] = []
         for repo in repos:
@@ -249,10 +246,7 @@ def discover_gitlab_repos(
 
     gl = gitlab_lib.Gitlab(gitlab_url, private_token=token)
     if all_repos:
-        try:
-            projects = gl.projects.list(all=True, membership=True)
-        except Exception:
-            return []
+        projects = gl.projects.list(all=True, membership=True)
 
         result: list[tuple[str, ...]] = []
         for project in projects:

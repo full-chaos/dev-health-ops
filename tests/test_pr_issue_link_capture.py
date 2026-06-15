@@ -187,6 +187,21 @@ def test_github_comment_capture_preserves_blocking_intent() -> None:
     assert deps[0].relationship_type == "blocked_by"  # excluded by the resolver
 
 
+def test_github_comment_blocking_wins_over_relates_for_same_key() -> None:
+    # A URL relates-link and a later blocking keyword for the SAME key must
+    # resolve to the blocking (non-inheritable) relationship, not relates_to.
+    deps = extract_github_comment_dependencies(
+        work_item_id="ghpr:o/r#1",
+        comment_bodies=[
+            "Tracked in https://linear.app/x/issue/CHAOS-1/foo",
+            "Update: this is blocked by CHAOS-1 until the migration lands",
+        ],
+    )
+    assert len(deps) == 1
+    assert deps[0].target_work_item_id == "extkey:CHAOS-1"
+    assert deps[0].relationship_type == "blocked_by"
+
+
 def test_github_comment_blocking_intent_preserved_for_url_links() -> None:
     # "blocked by <linear url>" must stay non-inheritable, not default to
     # relates_to just because the reference is a URL.

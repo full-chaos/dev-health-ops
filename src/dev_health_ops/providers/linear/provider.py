@@ -98,13 +98,22 @@ class LinearProvider(ProviderWithClient[LinearClient]):
         ) -> list[WorkItemDependency]:
             # PR/MR -> issue edges from linked attachments. If the issue's
             # attachment page was truncated, fetch the full set so a link past
-            # the first page is not silently dropped.
+            # the first page is not silently dropped — best-effort: a transient
+            # fetch error must not abort the whole sync, so fall back to the
+            # first page already in hand.
+            source: dict = issue
             att_page = issue.get("attachments") or {}
             if (att_page.get("pageInfo") or {}).get("hasNextPage") and issue.get("id"):
-                full = client.get_issue_attachments(str(issue["id"]))
-                source: dict = {"attachments": {"nodes": full}}
-            else:
-                source = issue
+                try:
+                    full = client.get_issue_attachments(str(issue["id"]))
+                    source = {"attachments": {"nodes": full}}
+                except Exception as exc:
+                    logger.warning(
+                        "Linear: failed to fetch full attachments for %s; "
+                        "using first page only (%s)",
+                        work_item_id,
+                        exc,
+                    )
             return extract_linear_dependencies(issue=source, work_item_id=work_item_id)
 
         fetch_comments = _env_flag("LINEAR_FETCH_COMMENTS", True)

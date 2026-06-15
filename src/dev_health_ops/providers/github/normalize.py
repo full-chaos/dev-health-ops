@@ -1007,23 +1007,21 @@ def extract_github_comment_dependencies(
     yields a non-inheritable relationship), with the URL link as inheritable
     ``relates_to``. Used as a fallback to the authoritative Linear attachment.
     """
-    deps: list[WorkItemDependency] = []
-    seen: set[str] = set()
+    # Collect every relationship signal per key, then keep the HIGHEST-RISK one
+    # so a blocking mention anywhere in the comments wins over a relates/URL
+    # mention of the same key (a blocking link must stay non-inheritable).
+    _RANK = {"blocked_by": 3, "blocks": 2, "relates_to": 1}
+    best: dict[str, tuple[str, str]] = {}  # key -> (relationship_type, raw)
 
-    def _emit(raw_key: str, relationship_type: str, raw: str) -> None:
+    def _consider(raw_key: str, relationship_type: str, raw: str) -> None:
         key = raw_key.strip().upper()
-        if not key or key in seen:
+        if not key:
             return
-        seen.add(key)
-        deps.append(
-            WorkItemDependency(
-                source_work_item_id=work_item_id,
-                target_work_item_id=f"extkey:{key}",
-                relationship_type=relationship_type,
-                relationship_type_raw=raw,
-                last_synced=datetime.now(timezone.utc),
-            )
-        )
+        current = best.get(key)
+        if current is None or _RANK.get(relationship_type, 0) > _RANK.get(
+            current[0], 0
+        ):
+            best[key] = (relationship_type, raw)
 
     for body in comment_bodies:
         if not body:
@@ -1039,15 +1037,25 @@ def extract_github_comment_dependencies(
                 relationship = "blocked_by"
             elif "blocks" in preceding:
                 relationship = "blocks"
-            _emit(match.group(1), relationship, "github_comment_linear_url")
+            _consider(match.group(1), relationship, "github_comment_linear_url")
         # Explicit linkage keyword + key; intent preserved via keyword mapping.
         for match in _COMMENT_KEYWORD_KEY_PATTERN.finditer(text):
-            _emit(
+            _consider(
                 match.group(2),
                 _external_key_relationship(match.group(1)),
                 "github_comment",
             )
-    return deps
+
+    return [
+        WorkItemDependency(
+            source_work_item_id=work_item_id,
+            target_work_item_id=f"extkey:{key}",
+            relationship_type=relationship_type,
+            relationship_type_raw=raw,
+            last_synced=datetime.now(timezone.utc),
+        )
+        for key, (relationship_type, raw) in best.items()
+    ]
 
 
 def enrich_work_item_with_priority(

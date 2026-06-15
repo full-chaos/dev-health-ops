@@ -15,12 +15,14 @@ from dev_health_ops.metrics.compute_work_item_state_durations import (
 from dev_health_ops.metrics.compute_work_items import (
     build_linked_issue_team_resolver,
     compute_work_item_metrics_daily,
+    resolve_base_team,
 )
 from dev_health_ops.metrics.job_daily import (
     REPO_ROOT,
     _discover_repos,
     _to_utc,
 )
+from dev_health_ops.metrics.loaders.base import to_dataclass
 from dev_health_ops.metrics.schemas import (
     InvestmentClassificationRecord,
     InvestmentMetricsRecord,
@@ -33,12 +35,17 @@ from dev_health_ops.metrics.work_items import (
     fetch_jira_work_items_with_extras,
     parse_github_projects_v2_env,
 )
-from dev_health_ops.models.work_items import WorkItemType
+from dev_health_ops.models.work_items import (
+    WorkItem,
+    WorkItemDependency,
+    WorkItemType,
+)
 from dev_health_ops.providers.identity import load_identity_resolver
 from dev_health_ops.providers.status_mapping import load_status_mapping
 from dev_health_ops.providers.teams import (
     build_project_key_resolver,
     load_team_resolver,
+    normalize_team_id,
 )
 from dev_health_ops.storage import detect_db_type
 from dev_health_ops.utils.cli import (
@@ -430,13 +437,62 @@ def run_work_items_sync_job(
                 s.write_ai_attribution(ai_attributions)
 
         # Build the linked-issue team-inheritance fallback once for the whole
-        # window: PRs/MRs that map to no team of their own inherit the team of
-        # an issue they link to (provider-agnostic — e.g. a GitHub PR closing a
-        # Linear issue). Window-wide, so a donor issue completed on a different
-        # day than the borrowing PR still attributes correctly.
+        # run: PRs/MRs that map to no team of their own inherit the team of an
+        # issue they link to (provider-agnostic — e.g. a GitHub PR closing a
+        # Linear issue).
+        #
+        # The donor set must be COMPLETE, not just this sync window: an
+        # incremental run may re-fetch only the PR while its donor issue was
+        # synced earlier, so union the freshly-synced items/edges with the
+        # persisted superset from ClickHouse. Freshly-synced rows win (newest
+        # attribution); the persisted query uses FINAL to read the latest
+        # ReplacingMergeTree version. Falls back to the in-memory window set if
+        # the sink can't be queried.
+        donor_by_id: dict[str, Any] = {}
+        merged_deps: dict[tuple[str, str, str], Any] = {}
+        if hasattr(primary_sink, "query_dicts"):
+            _org_where = " WHERE org_id = {org_id:String}" if org_id else ""
+            _org_params = {"org_id": org_id} if org_id else {}
+            try:
+                for r in primary_sink.query_dicts(
+                    "SELECT * FROM work_items FINAL" + _org_where, _org_params
+                ):
+                    wi = to_dataclass(WorkItem, r)
+                    donor_by_id[wi.work_item_id] = wi
+                for r in primary_sink.query_dicts(
+                    "SELECT source_work_item_id, target_work_item_id, "
+                    "relationship_type, relationship_type_raw, last_synced, org_id "
+                    "FROM work_item_dependencies FINAL" + _org_where,
+                    _org_params,
+                ):
+                    dep = to_dataclass(WorkItemDependency, r)
+                    merged_deps[
+                        (
+                            dep.source_work_item_id,
+                            dep.target_work_item_id,
+                            dep.relationship_type,
+                        )
+                    ] = dep
+            except Exception:
+                logger.warning(
+                    "Donor superset load failed; linked-issue inheritance "
+                    "limited to the sync window",
+                    exc_info=True,
+                )
+        for wi in work_items:
+            donor_by_id[wi.work_item_id] = wi
+        for dep in dependencies:
+            merged_deps[
+                (
+                    dep.source_work_item_id,
+                    dep.target_work_item_id,
+                    dep.relationship_type,
+                )
+            ] = dep
+
         linked_issue_resolver = build_linked_issue_team_resolver(
-            work_items=work_items,
-            dependencies=dependencies,
+            work_items=list(donor_by_id.values()),
+            dependencies=list(merged_deps.values()),
             team_resolver=team_resolver,
             project_key_resolver=pk_resolver,
         )
@@ -469,18 +525,15 @@ def run_work_items_sync_job(
             ] = {}
 
             def _get_team(wi: Any) -> str:
-                if pk_resolver:
-                    t_id, _ = pk_resolver.resolve(
-                        getattr(wi, "work_scope_id", None)
-                        or getattr(wi, "project_key", None)
+                # Same cascade as cycle-time / state-duration compute, including
+                # the linked-issue inheritance fallback, so issue-type and
+                # investment tables never disagree with the others on a PR's team.
+                team_id, _ = resolve_base_team(wi, team_resolver, pk_resolver)
+                if team_id is None:
+                    team_id, _ = linked_issue_resolver.resolve(
+                        getattr(wi, "work_item_id", None)
                     )
-                    if t_id:
-                        return t_id
-                if getattr(wi, "assignees", None):
-                    t_id, _ = team_resolver.resolve(wi.assignees[0])
-                    if t_id:
-                        return t_id
-                return "unassigned"
+                return normalize_team_id(team_id)
 
             def _normalize_investment_team_id(team_id: str | None) -> str | None:
                 if not team_id or team_id == "unassigned":

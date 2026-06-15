@@ -262,8 +262,11 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         Edges are org-scoped but otherwise time-independent (a PR's link to the
         issue it closes does not expire), so no date window is applied — the
         whole org graph is needed to attribute a PR to a donor issue that may
-        sit outside the metrics window. Returns an empty list when the table is
-        absent (older deployments) rather than failing the daily job.
+        sit outside the metrics window. ``FINAL`` collapses the
+        ``ReplacingMergeTree(last_synced)`` table to the latest version of each
+        edge so stale/duplicate rows can't drive attribution. Returns an empty
+        list when the table is absent (older deployments) rather than failing
+        the daily job.
         """
         from dev_health_ops.models.work_items import WorkItemDependency
 
@@ -277,7 +280,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
             relationship_type_raw,
             last_synced,
             org_id
-        FROM work_item_dependencies
+        FROM work_item_dependencies FINAL
         WHERE 1 = 1
         {org_filter}
         ORDER BY source_work_item_id, target_work_item_id, last_synced

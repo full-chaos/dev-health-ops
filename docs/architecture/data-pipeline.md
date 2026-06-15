@@ -139,16 +139,25 @@ canonical target wins (a stable tiebreak, since ClickHouse rows are
 unordered).
 
 The resolver (`build_linked_issue_team_resolver`) is built **once per run**
-and applied identically to both `compute_work_item_metrics_daily`
-(cycle-times) and `compute_work_item_state_durations_daily`, so a PR reads
-with the same team in every work-item table. It must see a **donor-complete**
-set: `job_daily` loads donor work items org-wide (`repo_id=None`) and
-window-independent — a PR can link to an issue that completed long before the
-metrics day, or to a repo-less Linear/Jira issue that a per-repo window would
-exclude. Org-scoped edges come from
-`ClickHouseDataLoader.load_work_item_dependencies`. Because the edges are
-written during a **work-items sync**, a sync (not just a metrics recompute)
-is required for newly-captured links to take effect.
+and applied to *every* work-item metric family — cycle-times
+(`compute_work_item_metrics_daily`), state-durations
+(`compute_work_item_state_durations_daily`), and the issue-type / investment
+rollups (via `_get_team`) — so a PR reads with the same team in every table
+and cross-table joins stay consistent.
+
+It must see a **donor-complete** set, not just the active window:
+
+- `job_daily` loads donor work items org-wide (`repo_id=None`) and
+  window-independent — a PR can link to an issue that completed long before
+  the metrics day, or to a repo-less Linear/Jira issue that a per-repo window
+  would exclude. Dependency edges come from
+  `ClickHouseDataLoader.load_work_item_dependencies` (`FINAL`, latest version).
+- `job_work_items` (the sync) **unions** the freshly-synced items/edges with
+  the persisted ClickHouse superset (`FINAL`), so an incremental run that
+  re-fetches only the PR still finds a donor synced earlier.
+
+Because the edges are written during a **work-items sync**, a sync (not just a
+metrics recompute) is required for newly-captured links to take effect.
 
 > Note: branch-name capture trusts the head branch (the Linear convention),
 > so a contributor could in principle name a branch to force a team

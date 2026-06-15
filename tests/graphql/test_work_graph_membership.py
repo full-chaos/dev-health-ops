@@ -78,7 +78,9 @@ class TestEdgeThemeAttribution:
         """Edge whose source is a known work unit member carries the dominant theme."""
         edge_rows = [make_edge_row(source_type="issue", source_id="PROJ-1")]
         membership_rows = [
-            make_membership_row("issue", "PROJ-1", "feature_delivery", "feature_delivery.roadmap")
+            make_membership_row(
+                "issue", "PROJ-1", "feature_delivery", "feature_delivery.roadmap"
+            )
         ]
 
         with patch(
@@ -170,8 +172,12 @@ class TestEdgeThemeAttribution:
             )
         ]
         membership_rows = [
-            make_membership_row("issue", "PROJ-1", "feature_delivery", "feature_delivery.roadmap"),
-            make_membership_row("pr", "PR-99", "maintenance", "maintenance.dependency_updates"),
+            make_membership_row(
+                "issue", "PROJ-1", "feature_delivery", "feature_delivery.roadmap"
+            ),
+            make_membership_row(
+                "pr", "PR-99", "maintenance", "maintenance.dependency_updates"
+            ),
         ]
 
         with patch(
@@ -215,7 +221,12 @@ class TestEdgeThemeAttribution:
         """A membership row with empty dominant_theme string is treated as None."""
         edge_rows = [make_edge_row(source_id="PROJ-1")]
         membership_rows = [
-            {"node_type": "issue", "node_id": "PROJ-1", "dominant_theme": "", "dominant_subcategory": ""}
+            {
+                "node_type": "issue",
+                "node_id": "PROJ-1",
+                "dominant_theme": "",
+                "dominant_subcategory": "",
+            }
         ]
 
         with patch(

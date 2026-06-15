@@ -45,6 +45,7 @@ from dev_health_ops.metrics.schemas import (
     WorkItemUserMetricsDailyRecord,
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
+    WorkUnitMembershipRecord,
 )
 from dev_health_ops.metrics.testops_schemas import (
     BenchmarkAnomalyRecord,
@@ -357,6 +358,12 @@ class BaseMetricsSink(ABC):
         self, rows: Sequence[WorkUnitInvestmentEvidenceQuoteRecord]
     ) -> None:
         """Write extractive evidence quotes for work unit investment records."""
+        pass
+
+    def write_work_unit_memberships(
+        self, rows: Sequence[WorkUnitMembershipRecord]
+    ) -> None:
+        """Write node→work-unit membership rows for theme/subcategory filtering."""
         pass
 
     # -------------------------------------------------------------------------

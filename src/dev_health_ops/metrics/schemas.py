@@ -746,6 +746,34 @@ class WorkUnitInvestmentRecord:
 
 
 @dataclass(frozen=True)
+class WorkUnitMembershipRecord:
+    """One row per (node, category) — reverse index for theme/subcategory filtering.
+
+    Persisted into ``work_unit_membership`` (CHAOS-2429/2430). Multi-membership:
+    a node emits one row per theme and per subcategory whose weight in the parent
+    work unit's distribution is >= MEMBERSHIP_WEIGHT_THRESHOLD, plus the argmax
+    category of each kind (``is_dominant=1``) even if below threshold.
+
+    ``category_kind`` is ``'theme'`` or ``'subcategory'``. Readers MUST scope to
+    each node's latest run (rows whose ``computed_at`` equals the max
+    ``computed_at`` for that ``(org_id, node_type, node_id)``) — NOT per
+    ``work_unit_id`` — to exclude stale rows left behind when edge churn moves a
+    node into a new component (the old work_unit_id is never re-emitted).
+    """
+
+    org_id: str
+    node_type: str
+    node_id: str
+    work_unit_id: str
+    category_kind: str
+    category: str
+    weight: float
+    is_dominant: int
+    categorization_status: str
+    computed_at: datetime
+
+
+@dataclass(frozen=True)
 class WorkUnitInvestmentEvidenceQuoteRecord:
     work_unit_id: str
     quote: str

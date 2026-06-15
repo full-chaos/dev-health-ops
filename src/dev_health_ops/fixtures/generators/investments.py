@@ -272,6 +272,59 @@ class InvestmentsGeneratorMixin(BaseGeneratorMixin):
 
         return records
 
+    def generate_work_unit_memberships(
+        self,
+        work_unit_investments: list[Any],
+        *,
+        org_id: str = "",
+    ) -> list[Any]:
+        """Generate work_unit_membership rows from generated investment records.
+
+        Derived directly from each ``WorkUnitInvestmentRecord``'s theme and
+        subcategory distributions so fixtures stay consistent with investments
+        and mirror the materializer's multi-membership rules exactly: one row
+        per (node, category) at/above MEMBERSHIP_WEIGHT_THRESHOLD, plus the
+        argmax of each kind (is_dominant=1) even below threshold, lexical
+        tie-break. Each fixture work unit is a single issue node
+        (work_unit_id == work_item_id), so the node is ("issue", work_unit_id).
+
+        Populating this in fixtures means the live-e2e/demo org exercises theme
+        filtering directly and the degraded path (MEMBERSHIP_NOT_MATERIALIZED)
+        is only ever hit pre-materialization (CHAOS-2430).
+        """
+        from dev_health_ops.metrics.schemas import WorkUnitMembershipRecord
+        from dev_health_ops.work_graph.investment.materialize import (
+            _membership_categories,
+        )
+
+        records: list[Any] = []
+        for inv in work_unit_investments:
+            node_id = inv.work_unit_id
+            theme_rows = _membership_categories(inv.theme_distribution_json or {})
+            subcat_rows = _membership_categories(
+                inv.subcategory_distribution_json or {}
+            )
+            for kind, cat_rows in (
+                ("theme", theme_rows),
+                ("subcategory", subcat_rows),
+            ):
+                for category, weight, is_dominant in cat_rows:
+                    records.append(
+                        WorkUnitMembershipRecord(
+                            org_id=org_id,
+                            node_type="issue",
+                            node_id=node_id,
+                            work_unit_id=inv.work_unit_id,
+                            category_kind=kind,
+                            category=category,
+                            weight=weight,
+                            is_dominant=is_dominant,
+                            categorization_status=inv.categorization_status,
+                            computed_at=inv.computed_at,
+                        )
+                    )
+        return records
+
     def generate_investment_metrics(self, days: int = 30) -> list[Any]:
         """Generate investment metrics daily rollup records."""
         from dev_health_ops.investment_taxonomy import THEMES

@@ -255,16 +255,47 @@ async def _batch_resolve_display_names(
 
 
 def _row_to_edge(
-    row: dict[str, Any], resolved: dict[str, str] | None = None
+    row: dict[str, Any],
+    resolved: dict[str, str] | None = None,
+    membership: dict[tuple[str, str], dict[str, str]] | None = None,
 ) -> WorkGraphEdgeResult:
     source_id = str(row.get("source_id", ""))
     target_id = str(row.get("target_id", ""))
+    source_type_raw = str(row.get("source_type", "issue"))
+    target_type_raw = str(row.get("target_type", "issue"))
+
+    theme: str | None = None
+    subcategory: str | None = None
+
+    # edge.theme / edge.subcategory ALWAYS report the node's DOMINANT category
+    # (the is_dominant row), on BOTH the filtered and unfiltered paths. A theme
+    # filter only selects WHICH edges are shown — it never changes what the
+    # annotation reports — so a mixed-membership unit matched under its secondary
+    # theme still reports its dominant theme here (not the requested filter
+    # value). Precedence: ISSUE endpoint > PR endpoint > other endpoint types;
+    # both endpoints are checked and the issue wins when types differ. Fields
+    # stay None when neither endpoint has membership data.
+    if membership is not None:
+        endpoint_preference = [
+            (source_type_raw, source_id),
+            (target_type_raw, target_id),
+        ]
+        # Sort so issue endpoints are tried before pr, and pr before others.
+        _type_rank = {"issue": 0, "pr": 1}
+        endpoint_preference.sort(key=lambda ep: _type_rank.get(ep[0].lower(), 2))
+        for ep_type, ep_id in endpoint_preference:
+            m = membership.get((ep_type, ep_id))
+            if m:
+                theme = m.get("dominant_theme") or None
+                subcategory = m.get("dominant_subcategory") or None
+                break
+
     return WorkGraphEdgeResult(
         edge_id=str(row.get("edge_id", "")),
-        source_type=_map_node_type(str(row.get("source_type", "issue"))),
+        source_type=_map_node_type(source_type_raw),
         source_id=source_id,
         source_display_name=_display_name_for(source_id, resolved),
-        target_type=_map_node_type(str(row.get("target_type", "issue"))),
+        target_type=_map_node_type(target_type_raw),
         target_id=target_id,
         target_display_name=_display_name_for(target_id, resolved),
         edge_type=_map_edge_type(str(row.get("edge_type", "relates"))),
@@ -273,6 +304,363 @@ def _row_to_edge(
         evidence=str(row.get("evidence", "")),
         repo_id=str(row.get("repo_id")) if row.get("repo_id") else None,
         provider=str(row.get("provider")) if row.get("provider") else None,
+        theme=theme,
+        subcategory=subcategory,
+    )
+
+
+# work_unit_membership is multi-membership (one row per node-category) on a
+# ReplacingMergeTree keyed by (org, node, category_kind, category).
+#
+# STALENESS IS SCOPED PER NODE, NOT PER WORK UNIT. work_unit_id is a hash of the
+# connected component, so when edge churn moves a node into a new component the
+# OLD work_unit_id is never re-emitted — a per-work_unit_id "latest run" guard
+# would keep that dead unit's rows alive forever (the node would keep matching
+# obsolete categories, and annotation would see multiple is_dominant rows). A
+# node belongs to exactly one component per run and emits its rows with one
+# computed_at, so restricting to rows whose computed_at equals the max
+# computed_at for that (org_id, node_type, node_id) makes the node's most recent
+# materialization always supersede its prior component's rows. This fixes
+# split/merge and below-threshold drop-off in one guard.
+#
+# ORPHANS: a node removed from the graph entirely is never re-emitted, so its
+# last-known rows linger. The materialization job can run repo/team-scoped (see
+# workers/work_graph_tasks.py) — it is NOT guaranteed to be a global org sweep
+# each run — so a "latest global run per org" backstop would wrongly hide nodes
+# whose repo was not in the most recent scoped run, and tombstoning vanished
+# nodes would require a full-graph diff a scoped run cannot produce. We
+# therefore intentionally let an orphaned node retain its last categories until
+# it is re-materialized (or its edges age out of work_graph_edges, at which
+# point no edge references it anyway). This matches how the rest of the work
+# graph treats vanished nodes (no tombstones).
+_LATEST_RUN_PER_NODE_SUBQUERY = """
+        SELECT node_type, node_id, max(computed_at) AS max_computed_at
+        FROM work_unit_membership
+        WHERE org_id = %(org_id)s
+        GROUP BY node_type, node_id
+"""
+
+
+async def _batch_resolve_membership(
+    client: Any,
+    org_id: str,
+    rows: list[dict[str, Any]],
+) -> dict[tuple[str, str], dict[str, str]]:
+    """Batch-lookup the dominant theme/subcategory per edge endpoint in ONE query.
+
+    Returns {(node_type, node_id) -> {"dominant_theme": ..., "dominant_subcategory": ...}}
+    built from the is_dominant=1 rows of each node's latest run (stale rows from
+    a prior component excluded via the per-node latest-run join — see
+    _LATEST_RUN_PER_NODE_SUBQUERY). Scoped to org_id.
+    """
+    from dev_health_ops.api.queries.client import query_dicts
+
+    # Collect unique (node_type, node_id) pairs from both endpoints of every edge.
+    endpoints: set[tuple[str, str]] = set()
+    for row in rows:
+        for id_field, type_field in (
+            ("source_id", "source_type"),
+            ("target_id", "target_type"),
+        ):
+            node_id = str(row.get(id_field) or "").strip()
+            node_type = str(row.get(type_field) or "").strip()
+            if node_id and node_type:
+                endpoints.add((node_type, node_id))
+
+    if not endpoints:
+        return {}
+
+    node_types = sorted({t for t, _ in endpoints})
+    node_ids = sorted({i for _, i in endpoints})
+
+    try:
+        membership_rows = await query_dicts(
+            client,
+            f"""
+            WITH latest AS ({_LATEST_RUN_PER_NODE_SUBQUERY})
+            SELECT
+                m.node_type AS node_type,
+                m.node_id AS node_id,
+                m.category_kind AS category_kind,
+                m.category AS category
+            FROM work_unit_membership AS m
+            INNER JOIN latest
+                ON m.node_type = latest.node_type
+               AND m.node_id = latest.node_id
+               AND m.computed_at = latest.max_computed_at
+            WHERE m.org_id = %(org_id)s
+              AND m.node_type IN %(node_types)s
+              AND m.node_id IN %(node_ids)s
+              AND m.is_dominant = 1
+            """,
+            {
+                "org_id": org_id,
+                "node_types": node_types,
+                "node_ids": node_ids,
+            },
+        )
+    except Exception as exc:
+        # Only the EXPECTED recognized state — work_unit_membership does not
+        # exist yet (rolling deploy / pre-migration) — degrades to "no
+        # annotation" (edges still returned, theme/subcategory null). This
+        # mirrors the narrowed filtered-path handling. Every OTHER error
+        # (timeouts, auth, a DIFFERENT missing table, schema regressions)
+        # re-raises so real failures surface loudly instead of being silently
+        # served as null annotations. A node that genuinely has no membership
+        # row is an empty result set, not an exception, and is unaffected.
+        if _is_missing_membership_table_error(exc):
+            logger.warning(
+                "work_unit_membership table missing during annotation lookup "
+                "for org %s — returning edges without theme annotation "
+                "(CHAOS-2430).",
+                org_id,
+            )
+            return {}
+        raise
+
+    result: dict[tuple[str, str], dict[str, str]] = {}
+    for r in membership_rows:
+        nt = str(r.get("node_type") or "")
+        ni = str(r.get("node_id") or "")
+        if not (nt and ni):
+            continue
+        entry = result.setdefault(
+            (nt, ni), {"dominant_theme": "", "dominant_subcategory": ""}
+        )
+        kind = str(r.get("category_kind") or "")
+        category = str(r.get("category") or "")
+        if kind == "theme":
+            entry["dominant_theme"] = category
+        elif kind == "subcategory":
+            entry["dominant_subcategory"] = category
+    return result
+
+
+def _theme_membership_exists_clause() -> str:
+    """SQL EXISTS clause: edge endpoint is a member of ALL requested categories.
+
+    A correlated semi-join pushed INTO the edge query so the membership filter,
+    the repo_id/edge_type/source filters, AND the LIMIT all execute in one
+    ClickHouse plan (no unbounded Python IN set; the before-LIMIT guarantee
+    holds because this lives in the edge WHERE). Per-node latest-run guard
+    excludes stale rows from a prior component (split/merge safe). The
+    uniqExact HAVING enforces "member of EVERY requested (kind, category)", so a
+    theme+subcategory filter requires membership in BOTH. An edge matches when
+    EITHER endpoint satisfies the subquery.
+    """
+    return f"""
+        EXISTS (
+            SELECT 1
+            FROM work_unit_membership AS m
+            INNER JOIN ({_LATEST_RUN_PER_NODE_SUBQUERY}) AS latest
+                ON m.node_type = latest.node_type
+               AND m.node_id = latest.node_id
+               AND m.computed_at = latest.max_computed_at
+            WHERE m.org_id = %(org_id)s
+              AND (
+                (m.node_type, m.node_id) = (work_graph_edges.source_type, work_graph_edges.source_id)
+                OR (m.node_type, m.node_id) = (work_graph_edges.target_type, work_graph_edges.target_id)
+              )
+              AND (m.category_kind, m.category) IN %(category_tuples)s
+            GROUP BY m.node_type, m.node_id
+            HAVING uniqExact((m.category_kind, m.category)) = %(wanted_count)s
+        )
+    """
+
+
+def _subcategory_parent_theme(subcategory: str) -> str | None:
+    """Return the canonical parent theme of a subcategory, or None if unknown.
+
+    Resolves via the canonical SUBCATEGORY_TO_THEME mapping, falling back to the
+    ``"theme.sub"`` naming convention prefix when the subcategory is not in the
+    map (defensive — keeps a future taxonomy addition from silently failing).
+    """
+    from dev_health_ops.investment_taxonomy import SUBCATEGORY_TO_THEME
+
+    mapped = SUBCATEGORY_TO_THEME.get(subcategory)
+    if mapped:
+        return mapped
+    prefix = subcategory.split(".", 1)[0]
+    return prefix or None
+
+
+def _theme_subcategory_conflict(theme: str | None, subcategory: str | None) -> bool:
+    """True when theme + subcategory are BOTH set but cross taxonomy boundaries.
+
+    A subcategory belongs to exactly one theme (canonical SUBCATEGORY_TO_THEME).
+    If the caller supplies a theme AND a subcategory whose parent theme differs
+    (e.g. via URL tampering, stale client state, or version skew), the requested
+    intersection is impossible — no work unit can be a member of both. Callers
+    must short-circuit to an empty result rather than build the (corrupting)
+    cross-theme intersection (CHAOS-2430).
+    """
+    if not (theme and subcategory):
+        return False
+    return _subcategory_parent_theme(subcategory) != theme
+
+
+def _build_theme_filter(
+    theme: str | None,
+    subcategory: str | None,
+) -> tuple[str | None, dict[str, Any]]:
+    """Return (exists_clause_sql, params) for the active theme/subcategory filter.
+
+    Returns (None, {}) when no theme filter is active. ``params`` carries the
+    requested ``(category_kind, category)`` tuples and the count that the
+    endpoint must match (1 for theme-only or subcategory-only, 2 for both).
+
+    Callers MUST screen for ``_theme_subcategory_conflict`` first: a cross-theme
+    theme+subcategory pair has no valid intersection and must short-circuit to an
+    empty result rather than reach here.
+    """
+    wanted: list[tuple[str, str]] = []
+    if theme:
+        wanted.append(("theme", theme))
+    if subcategory:
+        wanted.append(("subcategory", subcategory))
+    if not wanted:
+        return None, {}
+    return _theme_membership_exists_clause(), {
+        "category_tuples": wanted,
+        "wanted_count": len(wanted),
+    }
+
+
+# Wire value consumed by the web client to distinguish a transient rollout state
+# (membership table not yet populated) from a genuine empty theme-filter result.
+MEMBERSHIP_NOT_MATERIALIZED = "MEMBERSHIP_NOT_MATERIALIZED"
+
+
+async def _detect_membership_degraded_reason(client: Any, org_id: str) -> str | None:
+    """Return MEMBERSHIP_NOT_MATERIALIZED when a theme filter yielded nothing
+    because work_unit_membership is unpopulated for an org that HAS categorized
+    work units, else None.
+
+    Degraded iff: the org has >= 1 work_unit_investments row AND ZERO
+    work_unit_membership rows. The membership count is scoped to each node's
+    latest run (a row is "live" only if its computed_at equals the node's max)
+    so leftover rows from a prior component never mask a truly empty table —
+    consistent with the per-node staleness used everywhere else (CHAOS-2430).
+    Also emits the rollout warning log (observability retained). Never raises:
+    on probe failure it returns None so the request is unaffected.
+    """
+    from dev_health_ops.api.queries.client import query_dicts
+
+    try:
+        rows = await query_dicts(
+            client,
+            """
+            SELECT
+                (
+                    SELECT count()
+                    FROM work_unit_membership AS m
+                    INNER JOIN (
+                        SELECT node_type, node_id, max(computed_at) AS max_computed_at
+                        FROM work_unit_membership
+                        WHERE org_id = %(org_id)s
+                        GROUP BY node_type, node_id
+                    ) AS latest
+                        ON m.node_type = latest.node_type
+                       AND m.node_id = latest.node_id
+                       AND m.computed_at = latest.max_computed_at
+                    WHERE m.org_id = %(org_id)s
+                ) AS membership_rows,
+                (
+                    SELECT count()
+                    FROM work_unit_investments
+                    WHERE org_id = %(org_id)s
+                ) AS investment_rows
+            """,
+            {"org_id": org_id},
+        )
+    except Exception:
+        # Never let the degraded-state probe affect the request.
+        logger.debug("membership-population probe failed", exc_info=True)
+        return None
+
+    if not rows:
+        return None
+    membership_rows = int(rows[0].get("membership_rows") or 0)
+    investment_rows = int(rows[0].get("investment_rows") or 0)
+    if membership_rows == 0 and investment_rows > 0:
+        logger.warning(
+            "Theme filter returned no edges and work_unit_membership is empty "
+            "for org %s while work_unit_investments has %d rows — the "
+            "post-migration investment materialization rerun that populates "
+            "work_unit_membership has likely not run yet (CHAOS-2430).",
+            org_id,
+            investment_rows,
+        )
+        return MEMBERSHIP_NOT_MATERIALIZED
+    return None
+
+
+_MEMBERSHIP_TABLE = "work_unit_membership"
+
+# ClickHouse names the actually-missing table in an "Unknown table ...
+# identifier '<name>'" clause. The full error ALSO echoes the entire failing
+# SQL (which mentions every table in the query), so a naive substring search for
+# the table name matches even when a DIFFERENT table is missing. We therefore
+# extract ONLY the quoted identifier from the dedicated clause and compare it.
+_UNKNOWN_TABLE_IDENTIFIER_RE = re.compile(
+    r"Unknown table(?: expression identifier)?\s+'([^']+)'",
+    re.IGNORECASE,
+)
+
+
+def _unknown_table_names(text: str) -> set[str]:
+    """Return the table identifiers ClickHouse reported as unknown.
+
+    Matches the "Unknown table expression identifier '<name>'" / "Unknown table
+    '<name>'" clauses only — NOT the echoed SQL — and strips any database
+    qualifier (``db.table`` -> ``table``).
+    """
+    names: set[str] = set()
+    for ident in _UNKNOWN_TABLE_IDENTIFIER_RE.findall(text):
+        names.add(ident.split(".")[-1].strip("`"))
+    return names
+
+
+def _is_missing_membership_table_error(exc: BaseException) -> bool:
+    """True ONLY when a ClickHouse missing-table (code 60) error names
+    ``work_unit_membership`` as the unknown table.
+
+    During a rolling deploy or before the membership migration has run, the
+    filtered edge query's EXISTS subquery references ``work_unit_membership``
+    before it exists; the driver raises a DatabaseError carrying ``code == 60``
+    with an ``UNKNOWN_TABLE`` server message whose identifier clause names the
+    offending table. We require the code-60/UNKNOWN_TABLE signal AND that the
+    reported-unknown identifier IS ``work_unit_membership`` — parsed from the
+    identifier clause, NOT the echoed SQL (which lists every table in the
+    query). So a code-60 error for any OTHER table (e.g. a missing
+    ``work_graph_edges`` or another schema regression on the filtered path)
+    re-raises and surfaces loudly instead of masquerading as the benign degraded
+    state.
+    """
+    text = str(exc)
+    is_unknown_table = (
+        getattr(exc, "code", None) == 60
+        or "UNKNOWN_TABLE" in text
+        or "code: 60" in text
+    )
+    if not is_unknown_table:
+        return False
+    return _MEMBERSHIP_TABLE in _unknown_table_names(text)
+
+
+def _empty_edges_result(degraded_reason: str | None = None) -> WorkGraphEdgesResult:
+    """An empty, well-formed result — used for impossible filters and the
+    degraded (membership-not-materialized) state."""
+    return WorkGraphEdgesResult(
+        edges=[],
+        total_count=0,
+        page_info=PageInfo(
+            has_next_page=False,
+            has_previous_page=False,
+            start_cursor=None,
+            end_cursor=None,
+        ),
+        degraded_reason=degraded_reason,
     )
 
 
@@ -291,6 +679,23 @@ async def resolve_work_graph_edges(
     limit = filters.limit if filters else 1000
     params: dict[str, Any] = {"limit": int(limit), "org_id": org_id}
     where_clauses: list[str] = ["org_id = %(org_id)s"]
+
+    theme_filter = filters.theme if filters else None
+    subcategory_filter = filters.subcategory if filters else None
+    theme_filter_active = bool(theme_filter or subcategory_filter)
+
+    # A theme + subcategory pair that cross taxonomy boundaries (the subcategory
+    # belongs to a different theme) has no valid intersection — short-circuit to
+    # an empty result instead of building the impossible cross-theme filter
+    # (guards against URL tampering / stale client state / version skew).
+    if _theme_subcategory_conflict(theme_filter, subcategory_filter):
+        logger.info(
+            "work_graph theme filter conflict: theme=%r does not own "
+            "subcategory=%r — returning empty result",
+            theme_filter,
+            subcategory_filter,
+        )
+        return _empty_edges_result()
 
     if filters:
         if filters.repo_ids:
@@ -313,6 +718,24 @@ async def resolve_work_graph_edges(
             where_clauses.append("(source_id = %(node_id)s OR target_id = %(node_id)s)")
             params["node_id"] = filters.node_id
 
+    # --- Server-side theme/subcategory filter (CHAOS-2430) --------------------
+    # The membership constraint is pushed INTO the edge query as a correlated
+    # EXISTS semi-join, so repo_id/edge_type/source filters AND the membership
+    # filter AND the LIMIT all execute in ONE ClickHouse plan. This keeps the
+    # before-LIMIT guarantee (a sparse theme's edges are never hidden behind the
+    # row cap) WITHOUT round-tripping an unbounded matched-node set through
+    # Python (which could blow param limits / time out at tenant scale and
+    # ignored repo/edge filters). An edge matches if EITHER endpoint is a member
+    # of the requested theme/subcategory (multi-membership), with the
+    # theme+subcategory "both required" semantics enforced inside the subquery.
+    if theme_filter_active:
+        exists_clause, theme_params = _build_theme_filter(
+            theme_filter, subcategory_filter
+        )
+        if exists_clause:
+            where_clauses.append(exists_clause)
+            params.update(theme_params)
+
     where_sql = f"WHERE {' AND '.join(where_clauses)}"
 
     query = f"""
@@ -333,9 +756,44 @@ async def resolve_work_graph_edges(
         LIMIT %(limit)s
     """
 
-    rows = await query_dicts(client, query, params)
+    try:
+        rows = await query_dicts(client, query, params)
+    except Exception as exc:
+        # During a rolling deploy / before the membership migration has run, the
+        # filtered edge query's EXISTS subquery references work_unit_membership
+        # before it exists. Return the controlled degraded state instead of a
+        # 500 — the web client already handles MEMBERSHIP_NOT_MATERIALIZED. The
+        # check is NARROW: only a code-60 error that names work_unit_membership
+        # is downgraded. Any other missing-table / schema regression on this
+        # path (e.g. a missing work_graph_edges) re-raises so it fails loudly
+        # rather than masquerading as a benign empty state.
+        if theme_filter_active and _is_missing_membership_table_error(exc):
+            logger.warning(
+                "work_unit_membership table missing for org %s during theme "
+                "filter — returning degraded state (CHAOS-2430).",
+                org_id,
+            )
+            return _empty_edges_result(MEMBERSHIP_NOT_MATERIALIZED)
+        raise
+
+    # Degraded-state signal (CHAOS-2430 rollout): a theme filter that yields zero
+    # edges is normally a legitimate empty state, but immediately after deploy it
+    # can instead mean work_unit_membership has not been populated yet (the table
+    # is empty until the next investment materialization rerun). Surface that as
+    # degraded_reason=MEMBERSHIP_NOT_MATERIALIZED so the client distinguishes a
+    # transient rollout state from a genuine empty result. No silent fallback —
+    # edges stay [] either way.
+    degraded_reason: str | None = None
+    if theme_filter_active and not rows:
+        degraded_reason = await _detect_membership_degraded_reason(client, org_id)
+
     resolved = await _batch_resolve_display_names(client, org_id, rows)
-    edges = [_row_to_edge(row, resolved) for row in rows]
+
+    # Annotation ALWAYS reports each edge's dominant theme/subcategory (the
+    # is_dominant rows), on both the filtered and unfiltered paths — the theme
+    # filter only selects which edges are shown, never what is reported.
+    membership = await _batch_resolve_membership(client, org_id, rows)
+    edges = [_row_to_edge(row, resolved, membership) for row in rows]
 
     return WorkGraphEdgesResult(
         edges=edges,
@@ -346,4 +804,5 @@ async def resolve_work_graph_edges(
             start_cursor=edges[0].edge_id if edges else None,
             end_cursor=edges[-1].edge_id if edges else None,
         ),
+        degraded_reason=degraded_reason,
     )

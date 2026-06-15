@@ -526,6 +526,11 @@ class WorkGraphEdgeResult:
     a non-UUID id passes through verbatim; a UUID that cannot be looked up
     is None so the client renders a controlled Unresolved badge (never a
     bare UUID).
+
+    theme / subcategory are the dominant investment theme and subcategory of
+    the work unit that contains an endpoint of this edge, looked up from
+    work_unit_membership (CHAOS-2430). Null when neither endpoint belongs to
+    a known work unit.
     """
 
     edge_id: str
@@ -541,15 +546,29 @@ class WorkGraphEdgeResult:
     evidence: str
     repo_id: str | None = None
     provider: str | None = None
+    theme: str | None = None
+    subcategory: str | None = None
 
 
 @strawberry.type
 class WorkGraphEdgesResult:
-    """Result for work graph edges query."""
+    """Result for work graph edges query.
+
+    ``degraded_reason`` (wire: ``degradedReason``) is non-null only when a
+    theme/subcategory filter was requested, the matched set is empty, and the
+    org has ``work_unit_investments`` rows but ZERO ``work_unit_membership`` rows
+    (latest-run scoped) — i.e. the post-migration investment materialization
+    that populates ``work_unit_membership`` has not run yet. In that case it is
+    ``"MEMBERSHIP_NOT_MATERIALIZED"`` so the client can distinguish a transient
+    rollout state from a genuine empty result. It is ``None`` in every other
+    case, including a genuine empty result when membership data exists
+    (CHAOS-2430).
+    """
 
     edges: list[WorkGraphEdgeResult]
     total_count: int
     page_info: PageInfo
+    degraded_reason: str | None = None
 
 
 # =============================================================================

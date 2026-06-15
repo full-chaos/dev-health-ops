@@ -147,20 +147,16 @@ class ClickHouseStore:
 
                 if path.suffix == ".sql":
                     try:
+                        from dev_health_ops.migrations.clickhouse import (
+                            split_sql_statements,
+                        )
+
                         sql = await asyncio.to_thread(path.read_text, encoding="utf-8")
-                        for stmt in sql.split(";"):
-                            stmt = stmt.strip()
-                            if not stmt:
-                                continue
-                            # Skip comment-only chunks (created when a stray
-                            # ';' appears inside a '--' comment block).
-                            code_lines = [
-                                line
-                                for line in stmt.splitlines()
-                                if line.strip() and not line.strip().startswith("--")
-                            ]
-                            if not code_lines:
-                                continue
+                        # split_sql_statements strips '-- ...' line comments
+                        # BEFORE splitting on ';', so a stray ';' inside a
+                        # comment can never orphan bare text into its own
+                        # statement and break the migration (CHAOS-2430).
+                        for stmt in split_sql_statements(sql):
                             await asyncio.to_thread(self.client.command, stmt)
                     except Exception as e:
                         logger.critical("Migration failed: %s\nError: %s", path.name, e)

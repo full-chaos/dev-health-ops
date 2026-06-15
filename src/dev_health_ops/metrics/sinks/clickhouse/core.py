@@ -203,12 +203,15 @@ class ClickHouseCore(BaseMetricsSink):
 
             if path.suffix == ".sql":
                 try:
+                    from dev_health_ops.migrations.clickhouse import (
+                        split_sql_statements,
+                    )
+
                     sql = path.read_text(encoding="utf-8")
-                    # Very small splitter: migrations are expected to contain only DDL.
-                    for stmt in sql.split(";"):
-                        stmt = stmt.strip()
-                        if not stmt:
-                            continue
+                    # split_sql_statements strips '-- ...' line comments BEFORE
+                    # splitting on ';', so a stray ';' inside a comment can never
+                    # orphan bare text into its own statement (CHAOS-2430).
+                    for stmt in split_sql_statements(sql):
                         self.client.command(stmt)
                 except Exception as e:
                     logger.error(f"CRITICAL: Migration failed: {path.name}\nError: {e}")

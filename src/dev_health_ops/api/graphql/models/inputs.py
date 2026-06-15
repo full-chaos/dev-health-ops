@@ -293,13 +293,22 @@ class WorkGraphEdgeTypeInput(Enum):
 
 @strawberry.input
 class WorkGraphEdgeFilterInput:
-    """Filter options for work graph edge queries."""
+    """Filter options for work graph edge queries.
+
+    ``theme`` / ``subcategory`` filter edges to those that *touch* a work unit
+    of the given investment theme/subcategory: an edge matches if EITHER
+    endpoint belongs to such a unit (per ``work_unit_membership``). This filter
+    is applied SERVER-SIDE before the ``limit`` is enforced, so a sparse
+    theme's edges are never hidden behind the row cap (CHAOS-2427/2430).
+    """
 
     repo_ids: list[str] | None = None
     source_type: WorkGraphNodeTypeInput | None = None
     target_type: WorkGraphNodeTypeInput | None = None
     edge_type: WorkGraphEdgeTypeInput | None = None
     node_id: str | None = None
+    theme: str | None = None
+    subcategory: str | None = None
     limit: int = 1000
 
 

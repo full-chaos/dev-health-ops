@@ -404,7 +404,7 @@ class TestWorkGraphEdgeLookupResolution:
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
-            mock_query.side_effect = [edge_rows, pr_lookup_rows]
+            mock_query.side_effect = [edge_rows, pr_lookup_rows, []]  # + membership
             result = await resolve_work_graph_edges(mock_context)
 
         assert result.edges[0].source_display_name == "Add feature X"
@@ -424,31 +424,37 @@ class TestWorkGraphEdgeLookupResolution:
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
-            mock_query.side_effect = [edge_rows, []]
+            mock_query.side_effect = [edge_rows, [], []]  # PR lookup empty + membership
             result = await resolve_work_graph_edges(mock_context)
 
         assert result.edges[0].source_display_name is None
 
     @pytest.mark.asyncio
     async def test_human_readable_id_passes_through_without_lookup(self, mock_context):
-        """Human-readable ids need no table lookup; query_dicts called exactly once."""
+        """Human-readable ids need no display-name table lookup.
+        query_dicts is called twice: once for edges, once for the membership
+        batch (CHAOS-2429/2430 — theme attribution always fires).
+        """
         edge_rows = [make_edge_row(source_id="PROJ-123", target_id="deploy-prod")]
 
         with patch(
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
-            mock_query.return_value = edge_rows
+            mock_query.side_effect = [edge_rows, []]  # edge query + empty membership
             result = await resolve_work_graph_edges(mock_context)
 
-        # Only the edge query — no batch lookup needed
-        assert mock_query.call_count == 1
+        # 2 calls: edge query + membership batch (no display-name lookups needed).
+        assert mock_query.call_count == 2
         assert result.edges[0].source_display_name == "PROJ-123"
         assert result.edges[0].target_display_name == "deploy-prod"
 
     @pytest.mark.asyncio
     async def test_opaque_hex_id_never_triggers_lookup(self, mock_context):
-        """Opaque hex ids are not resolvable; no extra query is issued (call_count == 1)."""
+        """Opaque hex ids are not resolvable via display-name lookup.
+        query_dicts is still called twice: edge query + membership batch
+        (CHAOS-2429/2430 — theme attribution always fires).
+        """
         hex_id = "032adec80b86fd88759f19e65f133d6cacc136f3276cabc79e851ccd22de1cd2"
         edge_rows = [make_edge_row(source_id=hex_id, target_id="INC-001")]
 
@@ -456,10 +462,11 @@ class TestWorkGraphEdgeLookupResolution:
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
-            mock_query.return_value = edge_rows
+            mock_query.side_effect = [edge_rows, []]  # edge query + empty membership
             result = await resolve_work_graph_edges(mock_context)
 
-        assert mock_query.call_count == 1
+        # 2 calls: edge query + membership batch (no display-name lookup for hex ids).
+        assert mock_query.call_count == 2
         assert result.edges[0].source_display_name is None
 
     @pytest.mark.asyncio
@@ -491,11 +498,11 @@ class TestWorkGraphEdgeLookupResolution:
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
-            mock_query.side_effect = [edge_rows, pr_lookup_rows]
+            mock_query.side_effect = [edge_rows, pr_lookup_rows, []]  # + membership
             result = await resolve_work_graph_edges(mock_context)
 
-        # 2 calls: 1 edge query + 1 batch PR lookup (not one per PR)
-        assert mock_query.call_count == 2
+        # 3 calls: edge query + 1 batch PR lookup (not one per PR) + membership
+        assert mock_query.call_count == 3
         assert result.edges[0].source_display_name == "PR Ten"
         assert result.edges[1].source_display_name == "PR Twenty"
 
@@ -517,7 +524,7 @@ class TestWorkGraphEdgeLookupResolution:
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
-            mock_query.side_effect = [edge_rows, dep_lookup_rows]
+            mock_query.side_effect = [edge_rows, dep_lookup_rows, []]  # + membership
             result = await resolve_work_graph_edges(mock_context)
 
         assert result.edges[0].source_display_name == "production deploy"
@@ -540,7 +547,7 @@ class TestWorkGraphEdgeLookupResolution:
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
-            mock_query.side_effect = [edge_rows, inc_lookup_rows]
+            mock_query.side_effect = [edge_rows, inc_lookup_rows, []]  # + membership
             result = await resolve_work_graph_edges(mock_context)
 
         # Status normalised to title-case customer label (not raw enum string)
@@ -564,7 +571,7 @@ class TestWorkGraphEdgeLookupResolution:
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
-            mock_query.side_effect = [edge_rows, dep_lookup_rows]
+            mock_query.side_effect = [edge_rows, dep_lookup_rows, []]  # + membership
             result = await resolve_work_graph_edges(mock_context)
 
         # Must not leak the raw UUID — Unresolved badge (None)
@@ -588,7 +595,7 @@ class TestWorkGraphEdgeLookupResolution:
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
-            mock_query.side_effect = [edge_rows, inc_lookup_rows]
+            mock_query.side_effect = [edge_rows, inc_lookup_rows, []]  # + membership
             result = await resolve_work_graph_edges(mock_context)
 
         assert result.edges[0].target_display_name is None
@@ -611,7 +618,7 @@ class TestWorkGraphEdgeLookupResolution:
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
-            mock_query.side_effect = [edge_rows, inc_lookup_rows]
+            mock_query.side_effect = [edge_rows, inc_lookup_rows, []]  # + membership
             result = await resolve_work_graph_edges(mock_context)
 
         assert result.edges[0].target_display_name == "incident (Incident)"
@@ -628,7 +635,7 @@ class TestWorkGraphEdgeLookupResolution:
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
-            mock_query.side_effect = [edge_rows, []]
+            mock_query.side_effect = [edge_rows, [], []]  # PR lookup empty + membership
             await resolve_work_graph_edges(mock_context)
 
         # Second call is the PR lookup — verify org_id in params
@@ -649,7 +656,11 @@ class TestWorkGraphEdgeLookupResolution:
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
-            mock_query.side_effect = [edge_rows, []]
+            mock_query.side_effect = [
+                edge_rows,
+                [],
+                [],
+            ]  # dep lookup empty + membership
             await resolve_work_graph_edges(mock_context)
 
         dep_lookup_call = mock_query.call_args_list[1]
@@ -674,7 +685,11 @@ class TestWorkGraphEdgeLookupResolution:
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
-            mock_query.side_effect = [edge_rows, []]
+            mock_query.side_effect = [
+                edge_rows,
+                [],
+                [],
+            ]  # inc lookup empty + membership
             await resolve_work_graph_edges(mock_context)
 
         inc_lookup_call = mock_query.call_args_list[1]
@@ -695,7 +710,7 @@ class TestWorkGraphEdgeLookupResolution:
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
-            mock_query.side_effect = [edge_rows, pr_lookup_rows]
+            mock_query.side_effect = [edge_rows, pr_lookup_rows, []]  # + membership
             result = await resolve_work_graph_edges(mock_context)
 
         # Lookup win — not the raw {uuid}#pr1 id, not None
@@ -715,7 +730,7 @@ class TestWorkGraphEdgeLookupResolution:
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
         ) as mock_query:
-            mock_query.side_effect = [edge_rows, []]
+            mock_query.side_effect = [edge_rows, [], []]  # PR lookup empty + membership
             await resolve_work_graph_edges(mock_context)
 
         pr_lookup_params = mock_query.call_args_list[1][0][2]

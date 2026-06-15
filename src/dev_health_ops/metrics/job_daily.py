@@ -1124,11 +1124,21 @@ async def run_daily_metrics_job(
 
                 # LEFT JOIN so PRs with commits that have no file stats still appear
                 # (file_path=NULL → not a test path → has_test_change=False for that PR).
+                # commit_hash + committer_when (from git_commits, org-scoped) feed
+                # follow-up-commit derivation (CHAOS-2437); committer_when is
+                # de-duplicated per commit downstream so RMT version rows are
+                # harmless. git_commit_stats carries no org_id column, so its join
+                # stays on (repo_id, commit_hash) -- p is already org-scoped by the
+                # WHERE clause.
                 raw_link_rows = primary_sink.query_dicts(
-                    "SELECT p.repo_id, p.pr_number, s.file_path"
+                    "SELECT p.repo_id, p.pr_number, p.commit_hash, p.evidence,"
+                    " c.committer_when, s.file_path"
                     " FROM work_graph_pr_commit AS p"
                     " LEFT JOIN git_commit_stats AS s"
                     "   ON s.repo_id = p.repo_id AND s.commit_hash = p.commit_hash"
+                    " LEFT JOIN git_commits AS c"
+                    "   ON c.repo_id = p.repo_id AND c.hash = p.commit_hash"
+                    "   AND c.org_id = p.org_id"
                     f" WHERE p.org_id = {{org_id:String}}{pc_repo_filter}"
                     "   AND p.pr_number IN {pr_numbers:Array(UInt32)}",
                     pc_params,
@@ -1154,7 +1164,12 @@ async def run_daily_metrics_job(
                         )
                         continue
                     built.setdefault((rid, pr_num), []).append(
-                        {"file_path": link.get("file_path")}
+                        {
+                            "file_path": link.get("file_path"),
+                            "commit_hash": link.get("commit_hash"),
+                            "committer_when": link.get("committer_when"),
+                            "evidence": link.get("evidence"),
+                        }
                     )
                 pr_commit_stats = built
             else:

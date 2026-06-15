@@ -20,6 +20,10 @@ class CommitStatRow(TypedDict):
     deletions: int
     old_file_mode: NotRequired[str | None]
     new_file_mode: NotRequired[str | None]
+    # PR↔commit linkage provenance (work_graph_pr_commit.evidence), populated
+    # only when these rows come from the PR-commit linkage join (CHAOS-2437).
+    # Distinguishes a PR's merge/squash artifact from intermediate commits.
+    evidence: NotRequired[str | None]
 
 
 class PullRequestRow(TypedDict):

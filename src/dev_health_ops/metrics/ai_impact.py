@@ -165,6 +165,99 @@ def _test_changes_by_pr(
     return result
 
 
+def _first_review_at_by_pr(
+    rows: Sequence[PullRequestReviewRow],
+) -> dict[tuple[uuid.UUID, int], datetime]:
+    """Earliest review timestamp per PR (the feedback boundary for rework)."""
+    result: dict[tuple[uuid.UUID, int], datetime] = {}
+    for row in rows:
+        submitted = row.get("submitted_at")
+        if submitted is None:
+            continue
+        key = (row["repo_id"], int(row["number"]))
+        ts = _to_utc(submitted)
+        current = result.get(key)
+        if current is None or ts < current:
+            result[key] = ts
+    return result
+
+
+# work_graph_pr_commit.evidence values that mark a PR's OWN merge/squash commit
+# (CHAOS-2435). That commit is the merge artifact, not follow-up work, and on a
+# squash-merge repo it is the *only* commit the linkage attaches to the PR --
+# counting it would make every reviewed PR look reworked. Intermediate commits
+# carry other provenance (fixtures/native linkage) and remain eligible.
+_MERGE_ARTIFACT_EVIDENCE: frozenset[str] = frozenset(
+    {"commit_message_pr_ref", "commit_message_squash_pr_ref"}
+)
+
+
+def _followup_commits_by_pr(
+    pr_commit_stats: Mapping[tuple[uuid.UUID, int], Sequence[CommitStatRow]] | None,
+    pr_index: Mapping[tuple[uuid.UUID, int], PullRequestRow],
+    first_review_at: Mapping[tuple[uuid.UUID, int], datetime],
+) -> dict[tuple[uuid.UUID, int], int]:
+    """Count follow-up commits per PR from the PR↔commit linkage.
+
+    A *follow-up* commit is a distinct commit linked to the PR that landed
+    **after** the feedback boundary (boundary = the PR's first review time when
+    it has been reviewed, else its creation time -- "after PR opened").
+
+    Two guards keep the merge artifact itself from being counted as rework, so a
+    squash-merge PR contributes 0 rather than a phantom 1 (the same class of
+    inflation the test-gap None-semantics guard prevents, CHAOS-2183):
+
+    - **evidence** -- commits linked as the PR's own merge/squash commit
+      (``_MERGE_ARTIFACT_EVIDENCE``) are excluded. This is the reliable signal:
+      on a squash-merge repo the squash commit is the only commit CHAOS-2435
+      attaches, and its ``committer_when`` sits just *before* the API-reported
+      ``merged_at``, so a timestamp bound alone misses it.
+    - **merged_at** -- a defensive ``>= merged_at`` cut for any merge commit that
+      reaches here without artifact evidence (e.g. a future linkage source).
+
+    Returns an empty mapping when linkage is unavailable (``pr_commit_stats`` is
+    ``None`` or empty), so :class:`_PRFact` falls back to ``0`` -- never a
+    fabricated count.
+    """
+    if not pr_commit_stats:
+        return {}
+    result: dict[tuple[uuid.UUID, int], int] = {}
+    for key, rows in pr_commit_stats.items():
+        pr = pr_index.get(key)
+        if pr is None:
+            continue
+        boundary = first_review_at.get(key) or _to_utc(pr["created_at"])
+        merged_at_raw = pr.get("merged_at")
+        merged_at = _to_utc(merged_at_raw) if merged_at_raw is not None else None
+
+        # Dedupe the per-file linkage rows down to one timestamp per commit, and
+        # drop any commit ever tagged as the PR's merge/squash artifact.
+        commit_times: dict[str, datetime] = {}
+        artifact_hashes: set[str] = set()
+        for row in rows:
+            commit_hash = row.get("commit_hash")
+            when = row.get("committer_when")
+            if not commit_hash or when is None:
+                continue
+            commit_hash = str(commit_hash)
+            if (row.get("evidence") or "") in _MERGE_ARTIFACT_EVIDENCE:
+                artifact_hashes.add(commit_hash)
+                continue
+            commit_times[commit_hash] = _to_utc(when)
+        for commit_hash in artifact_hashes:
+            commit_times.pop(commit_hash, None)
+
+        count = 0
+        for when in commit_times.values():
+            if when <= boundary:
+                continue
+            if merged_at is not None and when >= merged_at:
+                continue
+            count += 1
+        result[key] = count
+    return result
+
+
 def _aggregate(facts: Sequence[_PRFact], incidents_count: int) -> _Agg:
     cycles = [fact.cycle_hours for fact in facts if fact.cycle_hours is not None]
     prs_total = len(facts)
@@ -240,6 +333,9 @@ def compute_ai_impact_metrics_daily(
     attribution_by_pr = _attribution_index(ai_attribution_rows)
     review_counts = _reviews_by_pr(pull_request_review_rows)
     test_changes = _test_changes_by_pr(commit_stat_rows, pr_commit_stats)
+    first_review_at = _first_review_at_by_pr(pull_request_review_rows)
+    pr_index = {(pr["repo_id"], int(pr["number"])): pr for pr in pull_request_rows}
+    followup_by_pr = _followup_commits_by_pr(pr_commit_stats, pr_index, first_review_at)
     repo_names = repo_names_by_id or {}
     start = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc)
     end = start + timedelta(days=1)
@@ -296,7 +392,9 @@ def compute_ai_impact_metrics_daily(
                 # Default None (not False): if pr_commit_stats was None or this PR
                 # wasn't in the linkage table, treat as unknown rather than a gap.
                 has_test_change=test_changes.get((repo_id, number)),
-                followup_commits=0,
+                # 0 when linkage is unavailable (never fabricated) -- see
+                # _followup_commits_by_pr.
+                followup_commits=followup_by_pr.get((repo_id, number), 0),
             )
         )
 

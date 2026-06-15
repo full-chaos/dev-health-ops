@@ -555,6 +555,23 @@ class TestDiscoverGitlabRepos:
         assert result == [("100",), ("200",)]
 
     @patch("gitlab.Gitlab")
+    def test_all_repos_nested_subgroup_search(self, mock_gitlab_cls):
+        from dev_health_ops.discovery.repos import discover_gitlab_repos
+
+        projects = [
+            SimpleNamespace(name="api", id=100, path_with_namespace="grpA/sub/api"),
+            SimpleNamespace(name="web", id=200, path_with_namespace="grpA/other/web"),
+            SimpleNamespace(name="db", id=300, path_with_namespace="elsewhere/db"),
+        ]
+        mock_gitlab_cls.return_value.projects.list.return_value = projects
+
+        result = discover_gitlab_repos(
+            {"all_repos": True, "search": "grpA/sub/*"}, "token"
+        )
+
+        assert result == [("100",)]
+
+    @patch("gitlab.Gitlab")
     def test_all_repos_membership_listing_failure_raises(self, mock_gitlab_cls):
         from dev_health_ops.discovery.repos import discover_gitlab_repos
 

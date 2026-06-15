@@ -228,10 +228,14 @@ def discover_gitlab_repos(
 
     if all_repos and isinstance(search, str) and search.strip():
         if "/" in search:
-            parts = search.split("/", 1)
+            # Split on the LAST slash so nested GitLab namespaces (e.g.
+            # "group/subgroup/*") resolve namespace="group/subgroup",
+            # pattern="*" instead of treating "subgroup/*" as a project name
+            # pattern (project names contain no slashes).
+            ns_part, _, pattern_part = search.rpartition("/")
             if not namespace:
-                namespace = parts[0].strip()
-            project_pattern = parts[1]
+                namespace = ns_part.strip()
+            project_pattern = pattern_part
         else:
             project_pattern = search.strip()
     elif isinstance(search, str) and "/" in search:

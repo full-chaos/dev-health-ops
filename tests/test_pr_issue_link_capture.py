@@ -124,24 +124,44 @@ def test_linear_attachment_edge_drives_pr_inheritance_direct_target() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_github_comment_capture_extracts_and_dedupes_keys() -> None:
+def test_github_comment_capture_from_linear_url_and_keyword() -> None:
     deps = extract_github_comment_dependencies(
         work_item_id="ghpr:o/r#1",
         comment_bodies=[
-            "Linear: CHAOS-2400 linked this PR",
+            "Linked to https://linear.app/full-chaos/issue/CHAOS-2400/title",
             None,
-            "follow-up on CHAOS-2400",  # duplicate key -> one edge
-            "no key in this comment",
+            "Also fixes PROJ-7 per discussion",
+            "see https://linear.app/x/issue/CHAOS-2400/dup",  # duplicate -> one edge
         ],
     )
-    assert [d.target_work_item_id for d in deps] == ["extkey:CHAOS-2400"]
-    assert deps[0].relationship_type == "relates_to"
-    assert deps[0].relationship_type_raw == "github_comment"
+    targets = {d.target_work_item_id for d in deps}
+    assert targets == {"extkey:CHAOS-2400", "extkey:PROJ-7"}
+    rel = {d.target_work_item_id: d.relationship_type for d in deps}
+    assert rel["extkey:CHAOS-2400"] == "relates_to"  # URL link
+    assert rel["extkey:PROJ-7"] == "relates_to"  # 'fixes'
 
 
-def test_github_comment_capture_ignores_lowercase_versionish_tokens() -> None:
+def test_github_comment_capture_preserves_blocking_intent() -> None:
+    # A blocking keyword must NOT yield an inheritable edge.
     deps = extract_github_comment_dependencies(
         work_item_id="ghpr:o/r#1",
-        comment_bodies=["bumped to v1-2 and python-3", "deploy-9 done"],
+        comment_bodies=["This is blocked by CHAOS-9 until infra lands"],
+    )
+    assert len(deps) == 1
+    assert deps[0].target_work_item_id == "extkey:CHAOS-9"
+    assert deps[0].relationship_type == "blocked_by"  # excluded by the resolver
+
+
+def test_github_comment_capture_ignores_incidental_and_versionish_tokens() -> None:
+    # Bare mentions with no explicit linkage signal must NOT be captured —
+    # otherwise an unrelated ticket reference could mis-attribute the PR.
+    deps = extract_github_comment_dependencies(
+        work_item_id="ghpr:o/r#1",
+        comment_bodies=[
+            "Reminds me of OTHER-123 from last quarter",  # incidental mention
+            "bumped to v1-2 and python-3",
+            "deploy-9 done",
+            "CVE-2024 patched",
+        ],
     )
     assert deps == []

@@ -124,6 +124,15 @@ def extract_linear_dependencies(
                 relationship_type_raw="linear_attachment",
             )
         )
+    # The attachments connection is fetched as a single page; if it is
+    # truncated, a PR/MR link beyond the page is silently missed. Surface that
+    # so a missed link is observable rather than a silent attribution gap.
+    if _get(issue, "attachments", "pageInfo", "hasNextPage"):
+        logger.warning(
+            "Linear issue %s has more attachments than fetched; a PR/MR link "
+            "may be missed for team inheritance.",
+            work_item_id,
+        )
     return deps
 
 

@@ -979,41 +979,65 @@ def extract_github_dependencies(
     return dependencies
 
 
-# Bare external (Linear/Jira) issue keys as they appear in a PR comment — e.g.
-# the Linear integration bot's "CHAOS-2400" linkback. Uppercase-only to avoid
-# matching version-ish tokens; resolution still drops keys with no matching
-# issue, so over-capture is harmless.
-_EXTERNAL_KEY_COMMENT_PATTERN = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b")
+# A Linear issue link in a PR comment is only captured from an EXPLICIT linkage
+# signal, never a bare token: a ``linear.app/.../issue/KEY`` URL (the integration
+# bot's linkback) or a key preceded by a linkage keyword. This avoids turning an
+# incidental ticket mention (a security id, an unrelated Jira reference) into an
+# inheritable team edge.
+_COMMENT_LINEAR_URL_PATTERN = re.compile(
+    r"linear\.app/[^/\s]+/issue/([A-Za-z][A-Za-z0-9]+-\d+)", re.IGNORECASE
+)
+_COMMENT_KEYWORD_KEY_PATTERN = re.compile(
+    r"(depends\s+on|blocked\s+by|blocks|fixes|closes|resolves|relates\s+to|"
+    r"part\s+of|linked\s+to|see)\s*:?\s*([A-Za-z][A-Za-z0-9]+-\d+)\b",
+    re.IGNORECASE,
+)
 
 
 def extract_github_comment_dependencies(
     *, work_item_id: str, comment_bodies: Sequence[str | None]
 ) -> list[WorkItemDependency]:
-    """Secondary capture: external issue keys mentioned in a PR's comments.
+    """Secondary capture: external issue links in a PR's comments.
 
     The Linear/Jira reference on a GitHub PR frequently lives only in an
-    integration bot comment, not the PR body or branch. Emitted as ``extkey:``
-    edges (inheritable ``relates_to``) so the PR can inherit the linked issue's
-    team when the authoritative Linear-attachment edge is unavailable.
+    integration bot comment, not the PR body or branch. Only EXPLICIT linkage
+    signals are captured — a ``linear.app`` issue URL or a key after a linkage
+    keyword — so incidental ticket mentions can't mis-attribute the PR. Emitted
+    as ``extkey:`` edges; the keyword's intent is preserved (a blocking word
+    yields a non-inheritable relationship), with the URL link as inheritable
+    ``relates_to``. Used as a fallback to the authoritative Linear attachment.
     """
     deps: list[WorkItemDependency] = []
     seen: set[str] = set()
+
+    def _emit(raw_key: str, relationship_type: str, raw: str) -> None:
+        key = raw_key.strip().upper()
+        if not key or key in seen:
+            return
+        seen.add(key)
+        deps.append(
+            WorkItemDependency(
+                source_work_item_id=work_item_id,
+                target_work_item_id=f"extkey:{key}",
+                relationship_type=relationship_type,
+                relationship_type_raw=raw,
+                last_synced=datetime.now(timezone.utc),
+            )
+        )
+
     for body in comment_bodies:
         if not body:
             continue
-        for match in _EXTERNAL_KEY_COMMENT_PATTERN.finditer(str(body)):
-            key = match.group(1).strip().upper()
-            if key in seen:
-                continue
-            seen.add(key)
-            deps.append(
-                WorkItemDependency(
-                    source_work_item_id=work_item_id,
-                    target_work_item_id=f"extkey:{key}",
-                    relationship_type="relates_to",
-                    relationship_type_raw="github_comment",
-                    last_synced=datetime.now(timezone.utc),
-                )
+        text = str(body)
+        # Linear bot/integration URL — strongest signal, an explicit link.
+        for match in _COMMENT_LINEAR_URL_PATTERN.finditer(text):
+            _emit(match.group(1), "relates_to", "github_comment_linear_url")
+        # Explicit linkage keyword + key; intent preserved via keyword mapping.
+        for match in _COMMENT_KEYWORD_KEY_PATTERN.finditer(text):
+            _emit(
+                match.group(2),
+                _external_key_relationship(match.group(1)),
+                "github_comment",
             )
     return deps
 

@@ -137,11 +137,14 @@ query Issues($first: Int!, $after: String, $filter: IssueFilter) {
           }
         }
       }
-      attachments(first: 25) {
+      attachments(first: 50) {
         nodes {
           id
           url
           sourceType
+        }
+        pageInfo {
+          hasNextPage
         }
       }
     }

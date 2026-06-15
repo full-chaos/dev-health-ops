@@ -82,12 +82,17 @@ def _daily_metrics_ready(org_id: str, day: Any) -> bool:
         return True
 
 
-def _discover_active_org_ids() -> list[str]:
+def _discover_active_org_ids(strict: bool = False) -> list[str]:
     """Return the IDs of all active organisations (Postgres source of truth).
 
     Mirrors how ``dispatch_scheduled_metrics`` scopes work to live orgs. Falls
     back to ``["default"]`` (single-tenant / community installs) when the
     organizations table is empty or unavailable.
+
+    When ``strict=True``, a Postgres enumeration failure RAISES instead of
+    collapsing to the ``["default"]`` fallback, so a once-daily job retries on
+    a DB outage rather than silently dispatching zero orgs as a clean success
+    (CHAOS-2439).
     """
     from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.models.users import Organization
@@ -101,6 +106,8 @@ def _discover_active_org_ids() -> list[str]:
             )
         org_ids = [str(row[0]) for row in rows]
     except Exception:
+        if strict:
+            raise
         logger.exception("Failed to enumerate active organizations")
         org_ids = []
 

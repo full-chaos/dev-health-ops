@@ -148,6 +148,19 @@ beat_schedule = {
         # `default` floods (that is precisely when it is needed).
         "options": {"queue": "monitoring"},
     },
+    # Daily safety net for work_unit_membership (CHAOS-2439/2433). The primary
+    # trigger is event-driven: post-sync build -> LLM materialize chain. This
+    # beat entry fans out a cheap no-LLM backfill (build -> project membership)
+    # per active org once per day so idle orgs and the post-deploy window are
+    # always covered. The backfill uses the run_id / completion-marker protocol
+    # (CHAOS-2433), so it coexists safely with the event-driven materializer.
+    # Scheduled at 03:30 UTC, after daily metrics (01:00) and recommendations
+    # (02:00), to avoid competing with the heaviest nightly jobs.
+    "run-membership-backfill-daily": {
+        "task": "dev_health_ops.workers.tasks.dispatch_membership_backfill",
+        "schedule": crontab(hour=3, minute=30),
+        "options": {"queue": "default"},
+    },
 }
 
 # Result settings

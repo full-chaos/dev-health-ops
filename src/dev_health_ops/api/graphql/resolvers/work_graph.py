@@ -310,35 +310,103 @@ def _row_to_edge(
 
 
 # work_unit_membership is multi-membership (one row per node-category) on a
-# ReplacingMergeTree keyed by (org, node, category_kind, category).
+# ReplacingMergeTree keyed by (org, node, category_kind, category, run_id).
 #
-# STALENESS IS SCOPED PER NODE, NOT PER WORK UNIT. work_unit_id is a hash of the
-# connected component, so when edge churn moves a node into a new component the
-# OLD work_unit_id is never re-emitted — a per-work_unit_id "latest run" guard
-# would keep that dead unit's rows alive forever (the node would keep matching
-# obsolete categories, and annotation would see multiple is_dominant rows). A
-# node belongs to exactly one component per run and emits its rows with one
-# computed_at, so restricting to rows whose computed_at equals the max
-# computed_at for that (org_id, node_type, node_id) makes the node's most recent
-# materialization always supersede its prior component's rows. This fixes
-# split/merge and below-threshold drop-off in one guard.
+# RUN_ID / COMPLETION-MARKER PROTOCOL (CHAOS-2433):
+# Every membership write (materializer or backfill) stamps a single run_id on
+# ALL rows of the run, then writes ONE completion-marker row to
+# work_unit_membership_runs (org_id, run_id, completed_at) as the LAST step.
+# A run is COMPLETE only when its marker exists. Readers select the latest
+# complete run for the org:
 #
-# ORPHANS: a node removed from the graph entirely is never re-emitted, so its
-# last-known rows linger. The materialization job can run repo/team-scoped (see
-# workers/work_graph_tasks.py) — it is NOT guaranteed to be a global org sweep
-# each run — so a "latest global run per org" backstop would wrongly hide nodes
-# whose repo was not in the most recent scoped run, and tombstoning vanished
-# nodes would require a full-graph diff a scoped run cannot produce. We
-# therefore intentionally let an orphaned node retain its last categories until
-# it is re-materialized (or its edges age out of work_graph_edges, at which
-# point no edge references it anyway). This matches how the rest of the work
-# graph treats vanished nodes (no tombstones).
-_LATEST_RUN_PER_NODE_SUBQUERY = """
-        SELECT node_type, node_id, max(computed_at) AS max_computed_at
-        FROM work_unit_membership
+#   argMax(run_id, completed_at) FROM work_unit_membership_runs WHERE org_id=?
+#
+# and scope ALL membership reads to rows whose run_id equals that value.
+#
+# This protocol fixes three failure modes at once (superseding per-node
+# max(computed_at)):
+#   1. CONCURRENCY RACE: a materializer in-flight has written some membership
+#      rows but not its marker; the prior COMPLETE backfill run is still visible.
+#      The materializer's marker write atomically switches readers to the new run.
+#   2. SPLIT/MERGE STALE: nodes from a prior component that are absent from the
+#      latest complete run simply have no rows in that run — not filterable and
+#      annotation returns None, exactly "no membership row" semantics.
+#   3. PARTIAL-WRITE DIVERGENCE: a run with rows but no marker is never selected.
+#
+# NO TOMBSTONES: tombstones (category='') are not needed because a churned node
+# that is absent from the latest complete run has no rows in scope — the reader
+# sees exactly the same result as "node has no membership" without any sentinel.
+#
+# When NO complete run exists for the org (table empty or all runs incomplete),
+# readers treat it as no membership at all — degraded state if investments exist.
+#
+# LEGACY ROLLOUT (CHAOS-2433 finding #3, corrected in the final review):
+# Migration 048 seeds ONE synthetic "legacy" marker per org that already had
+# membership rows before migration 047 (run_id defaulted to '' on those rows,
+# and no real run had published a marker yet).  The legacy marker uses the
+# reserved run_id _LEGACY_RUN_ID and completed_at = max(existing computed_at).
+# When the selected latest run IS the legacy marker, readers must match the
+# PRE-EXISTING rows (run_id = '').
+#
+# OVER-MATCH FIX (final review HIGH): a blanket "match ALL run_id='' rows" is
+# WRONG.  The OLD pre-protocol table key was (org, node, category_kind, category)
+# with run_id NOT in the key, so a node that was dominant category A at T1 and
+# re-materialized to dominant category B at T2 has BOTH rows persisted (A and B
+# are different category values -> different keys -> ReplacingMergeTree never
+# deduped them).  The OLD reader scoped each node to its latest row via
+# max(computed_at) per (org, node).  A blanket run_id='' match resurfaces the
+# stale A alongside the current B (wrong filters + multiple is_dominant rows per
+# node) during the rollout window.  We therefore restore the EXACT old per-node
+# semantics for the legacy run ONLY: scope each node to its latest computed_at
+# among its run_id='' rows.  For REAL run_ids, run_id equality is unchanged (the
+# protocol guarantees one generation per run_id, so no per-node-max is needed).
+# As soon as a real org-wide run publishes a marker, its completed_at exceeds the
+# legacy marker's, argMax selects it, and the legacy path retires automatically.
+_LEGACY_RUN_ID = "__legacy__"
+
+_LATEST_COMPLETE_RUN_SUBQUERY = """
+        SELECT argMax(run_id, completed_at) AS latest_run_id
+        FROM work_unit_membership_runs
         WHERE org_id = %(org_id)s
-        GROUP BY node_type, node_id
 """
+
+# LEFT JOIN to an inline derived table computing, per (org, node), the MAX
+# computed_at among LEGACY rows (run_id = '').  Bound to ``m`` by (org, node) and
+# aliased ``lnm`` so the scope predicate can restrict the legacy branch to each
+# node's most recent pre-migration row — the exact old per-node-latest behavior.
+# Inlined (not a top-level CTE) so it works identically in the annotation query
+# AND inside the correlated EXISTS semi-join.  Only meaningful when the latest
+# run is the legacy marker; harmless (unmatched LEFT JOIN) otherwise.  The
+# scoping subquery is org-scoped via %(org_id)s.
+_LEGACY_NODE_MAX_JOIN = """
+            LEFT JOIN (
+                SELECT
+                    org_id,
+                    node_type,
+                    node_id,
+                    max(computed_at) AS legacy_max_computed_at
+                FROM work_unit_membership
+                WHERE org_id = %(org_id)s AND run_id = ''
+                GROUP BY org_id, node_type, node_id
+            ) AS lnm
+                ON lnm.org_id = m.org_id
+                AND lnm.node_type = m.node_type
+                AND lnm.node_id = m.node_id
+"""
+
+# Scope predicate (legacy-vs-real conditional).  ``m`` = work_unit_membership
+# alias, ``latest_run`` = _LATEST_COMPLETE_RUN_SUBQUERY alias, ``lnm`` =
+# _LEGACY_NODE_MAX_JOIN alias.  REAL run -> run_id equality (one generation per
+# run_id).  LEGACY run -> the node's latest pre-migration row only (run_id='' AND
+# computed_at == that node's legacy max), NOT a blanket run_id='' match.  The
+# empty-string guard (latest_run.latest_run_id != '') stays the caller's
+# responsibility so orgs with no complete run resolve to "no membership".
+_RUN_SCOPE_PREDICATE = (
+    f"(latest_run.latest_run_id != '{_LEGACY_RUN_ID}' "
+    "AND m.run_id = latest_run.latest_run_id) "
+    f"OR (latest_run.latest_run_id = '{_LEGACY_RUN_ID}' AND m.run_id = '' "
+    "AND m.computed_at = lnm.legacy_max_computed_at)"
+)
 
 
 async def _batch_resolve_membership(
@@ -349,9 +417,10 @@ async def _batch_resolve_membership(
     """Batch-lookup the dominant theme/subcategory per edge endpoint in ONE query.
 
     Returns {(node_type, node_id) -> {"dominant_theme": ..., "dominant_subcategory": ...}}
-    built from the is_dominant=1 rows of each node's latest run (stale rows from
-    a prior component excluded via the per-node latest-run join — see
-    _LATEST_RUN_PER_NODE_SUBQUERY). Scoped to org_id.
+    built from the is_dominant=1 rows of the latest COMPLETE run (scoped via
+    work_unit_membership_runs — see _LATEST_COMPLETE_RUN_SUBQUERY). Nodes absent
+    from the latest complete run return no entry (annotation null). Scoped to
+    org_id.  When no complete run exists, returns {} (no annotation).
     """
     from dev_health_ops.api.queries.client import query_dicts
 
@@ -377,21 +446,21 @@ async def _batch_resolve_membership(
         membership_rows = await query_dicts(
             client,
             f"""
-            WITH latest AS ({_LATEST_RUN_PER_NODE_SUBQUERY})
+            WITH latest_run AS ({_LATEST_COMPLETE_RUN_SUBQUERY})
             SELECT
                 m.node_type AS node_type,
                 m.node_id AS node_id,
                 m.category_kind AS category_kind,
                 m.category AS category
             FROM work_unit_membership AS m
-            INNER JOIN latest
-                ON m.node_type = latest.node_type
-               AND m.node_id = latest.node_id
-               AND m.computed_at = latest.max_computed_at
+            INNER JOIN latest_run ON 1 = 1
+            {_LEGACY_NODE_MAX_JOIN}
             WHERE m.org_id = %(org_id)s
               AND m.node_type IN %(node_types)s
               AND m.node_id IN %(node_ids)s
               AND m.is_dominant = 1
+              AND latest_run.latest_run_id != ''
+              AND ({_RUN_SCOPE_PREDICATE})
             """,
             {
                 "org_id": org_id,
@@ -442,21 +511,22 @@ def _theme_membership_exists_clause() -> str:
     A correlated semi-join pushed INTO the edge query so the membership filter,
     the repo_id/edge_type/source filters, AND the LIMIT all execute in one
     ClickHouse plan (no unbounded Python IN set; the before-LIMIT guarantee
-    holds because this lives in the edge WHERE). Per-node latest-run guard
-    excludes stale rows from a prior component (split/merge safe). The
-    uniqExact HAVING enforces "member of EVERY requested (kind, category)", so a
-    theme+subcategory filter requires membership in BOTH. An edge matches when
-    EITHER endpoint satisfies the subquery.
+    holds because this lives in the edge WHERE). Run-scoping via
+    work_unit_membership_runs (CHAOS-2433) ensures only the latest COMPLETE run's
+    rows are considered. The uniqExact HAVING enforces "member of EVERY requested
+    (kind, category)", so a theme+subcategory filter requires membership in BOTH.
+    An edge matches when EITHER endpoint satisfies the subquery.
     """
     return f"""
         EXISTS (
             SELECT 1
             FROM work_unit_membership AS m
-            INNER JOIN ({_LATEST_RUN_PER_NODE_SUBQUERY}) AS latest
-                ON m.node_type = latest.node_type
-               AND m.node_id = latest.node_id
-               AND m.computed_at = latest.max_computed_at
+            INNER JOIN ({_LATEST_COMPLETE_RUN_SUBQUERY}) AS latest_run
+                ON 1 = 1
+            {_LEGACY_NODE_MAX_JOIN}
             WHERE m.org_id = %(org_id)s
+              AND latest_run.latest_run_id != ''
+              AND ({_RUN_SCOPE_PREDICATE})
               AND (
                 (m.node_type, m.node_id) = (work_graph_edges.source_type, work_graph_edges.source_id)
                 OR (m.node_type, m.node_id) = (work_graph_edges.target_type, work_graph_edges.target_id)
@@ -533,14 +603,26 @@ MEMBERSHIP_NOT_MATERIALIZED = "MEMBERSHIP_NOT_MATERIALIZED"
 
 async def _detect_membership_degraded_reason(client: Any, org_id: str) -> str | None:
     """Return MEMBERSHIP_NOT_MATERIALIZED when a theme filter yielded nothing
-    because work_unit_membership is unpopulated for an org that HAS categorized
-    work units, else None.
+    because NO complete membership run has been published for an org that HAS
+    categorized work units, else None.
 
-    Degraded iff: the org has >= 1 work_unit_investments row AND ZERO
-    work_unit_membership rows. The membership count is scoped to each node's
-    latest run (a row is "live" only if its computed_at equals the node's max)
-    so leftover rows from a prior component never mask a truly empty table —
-    consistent with the per-node staleness used everywhere else (CHAOS-2430).
+    Degraded iff: the org has >= 1 work_unit_investments row AND NO complete-run
+    MARKER exists in work_unit_membership_runs for the org (the run_id /
+    completion-marker protocol has not produced any complete run yet —
+    CHAOS-2433).
+
+    GATE ON MARKER EXISTENCE, NOT ROW COUNT (CHAOS-2433 round-2 finding #2):
+    an intentionally-EMPTY complete run (the all-skipped supersede case — every
+    current component churned past its last categorization) is a genuine
+    "this org currently has no memberships" state, NOT "not materialized". It
+    publishes a marker with zero membership rows. Keying the degraded signal on
+    count(membership rows in latest run) > 0 would mislabel that valid empty
+    complete run as a rollout failure. We therefore key on whether ANY complete
+    marker exists for the org: a marker present (even with zero rows) means the
+    pipeline HAS produced a complete run, so an empty filter result is a genuine
+    empty (degraded_reason=None). Only the total absence of a marker (pre-migration
+    / pre-first-run rollout window) while investments exist is degraded.
+
     Also emits the rollout warning log (observability retained). Never raises:
     on probe failure it returns None so the request is unaffected.
     """
@@ -553,18 +635,9 @@ async def _detect_membership_degraded_reason(client: Any, org_id: str) -> str | 
             SELECT
                 (
                     SELECT count()
-                    FROM work_unit_membership AS m
-                    INNER JOIN (
-                        SELECT node_type, node_id, max(computed_at) AS max_computed_at
-                        FROM work_unit_membership
-                        WHERE org_id = %(org_id)s
-                        GROUP BY node_type, node_id
-                    ) AS latest
-                        ON m.node_type = latest.node_type
-                       AND m.node_id = latest.node_id
-                       AND m.computed_at = latest.max_computed_at
-                    WHERE m.org_id = %(org_id)s
-                ) AS membership_rows,
+                    FROM work_unit_membership_runs
+                    WHERE org_id = %(org_id)s
+                ) AS complete_run_markers,
                 (
                     SELECT count()
                     FROM work_unit_investments
@@ -580,14 +653,15 @@ async def _detect_membership_degraded_reason(client: Any, org_id: str) -> str | 
 
     if not rows:
         return None
-    membership_rows = int(rows[0].get("membership_rows") or 0)
+    complete_run_markers = int(rows[0].get("complete_run_markers") or 0)
     investment_rows = int(rows[0].get("investment_rows") or 0)
-    if membership_rows == 0 and investment_rows > 0:
+    if complete_run_markers == 0 and investment_rows > 0:
         logger.warning(
-            "Theme filter returned no edges and work_unit_membership is empty "
-            "for org %s while work_unit_investments has %d rows — the "
-            "post-migration investment materialization rerun that populates "
-            "work_unit_membership has likely not run yet (CHAOS-2430).",
+            "Theme filter returned no edges and NO complete membership run "
+            "marker exists for org %s while work_unit_investments has %d rows — "
+            "the post-migration investment materialization rerun that publishes "
+            "a work_unit_membership_runs completion marker has likely not run "
+            "yet (CHAOS-2430/2433).",
             org_id,
             investment_rows,
         )
@@ -595,7 +669,7 @@ async def _detect_membership_degraded_reason(client: Any, org_id: str) -> str | 
     return None
 
 
-_MEMBERSHIP_TABLE = "work_unit_membership"
+_MEMBERSHIP_TABLES = frozenset({"work_unit_membership", "work_unit_membership_runs"})
 
 # ClickHouse names the actually-missing table in an "Unknown table ...
 # identifier '<name>'" clause. The full error ALSO echoes the entire failing
@@ -623,19 +697,18 @@ def _unknown_table_names(text: str) -> set[str]:
 
 def _is_missing_membership_table_error(exc: BaseException) -> bool:
     """True ONLY when a ClickHouse missing-table (code 60) error names
-    ``work_unit_membership`` as the unknown table.
+    ``work_unit_membership`` OR ``work_unit_membership_runs`` as the unknown table.
 
-    During a rolling deploy or before the membership migration has run, the
-    filtered edge query's EXISTS subquery references ``work_unit_membership``
-    before it exists; the driver raises a DatabaseError carrying ``code == 60``
-    with an ``UNKNOWN_TABLE`` server message whose identifier clause names the
-    offending table. We require the code-60/UNKNOWN_TABLE signal AND that the
-    reported-unknown identifier IS ``work_unit_membership`` — parsed from the
-    identifier clause, NOT the echoed SQL (which lists every table in the
-    query). So a code-60 error for any OTHER table (e.g. a missing
-    ``work_graph_edges`` or another schema regression on the filtered path)
-    re-raises and surfaces loudly instead of masquerading as the benign degraded
-    state.
+    During a rolling deploy or before migration 047 has run, the filtered edge
+    query or the degraded probe references these tables before they exist; the
+    driver raises a DatabaseError carrying ``code == 60`` with an
+    ``UNKNOWN_TABLE`` server message whose identifier clause names the offending
+    table. We require the code-60/UNKNOWN_TABLE signal AND that the
+    reported-unknown identifier IS one of the membership tables — parsed from the
+    identifier clause, NOT the echoed SQL (which lists every table in the query).
+    So a code-60 error for any OTHER table (e.g. a missing ``work_graph_edges``
+    or another schema regression on the filtered path) re-raises and surfaces
+    loudly instead of masquerading as the benign degraded state.
     """
     text = str(exc)
     is_unknown_table = (
@@ -645,7 +718,7 @@ def _is_missing_membership_table_error(exc: BaseException) -> bool:
     )
     if not is_unknown_table:
         return False
-    return _MEMBERSHIP_TABLE in _unknown_table_names(text)
+    return bool(_unknown_table_names(text) & _MEMBERSHIP_TABLES)
 
 
 def _empty_edges_result(degraded_reason: str | None = None) -> WorkGraphEdgesResult:

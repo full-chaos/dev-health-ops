@@ -6,12 +6,15 @@ That task was never dispatched on the live sync path, so real orgs saw an empty
 ``/investment`` view.
 
 ``_dispatch_post_sync_tasks`` now enqueues a Celery **chain**:
-``run_work_graph_build`` -> ``run_investment_materialize``. The chain (not two
-independent ``send_task`` calls) guarantees materialization only starts after
-the build *succeeds*, so concurrent metrics workers cannot race materialize
-ahead of the graph it reads. The chain fires after *either* a git or a
-work-item sync (org-wide persisted data accumulates across separate configs),
-not only when one config carries both.
+``run_work_graph_build`` -> ``run_investment_materialize`` ->
+``run_membership_backfill`` (the no-LLM membership PROJECTION). The chain (not
+independent ``send_task`` calls) guarantees each step only starts after its
+predecessor *succeeds*. CHAOS-2433 round-3 finding #2 added the third step: the
+materializer writes ``work_unit_investments`` ONLY, and the full-coverage
+projection is the SOLE writer of ``work_unit_membership`` + the completion
+marker — so a date-windowed materialize can never publish partial coverage. The
+chain fires after *either* a git or a work-item sync (org-wide persisted data
+accumulates across separate configs), not only when one config carries both.
 
 These tests prove the seam without a live ClickHouse: they patch the Celery
 ``chain`` / ``signature`` factories and assert the dispatch contract.
@@ -28,6 +31,7 @@ from dev_health_ops.workers.sync_runtime import _dispatch_post_sync_tasks
 
 _INVESTMENT_TASK = "dev_health_ops.workers.tasks.run_investment_materialize"
 _WORK_GRAPH_TASK = "dev_health_ops.workers.tasks.run_work_graph_build"
+_PROJECTION_TASK = "dev_health_ops.workers.tasks.run_membership_backfill"
 
 
 def _run_dispatch(provider: str, sync_targets: list[str], org_id: str):
@@ -64,28 +68,35 @@ def _run_dispatch(provider: str, sync_targets: list[str], org_id: str):
 
 
 def test_investment_chain_dispatched_with_git_and_work_items() -> None:
-    """git + work-items => build -> materialize chain, applied async, org-scoped."""
+    """git + work-items => build -> materialize -> project chain, applied async."""
     mock_signature, mock_chain, chain_instance, _ = _run_dispatch(
         provider="github",
         sync_targets=["git", "prs", "work-items"],
         org_id="org-123",
     )
 
-    # The chain must be built with build FIRST, materialize SECOND.
+    # The chain must be built build FIRST, materialize SECOND, project THIRD.
     assert mock_chain.call_count == 1
-    build_sig, materialize_sig = mock_chain.call_args.args
+    build_sig, materialize_sig, project_sig = mock_chain.call_args.args
     assert build_sig.task_name == _WORK_GRAPH_TASK
     assert materialize_sig.task_name == _INVESTMENT_TASK
+    assert project_sig.task_name == _PROJECTION_TASK, (
+        "the membership PROJECTION (no-LLM, full coverage) must run last as the "
+        "sole membership writer (CHAOS-2433 round-3 #2)"
+    )
 
-    # Both signatures are org-scoped onto the metrics queue.
+    # All signatures are org-scoped onto the metrics queue.
     assert build_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
     assert build_sig.sig_kwargs["queue"] == "metrics"
     assert materialize_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
     assert materialize_sig.sig_kwargs["queue"] == "metrics"
+    assert project_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
+    assert project_sig.sig_kwargs["queue"] == "metrics"
 
-    # Materialize is linked IMMUTABLE so the build's return dict is not injected
-    # as a positional arg (which would break run_investment_materialize).
+    # Downstream steps are linked IMMUTABLE so a parent's return dict is not
+    # injected as a positional arg (which would break the next task).
     assert materialize_sig.sig_kwargs.get("immutable") is True
+    assert project_sig.sig_kwargs.get("immutable") is True
     assert build_sig.sig_kwargs.get("immutable") is not True
 
     # The chain is actually dispatched (not just constructed).
@@ -96,8 +107,8 @@ def test_investment_chain_dispatched_with_git_only() -> None:
     """git only (no work-items in this config) => chain still fires.
 
     Work items for the org may have been persisted by a separate sync config;
-    the org-wide build/materialize must not be gated on one config carrying
-    both kinds of data.
+    the org-wide build/materialize/project must not be gated on one config
+    carrying both kinds of data.
     """
     _, mock_chain, chain_instance, _ = _run_dispatch(
         provider="github",
@@ -106,9 +117,10 @@ def test_investment_chain_dispatched_with_git_only() -> None:
     )
 
     assert mock_chain.call_count == 1
-    build_sig, materialize_sig = mock_chain.call_args.args
+    build_sig, materialize_sig, project_sig = mock_chain.call_args.args
     assert build_sig.task_name == _WORK_GRAPH_TASK
     assert materialize_sig.task_name == _INVESTMENT_TASK
+    assert project_sig.task_name == _PROJECTION_TASK
     chain_instance.apply_async.assert_called_once_with()
 
 
@@ -125,10 +137,12 @@ def test_investment_chain_dispatched_with_work_items_only_jira() -> None:
     )
 
     assert mock_chain.call_count == 1
-    build_sig, materialize_sig = mock_chain.call_args.args
+    build_sig, materialize_sig, project_sig = mock_chain.call_args.args
     assert build_sig.task_name == _WORK_GRAPH_TASK
     assert materialize_sig.task_name == _INVESTMENT_TASK
+    assert project_sig.task_name == _PROJECTION_TASK
     assert materialize_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
+    assert project_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
     chain_instance.apply_async.assert_called_once_with()
 
 

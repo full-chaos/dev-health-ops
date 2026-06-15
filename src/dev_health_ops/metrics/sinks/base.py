@@ -46,6 +46,7 @@ from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
     WorkUnitMembershipRecord,
+    WorkUnitMembershipRunRecord,
 )
 from dev_health_ops.metrics.testops_schemas import (
     BenchmarkAnomalyRecord,
@@ -365,6 +366,27 @@ class BaseMetricsSink(ABC):
     ) -> None:
         """Write node→work-unit membership rows for theme/subcategory filtering."""
         pass
+
+    def write_membership_run(self, record: WorkUnitMembershipRunRecord) -> None:
+        """Write the completion-marker for a membership write run (CHAOS-2433).
+
+        Must be called as the LAST step after all membership rows for the run
+        have been written.  A run whose run_id has no completion-marker is
+        incomplete and invisible to readers.
+        """
+        pass
+
+    def prune_membership_runs(self, org_id: str, *, keep: int = 2) -> int:
+        """Retain only the latest ``keep`` COMPLETE membership runs for an org.
+
+        Deletes ``work_unit_membership`` rows AND their ``work_unit_membership_runs``
+        markers for runs older than the latest ``keep`` complete runs (ordered by
+        completion timestamp). Runs WITHOUT a completion marker (in-flight writes)
+        are NEVER touched. Returns the number of run generations pruned. No-op in
+        the base sink. See the ClickHouse implementation for the retention
+        contract (CHAOS-2433 round-5).
+        """
+        return 0
 
     # -------------------------------------------------------------------------
     # Investment explanation caching

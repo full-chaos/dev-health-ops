@@ -759,10 +759,12 @@ class WorkUnitMembershipRecord:
     category of each kind (``is_dominant=1``) even if below threshold.
 
     ``category_kind`` is ``'theme'`` or ``'subcategory'``. Readers MUST scope to
-    each node's latest run (rows whose ``computed_at`` equals the max
-    ``computed_at`` for that ``(org_id, node_type, node_id)``) — NOT per
-    ``work_unit_id`` — to exclude stale rows left behind when edge churn moves a
-    node into a new component (the old work_unit_id is never re-emitted).
+    the latest COMPLETE run for the org (run_id = argMax(run_id, completed_at)
+    from ``work_unit_membership_runs``) rather than selecting rows by
+    ``computed_at``.  A run is complete only after its completion-marker row has
+    been written to ``work_unit_membership_runs``.  Rows whose ``run_id`` does
+    not match the latest complete run are stale and invisible to readers (fixes
+    split/merge, partial-write divergence, and the concurrency race — CHAOS-2433).
     """
 
     org_id: str
@@ -775,6 +777,25 @@ class WorkUnitMembershipRecord:
     is_dominant: int
     categorization_status: str
     computed_at: datetime
+    run_id: str = ""
+
+
+@dataclass(frozen=True)
+class WorkUnitMembershipRunRecord:
+    """Completion-marker for one membership write run (CHAOS-2433).
+
+    Written to ``work_unit_membership_runs`` as the LAST step of every membership
+    write (materializer or backfill).  A run whose ``run_id`` appears in
+    ``work_unit_membership`` but NOT in ``work_unit_membership_runs`` is
+    incomplete (in-flight or crashed) and is invisible to readers.
+
+    Readers select: ``argMax(run_id, completed_at) FROM work_unit_membership_runs
+    WHERE org_id = ?`` and scope membership reads to that ``run_id``.
+    """
+
+    org_id: str
+    run_id: str
+    completed_at: datetime
 
 
 @dataclass(frozen=True)

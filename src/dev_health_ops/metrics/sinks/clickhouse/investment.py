@@ -21,6 +21,7 @@ from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
     WorkUnitMembershipRecord,
+    WorkUnitMembershipRunRecord,
 )
 
 if TYPE_CHECKING:
@@ -32,6 +33,12 @@ else:
 
 
 logger = logging.getLogger(__name__)
+
+# Reserved run_id of the seeded legacy completion marker (migration 048). Its
+# membership rows carry run_id='' (migration 047 default), so retention maps the
+# '__legacy__' marker back to '' when deleting its rows. MUST match
+# api/graphql/resolvers/work_graph._LEGACY_RUN_ID.
+_LEGACY_RUN_ID = "__legacy__"
 
 
 class InvestmentMixin(_ClickHouseSinkBase):
@@ -175,9 +182,111 @@ class InvestmentMixin(_ClickHouseSinkBase):
                 "is_dominant",
                 "categorization_status",
                 "computed_at",
+                "run_id",
             ],
             rows,
         )
+
+    def write_membership_run(self, record: WorkUnitMembershipRunRecord) -> None:
+        """Write the completion-marker for a membership run (CHAOS-2433).
+
+        Must be called as the LAST step after all membership rows for the run
+        have been written.  Readers use the latest completed_at row here to
+        identify the current valid run_id.
+        """
+        self._insert_rows(
+            "work_unit_membership_runs",
+            ["org_id", "run_id", "completed_at"],
+            [record],
+        )
+
+    def prune_membership_runs(self, org_id: str, *, keep: int = 2) -> int:
+        """Retain only the latest ``keep`` COMPLETE membership runs for an org.
+
+        CHAOS-2433 round-5 (unbounded growth): migration 049 put run_id in the
+        ReplacingMergeTree key so generations are intentionally NOT collapsed.
+        Without retention, every org-wide projection (daily beat + post-sync)
+        adds a full copy of the org's memberships forever — storage blowup and
+        the resolver's latest-run filter scanning ever-more historical rows.
+        This prunes old generations right after a new marker is published.
+
+        Mechanism: read the org's completion markers ordered by completed_at DESC;
+        KEEP the latest ``keep`` run_ids; DELETE — via lightweight
+        ``ALTER TABLE ... DELETE WHERE`` — the work_unit_membership rows AND the
+        work_unit_membership_runs markers for every OLDER run. Both deletes are
+        scoped to ``org_id`` and to the explicit set of dropped run_ids, so the
+        pass is idempotent and safe to run concurrently across orgs (each org
+        only touches its own run_ids).
+
+        KEEP-LATEST-2 RATIONALE: keep the current latest run PLUS one prior, so a
+        reader/overlap mid-flight against the immediately-previous complete run
+        (e.g. an argMax that resolved to it microseconds before a newer marker
+        landed) is not pulled out from under it. Keeping 1 would risk deleting the
+        run a concurrent reader is actively scanning.
+
+        IN-FLIGHT SAFETY: retention operates ONLY on run_ids that HAVE a
+        completion marker (the candidate set comes exclusively from
+        work_unit_membership_runs). A markerless in-flight run — rows written, no
+        marker yet, about to become the next generation — is never in the
+        delete set, so a concurrent retention pass can never delete its rows.
+
+        LEGACY: the seeded ``__legacy__`` marker is just another complete run; its
+        membership rows carry run_id='' (migration 047 default), so when the
+        legacy marker ages out we translate it to '' for the row delete. It ages
+        out naturally once ``keep`` real runs exist (rollout continuity done).
+
+        Returns the number of old run generations pruned (markers deleted).
+        """
+        # Candidate set is EXCLUSIVELY markered runs (in-flight runs have no
+        # marker and are therefore never eligible for deletion).
+        result = self.client.query(
+            """
+            SELECT run_id
+            FROM work_unit_membership_runs
+            WHERE org_id = {org_id:String}
+            ORDER BY completed_at DESC, run_id DESC
+            """,
+            parameters={"org_id": org_id},
+        )
+        run_ids = [str(row[0]) for row in (result.result_rows or [])]
+        # Dedup preserving order (ReplacingMergeTree may surface unmerged dupes;
+        # we read without FINAL so collapse the latest-per-run_id ourselves).
+        seen: set[str] = set()
+        ordered_unique: list[str] = []
+        for rid in run_ids:
+            if rid not in seen:
+                seen.add(rid)
+                ordered_unique.append(rid)
+
+        if len(ordered_unique) <= keep:
+            return 0
+
+        drop_marker_run_ids = ordered_unique[keep:]
+        # Membership rows for the legacy marker carry run_id='' (not '__legacy__').
+        drop_row_run_ids = [
+            "" if rid == _LEGACY_RUN_ID else rid for rid in drop_marker_run_ids
+        ]
+
+        # Lightweight DELETE scoped to org + the explicit dropped run_ids. Both
+        # statements are idempotent (a re-run finds those run_ids already gone)
+        # and org-scoped so concurrent per-org passes never collide.
+        self.client.command(
+            "ALTER TABLE work_unit_membership "
+            "DELETE WHERE org_id = {org_id:String} AND run_id IN {run_ids:Array(String)}",
+            parameters={"org_id": org_id, "run_ids": drop_row_run_ids},
+        )
+        self.client.command(
+            "ALTER TABLE work_unit_membership_runs "
+            "DELETE WHERE org_id = {org_id:String} AND run_id IN {run_ids:Array(String)}",
+            parameters={"org_id": org_id, "run_ids": drop_marker_run_ids},
+        )
+        logger.info(
+            "Pruned %d old membership run generation(s) for org=%s (kept latest %d)",
+            len(drop_marker_run_ids),
+            org_id,
+            keep,
+        )
+        return len(drop_marker_run_ids)
 
     def write_investment_explanation(self, record: InvestmentExplanationRecord) -> None:
         """Write or replace an investment explanation to the cache."""

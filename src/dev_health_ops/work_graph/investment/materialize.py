@@ -15,7 +15,6 @@ from dev_health_ops.llm import get_provider
 from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
-    WorkUnitMembershipRecord,
 )
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.metrics.sinks.factory import create_sink
@@ -439,7 +438,6 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
 
         records: list[WorkUnitInvestmentRecord] = []
         quote_records: list[WorkUnitInvestmentEvidenceQuoteRecord] = []
-        membership_records: list[WorkUnitMembershipRecord] = []
         run_id = uuid.uuid4().hex
         computed_at = datetime.now(timezone.utc)
         model_version = config.llm_model or config.llm_provider
@@ -640,44 +638,21 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
                 )
             )
 
-            # Emit membership rows so the work graph resolver can join
-            # theme/subcategory onto edges in O(nodes) without scanning
-            # work_unit_investments (CHAOS-2429/2430). Multi-membership: one row
-            # per (node, category) for each theme and subcategory at/above the
-            # weight threshold, plus the argmax of each kind (is_dominant=1).
-            theme_categories = _membership_categories(theme_distribution)
-            subcategory_categories = _membership_categories(outcome.subcategories)
-            for node_type, node_id in unit_nodes:
-                for category, weight, is_dominant in theme_categories:
-                    membership_records.append(
-                        WorkUnitMembershipRecord(
-                            org_id=config.org_id or "",
-                            node_type=node_type,
-                            node_id=node_id,
-                            work_unit_id=unit_id,
-                            category_kind="theme",
-                            category=category,
-                            weight=weight,
-                            is_dominant=is_dominant,
-                            categorization_status=outcome.status,
-                            computed_at=computed_at,
-                        )
-                    )
-                for category, weight, is_dominant in subcategory_categories:
-                    membership_records.append(
-                        WorkUnitMembershipRecord(
-                            org_id=config.org_id or "",
-                            node_type=node_type,
-                            node_id=node_id,
-                            work_unit_id=unit_id,
-                            category_kind="subcategory",
-                            category=category,
-                            weight=weight,
-                            is_dominant=is_dominant,
-                            categorization_status=outcome.status,
-                            computed_at=computed_at,
-                        )
-                    )
+            # NOTE (CHAOS-2433 round-3 finding #2): the materializer NO LONGER
+            # writes work_unit_membership rows or completion markers.  It only
+            # categorizes and persists work_unit_investments here.  Membership is
+            # written EXCLUSIVELY by the no-LLM projection (backfill.py), which
+            # iterates the FULL current work graph (not this run's time window)
+            # and so publishes a legitimately FULL-COVERAGE org-wide marker.
+            #
+            # This unification fixes the partial-coverage blanking bug: a
+            # date-windowed materialize only processes in-window components, so an
+            # org-wide marker from it would blank current components OUTSIDE the
+            # window.  By making the full-coverage projection the SOLE membership
+            # writer, the windowed materializer can never publish partial coverage.
+            # The post-sync chain (build -> materialize -> project-membership)
+            # runs the projection right after materialize persists the new
+            # investments, so membership stays fresh.
 
             if config.persist_evidence_snippets and outcome.evidence_quotes:
                 for quote in outcome.evidence_quotes:
@@ -698,15 +673,19 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
             sink.write_work_unit_investments(records)
         if quote_records:
             sink.write_work_unit_investment_quotes(quote_records)
-        if membership_records:
-            sink.write_work_unit_memberships(membership_records)
+        # CHAOS-2433 round-3 finding #2: membership rows + completion markers are
+        # written EXCLUSIVELY by the no-LLM projection (backfill.py).  The
+        # materializer persists work_unit_investments only.  The post-sync chain
+        # runs the projection (build -> materialize -> project-membership) right
+        # after this, so membership is refreshed from the new investments with
+        # FULL current-component coverage (never the partial coverage a windowed
+        # materialize would produce).
         logger.info("Sink write complete")
 
         return {
             "components": len(components),
             "records": len(records),
             "quotes": len(quote_records),
-            "memberships": len(membership_records),
         }
     finally:
         sink.close()

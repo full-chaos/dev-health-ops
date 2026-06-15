@@ -171,6 +171,35 @@ class TestEdgeThemeAttribution:
         assert membership_params["org_id"] == "test-org"
 
     @pytest.mark.asyncio
+    async def test_annotation_uses_run_id_scoping(self, mock_context):
+        """The annotation lookup queries work_unit_membership_runs to scope to
+        the latest complete run (CHAOS-2433), not per-node max(computed_at)."""
+        edge_rows = [make_edge_row(source_id="PROJ-1")]
+
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [edge_rows, []]
+            await resolve_work_graph_edges(mock_context)
+
+        annotation_sql = mock_query.call_args_list[1][0][1]
+        # Run-scoped via work_unit_membership_runs.
+        assert "work_unit_membership_runs" in annotation_sql
+        assert "argMax(run_id, completed_at) AS latest_run_id" in annotation_sql
+        assert "m.run_id = latest_run.latest_run_id" in annotation_sql
+        # Guard: empty run_id (no complete run) excluded.
+        assert "latest_run.latest_run_id != ''" in annotation_sql
+        # REAL runs use run_id equality (NOT a global per-node max(computed_at)).
+        # The ONLY max(computed_at) is the LEGACY per-node guard (CHAOS-2433 final
+        # review HIGH), scoped to run_id='' rows and applied only when the latest
+        # run is the __legacy__ marker.
+        assert "max(computed_at) AS legacy_max_computed_at" in annotation_sql
+        assert "m.computed_at = lnm.legacy_max_computed_at" in annotation_sql
+        # Not the old global per-node-max alias.
+        assert "max(computed_at) AS max_computed_at" not in annotation_sql
+
+    @pytest.mark.asyncio
     async def test_issue_endpoint_beats_pr_endpoint(self, mock_context):
         """When both source (issue) and target (pr) are in membership, the issue wins."""
         edge_rows = [

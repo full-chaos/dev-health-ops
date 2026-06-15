@@ -214,6 +214,147 @@ def test_ai_test_gap_rate_uses_pr_commit_file_evidence():
     assert ai.leverage.test_component is None
 
 
+def _review(repo_id, number: int, *, hour: int, state: str = "COMMENTED"):
+    return {
+        "repo_id": repo_id,
+        "number": number,
+        "reviewer": "reviewer@example.com",
+        "submitted_at": datetime(2026, 5, 18, hour, tzinfo=timezone.utc),
+        "state": state,
+    }
+
+
+def _commit(
+    repo_id,
+    commit_hash: str,
+    *,
+    hour: int,
+    file_path: str = "src/app.py",
+    evidence: str | None = None,
+):
+    return {
+        "repo_id": repo_id,
+        "commit_hash": commit_hash,
+        "author_email": "dev@example.com",
+        "author_name": "Dev",
+        "committer_when": datetime(2026, 5, 18, hour, tzinfo=timezone.utc),
+        "file_path": file_path,
+        "additions": 4,
+        "deletions": 1,
+        "evidence": evidence,
+    }
+
+
+def test_followup_commits_after_first_review_drive_rework():
+    """A commit pushed after the first review is a follow-up commit and marks
+    the PR as rework -- even with zero changes-requested (CHAOS-2437).
+
+    Exercises the rework path in _aggregate (changes_requested OR
+    followup_commits). Only the post-review commit counts: the commit landed at
+    PR-open time (before the review boundary) must be excluded.
+    """
+    repo = uuid4()
+    pr = _pr(repo, 1, created_hour=8, merged_hour=12)  # changes_requested=0
+    rows = _rows(
+        [pr],
+        [_attr(repo, 1, "ai_assisted")],
+        reviews=[_review(repo, 1, hour=9)],
+        pr_commit_stats={
+            (repo, 1): [
+                _commit(repo, "initial", hour=8),  # before review -> excluded
+                _commit(repo, "followup", hour=10),  # after review -> counted
+            ]
+        },
+    )
+
+    ai = _bucket(rows, "ai_assisted")
+    assert ai.followup_commits_count == 1
+    assert ai.changes_requested_per_pr == pytest.approx(0)
+    assert ai.rework_prs == 1  # rework driven by the follow-up commit alone
+    assert ai.rework_drag_rate == pytest.approx(1)
+
+
+def test_followup_commits_dedupe_per_commit_across_file_rows():
+    """Per-file linkage rows for one commit collapse to a single follow-up."""
+    repo = uuid4()
+    pr = _pr(repo, 1, created_hour=8, merged_hour=12)
+    rows = _rows(
+        [pr],
+        [_attr(repo, 1, "ai_assisted")],
+        reviews=[_review(repo, 1, hour=9)],
+        pr_commit_stats={
+            (repo, 1): [
+                _commit(repo, "follow", hour=10, file_path="src/a.py"),
+                _commit(repo, "follow", hour=10, file_path="src/b.py"),
+            ]
+        },
+    )
+
+    ai = _bucket(rows, "ai_assisted")
+    assert ai.followup_commits_count == 1
+
+
+def test_squash_merge_commit_excluded_by_evidence_not_just_timestamp():
+    """A squash-merge PR's only linked commit is the squash artifact, tagged
+    ``commit_message_squash_pr_ref`` by CHAOS-2435. It must be excluded by its
+    linkage *evidence* -- crucially even though its commit time (11:00) is
+    strictly BEFORE merged_at (12:00), which is exactly the live shape that
+    defeats a timestamp-only bound (org a78c1a6a). No phantom follow-up/rework.
+    """
+    repo = uuid4()
+    pr = _pr(repo, 1, created_hour=8, merged_hour=12)  # no reviews -> boundary=open
+    rows = _rows(
+        [pr],
+        [_attr(repo, 1, "ai_assisted")],
+        pr_commit_stats={
+            (repo, 1): [
+                _commit(
+                    repo, "squash", hour=11, evidence="commit_message_squash_pr_ref"
+                )
+            ]
+        },
+    )
+
+    ai = _bucket(rows, "ai_assisted")
+    assert ai.followup_commits_count == 0
+    assert ai.rework_prs == 0
+
+
+def test_merge_commit_evidence_excluded_from_followup():
+    """An explicit merge commit (``commit_message_pr_ref``) is the merge
+    artifact too, not follow-up work -- excluded regardless of timing."""
+    repo = uuid4()
+    pr = _pr(repo, 1, created_hour=8, merged_hour=12)
+    rows = _rows(
+        [pr],
+        [_attr(repo, 1, "ai_assisted")],
+        reviews=[_review(repo, 1, hour=9)],
+        pr_commit_stats={
+            (repo, 1): [
+                _commit(repo, "merge", hour=11, evidence="commit_message_pr_ref")
+            ]
+        },
+    )
+
+    ai = _bucket(rows, "ai_assisted")
+    assert ai.followup_commits_count == 0
+    assert ai.rework_prs == 0
+
+
+def test_followup_commits_zero_without_linkage():
+    """No PR↔commit linkage -> follow-up count is 0, never fabricated."""
+    repo = uuid4()
+    rows = _rows(
+        [_pr(repo, 1, created_hour=8, merged_hour=12, changes_requested=0)],
+        [_attr(repo, 1, "ai_assisted")],
+        pr_commit_stats=None,
+    )
+
+    ai = _bucket(rows, "ai_assisted")
+    assert ai.followup_commits_count == 0
+    assert ai.rework_prs == 0
+
+
 def test_operating_leverage_is_decomposed_not_single_score():
     repo = uuid4()
     rows = _rows(

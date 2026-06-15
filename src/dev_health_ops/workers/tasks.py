@@ -50,7 +50,9 @@ from dev_health_ops.workers.task_utils import (
     _resolve_env_credentials,
 )
 from dev_health_ops.workers.work_graph_tasks import (
+    dispatch_membership_backfill,
     run_investment_materialize,
+    run_membership_backfill,
     run_work_graph_build,
 )
 
@@ -76,6 +78,7 @@ __all__ = [
     "phone_home_heartbeat",
     "process_webhook_event",
     "reconcile_team_members",
+    "dispatch_membership_backfill",
     "run_backfill",
     "run_capacity_forecast_job",
     "run_complexity_job",
@@ -85,6 +88,7 @@ __all__ = [
     "run_dora_metrics",
     "run_ingest_consumer",
     "run_investment_materialize",
+    "run_membership_backfill",
     "run_product_telemetry_consumer",
     "run_recommendations_job",
     "run_release_impact_job",

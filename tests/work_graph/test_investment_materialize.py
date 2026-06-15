@@ -28,6 +28,7 @@ class FakeSink:
         self.investment_rows: list[WorkUnitInvestmentRecord] = []
         self.quote_rows: list[WorkUnitInvestmentEvidenceQuoteRecord] = []
         self.membership_rows: list = []
+        self.membership_run_records: list = []
 
     def ensure_schema(self) -> None:
         return None
@@ -40,6 +41,9 @@ class FakeSink:
 
     def write_work_unit_memberships(self, rows) -> None:
         self.membership_rows.extend(rows)
+
+    def write_membership_run(self, record) -> None:
+        self.membership_run_records.append(record)
 
     def close(self) -> None:
         return None

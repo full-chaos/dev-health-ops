@@ -1,4 +1,4 @@
-"""Tests for CHAOS-2429/2430: work_unit_membership multi-membership emission.
+"""Tests for CHAOS-2429/2430/2433: work_unit_membership multi-membership emission.
 
 Covers:
 - _lexical_argmax dominant selection + tie-break.
@@ -8,6 +8,8 @@ Covers:
 - Materializer emits one row per (node, category) for theme and subcategory
   kinds; 45/40 split is recorded under BOTH themes; is_dominant correctness.
 - Org isolation; fallback-status rows still stamped; work_unit_id consistency.
+- run_id is stamped on every membership row and matches categorization_run_id.
+- Completion marker (WorkUnitMembershipRunRecord) is written AFTER membership rows.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
     WorkUnitMembershipRecord,
+    WorkUnitMembershipRunRecord,
 )
 from dev_health_ops.work_graph.investment.categorize import CategorizationOutcome
 from dev_health_ops.work_graph.investment.constants import (
@@ -146,6 +149,9 @@ class FakeSink:
         self.investment_rows: list[WorkUnitInvestmentRecord] = []
         self.quote_rows: list[WorkUnitInvestmentEvidenceQuoteRecord] = []
         self.membership_rows: list[WorkUnitMembershipRecord] = []
+        self.membership_run_records: list[WorkUnitMembershipRunRecord] = []
+        # Track write call order so we can assert marker comes LAST.
+        self._write_order: list[str] = []
 
     def ensure_schema(self) -> None:
         return None
@@ -158,6 +164,11 @@ class FakeSink:
 
     def write_work_unit_memberships(self, rows) -> None:
         self.membership_rows.extend(rows)
+        self._write_order.append("memberships")
+
+    def write_membership_run(self, record: WorkUnitMembershipRunRecord) -> None:
+        self.membership_run_records.append(record)
+        self._write_order.append("run_marker")
 
     def close(self) -> None:
         return None
@@ -493,3 +504,100 @@ async def test_membership_work_unit_id_matches_investment(monkeypatch):
     investment_unit_id = sink.investment_rows[0].work_unit_id
     for row in sink.membership_rows:
         assert row.work_unit_id == investment_unit_id
+
+
+# ---------------------------------------------------------------------------
+# run_id / completion-marker protocol tests (CHAOS-2433)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_membership_rows_carry_run_id(monkeypatch):
+    """All membership rows carry a non-empty run_id matching the investment
+    run's categorization_run_id (materializer reuses the same run_id)."""
+    repo_id, edges, work_items, commits = _sample_two_node_data()
+    sink = FakeSink()
+
+    async def _fake_categorize(bundle, llm_provider, llm_model=None, provider=None):
+        return CategorizationOutcome(
+            subcategories={"feature_delivery.roadmap": 1.0},
+            evidence_quotes=[],
+            uncertainty="",
+            status="ok",
+            errors=[],
+        )
+
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
+    )
+    _patch_queries(monkeypatch, edges, work_items, commits, repo_id)
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.categorize_text_bundle",
+        _fake_categorize,
+    )
+
+    await materialize_investments(_make_config(repo_id))
+
+    assert sink.membership_rows, "membership rows must be written"
+    # All rows have a non-empty run_id.
+    for row in sink.membership_rows:
+        assert row.run_id, f"run_id must be non-empty, got {row.run_id!r}"
+
+    # All rows share the SAME run_id (one run per materialize call).
+    run_ids = {row.run_id for row in sink.membership_rows}
+    assert len(run_ids) == 1, f"all rows must share one run_id, got: {run_ids}"
+
+    # The membership run_id matches the investment record's categorization_run_id.
+    assert sink.investment_rows, "investment rows must be written"
+    investment_run_id = sink.investment_rows[0].categorization_run_id
+    (membership_run_id,) = run_ids
+    assert membership_run_id == investment_run_id, (
+        "membership run_id must match investment categorization_run_id"
+    )
+
+
+@pytest.mark.asyncio
+async def test_completion_marker_written_after_membership_rows(monkeypatch):
+    """The completion-marker (WorkUnitMembershipRunRecord) is written to
+    work_unit_membership_runs AFTER all membership rows — proving the
+    run_id protocol write order."""
+    repo_id, edges, work_items, commits = _sample_two_node_data()
+    sink = FakeSink()
+
+    async def _fake_categorize(bundle, llm_provider, llm_model=None, provider=None):
+        return CategorizationOutcome(
+            subcategories={"maintenance.refactor": 1.0},
+            evidence_quotes=[],
+            uncertainty="",
+            status="ok",
+            errors=[],
+        )
+
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
+    )
+    _patch_queries(monkeypatch, edges, work_items, commits, repo_id)
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.categorize_text_bundle",
+        _fake_categorize,
+    )
+
+    await materialize_investments(_make_config(repo_id))
+
+    # Exactly one completion-marker written.
+    assert len(sink.membership_run_records) == 1, (
+        "exactly one completion-marker must be written"
+    )
+    marker = sink.membership_run_records[0]
+
+    # The marker's run_id matches the membership rows.
+    (membership_run_id,) = {row.run_id for row in sink.membership_rows}
+    assert marker.run_id == membership_run_id
+
+    # Write ORDER: membership rows come before the marker.
+    assert sink._write_order == ["memberships", "run_marker"], (
+        f"expected memberships then run_marker, got: {sink._write_order}"
+    )
+
+    # Marker's org_id matches the config.
+    assert marker.org_id == "test-org"

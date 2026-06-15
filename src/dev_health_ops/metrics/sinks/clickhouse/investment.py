@@ -21,6 +21,7 @@ from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
     WorkUnitMembershipRecord,
+    WorkUnitMembershipRunRecord,
 )
 
 if TYPE_CHECKING:
@@ -175,8 +176,22 @@ class InvestmentMixin(_ClickHouseSinkBase):
                 "is_dominant",
                 "categorization_status",
                 "computed_at",
+                "run_id",
             ],
             rows,
+        )
+
+    def write_membership_run(self, record: WorkUnitMembershipRunRecord) -> None:
+        """Write the completion-marker for a membership run (CHAOS-2433).
+
+        Must be called as the LAST step after all membership rows for the run
+        have been written.  Readers use the latest completed_at row here to
+        identify the current valid run_id.
+        """
+        self._insert_rows(
+            "work_unit_membership_runs",
+            ["org_id", "run_id", "completed_at"],
+            [record],
         )
 
     def write_investment_explanation(self, record: InvestmentExplanationRecord) -> None:

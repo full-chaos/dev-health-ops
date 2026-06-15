@@ -16,6 +16,7 @@ from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
     WorkUnitMembershipRecord,
+    WorkUnitMembershipRunRecord,
 )
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.metrics.sinks.factory import create_sink
@@ -645,6 +646,8 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
             # work_unit_investments (CHAOS-2429/2430). Multi-membership: one row
             # per (node, category) for each theme and subcategory at/above the
             # weight threshold, plus the argmax of each kind (is_dominant=1).
+            # run_id is stamped on every row so readers can scope to the latest
+            # COMPLETE run via work_unit_membership_runs (CHAOS-2433).
             theme_categories = _membership_categories(theme_distribution)
             subcategory_categories = _membership_categories(outcome.subcategories)
             for node_type, node_id in unit_nodes:
@@ -661,6 +664,7 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
                             is_dominant=is_dominant,
                             categorization_status=outcome.status,
                             computed_at=computed_at,
+                            run_id=run_id,
                         )
                     )
                 for category, weight, is_dominant in subcategory_categories:
@@ -676,6 +680,7 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
                             is_dominant=is_dominant,
                             categorization_status=outcome.status,
                             computed_at=computed_at,
+                            run_id=run_id,
                         )
                     )
 
@@ -699,7 +704,17 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
         if quote_records:
             sink.write_work_unit_investment_quotes(quote_records)
         if membership_records:
+            # Write ALL membership rows first, THEN the completion marker.
+            # A run with membership rows but no marker is incomplete (in-flight)
+            # and is invisible to readers until the marker is written (CHAOS-2433).
             sink.write_work_unit_memberships(membership_records)
+            sink.write_membership_run(
+                WorkUnitMembershipRunRecord(
+                    org_id=config.org_id or "",
+                    run_id=run_id,
+                    completed_at=computed_at,
+                )
+            )
         logger.info("Sink write complete")
 
         return {

@@ -46,6 +46,7 @@ from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
     WorkUnitMembershipRecord,
+    WorkUnitMembershipRunRecord,
 )
 from dev_health_ops.metrics.testops_schemas import (
     BenchmarkAnomalyRecord,
@@ -364,6 +365,15 @@ class BaseMetricsSink(ABC):
         self, rows: Sequence[WorkUnitMembershipRecord]
     ) -> None:
         """Write node→work-unit membership rows for theme/subcategory filtering."""
+        pass
+
+    def write_membership_run(self, record: WorkUnitMembershipRunRecord) -> None:
+        """Write the completion-marker for a membership write run (CHAOS-2433).
+
+        Must be called as the LAST step after all membership rows for the run
+        have been written.  A run whose run_id has no completion-marker is
+        incomplete and invisible to readers.
+        """
         pass
 
     # -------------------------------------------------------------------------

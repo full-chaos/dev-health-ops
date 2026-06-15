@@ -25,7 +25,12 @@ if TYPE_CHECKING:
 _CREDENTIAL_KEY_MAP: dict[str, dict[str, str]] = {
     "linear": {"apiKey": "api_key"},
     "jira": {"apiToken": "api_token", "baseUrl": "base_url"},
-    "github": {"baseUrl": "base_url"},
+    "github": {
+        "appId": "app_id",
+        "baseUrl": "base_url",
+        "installationId": "installation_id",
+        "privateKey": "private_key",
+    },
     "gitlab": {"baseUrl": "base_url"},
     "atlassian": {"apiToken": "api_token", "cloudId": "cloud_id"},
 }

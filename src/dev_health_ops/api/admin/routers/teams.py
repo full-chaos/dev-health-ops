@@ -21,6 +21,7 @@ from dev_health_ops.api.services.configuration import (
     TeamDiscoveryService,
     TeamMappingService,
 )
+from dev_health_ops.credentials.resolver import github_credentials_from_mapping
 
 from .common import get_session
 
@@ -29,6 +30,14 @@ router = APIRouter()
 
 def _string_value(value: object) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def _validate_github_base_url(base_url: str) -> None:
+    from dev_health_ops.api.admin.routers.credentials import _validate_external_url
+
+    is_valid, error = _validate_external_url(base_url)
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=error)
 
 
 async def _derive_owners_from_sync_configs(
@@ -183,11 +192,46 @@ async def discover_teams(
     warnings: list[str] = []
 
     if provider == "github":
-        token = decrypted.get("token")
-        if not token:
+        github_credentials = github_credentials_from_mapping(decrypted)
+        if github_credentials is None:
             raise HTTPException(
                 status_code=400,
-                detail="GitHub credentials require a token",
+                detail=(
+                    "GitHub credentials require either token or "
+                    "app_id + private_key + installation_id"
+                ),
+            )
+        if github_credentials.is_app_auth:
+            from dev_health_ops.connectors.utils.github_app import (
+                GitHubAppTokenProvider,
+            )
+
+            assert github_credentials.app_id is not None
+            assert github_credentials.private_key is not None
+            assert github_credentials.installation_id is not None
+            base_url = github_credentials.base_url or "https://api.github.com"
+            _validate_github_base_url(base_url)
+            try:
+                token = GitHubAppTokenProvider(
+                    app_id=github_credentials.app_id,
+                    private_key=github_credentials.private_key,
+                    installation_id=github_credentials.installation_id,
+                    api_base_url=base_url,
+                ).get_token()
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=401, detail="GitHub App authentication failed"
+                ) from exc
+        else:
+            token_value = github_credentials.token
+            if not token_value:
+                raise HTTPException(
+                    status_code=400, detail="GitHub credential missing token"
+                )
+            token = token_value
+        if not token:
+            raise HTTPException(
+                status_code=400, detail="GitHub credential missing token"
             )
         # Resolution order: explicit query param -> credential config ->
         # owners derived from existing repo sync configurations.
@@ -215,14 +259,15 @@ async def discover_teams(
             )
         teams = _dedupe_teams(discovered)
     elif provider == "gitlab":
-        token = decrypted.get("token")
+        token_value = decrypted.get("token")
         url_value = config.get("url", "https://gitlab.com")
         url = url_value if isinstance(url_value, str) else "https://gitlab.com"
-        if not token:
+        if not isinstance(token_value, str) or not token_value:
             raise HTTPException(
                 status_code=400,
                 detail="GitLab credentials require a token",
             )
+        token = token_value
         if group:
             group_paths = [group]
         elif _string_value(config.get("group")):

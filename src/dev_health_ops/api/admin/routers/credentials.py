@@ -20,6 +20,7 @@ from dev_health_ops.api.admin.schemas import (
     TestConnectionResponse,
 )
 from dev_health_ops.api.services.configuration import IntegrationCredentialsService
+from dev_health_ops.credentials.resolver import github_credentials_from_mapping
 
 from .common import get_session
 
@@ -35,6 +36,27 @@ class _MutableIntegrationCredential(Protocol):
 
 def _string_value(value: object) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def _github_credentials_or_400(creds: dict[str, Any]):
+    github_credentials = github_credentials_from_mapping(creds)
+    if github_credentials is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "GitHub credentials require either token or "
+                "app_id + private_key + installation_id"
+            ),
+        )
+    return github_credentials
+
+
+def _validated_github_base_url(base_url: str | None) -> str:
+    effective_base_url = base_url or "https://api.github.com"
+    is_valid, error = _validate_external_url(effective_base_url)
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=error)
+    return effective_base_url
 
 
 def _integration_credential_response(
@@ -104,18 +126,26 @@ async def list_credential_repos(
     if provider == "github":
         from dev_health_ops.connectors.github import GitHubConnector
 
-        token = decrypted.get("token")
-        base_url = _string_value(decrypted.get("base_url")) or _string_value(
-            config.get("base_url")
+        github_credentials = _github_credentials_or_400(
+            {
+                **decrypted,
+                "base_url": decrypted.get("base_url") or config.get("base_url"),
+            }
         )
-        if not token:
-            raise HTTPException(
-                status_code=400, detail="GitHub credential missing token"
-            )
-        github_connector = GitHubConnector(token=token, base_url=base_url)
-        effective_owner = owner or _string_value(config.get("org"))
+        _validated_github_base_url(github_credentials.base_url)
+        effective_owner = (
+            owner
+            or _string_value(config.get("org"))
+            or _string_value(decrypted.get("org"))
+        )
         if not effective_owner:
             return DiscoveredReposResponse(provider=provider, repos=[], total=0)
+        try:
+            github_connector = GitHubConnector(credentials=github_credentials)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=401, detail="GitHub App authentication failed"
+            ) from exc
         try:
             repos = github_connector.list_repositories(
                 org_name=effective_owner,
@@ -365,26 +395,56 @@ def _build_safe_url(validated_base: str, path: str) -> str:
 async def _test_github_connection(creds: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     import httpx
 
-    token = creds.get("token")
+    github_credentials = github_credentials_from_mapping(creds)
+    if github_credentials is None:
+        return False, {
+            "error": "Missing GitHub token or App credentials (app_id, private_key, installation_id)"
+        }
+
+    try:
+        base_url = _validated_github_base_url(github_credentials.base_url)
+    except HTTPException as exc:
+        return False, {"error": exc.detail}
+
+    token = github_credentials.token
+    path = "user"
+    if github_credentials.is_app_auth:
+        from dev_health_ops.connectors.utils.github_app import GitHubAppTokenProvider
+
+        assert github_credentials.app_id is not None
+        assert github_credentials.private_key is not None
+        assert github_credentials.installation_id is not None
+        try:
+            token = GitHubAppTokenProvider(
+                app_id=github_credentials.app_id,
+                private_key=github_credentials.private_key,
+                installation_id=github_credentials.installation_id,
+                api_base_url=base_url,
+            ).get_token()
+        except Exception:
+            return False, {"error": "GitHub App authentication failed"}
+        path = "installation/repositories"
     if not token:
         return False, {"error": "No token provided"}
 
-    base_url = _string_value(creds.get("base_url")) or "https://api.github.com"
-    is_valid, error = _validate_external_url(base_url)
-    if not is_valid:
-        return False, {"error": error}
-
     async with httpx.AsyncClient() as client:
         resp = await client.get(
-            _build_safe_url(base_url, "user"),
+            _build_safe_url(base_url, path),
             headers={
                 "Authorization": f"Bearer {token}",
                 "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
             },
             timeout=10,
         )
         if resp.status_code == 200:
             data = resp.json()
+            if github_credentials.is_app_auth:
+                return True, {
+                    "auth_mode": "github_app",
+                    "installation_id": github_credentials.installation_id,
+                    "repository_count": data.get("total_count"),
+                }
             return True, {"user": data.get("login"), "name": data.get("name")}
         return False, {"status": resp.status_code, "error": resp.text[:200]}
 

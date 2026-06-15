@@ -231,14 +231,20 @@ def github_credentials_from_mapping(
 
     Accepts a decrypted credentials dict (as persisted in ``integration_credentials``
     or assembled from environment variables) and returns a typed credential the
-    GitHub connector can consume directly. A ``private_key_path`` is resolved to the
-    ``private_key`` contents when only the path is present.
+    GitHub connector can consume directly.
 
     Returns ``None`` when the mapping contains neither a ``token`` nor a complete
-    App-auth triple (``app_id`` + ``private_key``/``private_key_path`` +
-    ``installation_id``), so callers can surface a clear configuration error.
+    App-auth triple (``app_id`` + ``private_key`` + ``installation_id``), so callers
+    can surface a clear configuration error.
     """
-    cred_dict = {k: v for k, v in cred_dict.items() if v is not None}
+    aliases = {
+        "appId": "app_id",
+        "baseUrl": "base_url",
+        "installationId": "installation_id",
+        "privateKey": "private_key",
+        "privateKeyPath": "private_key_path",
+    }
+    cred_dict = {aliases.get(k, k): v for k, v in cred_dict.items() if v is not None}
     if not cred_dict:
         return None
 
@@ -248,8 +254,9 @@ def github_credentials_from_mapping(
             try:
                 with open(str(private_key_path), encoding="utf-8") as key_file:
                     cred_dict["private_key"] = key_file.read()
-            except OSError as exc:
-                logger.debug("Could not read GitHub App private key path: %s", exc)
+            except OSError:
+                logger.debug("GitHub private key path could not be read")
+                return None
 
     allowed = {"token", "app_id", "private_key", "installation_id", "base_url"}
     kwargs = {k: v for k, v in cred_dict.items() if k in allowed}

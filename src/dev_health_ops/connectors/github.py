@@ -113,6 +113,7 @@ class GitHubConnector(GitConnector):
                 app_id=credentials.app_id,
                 private_key=credentials.private_key,
                 installation_id=credentials.installation_id,
+                api_base_url=base_url or "https://api.github.com",
             )
             token = self._app_token_provider.get_token()
         elif credentials is not None:

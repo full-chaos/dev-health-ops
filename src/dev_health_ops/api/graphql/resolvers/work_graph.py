@@ -453,6 +453,37 @@ def _theme_membership_exists_clause() -> str:
     """
 
 
+def _subcategory_parent_theme(subcategory: str) -> str | None:
+    """Return the canonical parent theme of a subcategory, or None if unknown.
+
+    Resolves via the canonical SUBCATEGORY_TO_THEME mapping, falling back to the
+    ``"theme.sub"`` naming convention prefix when the subcategory is not in the
+    map (defensive — keeps a future taxonomy addition from silently failing).
+    """
+    from dev_health_ops.investment_taxonomy import SUBCATEGORY_TO_THEME
+
+    mapped = SUBCATEGORY_TO_THEME.get(subcategory)
+    if mapped:
+        return mapped
+    prefix = subcategory.split(".", 1)[0]
+    return prefix or None
+
+
+def _theme_subcategory_conflict(theme: str | None, subcategory: str | None) -> bool:
+    """True when theme + subcategory are BOTH set but cross taxonomy boundaries.
+
+    A subcategory belongs to exactly one theme (canonical SUBCATEGORY_TO_THEME).
+    If the caller supplies a theme AND a subcategory whose parent theme differs
+    (e.g. via URL tampering, stale client state, or version skew), the requested
+    intersection is impossible — no work unit can be a member of both. Callers
+    must short-circuit to an empty result rather than build the (corrupting)
+    cross-theme intersection (CHAOS-2430).
+    """
+    if not (theme and subcategory):
+        return False
+    return _subcategory_parent_theme(subcategory) != theme
+
+
 def _build_theme_filter(
     theme: str | None,
     subcategory: str | None,
@@ -462,6 +493,10 @@ def _build_theme_filter(
     Returns (None, {}) when no theme filter is active. ``params`` carries the
     requested ``(category_kind, category)`` tuples and the count that the
     endpoint must match (1 for theme-only or subcategory-only, 2 for both).
+
+    Callers MUST screen for ``_theme_subcategory_conflict`` first: a cross-theme
+    theme+subcategory pair has no valid intersection and must short-circuit to an
+    empty result rather than reach here.
     """
     wanted: list[tuple[str, str]] = []
     if theme:
@@ -545,6 +580,37 @@ async def _detect_membership_degraded_reason(client: Any, org_id: str) -> str | 
     return None
 
 
+def _is_unknown_table_error(exc: BaseException) -> bool:
+    """True when a ClickHouse error indicates a missing table (code 60).
+
+    During a rolling deploy or before the work_unit_membership migration has
+    run, the filtered edge query references a table that does not exist yet.
+    The driver raises a DatabaseError carrying ``code == 60`` and an
+    ``UNKNOWN_TABLE`` server message; we match either form (the code attribute
+    is set by clickhouse-connect, the message is the resilient fallback).
+    """
+    if getattr(exc, "code", None) == 60:
+        return True
+    text = str(exc)
+    return "UNKNOWN_TABLE" in text or "code: 60" in text
+
+
+def _empty_edges_result(degraded_reason: str | None = None) -> WorkGraphEdgesResult:
+    """An empty, well-formed result — used for impossible filters and the
+    degraded (membership-not-materialized) state."""
+    return WorkGraphEdgesResult(
+        edges=[],
+        total_count=0,
+        page_info=PageInfo(
+            has_next_page=False,
+            has_previous_page=False,
+            start_cursor=None,
+            end_cursor=None,
+        ),
+        degraded_reason=degraded_reason,
+    )
+
+
 async def resolve_work_graph_edges(
     context: GraphQLContext,
     filters: WorkGraphEdgeFilterInput | None = None,
@@ -564,6 +630,19 @@ async def resolve_work_graph_edges(
     theme_filter = filters.theme if filters else None
     subcategory_filter = filters.subcategory if filters else None
     theme_filter_active = bool(theme_filter or subcategory_filter)
+
+    # A theme + subcategory pair that cross taxonomy boundaries (the subcategory
+    # belongs to a different theme) has no valid intersection — short-circuit to
+    # an empty result instead of building the impossible cross-theme filter
+    # (guards against URL tampering / stale client state / version skew).
+    if _theme_subcategory_conflict(theme_filter, subcategory_filter):
+        logger.info(
+            "work_graph theme filter conflict: theme=%r does not own "
+            "subcategory=%r — returning empty result",
+            theme_filter,
+            subcategory_filter,
+        )
+        return _empty_edges_result()
 
     if filters:
         if filters.repo_ids:
@@ -624,7 +703,23 @@ async def resolve_work_graph_edges(
         LIMIT %(limit)s
     """
 
-    rows = await query_dicts(client, query, params)
+    try:
+        rows = await query_dicts(client, query, params)
+    except Exception as exc:
+        # During a rolling deploy / before the work_unit_membership migration
+        # has run, the filtered edge query references a table that does not
+        # exist yet. Return the controlled degraded state instead of a 500 —
+        # the web client already handles MEMBERSHIP_NOT_MATERIALIZED. Only the
+        # filtered path touches work_unit_membership, so an unknown-table error
+        # on the unfiltered path is unexpected and re-raised.
+        if theme_filter_active and _is_unknown_table_error(exc):
+            logger.warning(
+                "work_unit_membership table missing for org %s during theme "
+                "filter — returning degraded state (CHAOS-2430).",
+                org_id,
+            )
+            return _empty_edges_result(MEMBERSHIP_NOT_MATERIALIZED)
+        raise
 
     # Degraded-state signal (CHAOS-2430 rollout): a theme filter that yields zero
     # edges is normally a legitimate empty state, but immediately after deploy it

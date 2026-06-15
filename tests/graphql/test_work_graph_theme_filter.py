@@ -491,3 +491,165 @@ class TestThemeFilterServerSide:
             assert ("theme", theme) in edge_params["category_tuples"]
             # ...but always reports the DOMINANT, not the requested filter theme.
             assert result.edges[0].theme == "feature_delivery"
+
+
+class TestThemeSubcategoryCrossTaxonomy:
+    """CHAOS-2430: a theme + subcategory pair that cross taxonomy boundaries has
+    no valid intersection and must short-circuit to an empty result (guards
+    against URL tampering / stale client / version skew), instead of building
+    the impossible cross-theme filter."""
+
+    @pytest.mark.asyncio
+    async def test_conflicting_theme_subcategory_returns_empty(self, mock_context):
+        """theme='feature_delivery' + subcategory='maintenance.refactor' (whose
+        parent theme is maintenance) → empty result, NO query issued."""
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            filters = WorkGraphEdgeFilterInput(
+                theme="feature_delivery", subcategory="maintenance.refactor"
+            )
+            result = await resolve_work_graph_edges(mock_context, filters)
+
+        assert result.edges == []
+        assert result.total_count == 0
+        # No degraded reason — this is an impossible filter, not a rollout state.
+        assert result.degraded_reason is None
+        # Short-circuited before any DB round-trip.
+        assert mock_query.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_matching_theme_subcategory_runs_normally(self, mock_context):
+        """theme + subcategory in the SAME theme → normal filtered query runs."""
+        edge_rows = [make_edge_row(edge_id="e1", source_type="issue", source_id="FD-1")]
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [
+                edge_rows,
+                dominant_rows(
+                    "issue", "FD-1", "feature_delivery", "feature_delivery.roadmap"
+                ),
+            ]
+            filters = WorkGraphEdgeFilterInput(
+                theme="feature_delivery", subcategory="feature_delivery.roadmap"
+            )
+            result = await resolve_work_graph_edges(mock_context, filters)
+
+        assert [e.edge_id for e in result.edges] == ["e1"]
+        # The edge query DID run (both category tuples present, wanted_count==2).
+        edge_params = mock_query.call_args_list[0][0][2]
+        assert edge_params["wanted_count"] == 2
+        assert ("theme", "feature_delivery") in edge_params["category_tuples"]
+        assert (
+            "subcategory",
+            "feature_delivery.roadmap",
+        ) in edge_params["category_tuples"]
+
+    @pytest.mark.asyncio
+    async def test_subcategory_only_unaffected_by_conflict_check(self, mock_context):
+        """A subcategory-only filter (no theme) never conflicts — it runs."""
+        edge_rows = [make_edge_row(edge_id="e1", source_type="issue", source_id="M-1")]
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [
+                edge_rows,
+                dominant_rows("issue", "M-1", "maintenance", "maintenance.refactor"),
+            ]
+            filters = WorkGraphEdgeFilterInput(subcategory="maintenance.refactor")
+            result = await resolve_work_graph_edges(mock_context, filters)
+
+        assert [e.edge_id for e in result.edges] == ["e1"]
+        assert mock_query.call_count >= 1
+
+
+class _UnknownTableError(Exception):
+    """Mimics clickhouse-connect's DatabaseError for a missing table (code 60)."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Received ClickHouse exception, code: 60, server response: "
+            "Code: 60. DB::Exception: Unknown table expression identifier "
+            "'work_unit_membership'. (UNKNOWN_TABLE)"
+        )
+        self.code = 60
+
+
+class TestMissingMembershipTableDegrades:
+    """CHAOS-2430: during a rolling deploy / before the migration runs, the
+    filtered edge query references work_unit_membership which may not exist. The
+    resolver must return the controlled degraded state, NOT a 500."""
+
+    @pytest.mark.asyncio
+    async def test_missing_table_returns_degraded(self, mock_context):
+        """Filtered query raising an unknown-table error → edges=[] with
+        degraded_reason=MEMBERSHIP_NOT_MATERIALIZED (no exception escapes)."""
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = _UnknownTableError()
+            filters = WorkGraphEdgeFilterInput(theme="feature_delivery")
+            result = await resolve_work_graph_edges(mock_context, filters)
+
+        assert result.edges == []
+        assert result.total_count == 0
+        assert result.degraded_reason == "MEMBERSHIP_NOT_MATERIALIZED"
+
+    @pytest.mark.asyncio
+    async def test_missing_table_message_only_match(self, mock_context):
+        """Detection also works when only the message carries the signal (no
+        code attr) — resilient to driver variations."""
+
+        class _MsgOnly(Exception):
+            pass
+
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = _MsgOnly(
+                "Code: 60. DB::Exception: Unknown table 'work_unit_membership'. "
+                "(UNKNOWN_TABLE)"
+            )
+            filters = WorkGraphEdgeFilterInput(theme="feature_delivery")
+            result = await resolve_work_graph_edges(mock_context, filters)
+
+        assert result.degraded_reason == "MEMBERSHIP_NOT_MATERIALIZED"
+        assert result.edges == []
+
+    @pytest.mark.asyncio
+    async def test_table_present_unchanged(self, mock_context):
+        """With the table present, the filtered path is unchanged."""
+        edge_rows = [make_edge_row(edge_id="e1", source_type="issue", source_id="FD-1")]
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [
+                edge_rows,
+                dominant_rows(
+                    "issue", "FD-1", "feature_delivery", "feature_delivery.roadmap"
+                ),
+            ]
+            filters = WorkGraphEdgeFilterInput(theme="feature_delivery")
+            result = await resolve_work_graph_edges(mock_context, filters)
+
+        assert [e.edge_id for e in result.edges] == ["e1"]
+        assert result.degraded_reason is None
+
+    @pytest.mark.asyncio
+    async def test_unfiltered_path_does_not_swallow_unknown_table(self, mock_context):
+        """An unknown-table error on the UNFILTERED path (no theme filter) is
+        unexpected — it must propagate, not be masked as degraded."""
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = _UnknownTableError()
+            with pytest.raises(Exception):
+                await resolve_work_graph_edges(mock_context)  # no filters

@@ -188,18 +188,38 @@ class ClickHouseCore(BaseMetricsSink):
             row[0] for row in (getattr(applied_result, "result_rows", []) or [])
         )
 
-        # Collect all migration files
+        # Collect all migration files in apply order.
         migration_files = sorted(
             list(migrations_dir.glob("*.sql")) + list(migrations_dir.glob("*.py"))
         )
 
+        # Fast-path: short-circuit only when EVERY on-disk migration is already
+        # applied (full-set completeness check via all_migrations_applied —
+        # CHAOS-2440).  A latest-filename-only check is unsound here because of
+        # inserted / mixed-ordering migrations (023b_ between 023_ and 024_,
+        # duplicate numeric prefixes): the DB could hold the latest row yet be
+        # missing an intermediate migration.  The full-set check stays O(n) in
+        # memory over the SELECT we already ran — no per-file DB query, no log
+        # loop — so it remains fast and quiet while being correct.
+        from dev_health_ops.migrations.clickhouse import all_migrations_applied
+
+        if migration_files and all_migrations_applied(
+            (p.name for p in migration_files), applied_versions
+        ):
+            logger.debug(
+                "ClickHouse schema is current (%d migrations applied) — "
+                "skipping migration loop",
+                len(migration_files),
+            )
+            return
+
         for path in migration_files:
             version = path.name
             if version in applied_versions:
-                logger.info(f"Skipping already applied migration: {version}")
+                logger.debug("Skipping already applied migration: %s", version)
                 continue
 
-            logger.info(f"Applying migration: {version}")
+            logger.info("Applying migration: %s", version)
 
             if path.suffix == ".sql":
                 try:

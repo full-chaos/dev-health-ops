@@ -1,7 +1,7 @@
 -- Migration 046: node-level membership table for Work Graph theme/subcategory
 -- filtering (CHAOS-2429/2430).
 --
--- work_unit_investments records one row per connected component (work unit);
+-- work_unit_investments records one row per connected component (a work unit).
 -- it has no node->unit index, so the resolver cannot join edges to theme data
 -- without scanning the full investments table. This table is the O(nodes)
 -- reverse index.
@@ -14,7 +14,7 @@
 -- would systematically hide the 40% category). category_kind distinguishes
 -- 'theme' rows from 'subcategory' rows. The argmax category within each kind is
 -- ALWAYS emitted (even if below threshold) with is_dominant=1, so every node is
--- findable under at least its dominant category; lexical tie-break on argmax.
+-- findable under at least its dominant category (argmax ties broken lexically).
 --
 -- STALE ROWS: ReplacingMergeTree dedups by the full sort key, which includes
 -- (category_kind, category). If a category drops below threshold on a later run

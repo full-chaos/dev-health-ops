@@ -242,10 +242,21 @@ def github_credentials_from_mapping(
         "baseUrl": "base_url",
         "installationId": "installation_id",
         "privateKey": "private_key",
+        "privateKeyPath": "private_key_path",
     }
     cred_dict = {aliases.get(k, k): v for k, v in cred_dict.items() if v is not None}
     if not cred_dict:
         return None
+
+    if "private_key" not in cred_dict:
+        private_key_path = cred_dict.get("private_key_path")
+        if private_key_path:
+            try:
+                with open(str(private_key_path), encoding="utf-8") as key_file:
+                    cred_dict["private_key"] = key_file.read()
+            except OSError:
+                logger.debug("GitHub private key path could not be read")
+                return None
 
     allowed = {"token", "app_id", "private_key", "installation_id", "base_url"}
     kwargs = {k: v for k, v in cred_dict.items() if k in allowed}

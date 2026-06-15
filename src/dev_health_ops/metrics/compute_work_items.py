@@ -142,13 +142,40 @@ def build_linked_issue_team_resolver(
             return key_index.get(target_id.split(":", 1)[1].strip().upper())
         return target_id
 
+    def _recency(dep: WorkItemDependency) -> float:
+        last = dep.last_synced
+        try:
+            return last.timestamp() if last is not None else 0.0
+        except (ValueError, OverflowError, OSError):
+            return 0.0
+
+    # Collapse to one edge per (source, target), keeping the latest by
+    # last_synced — so a relationship-type change (e.g. relates_to -> blocked_by)
+    # supersedes the stale row instead of leaving an old inheritable edge alive
+    # alongside the new one. On identical timestamps the lexicographically
+    # smaller relationship_type wins, which deterministically prefers the safer
+    # blocking type (`blocked_by`/`blocks` < `relates_to`) over inheriting.
+    latest_edge: dict[tuple[str, str], WorkItemDependency] = {}
+    for dep in dependencies:
+        pair = (dep.source_work_item_id, dep.target_work_item_id)
+        cur = latest_edge.get(pair)
+        if (
+            cur is None
+            or _recency(dep) > _recency(cur)
+            or (
+                _recency(dep) == _recency(cur)
+                and dep.relationship_type < cur.relationship_type
+            )
+        ):
+            latest_edge[pair] = dep
+
     # Collect every valid donor candidate per source, then pick deterministically
     # so attribution never depends on edge/storage order (ClickHouse rows have no
     # inherent ordering). When a source links several team-attributed issues, the
     # lexicographically smallest canonical target wins — a stable, run-independent
     # tiebreak. The common case is a single donor, where the choice is moot.
     candidates: dict[str, list[tuple[str, tuple[str, str]]]] = {}
-    for dep in dependencies:
+    for dep in latest_edge.values():
         # Only "does-the-work-of"/duplicate links transfer a team; skip blocking
         # and other relationships that routinely span teams.
         if dep.relationship_type not in _INHERITABLE_RELATIONSHIP_TYPES:

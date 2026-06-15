@@ -151,6 +151,50 @@ def test_blocking_relationships_do_not_drive_inheritance() -> None:
     assert resolver.resolve(pr.work_item_id) == ("CHAOS", "Chaos Team")
 
 
+def test_newer_blocking_edge_supersedes_stale_inheritable_edge() -> None:
+    # An edge corrected from relates_to -> blocked_by must stop inheriting, even
+    # if the stale relates_to row is still present (different ReplacingMergeTree
+    # version). Latest last_synced per (source,target) wins.
+    donor = _wi("linear:CHAOS-1", "linear", project_key="CHAOS")
+    pr = _wi("ghpr:x/y#1", "github", type="pr", project_id="x/y")
+    old = WorkItemDependency(
+        pr.work_item_id,
+        donor.work_item_id,
+        "relates_to",
+        "fixes",
+        last_synced=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    new = WorkItemDependency(
+        pr.work_item_id,
+        donor.work_item_id,
+        "blocked_by",
+        "blocked by",
+        last_synced=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    # Order-independent: stale relates_to never wins once superseded.
+    for deps in ([old, new], [new, old]):
+        resolver = build_linked_issue_team_resolver(
+            work_items=[donor, pr],
+            dependencies=deps,
+            project_key_resolver=_chaos_resolver(),
+        )
+        assert resolver.resolve(pr.work_item_id) == (None, None)
+    # The reverse correction (blocking -> relates) re-enables inheritance.
+    newer_relates = WorkItemDependency(
+        pr.work_item_id,
+        donor.work_item_id,
+        "relates_to",
+        "fixes",
+        last_synced=datetime(2026, 7, 1, tzinfo=timezone.utc),
+    )
+    resolver = build_linked_issue_team_resolver(
+        work_items=[donor, pr],
+        dependencies=[new, newer_relates],
+        project_key_resolver=_chaos_resolver(),
+    )
+    assert resolver.resolve(pr.work_item_id) == ("CHAOS", "Chaos Team")
+
+
 def test_unresolvable_extkey_yields_no_inheritance() -> None:
     pr = _wi("ghpr:x/y#1", "github", type="pr", project_id="x/y")
     deps = [

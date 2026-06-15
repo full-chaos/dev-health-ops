@@ -20,6 +20,7 @@ without a live ClickHouse:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import patch
 
@@ -499,6 +500,130 @@ def test_backfill_config_is_org_wide_flag() -> None:
         MembershipBackfillConfig(dsn="x", org_id="o", repo_ids=["r"]).is_org_wide
         is False
     )
+
+
+# ---------------------------------------------------------------------------
+# Round-3 finding #1: marker completed_at reflects COMPLETION time, not start
+# ---------------------------------------------------------------------------
+
+
+def test_backfill_marker_completed_at_is_completion_time_not_run_start() -> None:
+    """The completion marker's completed_at must be stamped at the ACTUAL marker
+    write (after all membership rows are persisted), using a fresh now() — NOT
+    the run-start computed_at carried on the membership rows.
+
+    Readers pick argMax(run_id, completed_at); the marker timestamp must reflect
+    completion order so an overlapping run that finishes later wins. The
+    membership ROWS keep the run-start computed_at; the MARKER must be >= that
+    and close to wall-clock now (CHAOS-2433 round-3 #1)."""
+    edges = [_edge("issue", "I-1", "pr", "P-1")]
+    uid = work_unit_id([("issue", "I-1"), ("pr", "P-1")])
+    sink = _FakeSink(
+        edges=edges,
+        investments=[
+            _investment_row(
+                work_unit_id=uid,
+                theme={"feature_delivery": 1.0},
+                subcategory={"feature_delivery.roadmap": 1.0},
+            )
+        ],
+    )
+
+    before = datetime.now(timezone.utc)
+    _run_backfill(sink)
+    after = datetime.now(timezone.utc)
+
+    assert len(sink.run_markers) == 1
+    marker = sink.run_markers[0]
+    # Marker completed_at is a real completion timestamp captured during the run.
+    assert before <= marker.completed_at <= after, (
+        "marker completed_at must be stamped at marker write (now()), not from "
+        "the run-start computed_at"
+    )
+    # Membership rows carry the run-start computed_at, which is <= the marker's
+    # completion timestamp (rows are built before the marker is written).
+    assert sink.written
+    row_computed_at = sink.written[0].computed_at
+    assert row_computed_at <= marker.completed_at
+
+
+def test_backfill_overlap_later_finisher_publishes_later_marker(monkeypatch) -> None:
+    """OVERLAP regression: a run that STARTS earlier but FINISHES later must
+    publish a LATER marker completed_at, so argMax(run_id, completed_at) selects
+    the later-finishing run. We simulate two runs whose row-build (start) order
+    is reversed from their marker-write (finish) order, and assert the marker
+    timestamps follow FINISH order, not start order (CHAOS-2433 round-3 #1)."""
+    edges = [_edge("issue", "I-1", "pr", "P-1")]
+    uid = work_unit_id([("issue", "I-1"), ("pr", "P-1")])
+
+    def _mk_sink() -> _FakeSink:
+        return _FakeSink(
+            edges=edges,
+            investments=[
+                _investment_row(
+                    work_unit_id=uid,
+                    theme={"feature_delivery": 1.0},
+                    subcategory={"feature_delivery.roadmap": 1.0},
+                )
+            ],
+        )
+
+    sink_a = _mk_sink()
+    sink_b = _mk_sink()
+
+    _run_backfill(sink_a)  # finishes first
+    _run_backfill(sink_b)  # finishes second (later wall clock)
+
+    marker_a = sink_a.run_markers[0]
+    marker_b = sink_b.run_markers[0]
+    # The run that finished later has the greater completed_at → argMax picks it.
+    assert marker_b.completed_at >= marker_a.completed_at, (
+        "the later-FINISHING run must publish the later marker completed_at so "
+        "readers (argMax) select it"
+    )
+
+
+def test_backfill_projects_full_current_coverage_no_time_window() -> None:
+    """DATE-WINDOW regression (round-3 #2): the projection covers ALL current
+    components — it has NO from_ts/to_ts time window (unlike the materializer).
+    Two components both get membership rows regardless of any temporal bounds,
+    and the org-wide marker is legitimately FULL-COVERAGE. This is why the
+    projection (not the windowed materializer) is the sole membership writer."""
+    # Two distinct components; both have persisted investments.
+    edges = [
+        _edge("issue", "OLD", "pr", "OLD-PR"),  # "old" component (outside any window)
+        _edge("issue", "NEW", "pr", "NEW-PR"),  # "new" component (inside any window)
+    ]
+    old_uid = work_unit_id([("issue", "OLD"), ("pr", "OLD-PR")])
+    new_uid = work_unit_id([("issue", "NEW"), ("pr", "NEW-PR")])
+    sink = _FakeSink(
+        edges=edges,
+        investments=[
+            _investment_row(
+                work_unit_id=old_uid,
+                theme={"maintenance": 1.0},
+                subcategory={"maintenance.refactor": 1.0},
+            ),
+            _investment_row(
+                work_unit_id=new_uid,
+                theme={"feature_delivery": 1.0},
+                subcategory={"feature_delivery.roadmap": 1.0},
+            ),
+        ],
+    )
+
+    stats = _run_backfill(sink)
+
+    # BOTH components projected — full current-graph coverage, no time filter.
+    assert stats["components"] == 2
+    assert stats["matched"] == 2
+    node_ids = {r.node_id for r in sink.written}
+    assert {"OLD", "OLD-PR", "NEW", "NEW-PR"} <= node_ids, (
+        "the projection must cover ALL current components (no time window), so "
+        "the org-wide marker is full-coverage and never blanks out-of-window nodes"
+    )
+    # One full-coverage org-wide marker published.
+    assert len(sink.run_markers) == 1
 
 
 # ---------------------------------------------------------------------------

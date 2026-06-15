@@ -967,12 +967,36 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                         and hasattr(sink, "write_work_unit_memberships")
                         and work_unit_investments
                     ):
+                        # CHAOS-2433: stamp a single fixture run_id on all rows and
+                        # publish a matching completion marker, or the run-scoped
+                        # resolver treats these rows as an incomplete (invisible)
+                        # run and theme filtering would always degrade.
+                        import uuid as _uuid
+                        from datetime import datetime as _dt
+                        from datetime import timezone as _tz
+
+                        from dev_health_ops.metrics.schemas import (
+                            WorkUnitMembershipRunRecord,
+                        )
+
+                        membership_run_id = _uuid.uuid4().hex
                         work_unit_memberships = generate_work_unit_memberships(
                             work_unit_investments,
                             org_id=org_id,
+                            run_id=membership_run_id,
                         )
                         if work_unit_memberships:
                             sink.write_work_unit_memberships(work_unit_memberships)
+                            # Completion marker LAST (run protocol). completed_at
+                            # is the actual write time so a later fixture run wins.
+                            if hasattr(sink, "write_membership_run"):
+                                sink.write_membership_run(
+                                    WorkUnitMembershipRunRecord(
+                                        org_id=org_id,
+                                        run_id=membership_run_id,
+                                        completed_at=_dt.now(_tz.utc),
+                                    )
+                                )
 
                     hotspot_records = metric_gen.generate_file_hotspot_daily(
                         days=ns.days

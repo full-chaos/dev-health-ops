@@ -291,12 +291,23 @@ def backfill_memberships(config: MembershipBackfillConfig) -> dict[str, int]:
         # repo-scoped backfill writes its rows but does NOT publish the org-wide
         # marker — otherwise it would become the org's latest complete run while
         # covering only that scope, blanking other repos for unscoped reads.
+        #
+        # ROUND-3 FINDING #1 (marker completed_at = COMPLETION time, not start):
+        # the marker's completed_at must reflect when the run FINISHED publishing
+        # (after all rows are persisted), NOT the run-start ``computed_at``.
+        # Readers pick argMax(run_id, completed_at); if two runs overlap, the one
+        # that FINISHES last must win.  Stamping the run-start time would let a
+        # run that started earlier but finished later publish an OLDER completed_at
+        # and lose to a run that finished first — the exact concurrency race the
+        # protocol must prevent.  The membership ROWS keep their run ``computed_at``;
+        # only the MARKER carries this completion timestamp.
+        marker_completed_at = datetime.now(timezone.utc)
         if config.is_org_wide:
             sink.write_membership_run(
                 WorkUnitMembershipRunRecord(
                     org_id=org_id,
                     run_id=backfill_run_id,
-                    completed_at=computed_at,
+                    completed_at=marker_completed_at,
                 )
             )
         else:

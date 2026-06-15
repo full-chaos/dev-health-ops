@@ -874,3 +874,293 @@ async def test_optimize_final_preserves_prior_complete_run_row(sink):
                 "SETTINGS mutations_sync=2",
                 parameters={"o": org_id},
             )
+
+
+@pytest.mark.asyncio
+async def test_overlap_later_marker_wins_over_earlier_marker(sink):
+    """ROUND-3 FINDING #1 (marker completed_at = COMPLETION order, not start):
+    a run whose membership ROWS carry an EARLIER computed_at but whose MARKER has
+    a LATER completed_at must WIN argMax(run_id, completed_at).
+
+    This is the overlap race: a long materializer/projection that STARTS before
+    another run (so its rows carry an earlier run-start computed_at) but FINISHES
+    after it (so its marker carries a later completion timestamp) must be the one
+    readers select. We invert the two axes — run A's rows are NEWER (computed_at)
+    but its marker is OLDER (completed_at); run B's rows are OLDER but its marker
+    is NEWER — and assert the resolver follows the MARKER (run B wins).
+    """
+    org_id = f"test-chaos-2433-overlap-{uuid.uuid4()}"
+    node_id = f"ISSUE-{uuid.uuid4()}"
+    pr_id = f"PR-{uuid.uuid4()}"
+    edge_id = f"edge-{uuid.uuid4()}"
+    repo_uuid = str(uuid.uuid4())
+
+    run_a = uuid.uuid4().hex  # rows NEWER (start later) but marker OLDER (finish first)
+    run_b = uuid.uuid4().hex  # rows OLDER (start first) but marker NEWER (finish last)
+
+    rows_ts_a = datetime(2026, 5, 1, tzinfo=timezone.utc)  # A rows: newer computed_at
+    rows_ts_b = datetime(2026, 4, 1, tzinfo=timezone.utc)  # B rows: older computed_at
+    marker_ts_a = datetime(2026, 6, 1, tzinfo=timezone.utc)  # A marker: OLDER finish
+    marker_ts_b = datetime(2026, 7, 1, tzinfo=timezone.utc)  # B marker: NEWER finish
+
+    membership_rows = [
+        # Run A — maintenance, rows carry the NEWER computed_at.
+        [
+            org_id,
+            "issue",
+            node_id,
+            "U_A",
+            "theme",
+            "maintenance",
+            0.9,
+            1,
+            "ok",
+            rows_ts_a,
+            run_a,
+        ],
+        [
+            org_id,
+            "issue",
+            node_id,
+            "U_A",
+            "subcategory",
+            "maintenance.refactor",
+            0.9,
+            1,
+            "ok",
+            rows_ts_a,
+            run_a,
+        ],
+        # Run B — feature_delivery, rows carry the OLDER computed_at.
+        [
+            org_id,
+            "issue",
+            node_id,
+            "U_B",
+            "theme",
+            "feature_delivery",
+            0.95,
+            1,
+            "ok",
+            rows_ts_b,
+            run_b,
+        ],
+        [
+            org_id,
+            "issue",
+            node_id,
+            "U_B",
+            "subcategory",
+            "feature_delivery.roadmap",
+            0.95,
+            1,
+            "ok",
+            rows_ts_b,
+            run_b,
+        ],
+    ]
+    # Markers: B finishes LATER (greater completed_at) → B must win argMax.
+    run_marker_rows = [
+        [org_id, run_a, marker_ts_a],
+        [org_id, run_b, marker_ts_b],
+    ]
+    edge_rows = [
+        [
+            org_id,
+            edge_id,
+            "issue",
+            node_id,
+            "pr",
+            pr_id,
+            "implements",
+            repo_uuid,
+            "github",
+            "native",
+            1.0,
+            "",
+            marker_ts_b,
+            marker_ts_b,
+            marker_ts_b,
+            marker_ts_b.date(),
+        ],
+    ]
+
+    sink.client.insert(
+        "work_unit_membership", membership_rows, column_names=_membership_cols()
+    )
+    sink.client.insert(
+        "work_unit_membership_runs",
+        run_marker_rows,
+        column_names=_membership_run_cols(),
+    )
+    sink.client.insert("work_graph_edges", edge_rows, column_names=_edge_cols())
+
+    assert CLICKHOUSE_URI is not None
+    context = GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink)
+
+    try:
+        # Run B finished later → its marker wins → feature_delivery matches.
+        feature = await resolve_work_graph_edges(
+            context, WorkGraphEdgeFilterInput(theme="feature_delivery")
+        )
+        assert [e.edge_id for e in feature.edges] == [edge_id], (
+            "the LATER-FINISHING run (greater marker completed_at) must win, even "
+            "though its rows carry an OLDER computed_at (CHAOS-2433 round-3 #1)"
+        )
+        assert feature.edges[0].theme == "feature_delivery"
+
+        # Run A's maintenance must NOT match even though A's ROWS are newer:
+        # selection follows the MARKER's completed_at, not the rows' computed_at.
+        maintenance = await resolve_work_graph_edges(
+            context, WorkGraphEdgeFilterInput(theme="maintenance")
+        )
+        assert maintenance.edges == [], (
+            "run A's newer-computed_at rows must lose because its marker finished "
+            "FIRST — marker completion order drives selection, not row computed_at"
+        )
+    finally:
+        for table in (
+            "work_unit_membership",
+            "work_unit_membership_runs",
+            "work_graph_edges",
+        ):
+            sink.client.command(
+                f"ALTER TABLE {table} DELETE WHERE org_id = {{o:String}} "
+                "SETTINGS mutations_sync=2",
+                parameters={"o": org_id},
+            )
+
+
+@pytest.mark.asyncio
+async def test_full_coverage_projection_does_not_blank_out_of_window_nodes(sink):
+    """ROUND-3 FINDING #2 (date-window): a full-coverage projection run must keep
+    ALL current components filterable — including ones a date-windowed materialize
+    would have skipped. We seed a prior full-coverage run covering an OLD node and
+    a NEW node, then a newer full-coverage projection run that ALSO covers both
+    (the projection iterates the whole current graph, no time window). Both nodes
+    stay filterable under the latest run — neither is blanked.
+
+    (Contrast: a windowed materialize covering only the NEW node would, if it
+    published an org-wide marker, blank the OLD node. The unified writer prevents
+    that because the materializer no longer publishes membership/markers.)
+    """
+    org_id = f"test-chaos-2433-window-{uuid.uuid4()}"
+    old_node = f"OLD-{uuid.uuid4()}"
+    new_node = f"NEW-{uuid.uuid4()}"
+    old_pr = f"PR-{uuid.uuid4()}"
+    new_pr = f"PR-{uuid.uuid4()}"
+    old_edge = f"edge-{uuid.uuid4()}"
+    new_edge = f"edge-{uuid.uuid4()}"
+    repo_uuid = str(uuid.uuid4())
+    rows_ts = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    marker_ts = datetime(2026, 8, 1, 0, 0, 1, tzinfo=timezone.utc)
+    run_id = uuid.uuid4().hex
+
+    # Latest full-coverage projection run covers BOTH the old and the new node.
+    membership_rows = [
+        [
+            org_id,
+            "issue",
+            old_node,
+            "U_OLD",
+            "theme",
+            "maintenance",
+            0.9,
+            1,
+            "ok",
+            rows_ts,
+            run_id,
+        ],
+        [
+            org_id,
+            "issue",
+            new_node,
+            "U_NEW",
+            "theme",
+            "feature_delivery",
+            0.95,
+            1,
+            "ok",
+            rows_ts,
+            run_id,
+        ],
+    ]
+    run_marker_rows = [[org_id, run_id, marker_ts]]
+    edge_rows = [
+        [
+            org_id,
+            old_edge,
+            "issue",
+            old_node,
+            "pr",
+            old_pr,
+            "implements",
+            repo_uuid,
+            "github",
+            "native",
+            1.0,
+            "",
+            rows_ts,
+            rows_ts,
+            rows_ts,
+            rows_ts.date(),
+        ],
+        [
+            org_id,
+            new_edge,
+            "issue",
+            new_node,
+            "pr",
+            new_pr,
+            "implements",
+            repo_uuid,
+            "github",
+            "native",
+            1.0,
+            "",
+            rows_ts,
+            rows_ts,
+            rows_ts,
+            rows_ts.date(),
+        ],
+    ]
+
+    sink.client.insert(
+        "work_unit_membership", membership_rows, column_names=_membership_cols()
+    )
+    sink.client.insert(
+        "work_unit_membership_runs",
+        run_marker_rows,
+        column_names=_membership_run_cols(),
+    )
+    sink.client.insert("work_graph_edges", edge_rows, column_names=_edge_cols())
+
+    assert CLICKHOUSE_URI is not None
+    context = GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink)
+
+    try:
+        # The OLD node (would be out-of-window for a 30d materialize) is STILL
+        # filterable from the full-coverage projection run — not blanked.
+        old_result = await resolve_work_graph_edges(
+            context, WorkGraphEdgeFilterInput(theme="maintenance")
+        )
+        assert [e.edge_id for e in old_result.edges] == [old_edge], (
+            "the full-coverage projection must keep out-of-window components "
+            "filterable — a windowed marker would have blanked them (round-3 #2)"
+        )
+        # The NEW (in-window) node is filterable too.
+        new_result = await resolve_work_graph_edges(
+            context, WorkGraphEdgeFilterInput(theme="feature_delivery")
+        )
+        assert [e.edge_id for e in new_result.edges] == [new_edge]
+    finally:
+        for table in (
+            "work_unit_membership",
+            "work_unit_membership_runs",
+            "work_graph_edges",
+        ):
+            sink.client.command(
+                f"ALTER TABLE {table} DELETE WHERE org_id = {{o:String}} "
+                "SETTINGS mutations_sync=2",
+                parameters={"o": org_id},
+            )

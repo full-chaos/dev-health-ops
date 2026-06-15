@@ -277,6 +277,7 @@ class InvestmentsGeneratorMixin(BaseGeneratorMixin):
         work_unit_investments: list[Any],
         *,
         org_id: str = "",
+        run_id: str = "",
     ) -> list[Any]:
         """Generate work_unit_membership rows from generated investment records.
 
@@ -288,9 +289,13 @@ class InvestmentsGeneratorMixin(BaseGeneratorMixin):
         tie-break. Each fixture work unit is a single issue node
         (work_unit_id == work_item_id), so the node is ("issue", work_unit_id).
 
-        Populating this in fixtures means the live-e2e/demo org exercises theme
-        filtering directly and the degraded path (MEMBERSHIP_NOT_MATERIALIZED)
-        is only ever hit pre-materialization (CHAOS-2430).
+        ``run_id`` (CHAOS-2433) is stamped on every row; the caller MUST also
+        publish a matching ``work_unit_membership_runs`` completion marker, or the
+        run-scoped resolver will treat these rows as an incomplete (invisible)
+        run.  Populating this in fixtures means the live-e2e/demo org exercises
+        theme filtering directly and the degraded path
+        (MEMBERSHIP_NOT_MATERIALIZED) is only ever hit pre-materialization
+        (CHAOS-2430).
         """
         from dev_health_ops.metrics.schemas import WorkUnitMembershipRecord
         from dev_health_ops.work_graph.investment.materialize import (
@@ -321,6 +326,7 @@ class InvestmentsGeneratorMixin(BaseGeneratorMixin):
                             is_dominant=is_dominant,
                             categorization_status=inv.categorization_status,
                             computed_at=inv.computed_at,
+                            run_id=run_id,
                         )
                     )
         return records

@@ -1,15 +1,15 @@
-"""Tests for CHAOS-2429/2430/2433: work_unit_membership multi-membership emission.
+"""Tests for CHAOS-2429/2430/2433: membership category helpers + materializer.
 
 Covers:
 - _lexical_argmax dominant selection + tie-break.
 - _membership_categories: multi-membership above the weight threshold, always
   including the argmax (is_dominant=1) even when below threshold, threshold
   boundary (0.2 included, 0.19 excluded unless dominant).
-- Materializer emits one row per (node, category) for theme and subcategory
-  kinds; 45/40 split is recorded under BOTH themes; is_dominant correctness.
-- Org isolation; fallback-status rows still stamped; work_unit_id consistency.
-- run_id is stamped on every membership row and matches categorization_run_id.
-- Completion marker (WorkUnitMembershipRunRecord) is written AFTER membership rows.
+- Materializer (CHAOS-2433 round-3 finding #2): writes work_unit_investments
+  ONLY — it NO LONGER writes work_unit_membership rows or the completion marker.
+  Membership is written exclusively by the no-LLM projection (backfill.py); see
+  tests/test_membership_backfill.py for the per-node/category emission, run_id,
+  marker-order, and coverage correctness.
 """
 
 from __future__ import annotations
@@ -276,21 +276,19 @@ def _make_config(
 
 
 # ---------------------------------------------------------------------------
-# Integration tests
+# Materializer integration tests — CHAOS-2433 round-3 finding #2.
+#
+# The materializer writes work_unit_investments ONLY. Membership rows + the
+# completion marker are written EXCLUSIVELY by the no-LLM projection
+# (backfill.py); see tests/test_membership_backfill.py for membership emission
+# correctness (per-node/category, run_id, marker order, coverage).
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_membership_rows_emitted_per_node_and_category(monkeypatch):
-    """Rows are emitted per (node, category) across both kinds.
-
-    subcategory dist: feature_delivery.roadmap=0.9, operational.support=0.1
-    → rolled-up themes: feature_delivery=0.9, operational=0.1.
-    Theme rows kept: feature_delivery (>=0.2 + dominant). operational (0.1) is
-    below threshold and not dominant → excluded.
-    Subcategory rows kept: feature_delivery.roadmap (dominant). operational.support 0.1
-    excluded. So 2 category rows per node, x2 nodes = 4 rows.
-    """
+async def test_materialize_writes_investments_only_no_membership(monkeypatch):
+    """The materializer persists work_unit_investments but writes NO membership
+    rows and NO completion marker (unified writer — backfill owns membership)."""
     repo_id, edges, work_items, commits = _sample_two_node_data()
     sink = FakeSink()
 
@@ -315,111 +313,34 @@ async def test_membership_rows_emitted_per_node_and_category(monkeypatch):
         _fake_categorize,
     )
 
-    await materialize_investments(_make_config(repo_id))
+    stats = await materialize_investments(_make_config(repo_id))
 
-    node_keys = {(r.node_type, r.node_id) for r in sink.membership_rows}
-    assert ("issue", "gh:ISSUE-1") in node_keys
-    assert ("commit", f"{repo_id}@abc123") in node_keys
+    # Investments ARE written, with the categorized distribution.
+    assert sink.investment_rows, "materializer must persist work_unit_investments"
+    inv = sink.investment_rows[0]
+    assert inv.org_id == "test-org"
+    assert inv.theme_distribution_json  # rolled-up themes present
+    assert inv.subcategory_distribution_json.get("feature_delivery.roadmap") == 0.9
 
-    # Per node: 1 theme row (feature_delivery) + 1 subcategory row.
-    issue_rows = [r for r in sink.membership_rows if r.node_id == "gh:ISSUE-1"]
-    theme_rows = [r for r in issue_rows if r.category_kind == "theme"]
-    sub_rows = [r for r in issue_rows if r.category_kind == "subcategory"]
-    assert {r.category for r in theme_rows} == {"feature_delivery"}
-    assert {r.category for r in sub_rows} == {"feature_delivery.roadmap"}
-    assert all(r.is_dominant == 1 for r in issue_rows)
+    # NO membership rows and NO marker — the projection owns those now.
+    assert sink.membership_rows == [], (
+        "materializer must NOT write work_unit_membership rows "
+        "(CHAOS-2433 round-3 finding #2)"
+    )
+    assert sink.membership_run_records == [], (
+        "materializer must NOT publish a completion marker (unified writer)"
+    )
+    assert sink._write_order == [], "no membership/marker writes from materializer"
+
+    # The stats no longer report a memberships count (materializer doesn't emit).
+    assert "memberships" not in stats
+    assert stats["records"] >= 1
 
 
 @pytest.mark.asyncio
-async def test_membership_45_40_split_findable_under_both_themes(monkeypatch):
-    """A 45%-feature / 40%-maintenance unit records BOTH theme rows so it is
-    findable under either theme (the core multi-membership requirement)."""
-    repo_id, edges, work_items, commits = _sample_two_node_data()
-    sink = FakeSink()
-
-    async def _fake_categorize(bundle, llm_provider, llm_model=None, provider=None):
-        # Subcategories roll up to themes 45% feature / 40% maintenance / 15% quality.
-        return CategorizationOutcome(
-            subcategories={
-                "feature_delivery.roadmap": 0.45,
-                "maintenance.refactor": 0.40,
-                "quality.testing": 0.15,
-            },
-            evidence_quotes=[],
-            uncertainty="",
-            status="ok",
-            errors=[],
-        )
-
-    monkeypatch.setattr(
-        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
-    )
-    _patch_queries(monkeypatch, edges, work_items, commits, repo_id)
-    monkeypatch.setattr(
-        "dev_health_ops.work_graph.investment.materialize.categorize_text_bundle",
-        _fake_categorize,
-    )
-
-    await materialize_investments(_make_config(repo_id))
-
-    issue_theme_rows = [
-        r
-        for r in sink.membership_rows
-        if r.node_id == "gh:ISSUE-1" and r.category_kind == "theme"
-    ]
-    theme_cats = {r.category for r in issue_theme_rows}
-    # Both feature_delivery (0.45) and maintenance (0.40) recorded; quality (0.15) not.
-    assert "feature_delivery" in theme_cats
-    assert "maintenance" in theme_cats
-    assert "quality" not in theme_cats
-    # feature_delivery (0.45) is the dominant.
-    dominant = {r.category for r in issue_theme_rows if r.is_dominant == 1}
-    assert dominant == {"feature_delivery"}
-
-
-@pytest.mark.asyncio
-async def test_membership_dominant_tie_break_lexical(monkeypatch):
-    """When two themes tie on rolled-up weight, the lexically smallest is dominant."""
-    repo_id, edges, work_items, commits = _sample_two_node_data()
-    sink = FakeSink()
-
-    async def _fake_categorize(bundle, llm_provider, llm_model=None, provider=None):
-        # Two subcategories under different themes, equal weight → theme tie.
-        return CategorizationOutcome(
-            subcategories={
-                "maintenance.refactor": 0.5,
-                "feature_delivery.roadmap": 0.5,
-            },
-            evidence_quotes=[],
-            uncertainty="",
-            status="ok",
-            errors=[],
-        )
-
-    monkeypatch.setattr(
-        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
-    )
-    _patch_queries(monkeypatch, edges, work_items, commits, repo_id)
-    monkeypatch.setattr(
-        "dev_health_ops.work_graph.investment.materialize.categorize_text_bundle",
-        _fake_categorize,
-    )
-
-    await materialize_investments(_make_config(repo_id))
-
-    theme_rows = [
-        r
-        for r in sink.membership_rows
-        if r.node_id == "gh:ISSUE-1" and r.category_kind == "theme"
-    ]
-    dominant = {r.category for r in theme_rows if r.is_dominant == 1}
-    # "feature_delivery" < "maintenance" lexically → it is the dominant.
-    assert dominant == {"feature_delivery"}
-
-
-@pytest.mark.asyncio
-async def test_membership_org_isolation(monkeypatch):
-    """Membership rows carry config.org_id."""
+async def test_materialize_scoped_run_writes_no_membership_or_marker(monkeypatch):
+    """A repo-scoped materialize also writes investments only — no membership,
+    no marker. (The org-wide projection publishes the full-coverage marker.)"""
     repo_id, edges, work_items, commits = _sample_two_node_data()
     sink = FakeSink()
 
@@ -441,138 +362,29 @@ async def test_membership_org_isolation(monkeypatch):
         _fake_categorize,
     )
 
-    await materialize_investments(_make_config(repo_id, org_id="acme-corp"))
-
-    assert len(sink.membership_rows) > 0
-    assert all(r.org_id == "acme-corp" for r in sink.membership_rows)
-
-
-@pytest.mark.asyncio
-async def test_membership_fallback_status_still_stamped(monkeypatch):
-    """Fallback-status rows (insufficient_evidence) are still emitted with a
-    dominant category and categorization_status='insufficient_evidence'."""
-    repo_id, edges, work_items, commits = _sample_two_node_data()
-    # Make description too short to pass MIN_EVIDENCE_CHARS → triggers fallback path.
-    work_items[0]["description"] = "short"
-    sink = FakeSink()
-
-    monkeypatch.setattr(
-        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
-    )
-    _patch_queries(monkeypatch, edges, work_items, commits, repo_id)
-    # categorize_text_bundle should NOT be called for fallback; no patch needed.
-
-    await materialize_investments(_make_config(repo_id))
-
-    assert len(sink.membership_rows) > 0
-    for row in sink.membership_rows:
-        assert row.categorization_status == "insufficient_evidence"
-        assert row.category  # non-empty category string
-        assert row.category_kind in {"theme", "subcategory"}
-    # Every node has at least one dominant theme and one dominant subcategory.
-    for node_id in ("gh:ISSUE-1", f"{repo_id}@abc123"):
-        node_rows = [r for r in sink.membership_rows if r.node_id == node_id]
-        dom_theme = [
-            r for r in node_rows if r.category_kind == "theme" and r.is_dominant == 1
-        ]
-        dom_sub = [
-            r
-            for r in node_rows
-            if r.category_kind == "subcategory" and r.is_dominant == 1
-        ]
-        assert len(dom_theme) == 1
-        assert len(dom_sub) == 1
-
-
-@pytest.mark.asyncio
-async def test_membership_work_unit_id_matches_investment(monkeypatch):
-    """All membership rows for a component share the investment record's work_unit_id."""
-    repo_id, edges, work_items, commits = _sample_two_node_data()
-    sink = FakeSink()
-
-    async def _fake_categorize(bundle, llm_provider, llm_model=None, provider=None):
-        return CategorizationOutcome(
-            subcategories={"operational.support": 1.0},
-            evidence_quotes=[],
-            uncertainty="",
-            status="ok",
-            errors=[],
-        )
-
-    monkeypatch.setattr(
-        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
-    )
-    _patch_queries(monkeypatch, edges, work_items, commits, repo_id)
-    monkeypatch.setattr(
-        "dev_health_ops.work_graph.investment.materialize.categorize_text_bundle",
-        _fake_categorize,
-    )
-
-    await materialize_investments(_make_config(repo_id))
+    await materialize_investments(_make_config(repo_id, repo_ids=[repo_id]))
 
     assert sink.investment_rows
-    investment_unit_id = sink.investment_rows[0].work_unit_id
-    for row in sink.membership_rows:
-        assert row.work_unit_id == investment_unit_id
-
-
-# ---------------------------------------------------------------------------
-# run_id / completion-marker protocol tests (CHAOS-2433)
-# ---------------------------------------------------------------------------
+    assert sink.membership_rows == []
+    assert sink.membership_run_records == []
 
 
 @pytest.mark.asyncio
-async def test_membership_rows_carry_run_id(monkeypatch):
-    """All membership rows carry a non-empty run_id matching the investment
-    run's categorization_run_id (materializer reuses the same run_id)."""
+async def test_materialize_does_not_call_membership_sink_methods(monkeypatch):
+    """Defensive: the materializer never invokes write_work_unit_memberships or
+    write_membership_run (they would raise here)."""
     repo_id, edges, work_items, commits = _sample_two_node_data()
-    sink = FakeSink()
 
-    async def _fake_categorize(bundle, llm_provider, llm_model=None, provider=None):
-        return CategorizationOutcome(
-            subcategories={"feature_delivery.roadmap": 1.0},
-            evidence_quotes=[],
-            uncertainty="",
-            status="ok",
-            errors=[],
-        )
+    class _NoMembershipSink(FakeSink):
+        def write_work_unit_memberships(self, rows):  # type: ignore[override]
+            raise AssertionError(
+                "materializer must not write membership rows (round-3 #2)"
+            )
 
-    monkeypatch.setattr(
-        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
-    )
-    _patch_queries(monkeypatch, edges, work_items, commits, repo_id)
-    monkeypatch.setattr(
-        "dev_health_ops.work_graph.investment.materialize.categorize_text_bundle",
-        _fake_categorize,
-    )
+        def write_membership_run(self, record):  # type: ignore[override]
+            raise AssertionError("materializer must not publish a marker (round-3 #2)")
 
-    await materialize_investments(_make_config(repo_id))
-
-    assert sink.membership_rows, "membership rows must be written"
-    # All rows have a non-empty run_id.
-    for row in sink.membership_rows:
-        assert row.run_id, f"run_id must be non-empty, got {row.run_id!r}"
-
-    # All rows share the SAME run_id (one run per materialize call).
-    run_ids = {row.run_id for row in sink.membership_rows}
-    assert len(run_ids) == 1, f"all rows must share one run_id, got: {run_ids}"
-
-    # The membership run_id matches the investment record's categorization_run_id.
-    assert sink.investment_rows, "investment rows must be written"
-    investment_run_id = sink.investment_rows[0].categorization_run_id
-    (membership_run_id,) = run_ids
-    assert membership_run_id == investment_run_id, (
-        "membership run_id must match investment categorization_run_id"
-    )
-
-
-@pytest.mark.asyncio
-async def test_completion_marker_written_after_membership_rows(monkeypatch):
-    """The completion-marker (WorkUnitMembershipRunRecord) is written to
-    work_unit_membership_runs AFTER all membership rows — proving the
-    run_id protocol write order."""
-    repo_id, edges, work_items, commits = _sample_two_node_data()
-    sink = FakeSink()
+    sink = _NoMembershipSink()
 
     async def _fake_categorize(bundle, llm_provider, llm_model=None, provider=None):
         return CategorizationOutcome(
@@ -592,63 +404,6 @@ async def test_completion_marker_written_after_membership_rows(monkeypatch):
         _fake_categorize,
     )
 
+    # Must NOT raise — proves neither membership method is called.
     await materialize_investments(_make_config(repo_id))
-
-    # Exactly one completion-marker written.
-    assert len(sink.membership_run_records) == 1, (
-        "exactly one completion-marker must be written"
-    )
-    marker = sink.membership_run_records[0]
-
-    # The marker's run_id matches the membership rows.
-    (membership_run_id,) = {row.run_id for row in sink.membership_rows}
-    assert marker.run_id == membership_run_id
-
-    # Write ORDER: membership rows come before the marker.
-    assert sink._write_order == ["memberships", "run_marker"], (
-        f"expected memberships then run_marker, got: {sink._write_order}"
-    )
-
-    # Marker's org_id matches the config.
-    assert marker.org_id == "test-org"
-
-
-@pytest.mark.asyncio
-async def test_materialize_scoped_run_writes_no_org_marker(monkeypatch):
-    """FINDING #2 (scoped runs must not publish an org-wide marker): a
-    repo-scoped materialize writes membership rows but does NOT publish the
-    org-wide completion marker — otherwise it would become the org's latest
-    complete run while covering only that scope, blanking other repos for
-    unscoped reads. The org-wide post-sync run publishes."""
-    repo_id, edges, work_items, commits = _sample_two_node_data()
-    sink = FakeSink()
-
-    async def _fake_categorize(bundle, llm_provider, llm_model=None, provider=None):
-        return CategorizationOutcome(
-            subcategories={"feature_delivery.roadmap": 1.0},
-            evidence_quotes=[],
-            uncertainty="",
-            status="ok",
-            errors=[],
-        )
-
-    monkeypatch.setattr(
-        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
-    )
-    _patch_queries(monkeypatch, edges, work_items, commits, repo_id)
-    monkeypatch.setattr(
-        "dev_health_ops.work_graph.investment.materialize.categorize_text_bundle",
-        _fake_categorize,
-    )
-
-    # Repo-SCOPED run.
-    await materialize_investments(_make_config(repo_id, repo_ids=[repo_id]))
-
-    # Membership rows ARE written for the scoped repo.
-    assert sink.membership_rows
-    # But NO org-wide completion marker is published.
-    assert sink.membership_run_records == [], (
-        "a repo-scoped materialize must not publish an org-wide completion "
-        "marker (CHAOS-2433 finding #2)"
-    )
-    assert sink._write_order == ["memberships"]
+    assert sink.investment_rows

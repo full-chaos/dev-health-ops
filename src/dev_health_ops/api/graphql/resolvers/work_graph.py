@@ -340,19 +340,28 @@ def _row_to_edge(
 # When NO complete run exists for the org (table empty or all runs incomplete),
 # readers treat it as no membership at all — degraded state if investments exist.
 #
-# LEGACY ROLLOUT (CHAOS-2433 finding #3):
+# LEGACY ROLLOUT (CHAOS-2433 finding #3, corrected in the final review):
 # Migration 048 seeds ONE synthetic "legacy" marker per org that already had
 # membership rows before migration 047 (run_id defaulted to '' on those rows,
 # and no real run had published a marker yet).  The legacy marker uses the
 # reserved run_id _LEGACY_RUN_ID and completed_at = max(existing computed_at).
 # When the selected latest run IS the legacy marker, readers must match the
-# PRE-EXISTING rows (run_id = '') instead of looking for rows tagged with the
-# literal '__legacy__'.  The join condition below therefore matches a row when
-# its run_id equals the latest run OR (the latest run is the legacy marker AND
-# the row carries the empty default run_id).  As soon as a real org-wide run
-# publishes a marker, its completed_at exceeds the legacy marker's, argMax
-# selects it, and the legacy path retires automatically (no cleanup needed; the
-# legacy marker simply stops being the latest).
+# PRE-EXISTING rows (run_id = '').
+#
+# OVER-MATCH FIX (final review HIGH): a blanket "match ALL run_id='' rows" is
+# WRONG.  The OLD pre-protocol table key was (org, node, category_kind, category)
+# with run_id NOT in the key, so a node that was dominant category A at T1 and
+# re-materialized to dominant category B at T2 has BOTH rows persisted (A and B
+# are different category values -> different keys -> ReplacingMergeTree never
+# deduped them).  The OLD reader scoped each node to its latest row via
+# max(computed_at) per (org, node).  A blanket run_id='' match resurfaces the
+# stale A alongside the current B (wrong filters + multiple is_dominant rows per
+# node) during the rollout window.  We therefore restore the EXACT old per-node
+# semantics for the legacy run ONLY: scope each node to its latest computed_at
+# among its run_id='' rows.  For REAL run_ids, run_id equality is unchanged (the
+# protocol guarantees one generation per run_id, so no per-node-max is needed).
+# As soon as a real org-wide run publishes a marker, its completed_at exceeds the
+# legacy marker's, argMax selects it, and the legacy path retires automatically.
 _LEGACY_RUN_ID = "__legacy__"
 
 _LATEST_COMPLETE_RUN_SUBQUERY = """
@@ -361,14 +370,42 @@ _LATEST_COMPLETE_RUN_SUBQUERY = """
         WHERE org_id = %(org_id)s
 """
 
-# Join predicate that scopes membership rows to the latest complete run, with
-# the legacy fallback baked in.  ``m`` is the work_unit_membership alias and
-# ``latest_run`` is the _LATEST_COMPLETE_RUN_SUBQUERY alias.  The empty-string
-# guard (latest_run.latest_run_id != '') stays the caller's responsibility so
-# orgs with no complete run still resolve to "no membership".
-_RUN_SCOPE_JOIN_ON = (
-    "m.run_id = latest_run.latest_run_id "
-    f"OR (latest_run.latest_run_id = '{_LEGACY_RUN_ID}' AND m.run_id = '')"
+# LEFT JOIN to an inline derived table computing, per (org, node), the MAX
+# computed_at among LEGACY rows (run_id = '').  Bound to ``m`` by (org, node) and
+# aliased ``lnm`` so the scope predicate can restrict the legacy branch to each
+# node's most recent pre-migration row — the exact old per-node-latest behavior.
+# Inlined (not a top-level CTE) so it works identically in the annotation query
+# AND inside the correlated EXISTS semi-join.  Only meaningful when the latest
+# run is the legacy marker; harmless (unmatched LEFT JOIN) otherwise.  The
+# scoping subquery is org-scoped via %(org_id)s.
+_LEGACY_NODE_MAX_JOIN = """
+            LEFT JOIN (
+                SELECT
+                    org_id,
+                    node_type,
+                    node_id,
+                    max(computed_at) AS legacy_max_computed_at
+                FROM work_unit_membership
+                WHERE org_id = %(org_id)s AND run_id = ''
+                GROUP BY org_id, node_type, node_id
+            ) AS lnm
+                ON lnm.org_id = m.org_id
+                AND lnm.node_type = m.node_type
+                AND lnm.node_id = m.node_id
+"""
+
+# Scope predicate (legacy-vs-real conditional).  ``m`` = work_unit_membership
+# alias, ``latest_run`` = _LATEST_COMPLETE_RUN_SUBQUERY alias, ``lnm`` =
+# _LEGACY_NODE_MAX_JOIN alias.  REAL run -> run_id equality (one generation per
+# run_id).  LEGACY run -> the node's latest pre-migration row only (run_id='' AND
+# computed_at == that node's legacy max), NOT a blanket run_id='' match.  The
+# empty-string guard (latest_run.latest_run_id != '') stays the caller's
+# responsibility so orgs with no complete run resolve to "no membership".
+_RUN_SCOPE_PREDICATE = (
+    f"(latest_run.latest_run_id != '{_LEGACY_RUN_ID}' "
+    "AND m.run_id = latest_run.latest_run_id) "
+    f"OR (latest_run.latest_run_id = '{_LEGACY_RUN_ID}' AND m.run_id = '' "
+    "AND m.computed_at = lnm.legacy_max_computed_at)"
 )
 
 
@@ -416,13 +453,14 @@ async def _batch_resolve_membership(
                 m.category_kind AS category_kind,
                 m.category AS category
             FROM work_unit_membership AS m
-            INNER JOIN latest_run
-                ON {_RUN_SCOPE_JOIN_ON}
+            INNER JOIN latest_run ON 1 = 1
+            {_LEGACY_NODE_MAX_JOIN}
             WHERE m.org_id = %(org_id)s
               AND m.node_type IN %(node_types)s
               AND m.node_id IN %(node_ids)s
               AND m.is_dominant = 1
               AND latest_run.latest_run_id != ''
+              AND ({_RUN_SCOPE_PREDICATE})
             """,
             {
                 "org_id": org_id,
@@ -484,9 +522,11 @@ def _theme_membership_exists_clause() -> str:
             SELECT 1
             FROM work_unit_membership AS m
             INNER JOIN ({_LATEST_COMPLETE_RUN_SUBQUERY}) AS latest_run
-                ON {_RUN_SCOPE_JOIN_ON}
+                ON 1 = 1
+            {_LEGACY_NODE_MAX_JOIN}
             WHERE m.org_id = %(org_id)s
               AND latest_run.latest_run_id != ''
+              AND ({_RUN_SCOPE_PREDICATE})
               AND (
                 (m.node_type, m.node_id) = (work_graph_edges.source_type, work_graph_edges.source_id)
                 OR (m.node_type, m.node_id) = (work_graph_edges.target_type, work_graph_edges.target_id)

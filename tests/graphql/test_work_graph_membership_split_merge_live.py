@@ -1633,3 +1633,231 @@ async def test_out_of_window_previously_categorized_component_stays_visible(sink
                 "SETTINGS mutations_sync=2",
                 parameters={"o": org_id},
             )
+
+
+@pytest.mark.asyncio
+async def test_legacy_per_node_max_excludes_stale_dominant(sink):
+    """FINAL REVIEW HIGH — legacy fallback must NOT over-match stale rows.
+
+    Pre-protocol, the old table key was (org, node, category_kind, category) with
+    run_id NOT in the key, so a node that was dominant category A at T1 and
+    re-materialized to dominant category B at T2 has BOTH rows persisted (distinct
+    category values -> distinct keys -> never deduped), all at run_id=''. The OLD
+    reader scoped each node to max(computed_at). A blanket run_id='' legacy match
+    would resurface stale A alongside current B.
+
+    With only the '__legacy__' marker present, assert:
+      * a theme filter for A's category (maintenance) returns NO node,
+      * a theme filter for B's category (feature_delivery) returns the node,
+      * the annotation reports exactly ONE dominant (B), no stale A duplicate.
+    Then a real org-wide run supersedes the legacy path entirely.
+    """
+    org_id = f"test-chaos-2433-legacy-pernode-{uuid.uuid4()}"
+    node_id = f"ISSUE-{uuid.uuid4()}"
+    pr_id = f"PR-{uuid.uuid4()}"
+    edge_id = f"edge-{uuid.uuid4()}"
+    repo_uuid = str(uuid.uuid4())
+    t1 = datetime(2024, 1, 1, tzinfo=timezone.utc)  # OLD dominant A
+    t2 = datetime(2024, 2, 1, tzinfo=timezone.utc)  # NEWER dominant B
+    legacy_ts = t2  # migration 048 seeds completed_at = max(existing computed_at)
+
+    # Both rows run_id='' (pre-migration shape), is_dominant=1, DIFFERENT category
+    # values across two re-materializations -> both survived the old dedup key.
+    legacy_rows = [
+        # OLD dominant: maintenance @ T1
+        [
+            org_id,
+            "issue",
+            node_id,
+            "U_OLD",
+            "theme",
+            "maintenance",
+            0.9,
+            1,
+            "ok",
+            t1,
+            "",
+        ],
+        [
+            org_id,
+            "issue",
+            node_id,
+            "U_OLD",
+            "subcategory",
+            "maintenance.refactor",
+            0.9,
+            1,
+            "ok",
+            t1,
+            "",
+        ],
+        # NEWER dominant: feature_delivery @ T2
+        [
+            org_id,
+            "issue",
+            node_id,
+            "U_NEW",
+            "theme",
+            "feature_delivery",
+            0.95,
+            1,
+            "ok",
+            t2,
+            "",
+        ],
+        [
+            org_id,
+            "issue",
+            node_id,
+            "U_NEW",
+            "subcategory",
+            "feature_delivery.roadmap",
+            0.95,
+            1,
+            "ok",
+            t2,
+            "",
+        ],
+    ]
+    legacy_marker = [[org_id, "__legacy__", legacy_ts]]
+    edge_rows = [
+        [
+            org_id,
+            edge_id,
+            "issue",
+            node_id,
+            "pr",
+            pr_id,
+            "implements",
+            repo_uuid,
+            "github",
+            "native",
+            1.0,
+            "",
+            t2,
+            t2,
+            t2,
+            t2.date(),
+        ],
+    ]
+
+    sink.client.insert(
+        "work_unit_membership", legacy_rows, column_names=_membership_cols()
+    )
+    sink.client.insert(
+        "work_unit_membership_runs", legacy_marker, column_names=_membership_run_cols()
+    )
+    sink.client.insert("work_graph_edges", edge_rows, column_names=_edge_cols())
+
+    assert CLICKHOUSE_URI is not None
+    context = GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink)
+
+    try:
+        # PHASE 1 (legacy): the STALE A (maintenance) must NOT match — only the
+        # node's latest pre-migration row (B) is in scope.
+        stale = await resolve_work_graph_edges(
+            context, WorkGraphEdgeFilterInput(theme="maintenance")
+        )
+        assert stale.edges == [], (
+            "legacy per-node-max guard must NOT resurface the stale OLD dominant "
+            "(maintenance @ T1) — only the latest legacy row counts (final HIGH)"
+        )
+
+        # The CURRENT B (feature_delivery) DOES match.
+        current = await resolve_work_graph_edges(
+            context, WorkGraphEdgeFilterInput(theme="feature_delivery")
+        )
+        assert [e.edge_id for e in current.edges] == [edge_id]
+        assert current.edges[0].theme == "feature_delivery"
+
+        # Annotation reports EXACTLY ONE dominant (B), no stale A duplicate.
+        unfiltered = await resolve_work_graph_edges(context)
+        edge = next(e for e in unfiltered.edges if e.edge_id == edge_id)
+        assert edge.theme == "feature_delivery"
+        assert edge.subcategory == "feature_delivery.roadmap"
+
+        # Direct DB proof: the in-scope dominant theme rows for this node under the
+        # legacy per-node-max guard are exactly ONE (B), not two (A + B). Use a
+        # correlated subquery for the per-node max so we never re-bind a timestamp
+        # (avoids DateTime64 precision/round-trip fragility).
+        in_scope = sink.client.query(
+            "SELECT category FROM work_unit_membership AS m "
+            "WHERE m.org_id = {o:String} AND m.node_id = {n:String} "
+            "AND m.run_id = '' AND m.category_kind = 'theme' AND m.is_dominant = 1 "
+            "AND m.computed_at = ("
+            "  SELECT max(computed_at) FROM work_unit_membership "
+            "  WHERE org_id = m.org_id AND node_type = m.node_type "
+            "  AND node_id = m.node_id AND run_id = ''"
+            ")",
+            parameters={"o": org_id, "n": node_id},
+        ).result_rows
+        assert [r[0] for r in in_scope] == ["feature_delivery"], (
+            "exactly one in-scope dominant theme under the legacy per-node-max "
+            "guard, and it is B (feature_delivery), not stale A"
+        )
+
+        # PHASE 2: a REAL org-wide run supersedes legacy entirely.
+        real_run = uuid.uuid4().hex
+        real_ts = datetime(2026, 4, 1, tzinfo=timezone.utc)
+        sink.client.insert(
+            "work_unit_membership",
+            [
+                [
+                    org_id,
+                    "issue",
+                    node_id,
+                    "U_REAL",
+                    "theme",
+                    "quality",
+                    0.9,
+                    1,
+                    "ok",
+                    real_ts,
+                    real_run,
+                ],
+                [
+                    org_id,
+                    "issue",
+                    node_id,
+                    "U_REAL",
+                    "subcategory",
+                    "quality.testing",
+                    0.9,
+                    1,
+                    "ok",
+                    real_ts,
+                    real_run,
+                ],
+            ],
+            column_names=_membership_cols(),
+        )
+        sink.client.insert(
+            "work_unit_membership_runs",
+            [[org_id, real_run, real_ts]],
+            column_names=_membership_run_cols(),
+        )
+
+        after = await resolve_work_graph_edges(
+            context, WorkGraphEdgeFilterInput(theme="quality")
+        )
+        assert [e.edge_id for e in after.edges] == [edge_id]
+        assert after.edges[0].theme == "quality"
+        # Neither legacy theme matches once the real run is latest.
+        for legacy_theme in ("feature_delivery", "maintenance"):
+            gone = await resolve_work_graph_edges(
+                context, WorkGraphEdgeFilterInput(theme=legacy_theme)
+            )
+            assert gone.edges == [], (
+                f"real run must supersede legacy entirely; {legacy_theme} gone"
+            )
+    finally:
+        for table in (
+            "work_unit_membership",
+            "work_unit_membership_runs",
+            "work_graph_edges",
+        ):
+            sink.client.command(
+                f"ALTER TABLE {table} DELETE WHERE org_id = {{o:String}} "
+                "SETTINGS mutations_sync=2",
+                parameters={"o": org_id},
+            )

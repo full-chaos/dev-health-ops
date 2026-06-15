@@ -190,8 +190,14 @@ class TestEdgeThemeAttribution:
         assert "m.run_id = latest_run.latest_run_id" in annotation_sql
         # Guard: empty run_id (no complete run) excluded.
         assert "latest_run.latest_run_id != ''" in annotation_sql
-        # NOT per-node max(computed_at).
-        assert "max(computed_at)" not in annotation_sql
+        # REAL runs use run_id equality (NOT a global per-node max(computed_at)).
+        # The ONLY max(computed_at) is the LEGACY per-node guard (CHAOS-2433 final
+        # review HIGH), scoped to run_id='' rows and applied only when the latest
+        # run is the __legacy__ marker.
+        assert "max(computed_at) AS legacy_max_computed_at" in annotation_sql
+        assert "m.computed_at = lnm.legacy_max_computed_at" in annotation_sql
+        # Not the old global per-node-max alias.
+        assert "max(computed_at) AS max_computed_at" not in annotation_sql
 
     @pytest.mark.asyncio
     async def test_issue_endpoint_beats_pr_endpoint(self, mock_context):

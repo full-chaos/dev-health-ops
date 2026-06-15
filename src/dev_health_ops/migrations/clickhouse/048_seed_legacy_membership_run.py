@@ -26,10 +26,14 @@ org's existing membership rows:
     FROM work_unit_membership
     GROUP BY org_id
 
-The reader (resolvers/work_graph.py, ``_RUN_SCOPE_JOIN_ON``) recognises the
-reserved ``__legacy__`` run_id and, when it is the org's latest complete run,
-matches the pre-existing rows (``run_id = ''``) rather than rows literally tagged
-``__legacy__``.  So existing membership stays readable the instant 047+048 land.
+The reader (resolvers/work_graph.py, ``_RUN_SCOPE_PREDICATE`` +
+``_LEGACY_NODE_MAX_JOIN``) recognises the reserved ``__legacy__`` run_id and, when
+it is the org's latest complete run, matches each node's LATEST pre-existing row
+(``run_id = ''`` AND ``computed_at`` == that node's max over its legacy rows) —
+the exact OLD per-node-max(computed_at) semantics, NOT a blanket ``run_id = ''``
+match (which would resurface stale rows from earlier re-materializations whose
+distinct category values survived the old non-run_id dedup key). So existing
+membership stays readable — and correct — the instant 047+048 land.
 
 CONVERGENCE / RETIREMENT
 ------------------------

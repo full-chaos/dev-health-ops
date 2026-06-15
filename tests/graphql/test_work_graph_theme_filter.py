@@ -186,7 +186,12 @@ class TestThemeFilterServerSide:
         # seeded __legacy__ marker, pre-existing rows (run_id='') still match.
         assert "latest_run.latest_run_id = '__legacy__'" in edge_sql
         assert "m.run_id = ''" in edge_sql
-        # Must NOT use old per-node max(computed_at) guard.
+        # FINAL REVIEW HIGH: the legacy branch is per-node-max(computed_at), NOT a
+        # blanket run_id='' match — it joins the legacy-node-max derived table and
+        # requires m.computed_at == that node's legacy max.
+        assert "legacy_max_computed_at" in edge_sql
+        assert "m.computed_at = lnm.legacy_max_computed_at" in edge_sql
+        # Must NOT use the old global per-node max(computed_at) guard alias.
         assert "max(computed_at) AS max_computed_at" not in edge_sql
         assert "GROUP BY node_type, node_id" not in edge_sql
 
@@ -917,6 +922,10 @@ class TestLegacyRolloutFallback:
         edge_sql = mock_query.call_args_list[0][0][1]
         assert "latest_run.latest_run_id = '__legacy__'" in edge_sql
         assert "m.run_id = ''" in edge_sql
+        # FINAL REVIEW HIGH: legacy branch scopes to per-node-max(computed_at),
+        # not a blanket run_id='' match.
+        assert "legacy_max_computed_at" in edge_sql
+        assert "m.computed_at = lnm.legacy_max_computed_at" in edge_sql
 
     @pytest.mark.asyncio
     async def test_annotation_path_has_legacy_fallback(self, mock_context):
@@ -949,6 +958,9 @@ class TestLegacyRolloutFallback:
         assert "work_unit_membership_runs" in annotation_sql
         assert "latest_run.latest_run_id = '__legacy__'" in annotation_sql
         assert "m.run_id = ''" in annotation_sql
+        # FINAL REVIEW HIGH: legacy branch scopes to per-node-max(computed_at).
+        assert "legacy_max_computed_at" in annotation_sql
+        assert "m.computed_at = lnm.legacy_max_computed_at" in annotation_sql
         # Annotation actually applied from the legacy rows.
         assert result.edges[0].theme == "feature_delivery"
 

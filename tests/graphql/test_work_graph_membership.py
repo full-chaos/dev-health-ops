@@ -58,18 +58,31 @@ def make_edge_row(
     return base
 
 
-def make_membership_row(
+def make_membership_rows(
     node_type: str,
     node_id: str,
     dominant_theme: str = "feature_delivery",
     dominant_subcategory: str = "feature_delivery.roadmap",
-) -> dict[str, Any]:
-    return {
-        "node_type": node_type,
-        "node_id": node_id,
-        "dominant_theme": dominant_theme,
-        "dominant_subcategory": dominant_subcategory,
-    }
+) -> list[dict[str, Any]]:
+    """Return the is_dominant rows (one per kind) that the annotation query emits.
+
+    The annotation query selects is_dominant=1 rows of the latest run and
+    returns (node_type, node_id, category_kind, category) tuples.
+    """
+    return [
+        {
+            "node_type": node_type,
+            "node_id": node_id,
+            "category_kind": "theme",
+            "category": dominant_theme,
+        },
+        {
+            "node_type": node_type,
+            "node_id": node_id,
+            "category_kind": "subcategory",
+            "category": dominant_subcategory,
+        },
+    ]
 
 
 class TestEdgeThemeAttribution:
@@ -77,11 +90,9 @@ class TestEdgeThemeAttribution:
     async def test_edge_with_issue_membership_carries_theme(self, mock_context):
         """Edge whose source is a known work unit member carries the dominant theme."""
         edge_rows = [make_edge_row(source_type="issue", source_id="PROJ-1")]
-        membership_rows = [
-            make_membership_row(
-                "issue", "PROJ-1", "feature_delivery", "feature_delivery.roadmap"
-            )
-        ]
+        membership_rows = make_membership_rows(
+            "issue", "PROJ-1", "feature_delivery", "feature_delivery.roadmap"
+        )
 
         with patch(
             "dev_health_ops.api.queries.client.query_dicts",
@@ -118,10 +129,9 @@ class TestEdgeThemeAttribution:
             make_edge_row(edge_id="e2", source_id="PROJ-2", target_id="deploy-b"),
             make_edge_row(edge_id="e3", source_id="PROJ-3", target_id="deploy-c"),
         ]
-        membership_rows = [
-            make_membership_row("issue", "PROJ-1"),
-            make_membership_row("issue", "PROJ-2"),
-        ]
+        membership_rows = make_membership_rows(
+            "issue", "PROJ-1"
+        ) + make_membership_rows("issue", "PROJ-2")
 
         with patch(
             "dev_health_ops.api.queries.client.query_dicts",
@@ -171,14 +181,9 @@ class TestEdgeThemeAttribution:
                 target_id="PR-99",
             )
         ]
-        membership_rows = [
-            make_membership_row(
-                "issue", "PROJ-1", "feature_delivery", "feature_delivery.roadmap"
-            ),
-            make_membership_row(
-                "pr", "PR-99", "maintenance", "maintenance.dependency_updates"
-            ),
-        ]
+        membership_rows = make_membership_rows(
+            "issue", "PROJ-1", "feature_delivery", "feature_delivery.roadmap"
+        ) + make_membership_rows("pr", "PR-99", "maintenance", "maintenance.refactor")
 
         with patch(
             "dev_health_ops.api.queries.client.query_dicts",
@@ -202,9 +207,9 @@ class TestEdgeThemeAttribution:
                 target_id="commit-abc",
             )
         ]
-        membership_rows = [
-            make_membership_row("pr", "PR-77", "quality", "quality.testing"),
-        ]
+        membership_rows = make_membership_rows(
+            "pr", "PR-77", "quality", "quality.testing"
+        )
 
         with patch(
             "dev_health_ops.api.queries.client.query_dicts",
@@ -220,13 +225,20 @@ class TestEdgeThemeAttribution:
     async def test_empty_dominant_theme_treated_as_null(self, mock_context):
         """A membership row with empty dominant_theme string is treated as None."""
         edge_rows = [make_edge_row(source_id="PROJ-1")]
+        # is_dominant rows whose category is an empty string (defensive).
         membership_rows = [
             {
                 "node_type": "issue",
                 "node_id": "PROJ-1",
-                "dominant_theme": "",
-                "dominant_subcategory": "",
-            }
+                "category_kind": "theme",
+                "category": "",
+            },
+            {
+                "node_type": "issue",
+                "node_id": "PROJ-1",
+                "category_kind": "subcategory",
+                "category": "",
+            },
         ]
 
         with patch(

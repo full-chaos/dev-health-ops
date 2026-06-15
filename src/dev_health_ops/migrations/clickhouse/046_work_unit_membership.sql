@@ -1,28 +1,39 @@
 -- Migration 046: node-level membership table for Work Graph theme/subcategory
--- filtering (CHAOS-2429).
+-- filtering (CHAOS-2429/2430).
 --
 -- work_unit_investments records one row per connected component (work unit);
--- it has no node→unit index, so the resolver cannot join edges to theme data
--- without scanning the full investments table. This table provides the
--- O(nodes) reverse index: one row per (org_id, node_type, node_id) with the
--- dominant theme and subcategory of the work unit that contains that node.
+-- it has no node->unit index, so the resolver cannot join edges to theme data
+-- without scanning the full investments table. This table is the O(nodes)
+-- reverse index.
 --
--- Dominant theme/subcategory are computed as argmax over the distribution
--- vectors in work_unit_investments, with lexical (smallest-key) tie-breaking
--- for determinism. categorization_status is propagated from the parent unit so
--- callers can filter out low-confidence rows.
+-- GRAIN: one row per (node, category). A node is a member of a category when
+-- that category's weight in the parent work unit's distribution is >=
+-- MEMBERSHIP_WEIGHT_THRESHOLD (0.2). This is MULTI-membership, not dominant-
+-- only: a 45%-feature / 40%-maintenance unit emits BOTH a feature_delivery row
+-- and a maintenance row, so it is findable under either theme (dominant-only
+-- would systematically hide the 40% category). category_kind distinguishes
+-- 'theme' rows from 'subcategory' rows. The argmax category within each kind is
+-- ALWAYS emitted (even if below threshold) with is_dominant=1, so every node is
+-- findable under at least its dominant category; lexical tie-break on argmax.
 --
--- ReplacingMergeTree on computed_at ensures idempotent re-materializations:
--- a re-run overwrites stale rows with a newer computed_at. Read with FINAL or
--- argMax(col, computed_at) for ReplacingMergeTree dedup semantics.
+-- STALE ROWS: ReplacingMergeTree dedups by the full sort key, which includes
+-- (category_kind, category). If a category drops below threshold on a later run
+-- its row is simply not re-emitted, so the old row is NOT overwritten and
+-- lingers. Readers MUST therefore scope to the latest run per work unit: all
+-- rows from one materialization run share a single computed_at, so filtering to
+-- rows whose computed_at equals max(computed_at) per work_unit_id excludes
+-- stale categories. This mirrors the latest-row-per-work-unit argMax/max
+-- pattern used by api/queries/work_unit_investments.py.
 CREATE TABLE IF NOT EXISTS work_unit_membership (
     org_id String,
     node_type String,
     node_id String,
     work_unit_id String,
-    dominant_theme String,
-    dominant_subcategory String,
+    category_kind String,
+    category String,
+    weight Float64,
+    is_dominant UInt8,
     categorization_status String,
     computed_at DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(computed_at)
-ORDER BY (org_id, node_type, node_id);
+ORDER BY (org_id, node_type, node_id, category_kind, category);

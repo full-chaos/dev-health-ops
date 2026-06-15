@@ -158,7 +158,7 @@ class TestThemeFilterServerSide:
 
     @pytest.mark.asyncio
     async def test_subcategory_narrows_match(self, mock_context):
-        """A subcategory filter adds a HAVING predicate on the argMax subcategory."""
+        """theme+subcategory requires membership in BOTH (uniqExact == 2)."""
         matched_node_rows = [node_match_row("issue", "FD-1")]
         edge_rows = [make_edge_row(edge_id="e1", source_type="issue", source_id="FD-1")]
 
@@ -172,21 +172,27 @@ class TestThemeFilterServerSide:
             )
             result = await resolve_work_graph_edges(mock_context, filters)
 
-        # Node-match query carries both theme and subcategory predicates.
+        # Node-match query: tuple-IN over (category_kind, category) + uniqExact HAVING.
         node_call = mock_query.call_args_list[0]
         node_sql = node_call[0][1]
         node_params = node_call[0][2]
-        assert "argMax(dominant_theme, computed_at) = %(theme)s" in node_sql
-        assert "argMax(dominant_subcategory, computed_at) = %(subcategory)s" in node_sql
-        assert node_params["theme"] == "feature_delivery"
-        assert node_params["subcategory"] == "feature_delivery.roadmap"
-        # Returned edges are annotated with the matched subcategory.
+        assert "(m.category_kind, m.category) IN %(category_tuples)s" in node_sql
+        assert "uniqExact((m.category_kind, m.category)) = %(wanted_count)s" in node_sql
+        # Both the theme and subcategory category tuples are requested.
+        assert ("theme", "feature_delivery") in node_params["category_tuples"]
+        assert (
+            "subcategory",
+            "feature_delivery.roadmap",
+        ) in node_params["category_tuples"]
+        assert node_params["wanted_count"] == 2
+        # Returned edges are annotated with the matched theme + subcategory.
         assert result.edges[0].subcategory == "feature_delivery.roadmap"
         assert result.edges[0].theme == "feature_delivery"
 
     @pytest.mark.asyncio
-    async def test_subcategory_only_derives_theme(self, mock_context):
-        """A subcategory-only filter derives the theme prefix ('theme.sub')."""
+    async def test_subcategory_only_matches_on_subcategory_tuple(self, mock_context):
+        """A subcategory-only filter matches on the subcategory tuple (wanted=1)
+        and derives the theme prefix for display annotation."""
         matched_node_rows = [node_match_row("issue", "FD-1")]
         edge_rows = [make_edge_row(edge_id="e1", source_type="issue", source_id="FD-1")]
 
@@ -199,9 +205,10 @@ class TestThemeFilterServerSide:
             result = await resolve_work_graph_edges(mock_context, filters)
 
         node_params = mock_query.call_args_list[0][0][2]
-        # Theme prefix derived from the subcategory.
-        assert node_params["theme"] == "quality"
-        assert node_params["subcategory"] == "quality.testing"
+        # Only the subcategory tuple is required for the match.
+        assert node_params["category_tuples"] == [("subcategory", "quality.testing")]
+        assert node_params["wanted_count"] == 1
+        # Display annotation derives the theme prefix from 'theme.sub'.
         assert result.edges[0].theme == "quality"
         assert result.edges[0].subcategory == "quality.testing"
 
@@ -241,18 +248,31 @@ class TestThemeFilterServerSide:
                 target_id="PR-9",
             )
         ]
+        # is_dominant rows (one per kind) for each endpoint, new grain shape.
         membership_rows = [
             {
                 "node_type": "issue",
                 "node_id": "PROJ-1",
-                "dominant_theme": "operational",
-                "dominant_subcategory": "operational.reliability",
+                "category_kind": "theme",
+                "category": "operational",
+            },
+            {
+                "node_type": "issue",
+                "node_id": "PROJ-1",
+                "category_kind": "subcategory",
+                "category": "operational.support",
             },
             {
                 "node_type": "pr",
                 "node_id": "PR-9",
-                "dominant_theme": "maintenance",
-                "dominant_subcategory": "maintenance.dependency_updates",
+                "category_kind": "theme",
+                "category": "maintenance",
+            },
+            {
+                "node_type": "pr",
+                "node_id": "PR-9",
+                "category_kind": "subcategory",
+                "category": "maintenance.refactor",
             },
         ]
 
@@ -270,7 +290,7 @@ class TestThemeFilterServerSide:
         assert "matched_nodes" not in edge_sql
         # Issue endpoint wins (precedence preserved).
         assert result.edges[0].theme == "operational"
-        assert result.edges[0].subcategory == "operational.reliability"
+        assert result.edges[0].subcategory == "operational.support"
 
     @pytest.mark.asyncio
     async def test_filter_combines_with_repo_and_edge_type(self, mock_context):
@@ -299,3 +319,60 @@ class TestThemeFilterServerSide:
         assert "matched_nodes" in edge_sql
         assert edge_params["repo_ids"] == ["repo-a"]
         assert edge_params["edge_type"] == "implements"
+
+    @pytest.mark.asyncio
+    async def test_mixed_unit_findable_under_both_themes(self, mock_context):
+        """Multi-membership: a node on a 45/40 unit is in the match set for BOTH
+        its themes, so filtering by either returns its edge. The node-match query
+        is what makes this true (it returns the node for each theme it belongs
+        to), so we assert the node is returned under each theme filter."""
+        edge_rows = [
+            make_edge_row(edge_id="e1", source_type="issue", source_id="MIX-1")
+        ]
+
+        # Under EITHER theme filter, the node-match query returns MIX-1 because
+        # the materializer emitted a membership row for both themes.
+        for theme in ("feature_delivery", "maintenance"):
+            with patch(
+                "dev_health_ops.api.queries.client.query_dicts",
+                new_callable=AsyncMock,
+            ) as mock_query:
+                mock_query.side_effect = [[node_match_row("issue", "MIX-1")], edge_rows]
+                filters = WorkGraphEdgeFilterInput(theme=theme)
+                result = await resolve_work_graph_edges(mock_context, filters)
+
+            assert [e.edge_id for e in result.edges] == ["e1"]
+            assert result.edges[0].theme == theme
+
+    @pytest.mark.asyncio
+    async def test_queries_scope_to_latest_run_per_unit(self, mock_context):
+        """Stale-row exclusion: both the node-match (filter) and the annotation
+        query restrict to the latest run per work unit via the
+        max(computed_at)-per-work_unit_id join, so a category dropped on a later
+        run cannot leak in. We assert the latest-run CTE/join appears in the SQL."""
+        # Filtered path → node-match query carries the CTE.
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [[node_match_row("issue", "FD-1")], []]
+            filters = WorkGraphEdgeFilterInput(theme="feature_delivery")
+            await resolve_work_graph_edges(mock_context, filters)
+
+        node_sql = mock_query.call_args_list[0][0][1]
+        assert "max(computed_at) AS max_computed_at" in node_sql
+        assert "m.computed_at = latest.max_computed_at" in node_sql
+
+        # Unfiltered path → annotation query carries the same latest-run join.
+        edge_rows = [make_edge_row(edge_id="e1", source_id="PROJ-1")]
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [edge_rows, []]
+            await resolve_work_graph_edges(mock_context)
+
+        annotation_sql = mock_query.call_args_list[1][0][1]
+        assert "max(computed_at) AS max_computed_at" in annotation_sql
+        assert "m.computed_at = latest.max_computed_at" in annotation_sql
+        assert "m.is_dominant = 1" in annotation_sql

@@ -747,18 +747,27 @@ class WorkUnitInvestmentRecord:
 
 @dataclass(frozen=True)
 class WorkUnitMembershipRecord:
-    """One row per node in a work unit — reverse index for theme/subcategory filtering.
+    """One row per (node, category) — reverse index for theme/subcategory filtering.
 
-    Persisted into ``work_unit_membership`` (CHAOS-2429).
-    Read with FINAL or ``argMax(<col>, computed_at)`` for ReplacingMergeTree dedup.
+    Persisted into ``work_unit_membership`` (CHAOS-2429/2430). Multi-membership:
+    a node emits one row per theme and per subcategory whose weight in the parent
+    work unit's distribution is >= MEMBERSHIP_WEIGHT_THRESHOLD, plus the argmax
+    category of each kind (``is_dominant=1``) even if below threshold.
+
+    ``category_kind`` is ``'theme'`` or ``'subcategory'``. Readers MUST scope to
+    the latest run per work unit (rows whose ``computed_at`` equals the max
+    ``computed_at`` for that ``work_unit_id``) to exclude stale below-threshold
+    categories that ReplacingMergeTree did not overwrite.
     """
 
     org_id: str
     node_type: str
     node_id: str
     work_unit_id: str
-    dominant_theme: str
-    dominant_subcategory: str
+    category_kind: str
+    category: str
+    weight: float
+    is_dominant: int
     categorization_status: str
     computed_at: datetime
 

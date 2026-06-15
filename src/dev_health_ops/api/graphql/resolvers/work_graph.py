@@ -314,17 +314,35 @@ def _row_to_edge(
     )
 
 
+# work_unit_membership is multi-membership (one row per node-category) on a
+# ReplacingMergeTree keyed by (org, node, category_kind, category). A category
+# that drops below threshold on a later run is simply not re-emitted, so its old
+# row is NOT overwritten and lingers. Every read therefore restricts to the
+# latest run per work unit: all rows from one materialization share a single
+# computed_at, so keeping only rows whose computed_at equals the max
+# computed_at for their work_unit_id excludes stale below-threshold categories.
+# This mirrors the latest-row-per-work-unit pattern in
+# api/queries/work_unit_investments.py.
+_LATEST_RUN_PER_UNIT_CTE = """
+    WITH latest AS (
+        SELECT work_unit_id, max(computed_at) AS max_computed_at
+        FROM work_unit_membership
+        WHERE org_id = %(org_id)s
+        GROUP BY work_unit_id
+    )
+"""
+
+
 async def _batch_resolve_membership(
     client: Any,
     org_id: str,
     rows: list[dict[str, Any]],
 ) -> dict[tuple[str, str], dict[str, str]]:
-    """Batch-lookup work_unit_membership for all edge endpoints in ONE query.
+    """Batch-lookup the dominant theme/subcategory per edge endpoint in ONE query.
 
-    Returns a mapping {(node_type, node_id) -> {"dominant_theme": ..., "dominant_subcategory": ...}}.
-    Uses argMax(col, computed_at) to read the latest row per node consistent
-    with ReplacingMergeTree semantics (same pattern as work_unit_investments readers).
-    Scoped to org_id to prevent cross-tenant leaks.
+    Returns {(node_type, node_id) -> {"dominant_theme": ..., "dominant_subcategory": ...}}
+    built from the is_dominant=1 rows of the latest run per work unit (stale
+    below-threshold rows excluded via the latest-run join). Scoped to org_id.
     """
     from dev_health_ops.api.queries.client import query_dicts
 
@@ -349,17 +367,21 @@ async def _batch_resolve_membership(
     try:
         membership_rows = await query_dicts(
             client,
-            """
+            _LATEST_RUN_PER_UNIT_CTE
+            + """
             SELECT
-                node_type,
-                node_id,
-                argMax(dominant_theme, computed_at) AS dominant_theme,
-                argMax(dominant_subcategory, computed_at) AS dominant_subcategory
-            FROM work_unit_membership
-            WHERE org_id = %(org_id)s
-              AND node_type IN %(node_types)s
-              AND node_id IN %(node_ids)s
-            GROUP BY node_type, node_id
+                m.node_type AS node_type,
+                m.node_id AS node_id,
+                m.category_kind AS category_kind,
+                m.category AS category
+            FROM work_unit_membership AS m
+            INNER JOIN latest
+                ON m.work_unit_id = latest.work_unit_id
+               AND m.computed_at = latest.max_computed_at
+            WHERE m.org_id = %(org_id)s
+              AND m.node_type IN %(node_types)s
+              AND m.node_id IN %(node_ids)s
+              AND m.is_dominant = 1
             """,
             {
                 "org_id": org_id,
@@ -375,11 +397,17 @@ async def _batch_resolve_membership(
     for r in membership_rows:
         nt = str(r.get("node_type") or "")
         ni = str(r.get("node_id") or "")
-        if nt and ni:
-            result[(nt, ni)] = {
-                "dominant_theme": str(r.get("dominant_theme") or ""),
-                "dominant_subcategory": str(r.get("dominant_subcategory") or ""),
-            }
+        if not (nt and ni):
+            continue
+        entry = result.setdefault(
+            (nt, ni), {"dominant_theme": "", "dominant_subcategory": ""}
+        )
+        kind = str(r.get("category_kind") or "")
+        category = str(r.get("category") or "")
+        if kind == "theme":
+            entry["dominant_theme"] = category
+        elif kind == "subcategory":
+            entry["dominant_subcategory"] = category
     return result
 
 
@@ -389,41 +417,53 @@ async def _fetch_theme_matching_nodes(
     theme: str | None,
     subcategory: str | None,
 ) -> set[tuple[str, str]]:
-    """Return the set of (node_type, node_id) whose work unit matches the filter.
+    """Return the set of (node_type, node_id) whose work unit is a MEMBER of the
+    requested theme/subcategory.
 
-    A node matches when the latest ``work_unit_membership`` row for it has
-    ``dominant_theme = theme`` (and ``dominant_subcategory = subcategory`` when
-    that filter is also supplied). This set drives the BEFORE-LIMIT edge
-    constraint so a sparse theme's edges are never hidden behind the row cap.
+    Multi-membership semantics: a node matches when, in the latest run of its
+    work unit, there is a membership row for the requested category (theme or
+    subcategory) — i.e. the category cleared the weight threshold (or is the
+    dominant). This is what makes a 45/40 unit findable under BOTH themes. The
+    returned set drives the BEFORE-LIMIT edge constraint so a sparse theme's
+    edges are never hidden behind the row cap.
 
-    Latest-row-per-node semantics use argMax(..., computed_at) consistent with
-    the ReplacingMergeTree. The theme/subcategory predicate is applied via
-    HAVING on the argMax result (not WHERE) so a superseded row of a different
-    theme can never leak a node into the match set. Scoped to org_id.
+    Stale rows are excluded by joining to the latest run per work unit (see
+    _LATEST_RUN_PER_UNIT_CTE). When both theme and subcategory are supplied the
+    node must be a member of BOTH (the more specific subcategory plus its theme).
+    Scoped to org_id.
     """
     from dev_health_ops.api.queries.client import query_dicts
 
-    having_clauses = ["argMax(dominant_theme, computed_at) = %(theme)s"]
-    sql_params: dict[str, Any] = {"org_id": org_id, "theme": theme}
+    # Build the set of (category_kind, category) the node must be a member of.
+    wanted: list[tuple[str, str]] = []
+    sql_params: dict[str, Any] = {"org_id": org_id}
+    if theme:
+        wanted.append(("theme", theme))
     if subcategory:
-        having_clauses.append(
-            "argMax(dominant_subcategory, computed_at) = %(subcategory)s"
-        )
-        sql_params["subcategory"] = subcategory
-    having_sql = " AND ".join(having_clauses)
-
+        wanted.append(("subcategory", subcategory))
+    if not wanted:
+        return set()
+    sql_params["category_tuples"] = wanted
+    # A node matches each requested category via a member row in the latest run.
+    # Require membership in ALL requested categories: count distinct matched
+    # (kind, category) >= number requested.
     rows = await query_dicts(
         client,
-        f"""
+        _LATEST_RUN_PER_UNIT_CTE
+        + """
         SELECT
-            node_type,
-            node_id
-        FROM work_unit_membership
-        WHERE org_id = %(org_id)s
-        GROUP BY node_type, node_id
-        HAVING {having_sql}
+            m.node_type AS node_type,
+            m.node_id AS node_id
+        FROM work_unit_membership AS m
+        INNER JOIN latest
+            ON m.work_unit_id = latest.work_unit_id
+           AND m.computed_at = latest.max_computed_at
+        WHERE m.org_id = %(org_id)s
+          AND (m.category_kind, m.category) IN %(category_tuples)s
+        GROUP BY m.node_type, m.node_id
+        HAVING uniqExact((m.category_kind, m.category)) = %(wanted_count)s
         """,
-        sql_params,
+        {**sql_params, "wanted_count": len(wanted)},
     )
     matched: set[tuple[str, str]] = set()
     for r in rows:
@@ -460,17 +500,13 @@ async def resolve_work_graph_edges(
     # enforced AFTER the theme constraint. This is the whole point: a sparse
     # theme's edges may all sit beyond the row cap, so filtering after the cap
     # (e.g. client-side) would produce false-empty graphs. An edge matches if
-    # EITHER endpoint belongs to a work unit of the requested theme.
+    # EITHER endpoint belongs to a work unit that is a MEMBER of the requested
+    # theme/subcategory (multi-membership: a mixed unit is findable under each
+    # of its significant categories, not just its dominant).
     matched_nodes: set[tuple[str, str]] = set()
     if theme_filter_active:
-        # A subcategory implies a theme via "theme.sub" naming; if the caller
-        # supplied only a subcategory, derive the theme prefix so the HAVING
-        # theme predicate is always present and the two are mutually consistent.
-        effective_theme = theme_filter
-        if effective_theme is None and subcategory_filter:
-            effective_theme = subcategory_filter.split(".", 1)[0]
         matched_nodes = await _fetch_theme_matching_nodes(
-            client, org_id, effective_theme, subcategory_filter
+            client, org_id, theme_filter, subcategory_filter
         )
         if not matched_nodes:
             # No node matches the theme → no edge can touch it. Return empty

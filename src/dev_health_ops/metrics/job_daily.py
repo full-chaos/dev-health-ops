@@ -772,7 +772,19 @@ async def run_daily_metrics_job(
         _load_donors = getattr(loader, "load_work_item_dependencies_donors", None)
         if _load_deps is not None and _load_donors is not None:
             try:
-                work_item_dependencies = await _load_deps()
+                # Bound the dependency read to edges whose SOURCE is a work item
+                # evaluated this run — load the run-window items once to collect
+                # those source ids — so this is never a full-graph scan on the
+                # critical daily path.
+                run_start = datetime.combine(min(days), time.min, tzinfo=timezone.utc)
+                run_end = _utc_day_window(max(days))[1]
+                run_items, _ = await loader.load_work_items(
+                    run_start, run_end, repo_id, repo_name
+                )
+                source_ids = {wi.work_item_id for wi in run_items}
+                work_item_dependencies = (
+                    await _load_deps(source_ids) if source_ids else []
+                )
                 _target_ids: set[str] = set()
                 _issue_keys: set[str] = set()
                 for _dep in work_item_dependencies:

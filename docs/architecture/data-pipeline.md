@@ -155,15 +155,18 @@ by a dependency edge), not the tenant's whole history, and is best-effort (a
 failed donor read degrades to no inheritance rather than aborting the run):
 
 - `job_daily` reads dependency edges
-  (`ClickHouseDataLoader.load_work_item_dependencies`, `FINAL`), collects the
+  (`ClickHouseDataLoader.load_work_item_dependencies`, `FINAL`) **bounded to
+  the source ids evaluated this run** (the run-window work items), collects the
   referenced target ids / external keys, and loads only those donor items via
   `load_work_item_dependencies_donors`. This still spans repos and time (a PR
   can close an issue completed long before the metrics day, or a repo-less
-  Linear/Jira issue) without hydrating the full history.
-- `job_work_items` (the sync) **unions** the freshly-synced items/edges with
-  the persisted ClickHouse edges (`FINAL`) and loads only the referenced donor
-  items, so an incremental run that re-fetches only the PR still finds a donor
-  synced earlier.
+  Linear/Jira issue) without scanning the full graph.
+- `job_work_items` (the sync) treats the **freshly-extracted edges as
+  authoritative** for the items it synced — they are the current
+  source-of-truth, so a link removed from a PR is simply absent and stops
+  granting inheritance — and loads only the referenced donor *items* from
+  ClickHouse (bounded), so an incremental run that re-fetches only the PR still
+  finds a donor synced earlier.
 
 All donor reads are **tenant-scoped**: the org-wide donor/edge queries run
 only under an explicit `org_id`, so a PR can never inherit a team from another
@@ -181,9 +184,14 @@ metrics recompute) is required for newly-captured links to take effect.
 > self-inflicted mis-attribution of one PR's team within the org — so it is
 > accepted rather than gated.
 
----
-
-## 5. Visualization (dev-health-web)
+> Known limitation: `work_item_dependencies` is append-only and has no
+> tombstone, so a *removed* link is not deleted from the table. The **sync**
+> path is unaffected — it re-extracts the PR's current edges, so a removed link
+> stops inheriting immediately. But a standalone **`job_daily` recompute** reads
+> persisted edges and can keep honoring a removed link until the next sync
+> re-stamps the source. A general link-lifecycle/tombstone for
+> `work_item_dependencies` (which also affects the work-graph) is tracked as a
+> follow-up.
 
 **Purpose:** Render persisted data for exploration.
 

@@ -37,7 +37,6 @@ from dev_health_ops.metrics.work_items import (
 )
 from dev_health_ops.models.work_items import (
     WorkItem,
-    WorkItemDependency,
     WorkItemType,
 )
 from dev_health_ops.providers.identity import load_identity_resolver
@@ -448,55 +447,27 @@ def run_work_items_sync_job(
         # issue they link to (provider-agnostic — e.g. a GitHub PR closing a
         # Linear issue).
         #
-        # The donor set must be COMPLETE, not just this sync window: an
-        # incremental run may re-fetch only the PR while its donor issue was
-        # synced earlier, so union the freshly-synced items/edges with the
-        # persisted superset from ClickHouse. Freshly-synced rows win (newest
-        # attribution); the persisted query uses FINAL to read the latest
-        # ReplacingMergeTree version. Falls back to the in-memory window set if
-        # the sink can't be queried.
+        # Freshly-extracted edges are AUTHORITATIVE for the items synced this
+        # run — they are the current source-of-truth, so a link removed from a
+        # PR is simply absent and stops granting inheritance (no append-only
+        # stale-edge problem on the sync path). We therefore use the fresh edges
+        # only. The donor *items* they point at may have been synced earlier, so
+        # those are loaded from ClickHouse — bounded to the referenced targets,
+        # never a full-history scan — and unioned with the fresh items.
         donor_by_id: dict[str, Any] = {}
         merged_deps: dict[tuple[str, str, str], Any] = {}
-
-        def _dep_key(dep: Any) -> tuple[str, str, str]:
-            return (
-                dep.source_work_item_id,
-                dep.target_work_item_id,
-                dep.relationship_type,
-            )
-
-        # Persisted edges complete the picture when an incremental run re-fetched
-        # only the PR. The read is bounded to edges whose SOURCE is a work item
-        # synced this run — the only items we attribute — so it is never a
-        # full-org graph scan. Only query under an explicit tenant scope (an
-        # unscoped query would read every tenant's edges and let a PR inherit
-        # another org's team) and degrade gracefully on failure.
-        synced_ids = sorted({wi.work_item_id for wi in work_items})
-        if org_id and synced_ids and hasattr(primary_sink, "query_dicts"):
-            try:
-                for r in primary_sink.query_dicts(
-                    "SELECT source_work_item_id, target_work_item_id, "
-                    "relationship_type, relationship_type_raw, last_synced, org_id "
-                    "FROM work_item_dependencies FINAL "
-                    "WHERE org_id = {org_id:String} "
-                    "AND source_work_item_id IN {sources:Array(String)}",
-                    {"org_id": org_id, "sources": synced_ids},
-                ):
-                    dep = to_dataclass(WorkItemDependency, r)
-                    merged_deps[_dep_key(dep)] = dep
-            except Exception:
-                logger.warning(
-                    "Persisted dependency load failed; inheritance limited to "
-                    "the sync window",
-                    exc_info=True,
-                )
-        # Freshly-synced edges win (newest version).
         for dep in dependencies:
-            merged_deps[_dep_key(dep)] = dep
+            merged_deps[
+                (
+                    dep.source_work_item_id,
+                    dep.target_work_item_id,
+                    dep.relationship_type,
+                )
+            ] = dep
 
-        # Load only the donor items referenced by an edge target — bounded to
-        # the linked surface, not the tenant's whole history.
-        if org_id and hasattr(primary_sink, "query_dicts"):
+        # Load only the donor items referenced by a fresh edge target — bounded
+        # to the linked surface, under tenant scope, degrading gracefully.
+        if org_id and merged_deps and hasattr(primary_sink, "query_dicts"):
             _ids: set[str] = set()
             _keys: set[str] = set()
             for dep in merged_deps.values():

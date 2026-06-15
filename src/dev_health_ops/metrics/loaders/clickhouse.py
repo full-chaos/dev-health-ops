@@ -299,22 +299,33 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         rows = await _clickhouse_query_dicts(self.client, query, params)
         return [to_dataclass(WorkItem, r) for r in rows]
 
-    async def load_work_item_dependencies(self) -> list[Any]:
+    async def load_work_item_dependencies(
+        self, source_work_item_ids: Any = None
+    ) -> list[Any]:
         """Load PR/issue dependency edges for linked-issue team inheritance.
 
-        Edges are org-scoped but otherwise time-independent (a PR's link to the
-        issue it closes does not expire), so no date window is applied — the
-        whole org graph is needed to attribute a PR to a donor issue that may
-        sit outside the metrics window. ``FINAL`` collapses the
-        ``ReplacingMergeTree(last_synced)`` table to the latest version of each
-        edge so stale/duplicate rows can't drive attribution. Returns an empty
-        list when the table is absent (older deployments) rather than failing
-        the daily job.
+        ``source_work_item_ids`` bounds the read to edges whose source is a work
+        item that will actually be evaluated this run (the only items we
+        attribute), so the daily path never scans the full org graph; passing
+        ``None`` loads all org edges. Edges are otherwise time-independent (a
+        PR's link to the issue it closes does not expire), so no date window is
+        applied — a PR can still reach a donor issue outside the metrics window.
+        ``FINAL`` collapses the ``ReplacingMergeTree(last_synced)`` table to the
+        latest version of each edge so stale/duplicate rows can't drive
+        attribution. Returns an empty list when the table is absent (older
+        deployments) rather than failing the daily job.
         """
         from dev_health_ops.models.work_items import WorkItemDependency
 
         org_filter = self._org_filter()
         params = self._inject_org_id({})
+        source_filter = ""
+        if source_work_item_ids is not None:
+            ids = sorted({str(i) for i in source_work_item_ids if i})
+            if not ids:
+                return []
+            params["dep_sources"] = ids
+            source_filter = " AND source_work_item_id IN {dep_sources:Array(String)}"
         query = f"""
         SELECT
             source_work_item_id,
@@ -326,6 +337,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         FROM work_item_dependencies FINAL
         WHERE 1 = 1
         {org_filter}
+        {source_filter}
         ORDER BY source_work_item_id, target_work_item_id, last_synced
         """
         try:

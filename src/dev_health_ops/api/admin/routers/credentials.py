@@ -192,18 +192,20 @@ async def list_credential_repos(
         gitlab_connector = GitLabConnector(url=url, private_token=token)
         effective_owner = owner or _string_value(config.get("group"))
         try:
-            if not effective_owner and search:
-                # Blank owner + search: enumerate token-scoped projects and
-                # filter client-side to avoid a global public-project search.
-                repos = gitlab_connector.list_repositories(
-                    org_name=None,
-                    search=None,
-                    pattern=f"*{search}*",
+            if not effective_owner:
+                # Blank owner: enumerate only membership-scoped projects to
+                # avoid returning globally-visible public projects the token
+                # is not a member of. Bypass the connector (frozen) and call
+                # python-gitlab directly with membership=True.
+                repos = _list_gitlab_membership_repos(
+                    url=url,
+                    token=token,
+                    search=search,
                     max_repos=max_repos,
                 )
             else:
                 repos = gitlab_connector.list_repositories(
-                    org_name=effective_owner or None,
+                    org_name=effective_owner,
                     search=search,
                     max_repos=max_repos,
                 )
@@ -466,8 +468,36 @@ async def _list_github_app_installation_repos(
                 params={"per_page": per_page, "page": page},
                 timeout=10,
             )
+            if resp.status_code == 401 or (
+                resp.status_code == 403
+                and "rate limit" not in resp.text.lower()
+                and "x-ratelimit-remaining" not in resp.headers
+            ):
+                raise HTTPException(
+                    status_code=401,
+                    detail="GitHub App authentication failed",
+                )
+            if resp.status_code == 429 or (
+                resp.status_code == 403
+                and (
+                    "rate limit" in resp.text.lower()
+                    or "x-ratelimit-remaining" in resp.headers
+                )
+            ):
+                raise HTTPException(
+                    status_code=429,
+                    detail="GitHub API rate limit exceeded",
+                )
+            if resp.status_code >= 500:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"GitHub API error: {resp.status_code}",
+                )
             if resp.status_code != 200:
-                break
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"GitHub API error: {resp.status_code}",
+                )
             data = resp.json()
             page_repos = data.get("repositories", [])
             if not page_repos:
@@ -492,6 +522,76 @@ async def _list_github_app_installation_repos(
             if len(page_repos) < per_page:
                 break
             page += 1
+
+    return repos
+
+
+def _list_gitlab_membership_repos(
+    url: str,
+    token: str,
+    search: str | None,
+    max_repos: int,
+) -> list[Any]:
+    """Enumerate GitLab projects the token is a member of (membership=True).
+
+    Bypasses the frozen connector to call python-gitlab directly with
+    membership=True, ensuring only credential-accessible projects are returned.
+    Applies search as a client-side fnmatch filter to avoid a global search.
+    """
+    import fnmatch
+
+    import gitlab
+    from gitlab.exceptions import GitlabAuthenticationError, GitlabError
+
+    from dev_health_ops.connectors.exceptions import (
+        AuthenticationException,
+        RateLimitException,
+    )
+    from dev_health_ops.connectors.models import Repository
+
+    gl = gitlab.Gitlab(url=url, private_token=token)
+    pattern = f"*{search}*" if search else None
+    repos: list[Any] = []
+    page = 1
+    per_page = 100
+
+    try:
+        while True:
+            gl_projects = gl.projects.list(
+                membership=True,
+                per_page=per_page,
+                page=page,
+            )
+            if not gl_projects:
+                break
+            for p in gl_projects:
+                full_name = getattr(p, "path_with_namespace", None) or getattr(
+                    p, "name", ""
+                )
+                if pattern and not fnmatch.fnmatch(full_name.lower(), pattern.lower()):
+                    continue
+                repos.append(
+                    Repository(
+                        id=p.id,
+                        name=p.name,
+                        full_name=full_name,
+                        default_branch=getattr(p, "default_branch", None) or "main",
+                        description=getattr(p, "description", None),
+                        url=getattr(p, "web_url", "") or "",
+                    )
+                )
+                if len(repos) >= max_repos:
+                    return repos
+            if len(gl_projects) < per_page:
+                break
+            page += 1
+    except GitlabAuthenticationError as exc:
+        raise AuthenticationException(str(exc)) from exc
+    except GitlabError as exc:
+        msg = str(exc).lower()
+        if "rate" in msg or "429" in msg:
+            raise RateLimitException(str(exc)) from exc
+        raise
 
     return repos
 

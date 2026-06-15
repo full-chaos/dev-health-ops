@@ -202,7 +202,9 @@ def run_membership_backfill(
     work-graph components and re-emits ``work_unit_membership`` rows from the
     theme/subcategory distributions ALREADY persisted by the post-sync LLM
     materializer. Units whose current component hash has no persisted
-    categorization are skipped (the post-sync chain covers those). See
+    categorization (churned components) receive TOMBSTONE rows (category='',
+    weight=0, is_dominant=0) so their stale prior-run membership rows are
+    superseded and the nodes stop matching any theme/subcategory filter.  See
     ``work_graph.investment.backfill`` for the full contract (CHAOS-2439).
 
     Args:

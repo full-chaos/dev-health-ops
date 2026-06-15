@@ -20,14 +20,36 @@ Per org, with NO categorizer/LLM call:
    per-node latest-run guard then supersedes any stale rows.
 4. Write via ``sink.write_work_unit_memberships``.
 
-SKIP-ON-CHURNED-COMPONENT: a unit whose CURRENT component hash has no matching
-``work_unit_investments`` row is skipped. That happens when edges churned since
-the last categorization (the node moved to a new component, so its new
-``work_unit_id`` was never categorized). Those units are intentionally left to
-the post-sync full ``build -> run_investment_materialize`` (LLM) chain, which
-runs on new data and categorizes the new component. The backfill only refreshes
-membership for components that ALREADY have categorization — it never invents
-categories.
+TOMBSTONE-ON-SKIP (stale-membership fix): a unit whose CURRENT component hash
+has no matching ``work_unit_investments`` row is a CHURNED / uncategorized
+component. Without action, any OLD membership rows from a prior component that
+contained those same nodes remain the latest rows for each node and continue
+matching theme/subcategory filters with stale data.
+
+To prevent this, the backfill writes a TOMBSTONE for each node in a skipped
+component: a ``work_unit_membership`` row with ``category=''`` (a sentinel
+value), ``weight=0.0``, ``is_dominant=0``, and a FRESH ``computed_at`` equal to
+the current run timestamp. Because the resolver's per-node latest-run guard
+selects membership rows whose ``computed_at`` equals the max for that
+``(org_id, node_type, node_id)``, the tombstone row supersedes all older rows,
+making the node's "current" membership empty. Tombstone invariants:
+
+- ``category=''`` is never matched by ``(m.category_kind, m.category) IN
+  %(category_tuples)s`` (all real categories are non-empty strings), so a
+  tombstoned node is NOT returned by any theme/subcategory filter.
+- The annotation lookup treats ``category=''`` the same as no row: the Python
+  ``m.get("dominant_theme") or None`` converts an empty string to ``None``, so
+  annotation returns ``theme=None, subcategory=None`` for tombstoned nodes.
+- The degraded-state probe counts live membership rows using the per-node
+  latest-run JOIN. Tombstones are "live" rows (fresh computed_at), so they
+  count toward ``membership_rows``. An org whose nodes are all tombstoned is
+  NOT misread as un-materialized (membership_rows > 0) — the degraded probe
+  correctly reports "no degraded state, filters just match nothing."
+
+Tombstones are emitted ONLY by the backfill skip path. The LLM materializer
+(``materialize.py``) never tombstones — it re-categorizes. The post-sync
+build→materialize(LLM) chain will eventually replace tombstones with real rows
+when the churned component is re-categorized.
 """
 
 from __future__ import annotations
@@ -48,6 +70,13 @@ from dev_health_ops.work_graph.investment.queries import fetch_work_graph_edges
 from dev_health_ops.work_graph.investment.utils import work_unit_id
 
 logger = logging.getLogger(__name__)
+
+# Sentinel category value written to work_unit_membership for nodes in a
+# CHURNED / uncategorized component.  An empty string is never a real category
+# name, so (category_kind, '') is never matched by a theme/subcategory filter
+# (which always supplies a non-empty category string).  See TOMBSTONE-ON-SKIP
+# in the module docstring.
+TOMBSTONE_CATEGORY: str = ""
 
 
 @dataclass(frozen=True)
@@ -138,12 +167,53 @@ def _as_distribution(value: Any) -> dict[str, float]:
     return {}
 
 
+def _build_tombstone_records(
+    *,
+    unit_nodes: list[NodeKey],
+    work_unit_id: str,
+    computed_at: datetime,
+    org_id: str,
+) -> list[WorkUnitMembershipRecord]:
+    """Return tombstone membership rows for each node in a churned component.
+
+    One tombstone per (node, category_kind) — two records per node (one for
+    'theme', one for 'subcategory').  Each carries ``category=TOMBSTONE_CATEGORY``
+    (empty string), ``weight=0.0``, ``is_dominant=0``, and the run's
+    ``computed_at``.
+
+    Because the resolver's per-node latest-run guard selects membership rows
+    whose ``computed_at`` equals the max for that ``(org_id, node_type,
+    node_id)``, these tombstones supersede any older real rows and make the node
+    appear as having no category membership.  See TOMBSTONE-ON-SKIP in the
+    module docstring for the full invariant analysis.
+    """
+    records: list[WorkUnitMembershipRecord] = []
+    for node_type, node_id in unit_nodes:
+        for kind in ("theme", "subcategory"):
+            records.append(
+                WorkUnitMembershipRecord(
+                    org_id=org_id,
+                    node_type=node_type,
+                    node_id=node_id,
+                    work_unit_id=work_unit_id,
+                    category_kind=kind,
+                    category=TOMBSTONE_CATEGORY,
+                    weight=0.0,
+                    is_dominant=0,
+                    categorization_status="tombstone",
+                    computed_at=computed_at,
+                )
+            )
+    return records
+
+
 def backfill_memberships(config: MembershipBackfillConfig) -> dict[str, int]:
     """Project work_unit_membership from existing work_unit_investments (no LLM).
 
     Returns a stats dict: components seen, units matched (had a persisted
-    categorization), units skipped (churned component / never categorized), and
-    membership rows written.
+    categorization), units skipped (churned component / never categorized),
+    tombstones written (one per node in skipped components, two rows per node),
+    and total membership rows written.
     """
     sink = create_sink(config.dsn)
     org_id = config.org_id or ""
@@ -160,6 +230,7 @@ def backfill_memberships(config: MembershipBackfillConfig) -> dict[str, int]:
                 "components": 0,
                 "matched": 0,
                 "skipped": 0,
+                "tombstones": 0,
                 "memberships": 0,
             }
 
@@ -182,13 +253,26 @@ def backfill_memberships(config: MembershipBackfillConfig) -> dict[str, int]:
         membership_records: list[WorkUnitMembershipRecord] = []
         matched = 0
         skipped = 0
+        tombstone_count = 0
         for uid, unit_nodes in unit_nodes_by_id.items():
             persisted = distributions.get(uid)
             if persisted is None:
-                # SKIP-ON-CHURNED-COMPONENT: this component hash was never
-                # categorized (edges churned since last LLM run). The post-sync
-                # build->materialize(LLM) chain covers it; the backfill never
-                # invents categories.
+                # TOMBSTONE-ON-SKIP: this component's work_unit_id has no
+                # persisted investment row (edges churned since last LLM run).
+                # Write tombstone rows for each node with a FRESH computed_at so
+                # the per-node latest-run guard supersedes any stale membership
+                # rows from a prior component, preventing those old categories
+                # from matching future theme/subcategory filters.  The post-sync
+                # build->materialize(LLM) chain will replace tombstones with
+                # real rows when the new component is categorized.
+                tombstone_records = _build_tombstone_records(
+                    unit_nodes=unit_nodes,
+                    work_unit_id=uid,
+                    computed_at=computed_at,
+                    org_id=org_id,
+                )
+                membership_records.extend(tombstone_records)
+                tombstone_count += len(tombstone_records)
                 skipped += 1
                 continue
             matched += 1
@@ -215,17 +299,19 @@ def backfill_memberships(config: MembershipBackfillConfig) -> dict[str, int]:
 
         logger.info(
             "Membership backfill org=%s: components=%d matched=%d skipped=%d "
-            "memberships=%d (no LLM)",
+            "tombstones=%d memberships=%d (no LLM)",
             org_id,
             len(components),
             matched,
             skipped,
+            tombstone_count,
             len(membership_records),
         )
         return {
             "components": len(components),
             "matched": matched,
             "skipped": skipped,
+            "tombstones": tombstone_count,
             "memberships": len(membership_records),
         }
     finally:

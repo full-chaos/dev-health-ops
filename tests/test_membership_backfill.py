@@ -12,7 +12,8 @@ without a live ClickHouse:
 - An idle org with existing investments but empty/stale membership gets
   membership populated, no LLM.
 - A unit whose current component hash has no persisted categorization (edges
-  churned since last LLM run) is skipped, not invented.
+  churned since last LLM run) receives TOMBSTONE rows (category='', weight=0,
+  is_dominant=0) so stale membership from a prior component is superseded.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from unittest.mock import patch
 
 import dev_health_ops.connectors  # noqa: F401  (defuse circular import on collection)
 from dev_health_ops.work_graph.investment.backfill import (
+    TOMBSTONE_CATEGORY,
     MembershipBackfillConfig,
     backfill_memberships,
 )
@@ -231,10 +233,12 @@ def test_backfill_populates_idle_org_membership_no_llm() -> None:
     assert all(r.org_id == "org-1" for r in sink.written)
 
 
-def test_backfill_skips_churned_component_without_categorization() -> None:
+def test_backfill_tombstones_churned_component() -> None:
     """A current component whose work_unit_id has no persisted investment row
-    (edges churned since last categorization) is SKIPPED — not invented. The
-    post-sync LLM chain covers those."""
+    (edges churned since last categorization) receives TOMBSTONE rows with a
+    fresh computed_at so stale prior-component membership is superseded.  The
+    post-sync LLM chain will replace tombstones with real rows when the new
+    component is categorized."""
     # Current graph: one matched component + one churned (uncategorized)
     # component "CHURNED"<->"CP-1" whose hash has no persisted investment row.
     matched_nodes = [("issue", "MATCHED"), ("pr", "MP-1")]
@@ -260,11 +264,26 @@ def test_backfill_skips_churned_component_without_categorization() -> None:
     assert stats["components"] == 2
     assert stats["matched"] == 1
     assert stats["skipped"] == 1
-    # Only the matched component's nodes get membership rows.
+    # Tombstones must be reported in stats (2 nodes × 2 kinds = 4 rows).
+    assert stats["tombstones"] == 4
+
+    # Both matched AND churned nodes were written (tombstones for churned).
     written_nodes = {r.node_id for r in sink.written}
-    assert written_nodes == {"MATCHED", "MP-1"}
-    assert "CHURNED" not in written_nodes
-    assert "CP-1" not in written_nodes
+    assert written_nodes == {"MATCHED", "MP-1", "CHURNED", "CP-1"}
+
+    # Tombstone rows: category='' (sentinel), weight=0, is_dominant=0.
+    churned_rows = [r for r in sink.written if r.node_id in {"CHURNED", "CP-1"}]
+    assert len(churned_rows) == 4  # 2 nodes × 2 kinds
+    for row in churned_rows:
+        assert row.category == TOMBSTONE_CATEGORY
+        assert row.weight == 0.0
+        assert row.is_dominant == 0
+        assert row.categorization_status == "tombstone"
+
+    # Real rows for matched nodes must NOT be tombstones.
+    matched_rows = [r for r in sink.written if r.node_id in {"MATCHED", "MP-1"}]
+    assert all(r.category != TOMBSTONE_CATEGORY for r in matched_rows)
+    assert any(r.is_dominant == 1 for r in matched_rows)
 
 
 def test_backfill_empty_graph_is_clean_noop() -> None:
@@ -275,6 +294,7 @@ def test_backfill_empty_graph_is_clean_noop() -> None:
         "components": 0,
         "matched": 0,
         "skipped": 0,
+        "tombstones": 0,
         "memberships": 0,
     }
     assert sink.written == []
@@ -305,3 +325,177 @@ def test_backfill_uses_latest_per_work_unit_query() -> None:
     assert "argMax(subcategory_distribution_json, computed_at)" in q
     assert "GROUP BY org_id, work_unit_id" in q
     assert "FROM work_unit_investments" in q
+
+
+# ---------------------------------------------------------------------------
+# Regression test: TOMBSTONE-ON-SKIP stale-membership fix (CHAOS-2439)
+# ---------------------------------------------------------------------------
+
+
+def test_tombstone_on_skip_regression() -> None:
+    """REGRESSION: a node that HAD old real membership (theme=quality) from a
+    prior run, whose component then churns so its current work_unit_id has NO
+    investments row, must receive a TOMBSTONE from the backfill.
+
+    This test covers all three invariants:
+
+    (a) Tombstone row IS written for the churned node with the current run's
+        computed_at (not the old computed_at from the stale rows).
+    (b) The resolver's theme filter does NOT return the node for theme=quality
+        — the tombstone category='' never matches the (category_kind, category)
+        tuple filter.
+    (c) Annotation for edges containing the churned node returns theme=None
+        (the tombstone is_dominant=0 row is excluded from the is_dominant=1
+        annotation query, so no category is reported).
+    """
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    from dev_health_ops.api.graphql.context import GraphQLContext
+    from dev_health_ops.api.graphql.models.inputs import WorkGraphEdgeFilterInput
+    from dev_health_ops.api.graphql.resolvers.work_graph import resolve_work_graph_edges
+
+    org_id = "org-regression"
+
+    # --- (a) BACKFILL: churned node receives tombstone with fresh computed_at ---
+
+    # Current graph: "STALE-NODE" is now in a NEW component with "NEW-PR".
+    # The work_unit_id for this component has no investments row (churned),
+    # so the backfill will tombstone both nodes.
+    edges = [
+        _edge("issue", "STALE-NODE", "pr", "NEW-PR"),  # churned component
+    ]
+
+    sink = _FakeSink(edges=edges, investments=[])
+
+    stats = _run_backfill(sink)
+
+    # Stats: 1 component, 0 matched, 1 skipped, 4 tombstones (2 nodes × 2 kinds).
+    assert stats["components"] == 1
+    assert stats["matched"] == 0
+    assert stats["skipped"] == 1
+    assert stats["tombstones"] == 4
+    assert stats["memberships"] == 4
+
+    # Tombstone rows were written for both nodes.
+    written_by_node = {r.node_id: r for r in sink.written}
+    assert "STALE-NODE" in written_by_node
+    assert "NEW-PR" in written_by_node
+
+    # Tombstone invariants for STALE-NODE.
+    stale_rows = [r for r in sink.written if r.node_id == "STALE-NODE"]
+    assert len(stale_rows) == 2  # one theme + one subcategory tombstone
+    for row in stale_rows:
+        assert row.category == TOMBSTONE_CATEGORY, "tombstone category must be ''"
+        assert row.weight == 0.0
+        assert row.is_dominant == 0
+        assert row.categorization_status == "tombstone"
+
+    # The tombstone computed_at matches across all rows in this run.
+    tombstone_ts = stale_rows[0].computed_at
+    assert all(r.computed_at == tombstone_ts for r in sink.written)
+
+    # --- (b) RESOLVER FILTER: tombstone node is NOT returned for theme=quality ---
+    #
+    # Simulate the state AFTER the tombstone is written: the resolver queries
+    # work_unit_membership and sees the tombstone row for STALE-NODE.  The
+    # theme=quality filter uses (category_kind, category) IN tuples — since the
+    # tombstone category is '', it can never match ("theme", "quality").
+    #
+    # We drive the resolver with a mock that returns an edge containing STALE-NODE
+    # as an endpoint but whose membership rows (latest-run) are tombstones only.
+    # The filter EXISTS query must NOT find STALE-NODE in "theme=quality".
+
+    edge_row = {
+        "edge_id": "stale-edge",
+        "source_type": "issue",
+        "source_id": "STALE-NODE",
+        "target_type": "pr",
+        "target_id": "NEW-PR",
+        "edge_type": "implements",
+        "provenance": "native",
+        "confidence": 1.0,
+        "evidence": "",
+        "repo_id": None,
+        "provider": "github",
+    }
+
+    context = GraphQLContext(
+        org_id=org_id,
+        db_url="clickhouse://localhost:8123/default",
+        client=object(),
+    )
+
+    # The theme filter EXISTS query runs server-side in ClickHouse; we prove the
+    # predicate construction is correct by asserting the SQL does NOT match the
+    # tombstone sentinel.  When mock returns empty (simulating that the filter
+    # found no matching edges because STALE-NODE's category='' ≠ 'quality'), the
+    # resolver must return an empty edge list.
+    async def _run_filter_test() -> None:
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            # Edge query: ClickHouse correctly returns empty because STALE-NODE
+            # has only tombstone rows (category='') which never match
+            # (category_kind, category) = ('theme', 'quality').
+            # Degraded probe: membership_rows>0 (tombstones are live rows),
+            # investment_rows=0 → not degraded.
+            mock_query.side_effect = [
+                [],  # edge query empty (tombstone doesn't match filter)
+                [{"membership_rows": 4, "investment_rows": 0}],  # degraded probe
+            ]
+            filters = WorkGraphEdgeFilterInput(theme="quality")
+            result = await resolve_work_graph_edges(context, filters)
+
+        # (b): STALE-NODE is not returned for theme=quality filter.
+        assert result.edges == [], (
+            "A tombstoned node must not appear in theme=quality filter results"
+        )
+        # NOT flagged as degraded: tombstones are real live rows, so membership>0.
+        assert result.degraded_reason is None, (
+            "Tombstoned org should NOT be reported as MEMBERSHIP_NOT_MATERIALIZED"
+        )
+
+        # (b continued): verify the filter SQL predicate — the category tuple
+        # ('theme', 'quality') will never match category='' in work_unit_membership.
+        edge_sql = mock_query.call_args_list[0][0][1]
+        edge_params = mock_query.call_args_list[0][0][2]
+        assert "(m.category_kind, m.category) IN %(category_tuples)s" in edge_sql
+        # The category tuple contains a non-empty string; '' ∉ {('theme', 'quality')}.
+        assert ("theme", "quality") in edge_params["category_tuples"]
+        assert TOMBSTONE_CATEGORY not in {
+            cat for _, cat in edge_params["category_tuples"]
+        }
+
+    asyncio.run(_run_filter_test())
+
+    # --- (c) ANNOTATION: edges on STALE-NODE get theme=None ---
+    #
+    # On the unfiltered path, the annotation query selects is_dominant=1 rows.
+    # Tombstone rows have is_dominant=0 so they are excluded, meaning no entry
+    # for STALE-NODE in the annotation result → theme=None, subcategory=None.
+    async def _run_annotation_test() -> None:
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            # Edge query returns the stale edge; annotation query returns NO rows
+            # for STALE-NODE (tombstone has is_dominant=0, excluded by filter).
+            mock_query.side_effect = [
+                [edge_row],
+                [],  # annotation: no is_dominant=1 rows (tombstone excluded)
+            ]
+            result = await resolve_work_graph_edges(context)
+
+        assert len(result.edges) == 1
+        edge = result.edges[0]
+        # (c): annotation for edges on a tombstoned node is theme=None.
+        assert edge.theme is None, (
+            "Edge annotation for a tombstoned node must be theme=None"
+        )
+        assert edge.subcategory is None, (
+            "Edge annotation for a tombstoned node must be subcategory=None"
+        )
+
+    asyncio.run(_run_annotation_test())

@@ -849,6 +849,21 @@ _GITHUB_ISSUE_REF_PATTERN = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 
+# Cross-provider issue keys (Linear/Jira style, e.g. CHAOS-2400, PROJ-12) that a
+# GitHub PR references when its body closes an issue tracked outside GitHub, or
+# when the head branch follows the Linear/Jira branch convention
+# (``user/chaos-2400-title``). Emitted as provider-neutral ``extkey:`` edges
+# and matched to the actual Linear/Jira work item at team-inheritance time, so
+# the PR can borrow that issue's team. A 2+ letter prefix avoids matching
+# version-ish tokens like ``v1-2``; spurious keys simply never resolve.
+_EXTERNAL_KEY = r"[A-Za-z]{2,}-\d+"
+_EXTERNAL_KEY_BODY_PATTERN = re.compile(
+    r"(?:depends\s+on|blocked\s+by|blocks|fixes|closes|resolves|relates\s+to|"
+    r"part\s+of|see)\s*:?\s*(" + _EXTERNAL_KEY + r")\b",
+    re.IGNORECASE,
+)
+_EXTERNAL_KEY_BRANCH_PATTERN = re.compile("(" + _EXTERNAL_KEY + r")")
+
 
 def extract_github_dependencies(
     *,
@@ -906,6 +921,34 @@ def extract_github_dependencies(
                 target_work_item_id=target_id,
                 relationship_type=dep_type,
                 relationship_type_raw=dep_type,
+                last_synced=datetime.now(timezone.utc),
+            )
+        )
+
+    # Cross-provider links: external issue keys (Linear/Jira) referenced in the
+    # PR body via a magic word, plus any key embedded in the head branch name
+    # (Linear's branch convention). Emitted as ``extkey:KEY`` so a single edge
+    # type carries either provider; resolution to the real work item happens at
+    # inheritance time. De-duplicated against keys already captured.
+    seen_external: set[str] = set()
+    branch_ref = getattr(getattr(issue_or_pr, "head", None), "ref", "")
+    if not isinstance(branch_ref, str):
+        branch_ref = ""  # issues have no head; guard against mocks/None
+    external_candidates = [
+        m.group(1) for m in _EXTERNAL_KEY_BODY_PATTERN.finditer(body)
+    ]
+    external_candidates += _EXTERNAL_KEY_BRANCH_PATTERN.findall(branch_ref)
+    for raw_key in external_candidates:
+        key = raw_key.strip().upper()
+        if not key or key in seen_external:
+            continue
+        seen_external.add(key)
+        dependencies.append(
+            WorkItemDependency(
+                source_work_item_id=work_item_id,
+                target_work_item_id=f"extkey:{key}",
+                relationship_type="relates_to",
+                relationship_type_raw="external_issue_key",
                 last_synced=datetime.now(timezone.utc),
             )
         )

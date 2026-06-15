@@ -12,7 +12,10 @@ from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.metrics.compute_work_item_state_durations import (
     compute_work_item_state_durations_daily,
 )
-from dev_health_ops.metrics.compute_work_items import compute_work_item_metrics_daily
+from dev_health_ops.metrics.compute_work_items import (
+    build_linked_issue_team_resolver,
+    compute_work_item_metrics_daily,
+)
 from dev_health_ops.metrics.job_daily import (
     REPO_ROOT,
     _discover_repos,
@@ -296,6 +299,22 @@ def run_work_items_sync_job(
             work_items.extend(items)
             transitions.extend(tr)
             ai_attributions.extend(gl_ai_attributions)
+            # Extract dependency edges (same-provider refs + cross-provider
+            # external keys) from each GitLab work item's description so GitLab
+            # items participate in linked-issue team inheritance like GitHub.
+            # get_attr-based extractor reads WorkItem.description directly.
+            from dev_health_ops.providers.gitlab.normalize import (
+                extract_gitlab_dependencies,
+            )
+
+            for wi in items:
+                dependencies.extend(
+                    extract_gitlab_dependencies(
+                        work_item_id=wi.work_item_id,
+                        issue=wi,
+                        project_full_path=(wi.project_id or wi.project_key or ""),
+                    )
+                )
 
         if "synthetic" in provider_set:
             from dev_health_ops.metrics.work_items import fetch_synthetic_work_items
@@ -410,6 +429,18 @@ def run_work_items_sync_job(
                 )
                 s.write_ai_attribution(ai_attributions)
 
+        # Build the linked-issue team-inheritance fallback once for the whole
+        # window: PRs/MRs that map to no team of their own inherit the team of
+        # an issue they link to (provider-agnostic — e.g. a GitHub PR closing a
+        # Linear issue). Window-wide, so a donor issue completed on a different
+        # day than the borrowing PR still attributes correctly.
+        linked_issue_resolver = build_linked_issue_team_resolver(
+            work_items=work_items,
+            dependencies=dependencies,
+            team_resolver=team_resolver,
+            project_key_resolver=pk_resolver,
+        )
+
         for d in days:
             wi_metrics, wi_user_metrics, wi_cycle_times = (
                 compute_work_item_metrics_daily(
@@ -419,6 +450,7 @@ def run_work_items_sync_job(
                     computed_at=computed_at,
                     team_resolver=team_resolver,
                     project_key_resolver=pk_resolver,
+                    linked_issue_resolver=linked_issue_resolver,
                 )
             )
             wi_state_durations = compute_work_item_state_durations_daily(

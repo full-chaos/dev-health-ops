@@ -40,7 +40,10 @@ from dev_health_ops.metrics.compute_wellbeing import (
 from dev_health_ops.metrics.compute_work_item_state_durations import (
     compute_work_item_state_durations_daily,
 )
-from dev_health_ops.metrics.compute_work_items import compute_work_item_metrics_daily
+from dev_health_ops.metrics.compute_work_items import (
+    build_linked_issue_team_resolver,
+    compute_work_item_metrics_daily,
+)
 from dev_health_ops.metrics.dependencies import get_metrics_dependencies
 from dev_health_ops.metrics.hotspots import (
     compute_file_hotspots,
@@ -745,6 +748,17 @@ async def run_daily_metrics_job(
     # Rolling buffer for pipeline stability (7-day window)
     pipeline_metrics_buffer: list[Any] = []
 
+    # Work-item dependency edges are org-scoped and time-independent (a PR's
+    # link to the issue it closes does not expire), so load them once for the
+    # whole run rather than per day. They power linked-issue team inheritance.
+    # Defensive getattr: loaders without the method (or deployments missing the
+    # table) simply skip inheritance instead of failing the daily job.
+    work_item_dependencies: list[Any] = []
+    if load_work_items_enabled and load_work_items_from_db:
+        _load_deps = getattr(loader, "load_work_item_dependencies", None)
+        if _load_deps is not None:
+            work_item_dependencies = await _load_deps()
+
     for d in days:
         logger.info("Computing metrics for day=%s", d.isoformat())
         start, end = _utc_day_window(d)
@@ -918,6 +932,12 @@ async def run_daily_metrics_job(
         wi_cycle_times: list[Any] = []
         wi_state_durations: list[Any] = []
         if work_items:
+            linked_issue_resolver = build_linked_issue_team_resolver(
+                work_items=work_items,
+                dependencies=work_item_dependencies,
+                team_resolver=team_resolver,
+                project_key_resolver=project_key_resolver,
+            )
             wi_metrics, wi_user_metrics, wi_cycle_times = (
                 compute_work_item_metrics_daily(
                     day=d,
@@ -925,6 +945,8 @@ async def run_daily_metrics_job(
                     transitions=work_item_transitions,
                     computed_at=computed_at,
                     team_resolver=team_resolver,
+                    project_key_resolver=project_key_resolver,
+                    linked_issue_resolver=linked_issue_resolver,
                 )
             )
             # CHAOS-2377: the state-duration rollup powers /metrics Flow Sankey +

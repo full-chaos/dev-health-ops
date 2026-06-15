@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, cast
@@ -34,6 +35,8 @@ from dev_health_ops.models.atlassian_ops import (
     AtlassianOpsSchedule,
 )
 from dev_health_ops.models.teams import JiraProjectOpsTeamLink
+
+logger = logging.getLogger(__name__)
 
 
 async def _clickhouse_query_dicts(
@@ -252,6 +255,42 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         transitions = [to_dataclass(WorkItemStatusTransition, t) for t in trans_dicts]
 
         return items, transitions
+
+    async def load_work_item_dependencies(self) -> list[Any]:
+        """Load PR/issue dependency edges for linked-issue team inheritance.
+
+        Edges are org-scoped but otherwise time-independent (a PR's link to the
+        issue it closes does not expire), so no date window is applied — the
+        whole org graph is needed to attribute a PR to a donor issue that may
+        sit outside the metrics window. Returns an empty list when the table is
+        absent (older deployments) rather than failing the daily job.
+        """
+        from dev_health_ops.models.work_items import WorkItemDependency
+
+        org_filter = self._org_filter()
+        params = self._inject_org_id({})
+        query = f"""
+        SELECT
+            source_work_item_id,
+            target_work_item_id,
+            relationship_type,
+            relationship_type_raw,
+            last_synced,
+            org_id
+        FROM work_item_dependencies
+        WHERE 1 = 1
+        {org_filter}
+        """
+        try:
+            dep_dicts = await _clickhouse_query_dicts(self.client, query, params)
+        except Exception:
+            logger.warning(
+                "load_work_item_dependencies: query failed; "
+                "skipping linked-issue inheritance",
+                exc_info=True,
+            )
+            return []
+        return [to_dataclass(WorkItemDependency, d) for d in dep_dicts]
 
     async def load_cicd_data(
         self,

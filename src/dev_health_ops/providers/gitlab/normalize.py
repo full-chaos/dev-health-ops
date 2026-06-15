@@ -442,6 +442,17 @@ _GITLAB_ISSUE_REF_PATTERN = re.compile(
 )
 _BLOCKING_KEYWORDS = {"blocks", "blocked by", "is blocked by", "blocking"}
 
+# Cross-provider issue keys (Linear/Jira style, e.g. CHAOS-2400, PROJ-12) that a
+# GitLab issue/MR description references when the tracked work lives outside
+# GitLab. Emitted as provider-neutral ``extkey:`` edges and matched to the real
+# Linear/Jira work item at team-inheritance time so the GitLab item can borrow
+# that issue's team — the same cross-provider recovery the GitHub path provides.
+_GITLAB_EXTERNAL_KEY_BODY_PATTERN = re.compile(
+    r"(?:depends\s+on|blocked\s+by|blocks|fixes|closes|resolves|relates\s+to|"
+    r"part\s+of|see)\s*:?\s*([A-Za-z]{2,}-\d+)\b",
+    re.IGNORECASE,
+)
+
 
 def extract_gitlab_dependencies(
     *,
@@ -528,6 +539,25 @@ def extract_gitlab_dependencies(
                     target_work_item_id=target_id,
                     relationship_type=relationship,
                     relationship_type_raw=relationship_raw,
+                )
+            )
+
+    # Cross-provider links: external (Linear/Jira) issue keys referenced via a
+    # magic word in the description. Emitted as ``extkey:KEY`` so a GitLab item
+    # can inherit the team of an issue tracked in another provider.
+    if description:
+        seen_external: set[str] = set()
+        for match in _GITLAB_EXTERNAL_KEY_BODY_PATTERN.finditer(str(description)):
+            key = match.group(1).strip().upper()
+            if not key or key in seen_external:
+                continue
+            seen_external.add(key)
+            dependencies.append(
+                WorkItemDependency(
+                    source_work_item_id=work_item_id,
+                    target_work_item_id=f"extkey:{key}",
+                    relationship_type="relates_to",
+                    relationship_type_raw="external_issue_key",
                 )
             )
 

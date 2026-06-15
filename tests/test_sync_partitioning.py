@@ -294,6 +294,42 @@ class TestDiscoverGithubRepos:
         assert result == [("org-a", "api-service"), ("org-c", "api-worker")]
 
     @patch("github.Github")
+    def test_all_repos_search_namespace_limits_authenticated_repos(
+        self, mock_github_cls
+    ):
+        from dev_health_ops.discovery.repos import discover_github_repos
+
+        repos = [
+            SimpleNamespace(name="api", owner=SimpleNamespace(login="orgA")),
+            SimpleNamespace(name="web", owner=SimpleNamespace(login="orgA")),
+            SimpleNamespace(name="api", owner=SimpleNamespace(login="orgB")),
+        ]
+        mock_user = MagicMock()
+        mock_user.get_repos.return_value = repos
+        mock_github_cls.return_value.get_user.return_value = mock_user
+
+        result = discover_github_repos({"all_repos": True, "search": "orgA/*"}, "token")
+
+        assert result == [("orgA", "api"), ("orgA", "web")]
+
+    @patch("github.Github")
+    def test_all_repos_owner_limits_authenticated_repos(self, mock_github_cls):
+        from dev_health_ops.discovery.repos import discover_github_repos
+
+        repos = [
+            SimpleNamespace(name="api", owner=SimpleNamespace(login="orgA")),
+            SimpleNamespace(name="web", owner=SimpleNamespace(login="orgA")),
+            SimpleNamespace(name="api", owner=SimpleNamespace(login="orgB")),
+        ]
+        mock_user = MagicMock()
+        mock_user.get_repos.return_value = repos
+        mock_github_cls.return_value.get_user.return_value = mock_user
+
+        result = discover_github_repos({"all_repos": True, "owner": "orgA"}, "token")
+
+        assert result == [("orgA", "api"), ("orgA", "web")]
+
+    @patch("github.Github")
     def test_returns_empty_on_total_failure(self, mock_github_cls):
         from dev_health_ops.discovery.repos import discover_github_repos
 
@@ -382,6 +418,36 @@ class TestDiscoverGitlabRepos:
         result = discover_gitlab_repos({"all_repos": True, "search": "api*"}, "token")
 
         assert result == [("100",), ("300",)]
+
+    @patch("gitlab.Gitlab")
+    def test_all_repos_group_limits_membership_projects(self, mock_gitlab_cls):
+        from dev_health_ops.discovery.repos import discover_gitlab_repos
+
+        projects = [
+            SimpleNamespace(name="api", id=100, path_with_namespace="grpA/api"),
+            SimpleNamespace(name="web", id=200, path_with_namespace="grpA/sub/web"),
+            SimpleNamespace(name="api", id=300, path_with_namespace="grpB/api"),
+        ]
+        mock_gitlab_cls.return_value.projects.list.return_value = projects
+
+        result = discover_gitlab_repos({"all_repos": True, "group": "grpA"}, "token")
+
+        assert result == [("100",), ("200",)]
+
+    @patch("gitlab.Gitlab")
+    def test_all_repos_owner_limits_membership_projects(self, mock_gitlab_cls):
+        from dev_health_ops.discovery.repos import discover_gitlab_repos
+
+        projects = [
+            SimpleNamespace(name="api", id=100, path_with_namespace="grpA/api"),
+            SimpleNamespace(name="web", id=200, path_with_namespace="grpA/sub/web"),
+            SimpleNamespace(name="api", id=300, path_with_namespace="grpB/api"),
+        ]
+        mock_gitlab_cls.return_value.projects.list.return_value = projects
+
+        result = discover_gitlab_repos({"all_repos": True, "owner": "grpA"}, "token")
+
+        assert result == [("100",), ("200",)]
 
     def test_returns_empty_without_group_when_all_repos_false(self):
         from dev_health_ops.discovery.repos import discover_gitlab_repos

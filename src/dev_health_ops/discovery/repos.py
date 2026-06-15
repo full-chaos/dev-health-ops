@@ -54,10 +54,13 @@ def discover_github_repos(
     search = sync_options.get("search", "")
     owner = sync_options.get("owner", "")
     all_repos = sync_options.get("all_repos") is True
+    namespace = owner.strip() if all_repos and isinstance(owner, str) else ""
 
     if all_repos and isinstance(search, str) and search.strip():
         if "/" in search:
             parts = search.split("/", 1)
+            if not namespace:
+                namespace = parts[0].strip()
             repo_pattern = parts[1]
         else:
             repo_pattern = search.strip()
@@ -88,6 +91,8 @@ def discover_github_repos(
                 full_name = getattr(repo, "full_name", "") or ""
                 if "/" in full_name:
                     repo_owner = full_name.split("/", 1)[0]
+            if namespace and repo_owner.lower() != namespace.lower():
+                continue
             if repo_owner:
                 result.append((repo_owner, repo_name))
 
@@ -125,11 +130,20 @@ def discover_gitlab_repos(
         gitlab_url = str(sync_options.get("gitlab_url") or "https://gitlab.com")
     search = sync_options.get("search", "")
     group_path = sync_options.get("group", "")
+    owner = sync_options.get("owner", "")
     all_repos = sync_options.get("all_repos") is True
+    namespace = ""
+    if all_repos:
+        if isinstance(group_path, str) and group_path.strip():
+            namespace = group_path.strip()
+        elif isinstance(owner, str) and owner.strip():
+            namespace = owner.strip()
 
     if all_repos and isinstance(search, str) and search.strip():
         if "/" in search:
             parts = search.split("/", 1)
+            if not namespace:
+                namespace = parts[0].strip()
             project_pattern = parts[1]
         else:
             project_pattern = search.strip()
@@ -154,6 +168,14 @@ def discover_gitlab_repos(
         for project in projects:
             name = getattr(project, "name", "") or ""
             project_id = getattr(project, "id", None)
+            path_with_namespace = getattr(project, "path_with_namespace", "") or ""
+            normalized_path = path_with_namespace.lower()
+            normalized_namespace = namespace.lower()
+            if normalized_namespace and not (
+                normalized_path == normalized_namespace
+                or normalized_path.startswith(f"{normalized_namespace}/")
+            ):
+                continue
             if project_id is not None and fnmatch.fnmatch(name, project_pattern):
                 result.append((str(project_id),))
 

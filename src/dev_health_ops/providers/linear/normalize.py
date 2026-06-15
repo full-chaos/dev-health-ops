@@ -96,14 +96,25 @@ def _trusted_scm_hosts() -> frozenset[str]:
     return _PUBLIC_SCM_HOSTS | frozenset(extra)
 
 
-def _is_scm_attachment(url: str) -> bool:
-    """True only when the attachment URL is on a trusted GitHub/GitLab host.
+def _is_scm_attachment(url: str, source_type: str | None) -> bool:
+    """True only for an integration-created GitHub/GitLab PR/MR attachment.
 
-    Attachment ``url`` AND ``sourceType`` are user-controlled, so neither a
-    PR-shaped path (``/pull/N``) nor a forged ``sourceType`` may grant trust —
-    ``sourceType`` is advisory only. Trust is purely the URL host against an
-    allowlist (public SaaS + operator-configured self-hosted hosts).
+    Two factors are BOTH required, because attachment data is user-controlled:
+
+    - ``sourceType`` must name the GitHub/GitLab integration — this is the
+      provenance signal that distinguishes an integration-created PR/MR
+      attachment from a link a user pasted manually onto an issue; and
+    - the URL host must be on the trusted allowlist (public SaaS +
+      operator-configured) — so the link cannot be redirected to a forged host.
+
+    Requiring both means a casual user-added link is dropped (no integration
+    sourceType) and a forged host is dropped (not allowlisted). A user who links
+    a *real* PR on a trusted host to their own issue is the feature working as
+    intended, not a forgery.
     """
+    st = (source_type or "").lower()
+    if "github" not in st and "gitlab" not in st:
+        return False
     try:
         host = (urlsplit(str(url)).netloc or "").lower()
     except ValueError:
@@ -111,15 +122,17 @@ def _is_scm_attachment(url: str) -> bool:
     return host in _trusted_scm_hosts()
 
 
-def _work_item_id_from_pr_url(url: str | None) -> str | None:
+def _work_item_id_from_pr_url(
+    url: str | None, source_type: str | None = None
+) -> str | None:
     """Map a linked PR/MR URL to the matching work-item id, or None.
 
     Returns ``ghpr:{owner}/{repo}#{n}`` for a GitHub PR and
     ``gitlab:{project_path}!{n}`` for a GitLab MR — the same ids those
     providers mint — so the edge resolves directly to the PR/MR work item.
-    Rejects URLs whose host is not a trusted GitHub/GitLab host.
+    Requires both integration ``sourceType`` provenance and a trusted host.
     """
-    if not url or not _is_scm_attachment(url):
+    if not url or not _is_scm_attachment(url, source_type):
         return None
     try:
         path = urlsplit(str(url)).path
@@ -150,7 +163,7 @@ def extract_linear_dependencies(
     seen: set[str] = set()
     attachments = _get(issue, "attachments", "nodes") or []
     for att in attachments:
-        pr_id = _work_item_id_from_pr_url(_get(att, "url"))
+        pr_id = _work_item_id_from_pr_url(_get(att, "url"), _get(att, "sourceType"))
         if not pr_id or pr_id in seen:
             continue
         seen.add(pr_id)

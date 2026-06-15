@@ -47,14 +47,16 @@ def _wi(work_item_id: str, provider: str, **kw: object) -> WorkItem:
 
 
 def test_pr_url_parser_maps_public_github_and_gitlab() -> None:
-    assert (
-        _work_item_id_from_pr_url("https://github.com/full-chaos/ops/pull/921")
-        == "ghpr:full-chaos/ops#921"
-    )
-    # GitLab MR, nested groups, public host.
+    # Both factors required: integration sourceType + trusted host.
     assert (
         _work_item_id_from_pr_url(
-            "https://gitlab.com/group/sub/project/-/merge_requests/45"
+            "https://github.com/full-chaos/ops/pull/921", "github"
+        )
+        == "ghpr:full-chaos/ops#921"
+    )
+    assert (
+        _work_item_id_from_pr_url(
+            "https://gitlab.com/group/sub/project/-/merge_requests/45", "gitlab"
         )
         == "gitlab:group/sub/project!45"
     )
@@ -68,16 +70,34 @@ def test_pr_url_parser_ignores_non_pr_urls() -> None:
         "",
         None,
     ):
-        assert _work_item_id_from_pr_url(url) is None
+        assert _work_item_id_from_pr_url(url, "github") is None
+
+
+def test_pr_url_parser_requires_integration_sourcetype() -> None:
+    # A real public-host PR URL without the integration sourceType (e.g. a link
+    # a user pasted manually) is NOT trusted.
+    assert _work_item_id_from_pr_url("https://github.com/o/r/pull/9") is None
+    assert _work_item_id_from_pr_url("https://github.com/o/r/pull/9", "link") is None
+    assert (
+        _work_item_id_from_pr_url("https://github.com/o/r/pull/9", "github")
+        == "ghpr:o/r#9"
+    )
 
 
 def test_pr_url_parser_trusts_only_allowlisted_hosts() -> None:
-    # Non-public hosts are rejected — including a forged github-substring host —
-    # because sourceType/host shape are user-controlled and not trustworthy.
-    assert _work_item_id_from_pr_url("https://evil.example/owner/repo/pull/1") is None
-    assert _work_item_id_from_pr_url("https://github.evil.example/o/r/pull/1") is None
+    # Even WITH an integration sourceType, a non-allowlisted host is rejected —
+    # including a forged github-substring host.
     assert (
-        _work_item_id_from_pr_url("https://gitlab.acme.internal/g/p/-/merge_requests/3")
+        _work_item_id_from_pr_url("https://evil.example/o/r/pull/1", "github") is None
+    )
+    assert (
+        _work_item_id_from_pr_url("https://github.evil.example/o/r/pull/1", "github")
+        is None
+    )
+    assert (
+        _work_item_id_from_pr_url(
+            "https://gitlab.acme.internal/g/p/-/merge_requests/3", "gitlab"
+        )
         is None
     )
 
@@ -85,30 +105,38 @@ def test_pr_url_parser_trusts_only_allowlisted_hosts() -> None:
 def test_pr_url_parser_allows_operator_configured_self_hosted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Self-hosted hosts are trusted ONLY via operator config, never by URL shape.
+    # Self-hosted hosts are trusted ONLY via operator config (plus sourceType).
     monkeypatch.setenv("LINEAR_TRUSTED_SCM_HOSTS", "gitlab.acme.internal, ghe.corp")
     assert (
-        _work_item_id_from_pr_url("https://gitlab.acme.internal/g/p/-/merge_requests/3")
+        _work_item_id_from_pr_url(
+            "https://gitlab.acme.internal/g/p/-/merge_requests/3", "gitlab"
+        )
         == "gitlab:g/p!3"
     )
-    assert _work_item_id_from_pr_url("https://ghe.corp/o/r/pull/8") == "ghpr:o/r#8"
+    assert (
+        _work_item_id_from_pr_url("https://ghe.corp/o/r/pull/8", "github")
+        == "ghpr:o/r#8"
+    )
 
 
-def test_linear_attachment_sourcetype_does_not_grant_trust() -> None:
-    # A crafted attachment URL on a non-allowlisted host must be dropped even
-    # when sourceType claims github — sourceType is advisory only.
-    issue = {
+def test_linear_attachment_requires_sourcetype_and_host() -> None:
+    # Integration sourceType on a non-allowlisted host -> dropped (host fails).
+    bad_host = {
         "attachments": {
-            "nodes": [
-                {"url": "https://notion.so/o/r/pull/9", "sourceType": "github"},
-            ]
+            "nodes": [{"url": "https://notion.so/o/r/pull/9", "sourceType": "github"}]
         }
     }
-    assert extract_linear_dependencies(issue=issue, work_item_id="linear:CHAOS-1") == []
-    # A public-host attachment is captured regardless of (absent) sourceType.
-    issue["attachments"]["nodes"][0]["url"] = "https://github.com/o/r/pull/9"
-    del issue["attachments"]["nodes"][0]["sourceType"]
-    deps = extract_linear_dependencies(issue=issue, work_item_id="linear:CHAOS-1")
+    assert extract_linear_dependencies(issue=bad_host, work_item_id="linear:C-1") == []
+    # Trusted host but no integration sourceType (manual link) -> dropped.
+    no_st = {"attachments": {"nodes": [{"url": "https://github.com/o/r/pull/9"}]}}
+    assert extract_linear_dependencies(issue=no_st, work_item_id="linear:C-1") == []
+    # Both present -> captured.
+    ok = {
+        "attachments": {
+            "nodes": [{"url": "https://github.com/o/r/pull/9", "sourceType": "github"}]
+        }
+    }
+    deps = extract_linear_dependencies(issue=ok, work_item_id="linear:C-1")
     assert [d.source_work_item_id for d in deps] == ["ghpr:o/r#9"]
 
 
@@ -121,7 +149,10 @@ def test_linear_attachment_emits_pr_to_issue_edge() -> None:
     issue = {
         "attachments": {
             "nodes": [
-                {"url": "https://github.com/full-chaos/ops/pull/12"},
+                {
+                    "url": "https://github.com/full-chaos/ops/pull/12",
+                    "sourceType": "github",
+                },
                 {"url": "https://www.notion.so/some-doc"},  # ignored
             ]
         }
@@ -144,7 +175,12 @@ def test_linear_attachment_edge_drives_pr_inheritance_direct_target() -> None:
     deps = extract_linear_dependencies(
         issue={
             "attachments": {
-                "nodes": [{"url": "https://github.com/full-chaos/ops/pull/12"}]
+                "nodes": [
+                    {
+                        "url": "https://github.com/full-chaos/ops/pull/12",
+                        "sourceType": "github",
+                    }
+                ]
             }
         },
         work_item_id="linear:CHAOS-2400",

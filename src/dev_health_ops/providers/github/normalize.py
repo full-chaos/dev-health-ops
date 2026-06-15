@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from collections.abc import Sequence
 from datetime import datetime, timezone
@@ -988,16 +989,26 @@ _COMMENT_LINEAR_URL_PATTERN = re.compile(
 )
 
 
-def _is_linear_integration_author(author_login: str | None) -> bool:
-    """True only for the Linear GitHub App actor (``linear[bot]``).
+# Exact login(s) of the Linear GitHub App actor. An exact allowlist (not a
+# substring match) so another app like "linear-helper[bot]" cannot pass.
+# Overridable for self-managed Linear app installs via env.
+_LINEAR_LINKBACK_BOTS = frozenset(
+    b.strip().lower()
+    for b in (os.getenv("GITHUB_LINEAR_LINKBACK_BOTS") or "linear[bot]").split(",")
+    if b.strip()
+)
 
-    The ``[bot]`` suffix is reserved for GitHub App actors — a human cannot
-    register a login containing brackets — so this cannot be impersonated by a
-    contributor. Gating comment capture to this actor closes the forge-a-URL
+
+def _is_linear_integration_author(author_login: str | None) -> bool:
+    """True only for the exact Linear GitHub App actor login(s).
+
+    The ``[bot]`` login is reserved for GitHub App actors (a human cannot
+    register a bracketed login), and the match is EXACT against the trusted
+    allowlist — a different bot whose login merely contains ``linear`` is
+    rejected. Gating comment capture to this actor closes the forge-a-URL
     vector: a normal user typing a ``linear.app`` URL in a comment is ignored.
     """
-    login = (author_login or "").strip().lower()
-    return login.endswith("[bot]") and "linear" in login
+    return (author_login or "").strip().lower() in _LINEAR_LINKBACK_BOTS
 
 
 def extract_github_comment_dependencies(

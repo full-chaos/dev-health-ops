@@ -63,7 +63,9 @@ def _make_store(client: MagicMock) -> ClickHouseStore:
     return store
 
 
-def _real_migration_files_for(method_code_filename: str, parents_depth: int) -> list[Path]:
+def _real_migration_files_for(
+    method_code_filename: str, parents_depth: int
+) -> list[Path]:
     """Return the sorted migration file list the runner would compute at runtime."""
     migrations_dir = (
         Path(method_code_filename).resolve().parents[parents_depth]
@@ -86,7 +88,6 @@ async def _fake_to_thread(fn, *args, **kwargs):
 
 
 class TestApplySqlMigrationsCoreFastPath:
-
     def _real_files(self) -> list[Path]:
         # _apply_sql_migrations lives in core.py; use ClickHouseCore's __code__
         # to get the source file so parents[3] resolves correctly.
@@ -199,7 +200,7 @@ class TestApplySqlMigrationsCoreFastPath:
         b_files = [n for n in names if n.startswith("023b")]
         assert b_files, "Expected at least one '023b_*' migration in the corpus"
         idx_b = names.index(b_files[0])
-        after_b = names[idx_b + 1:]
+        after_b = names[idx_b + 1 :]
         assert any(n.startswith("024") for n in after_b), (
             "'024_*' migration must appear after '023b_*' in sorted order"
         )
@@ -223,7 +224,6 @@ class TestApplySqlMigrationsCoreFastPath:
 
 
 class TestEnsureTablesFastPath:
-
     def _real_files(self) -> list[Path]:
         return _real_migration_files_for(
             ClickHouseStore._ensure_tables.__code__.co_filename,

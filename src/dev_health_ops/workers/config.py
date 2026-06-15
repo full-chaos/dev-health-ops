@@ -92,6 +92,20 @@ beat_schedule = {
         "schedule": crontab(hour=2, minute=0),
         "options": {"queue": "metrics"},
     },
+    # Daily floor-cadence safety net for work_unit_membership (CHAOS-2439).
+    # Investment materialization (which populates work_unit_membership, read by
+    # the work-graph theme/subcategory filter) is otherwise event-driven only —
+    # it runs post-sync via the run_work_graph_build -> run_investment_materialize
+    # chain. Idle-sync orgs and the post-deploy window would otherwise leave
+    # membership empty, stranding theme filters in the MEMBERSHIP_NOT_MATERIALIZED
+    # degraded state (CHAOS-2427 #925). The dispatcher fans out the SAME immutable
+    # build->materialize chain per active org with work-graph data. Scheduled at
+    # 01:15 — clear of run-daily-metrics (01:00) and run-release-impact (01:30).
+    "run-investment-materialize-daily": {
+        "task": "dev_health_ops.workers.tasks.dispatch_investment_materialize",
+        "schedule": crontab(hour=1, minute=15),
+        "options": {"queue": "default"},
+    },
     # Release-impact daily compute (CHAOS-2381): materializes
     # release_impact_daily from telemetry_signal_bucket + deployments, read by
     # the /feature-flags release-reliability cards. The dispatcher fans out one

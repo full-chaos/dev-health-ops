@@ -5,6 +5,8 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from datetime import time as dt_time
 
+from celery import chain
+
 from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.task_utils import _get_db_url
@@ -179,3 +181,121 @@ def run_investment_materialize(
     except Exception as exc:
         logger.exception("Investment materialize task failed: %s", exc)
         raise self.retry(exc=exc, countdown=120 * (2**self.request.retries))
+
+
+def _orgs_with_work_graph_data(db_url: str, org_ids: list[str]) -> set[str]:
+    """Return the subset of ``org_ids`` that have any ``work_graph_edges`` rows.
+
+    Scopes the daily floor-cadence fan-out to orgs that actually have a work
+    graph, so empty / never-synced orgs are not churned every night. Sourced
+    from ClickHouse ``work_graph_edges`` — the exact input that the
+    build->materialize chain reads — mirroring how the recommendations job
+    scopes to tables that hold data (``_discover_team_ids``). On any ClickHouse
+    error, returns all candidate orgs (fail open): the per-org chain is itself a
+    no-op for an empty org, so a transient probe failure must not silently skip
+    the safety net it exists to provide.
+    """
+    if not org_ids:
+        return set()
+    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+
+    try:
+        sink = ClickHouseMetricsSink(db_url)
+        rows = sink.client.query(
+            """
+            SELECT DISTINCT org_id
+            FROM work_graph_edges
+            WHERE org_id IN %(org_ids)s
+            """,
+            parameters={"org_ids": org_ids},
+        ).result_rows
+        return {str(row[0]) for row in rows if row and row[0]}
+    except Exception:
+        logger.warning(
+            "work_graph_edges org-with-data probe failed; "
+            "falling back to all candidate orgs",
+            exc_info=True,
+        )
+        return set(org_ids)
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=3,
+    queue="default",
+    name="dev_health_ops.workers.tasks.dispatch_investment_materialize",
+)
+def dispatch_investment_materialize(
+    self,
+    db_url: str | None = None,
+) -> dict:
+    """Daily floor-cadence safety net for ``work_unit_membership`` (CHAOS-2439).
+
+    Investment materialization (which populates ``work_unit_membership``, read by
+    the work-graph theme/subcategory filter) is otherwise EVENT-DRIVEN ONLY — it
+    runs post-sync via the ``run_work_graph_build`` -> ``run_investment_materialize``
+    chain in ``_dispatch_post_sync_tasks``. Idle-sync orgs and the post-deploy
+    window therefore leave membership empty, stranding theme filters in the
+    ``MEMBERSHIP_NOT_MATERIALIZED`` degraded state indefinitely (CHAOS-2427 #925).
+
+    This dispatcher fans out one per-org job at a fixed daily cadence, queuing the
+    SAME immutable ``build -> materialize`` chain used post-sync. The chain (not
+    two independent dispatches) guarantees materialize only starts after the
+    build *succeeds*, so concurrent metrics workers cannot race materialize ahead
+    of a stale/empty graph — the race CHAOS-2374 avoided. It is idempotent and
+    safe to coexist with the post-sync dispatch: materialization is keyed on
+    ``computed_at`` (ReplacingMergeTree) and re-running simply refreshes the
+    latest run.
+
+    Org selection mirrors the other daily fan-out dispatchers
+    (``_discover_active_org_ids`` — active orgs from Postgres, the source of
+    truth, ``["default"]`` fallback for single-tenant installs), then narrows to
+    orgs that actually have ``work_graph_edges`` so empty orgs are not churned.
+
+    Returns:
+        dict with the list of dispatched org_ids and a skipped count.
+    """
+    from dev_health_ops.workers.recommendations_tasks import _discover_active_org_ids
+
+    db_url = db_url or _get_db_url()
+
+    try:
+        candidate_org_ids = _discover_active_org_ids()
+    except Exception as exc:
+        # A transient Postgres/enumeration failure at the once-daily run must not
+        # report success while computing zero orgs (mirrors dispatch_release_impact):
+        # retry, then surface as a FAILED task rather than a silent empty success.
+        logger.exception("dispatch_investment_materialize failed to enumerate orgs")
+        raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
+
+    with_data = _orgs_with_work_graph_data(db_url, candidate_org_ids)
+
+    dispatched: list[str] = []
+    skipped = 0
+    for org_id in candidate_org_ids:
+        if org_id not in with_data:
+            skipped += 1
+            continue
+        # Mirror the post-sync immutable chain exactly (CHAOS-2374): build FIRST,
+        # then materialize, on the metrics queue. ``.si()``-equivalent immutability
+        # keeps the build's return value out of materialize's positional args.
+        build_sig = celery_app.signature(
+            "dev_health_ops.workers.tasks.run_work_graph_build",
+            kwargs={"org_id": org_id},
+            queue="metrics",
+        )
+        materialize_sig = celery_app.signature(
+            "dev_health_ops.workers.tasks.run_investment_materialize",
+            kwargs={"org_id": org_id},
+            queue="metrics",
+            immutable=True,
+        )
+        chain(build_sig, materialize_sig).apply_async()
+        dispatched.append(org_id)
+
+    logger.info(
+        "Investment materialize dispatch: dispatched=%d skipped=%d",
+        len(dispatched),
+        skipped,
+    )
+    return {"dispatched": dispatched, "skipped": skipped}

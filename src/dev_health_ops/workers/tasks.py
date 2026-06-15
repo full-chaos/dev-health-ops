@@ -50,6 +50,7 @@ from dev_health_ops.workers.task_utils import (
     _resolve_env_credentials,
 )
 from dev_health_ops.workers.work_graph_tasks import (
+    dispatch_investment_materialize,
     run_investment_materialize,
     run_work_graph_build,
 )
@@ -66,6 +67,7 @@ __all__ = [
     "_run_sync_for_repo",
     "dispatch_batch_sync",
     "dispatch_daily_metrics_partitioned",
+    "dispatch_investment_materialize",
     "dispatch_release_impact",
     "dispatch_scheduled_metrics",
     "dispatch_scheduled_reports",

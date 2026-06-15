@@ -223,10 +223,12 @@ def run_investment_materialization(ns: argparse.Namespace) -> int:
     try:
         stats = asyncio.run(materialize_investments(config))
         logging.info(
-            "Investment materialization complete. Components=%d Records=%d Quotes=%d",
+            "Investment materialization complete. "
+            "Components=%d Records=%d Quotes=%d Memberships=%d",
             stats.get("components", 0),
             stats.get("records", 0),
             stats.get("quotes", 0),
+            stats.get("memberships", 0),
         )
         return 0
     except Exception as e:

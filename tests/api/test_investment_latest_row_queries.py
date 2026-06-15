@@ -21,6 +21,25 @@ def _window() -> tuple[datetime, datetime]:
     )
 
 
+def test_latest_row_cte_does_not_shadow_argmax_ordering_column() -> None:
+    """Regression: the aggregate in the latest-row CTE must NOT be aliased to
+    ``computed_at``.
+
+    ``computed_at`` is the ordering column of every ``argMax(col, computed_at)``
+    in the CTE. Aliasing ``max(computed_at) AS computed_at`` makes ClickHouse
+    26.5.x resolve that name to the aggregate alias, turning each argMax into
+    ``argMax(col, max(computed_at))`` — an aggregate inside an aggregate — which
+    fails at analysis time with ``Code: 184 ILLEGAL_AGGREGATION``. Because the
+    GraphQL ``analytics`` breakdown/sankey resolvers reuse this exact CTE, that
+    error silently emptied the Investment treemap and the allocation flows /
+    team-&-repo coverage. The aggregate must keep a distinct alias.
+    """
+    cte = investment_queries.LATEST_WORK_UNIT_INVESTMENTS_CTE
+    assert "argMax(effort_value, computed_at)" in cte  # ordering column is used
+    assert "max(computed_at) AS computed_at" not in cte  # the shadowing alias
+    assert "max(computed_at) AS latest_computed_at" in cte
+
+
 @pytest.mark.asyncio
 async def test_investment_breakdown_aggregates_only_latest_work_unit_row(
     monkeypatch: pytest.MonkeyPatch,

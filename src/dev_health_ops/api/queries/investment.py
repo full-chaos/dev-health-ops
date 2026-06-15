@@ -35,7 +35,14 @@ LATEST_WORK_UNIT_INVESTMENTS_CTE = """
                 argMax(categorization_status, computed_at) AS categorization_status,
                 argMax(categorization_run_id, computed_at) AS categorization_run_id,
                 org_id,
-                max(computed_at) AS computed_at
+                -- Alias must NOT be ``computed_at``: that name is the ordering
+                -- column of every ``argMax(col, computed_at)`` above, and on
+                -- ClickHouse 26.5.x an identically-named aggregate alias
+                -- shadows the raw column, turning argMax into
+                -- ``argMax(col, max(computed_at))`` → ILLEGAL_AGGREGATION (184)
+                -- which silently empties the Investment treemap and allocation
+                -- sankey. Keep the distinct name.
+                max(computed_at) AS latest_computed_at
             FROM work_unit_investments
             WHERE org_id = %(org_id)s
             GROUP BY org_id, work_unit_id

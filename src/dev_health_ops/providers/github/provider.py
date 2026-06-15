@@ -357,14 +357,23 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                                 )
                                 if event:
                                     interactions.append(event)
-                            # Secondary link capture: a Linear/Jira key in a PR
-                            # comment (e.g. the integration bot linkback) when the
-                            # PR body/branch carries no reference.
+                            # Secondary link capture: the Linear integration
+                            # bot's linkback comment when the PR body/branch
+                            # carries no reference. Only that bot actor is
+                            # trusted (see extract_github_comment_dependencies).
                             dependencies.extend(
                                 extract_github_comment_dependencies(
                                     work_item_id=wi.work_item_id,
-                                    comment_bodies=[
-                                        getattr(c, "body", None) for c in comments
+                                    comments=[
+                                        (
+                                            getattr(c, "body", None),
+                                            getattr(
+                                                getattr(c, "user", None),
+                                                "login",
+                                                None,
+                                            ),
+                                        )
+                                        for c in comments
                                     ],
                                 )
                             )

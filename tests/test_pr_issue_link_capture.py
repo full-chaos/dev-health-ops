@@ -46,17 +46,12 @@ def _wi(work_item_id: str, provider: str, **kw: object) -> WorkItem:
 # --------------------------------------------------------------------------- #
 
 
-def test_pr_url_parser_maps_github_and_gitlab() -> None:
+def test_pr_url_parser_maps_public_github_and_gitlab() -> None:
     assert (
         _work_item_id_from_pr_url("https://github.com/full-chaos/ops/pull/921")
         == "ghpr:full-chaos/ops#921"
     )
-    # GitHub Enterprise host requires the integration sourceType to be trusted.
-    assert (
-        _work_item_id_from_pr_url("https://github.example.com/o/r/pull/7", "github")
-        == "ghpr:o/r#7"
-    )
-    # GitLab MR, nested groups, any host.
+    # GitLab MR, nested groups, public host.
     assert (
         _work_item_id_from_pr_url(
             "https://gitlab.com/group/sub/project/-/merge_requests/45"
@@ -76,34 +71,43 @@ def test_pr_url_parser_ignores_non_pr_urls() -> None:
         assert _work_item_id_from_pr_url(url) is None
 
 
-def test_pr_url_parser_rejects_non_scm_host_unless_sourcetype() -> None:
-    # A non-public host with a PR-shaped path is not trusted by host alone...
+def test_pr_url_parser_trusts_only_allowlisted_hosts() -> None:
+    # Non-public hosts are rejected — including a forged github-substring host —
+    # because sourceType/host shape are user-controlled and not trustworthy.
     assert _work_item_id_from_pr_url("https://evil.example/owner/repo/pull/1") is None
-    # ...and a forged github-substring host is likewise rejected (no exact match).
     assert _work_item_id_from_pr_url("https://github.evil.example/o/r/pull/1") is None
-    # The integration sourceType authorises a self-hosted/Enterprise host.
     assert (
-        _work_item_id_from_pr_url(
-            "https://gitlab.acme.internal/g/p/-/merge_requests/3", "gitlab"
-        )
+        _work_item_id_from_pr_url("https://gitlab.acme.internal/g/p/-/merge_requests/3")
+        is None
+    )
+
+
+def test_pr_url_parser_allows_operator_configured_self_hosted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Self-hosted hosts are trusted ONLY via operator config, never by URL shape.
+    monkeypatch.setenv("LINEAR_TRUSTED_SCM_HOSTS", "gitlab.acme.internal, ghe.corp")
+    assert (
+        _work_item_id_from_pr_url("https://gitlab.acme.internal/g/p/-/merge_requests/3")
         == "gitlab:g/p!3"
     )
-    # Public hosts are trusted by exact host.
-    assert _work_item_id_from_pr_url("https://github.com/o/r/pull/9") == "ghpr:o/r#9"
+    assert _work_item_id_from_pr_url("https://ghe.corp/o/r/pull/8") == "ghpr:o/r#8"
 
 
-def test_linear_attachment_gated_by_sourcetype_or_host() -> None:
-    # A non-SCM attachment whose URL happens to look like a PR is dropped.
+def test_linear_attachment_sourcetype_does_not_grant_trust() -> None:
+    # A crafted attachment URL on a non-allowlisted host must be dropped even
+    # when sourceType claims github — sourceType is advisory only.
     issue = {
         "attachments": {
             "nodes": [
-                {"url": "https://notion.so/o/r/pull/9", "sourceType": "notion"},
+                {"url": "https://notion.so/o/r/pull/9", "sourceType": "github"},
             ]
         }
     }
     assert extract_linear_dependencies(issue=issue, work_item_id="linear:CHAOS-1") == []
-    # Same path but flagged as a github source -> captured.
-    issue["attachments"]["nodes"][0]["sourceType"] = "github"
+    # A public-host attachment is captured regardless of (absent) sourceType.
+    issue["attachments"]["nodes"][0]["url"] = "https://github.com/o/r/pull/9"
+    del issue["attachments"]["nodes"][0]["sourceType"]
     deps = extract_linear_dependencies(issue=issue, work_item_id="linear:CHAOS-1")
     assert [d.source_work_item_id for d in deps] == ["ghpr:o/r#9"]
 
@@ -160,16 +164,20 @@ def test_linear_attachment_edge_drives_pr_inheritance_direct_target() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_github_comment_capture_from_linear_url_only() -> None:
-    # Only the linear.app integration URL is trusted; a bare keyword mention in
-    # a (third-party) comment is intentionally NOT captured.
+BOT = "linear[bot]"  # the Linear GitHub App actor login
+
+
+def test_github_comment_capture_from_bot_linear_url() -> None:
+    # Only the bot's linear.app URL is trusted.
     deps = extract_github_comment_dependencies(
         work_item_id="ghpr:o/r#1",
-        comment_bodies=[
-            "Linked to https://linear.app/full-chaos/issue/CHAOS-2400/title",
-            None,
-            "Also fixes PROJ-7 per discussion",  # keyword, no URL -> ignored
-            "see https://linear.app/x/issue/CHAOS-2400/dup",  # duplicate -> one edge
+        comments=[
+            (
+                "Linked to https://linear.app/full-chaos/issue/CHAOS-2400/title",
+                BOT,
+            ),
+            (None, BOT),
+            ("see https://linear.app/x/issue/CHAOS-2400/dup", BOT),  # dup -> one
         ],
     )
     assert [d.target_work_item_id for d in deps] == ["extkey:CHAOS-2400"]
@@ -177,24 +185,27 @@ def test_github_comment_capture_from_linear_url_only() -> None:
     assert deps[0].relationship_type_raw == "github_comment_linear_url"
 
 
-def test_github_comment_capture_ignores_bare_keyword_mentions() -> None:
-    # Without a linear.app URL, nothing is captured even with linkage keywords —
-    # comments are third-party and keyword text is forgeable.
+def test_github_comment_capture_ignores_non_bot_author() -> None:
+    # A human contributor posting a Linear URL must NOT create an edge — that is
+    # the forge-a-URL vector the actor gate closes.
     deps = extract_github_comment_dependencies(
         work_item_id="ghpr:o/r#1",
-        comment_bodies=["This is blocked by CHAOS-9", "Fixes CHAOS-10 too"],
+        comments=[
+            ("https://linear.app/x/issue/CHAOS-9/foo", "sneaky-user"),
+            ("https://linear.app/x/issue/CHAOS-9/foo", "evil[bot]"),  # wrong bot
+        ],
     )
     assert deps == []
 
 
 def test_github_comment_blocking_wins_over_relates_for_same_key() -> None:
-    # Two URL links for the SAME key, one with blocking context, must resolve to
+    # Two bot URL links for the SAME key, one with blocking context, resolve to
     # the blocking (non-inheritable) relationship.
     deps = extract_github_comment_dependencies(
         work_item_id="ghpr:o/r#1",
-        comment_bodies=[
-            "Tracked in https://linear.app/x/issue/CHAOS-1/foo",
-            "Update: blocked by https://linear.app/x/issue/CHAOS-1/bar",
+        comments=[
+            ("Tracked in https://linear.app/x/issue/CHAOS-1/foo", BOT),
+            ("Update: blocked by https://linear.app/x/issue/CHAOS-1/bar", BOT),
         ],
     )
     assert len(deps) == 1
@@ -203,12 +214,13 @@ def test_github_comment_blocking_wins_over_relates_for_same_key() -> None:
 
 
 def test_github_comment_blocking_intent_preserved_for_url_links() -> None:
-    # "blocked by <linear url>" must stay non-inheritable, not default to
-    # relates_to just because the reference is a URL.
     deps = extract_github_comment_dependencies(
         work_item_id="ghpr:o/r#1",
-        comment_bodies=[
-            "This PR is blocked by https://linear.app/x/issue/ABC-123/needs-infra"
+        comments=[
+            (
+                "This PR is blocked by https://linear.app/x/issue/ABC-123/infra",
+                BOT,
+            )
         ],
     )
     assert len(deps) == 1
@@ -253,16 +265,16 @@ def test_client_paginates_issue_attachments(
     assert calls[1] is not None and calls[1]["after"] == "c1"
 
 
-def test_github_comment_capture_ignores_incidental_and_versionish_tokens() -> None:
-    # Bare mentions with no explicit linkage signal must NOT be captured —
-    # otherwise an unrelated ticket reference could mis-attribute the PR.
+def test_github_comment_capture_ignores_bare_tokens_even_from_bot() -> None:
+    # Even a bot comment only yields edges from an explicit linear.app URL — a
+    # bare token / incidental mention is never captured.
     deps = extract_github_comment_dependencies(
         work_item_id="ghpr:o/r#1",
-        comment_bodies=[
-            "Reminds me of OTHER-123 from last quarter",  # incidental mention
-            "bumped to v1-2 and python-3",
-            "deploy-9 done",
-            "CVE-2024 patched",
+        comments=[
+            ("Reminds me of OTHER-123 from last quarter", BOT),
+            ("bumped to v1-2 and python-3", BOT),
+            ("This is blocked by CHAOS-9", BOT),  # keyword, no URL -> ignored
+            ("CVE-2024 patched", BOT),
         ],
     )
     assert deps == []

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -82,37 +83,43 @@ _PUBLIC_SCM_HOSTS = frozenset(
 )
 
 
-def _is_scm_attachment(url: str, source_type: str | None) -> bool:
-    """True only when the attachment is a trustworthy GitHub/GitLab PR/MR link.
+def _trusted_scm_hosts() -> frozenset[str]:
+    """Public SCM hosts plus any operator-configured self-hosted hosts.
 
-    Attachment data is user-controlled, so a non-code URL that merely contains
-    ``/pull/N`` (e.g. ``https://github.evil.example/x/pull/1``) must not be
-    trusted to mint a PR id. Trust requires either an exact **public** SCM host
-    or the Linear integration's ``sourceType`` (the latter is how self-hosted /
-    Enterprise instances on arbitrary hosts are recognised — there is no
-    hostname-only way to distinguish a real self-hosted host from a forged one).
+    Self-hosted GitHub Enterprise / GitLab live on arbitrary hosts that cannot
+    be trusted by name alone, so they must be opted in explicitly via the
+    ``LINEAR_TRUSTED_SCM_HOSTS`` env var (comma-separated). That is operator
+    config, NOT user-controlled attachment data.
     """
-    st = (source_type or "").lower()
-    if "github" in st or "gitlab" in st:
-        return True
+    raw = os.getenv("LINEAR_TRUSTED_SCM_HOSTS", "")
+    extra = {h.strip().lower() for h in raw.split(",") if h.strip()}
+    return _PUBLIC_SCM_HOSTS | frozenset(extra)
+
+
+def _is_scm_attachment(url: str) -> bool:
+    """True only when the attachment URL is on a trusted GitHub/GitLab host.
+
+    Attachment ``url`` AND ``sourceType`` are user-controlled, so neither a
+    PR-shaped path (``/pull/N``) nor a forged ``sourceType`` may grant trust —
+    ``sourceType`` is advisory only. Trust is purely the URL host against an
+    allowlist (public SaaS + operator-configured self-hosted hosts).
+    """
     try:
         host = (urlsplit(str(url)).netloc or "").lower()
     except ValueError:
         return False
-    return host in _PUBLIC_SCM_HOSTS
+    return host in _trusted_scm_hosts()
 
 
-def _work_item_id_from_pr_url(
-    url: str | None, source_type: str | None = None
-) -> str | None:
+def _work_item_id_from_pr_url(url: str | None) -> str | None:
     """Map a linked PR/MR URL to the matching work-item id, or None.
 
     Returns ``ghpr:{owner}/{repo}#{n}`` for a GitHub PR and
     ``gitlab:{project_path}!{n}`` for a GitLab MR — the same ids those
     providers mint — so the edge resolves directly to the PR/MR work item.
-    Rejects URLs whose host/sourceType is not a GitHub/GitLab source.
+    Rejects URLs whose host is not a trusted GitHub/GitLab host.
     """
-    if not url or not _is_scm_attachment(url, source_type):
+    if not url or not _is_scm_attachment(url):
         return None
     try:
         path = urlsplit(str(url)).path
@@ -143,7 +150,7 @@ def extract_linear_dependencies(
     seen: set[str] = set()
     attachments = _get(issue, "attachments", "nodes") or []
     for att in attachments:
-        pr_id = _work_item_id_from_pr_url(_get(att, "url"), _get(att, "sourceType"))
+        pr_id = _work_item_id_from_pr_url(_get(att, "url"))
         if not pr_id or pr_id in seen:
             continue
         seen.add(pr_id)

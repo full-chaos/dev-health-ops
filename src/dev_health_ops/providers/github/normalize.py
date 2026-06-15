@@ -988,25 +988,37 @@ _COMMENT_LINEAR_URL_PATTERN = re.compile(
 )
 
 
+def _is_linear_integration_author(author_login: str | None) -> bool:
+    """True only for the Linear GitHub App actor (``linear[bot]``).
+
+    The ``[bot]`` suffix is reserved for GitHub App actors — a human cannot
+    register a login containing brackets — so this cannot be impersonated by a
+    contributor. Gating comment capture to this actor closes the forge-a-URL
+    vector: a normal user typing a ``linear.app`` URL in a comment is ignored.
+    """
+    login = (author_login or "").strip().lower()
+    return login.endswith("[bot]") and "linear" in login
+
+
 def extract_github_comment_dependencies(
-    *, work_item_id: str, comment_bodies: Sequence[str | None]
+    *, work_item_id: str, comments: Sequence[tuple[str | None, str | None]]
 ) -> list[WorkItemDependency]:
     """Secondary capture: Linear issue links in a PR's comments.
 
-    PR comments are authored by anyone, so only the HIGH-CONFIDENCE signal is
-    trusted: an explicit ``linear.app/.../issue/KEY`` URL (the integration bot's
-    linkback). Natural-language keyword mentions (``see``/``fixes``/``part of``
-    …) are intentionally NOT captured from comments — a contributor could type
-    them to force an unrelated inheritance; the PR's own body still carries the
-    author's keyworded refs. Blocking phrasing immediately before the URL is
-    honoured (kept non-inheritable). Per key, the highest-risk relationship
-    across all comments wins. Fallback to the authoritative Linear attachment.
+    ``comments`` is a sequence of ``(body, author_login)``. Only comments from
+    the Linear integration bot (``linear[bot]``) are trusted, and within those,
+    only an explicit ``linear.app/.../issue/KEY`` URL — natural-language
+    keywords are never captured from comments. Both guards exist because PR
+    comments are third-party authored: without the actor gate a contributor
+    could type a Linear URL to force an unrelated inheritance. Blocking phrasing
+    before the URL is honoured (kept non-inheritable); per key the highest-risk
+    relationship wins. Fallback to the authoritative Linear attachment.
     """
     _RANK = {"blocked_by": 3, "blocks": 2, "relates_to": 1}
     best: dict[str, tuple[str, str]] = {}  # key -> (relationship_type, raw)
 
-    for body in comment_bodies:
-        if not body:
+    for body, author_login in comments:
+        if not body or not _is_linear_integration_author(author_login):
             continue
         text = str(body)
         for match in _COMMENT_LINEAR_URL_PATTERN.finditer(text):

@@ -191,6 +191,9 @@ async def list_credential_repos(
             raise HTTPException(
                 status_code=400, detail="GitLab credential missing token"
             )
+        is_valid, url_error = _validate_external_url(url)
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=url_error)
         gitlab_connector = GitLabConnector(url=url, private_token=token)
         effective_owner = owner or _string_value(config.get("group"))
         try:
@@ -470,22 +473,32 @@ async def _list_github_app_installation_repos(
                 params={"per_page": per_page, "page": page},
                 timeout=10,
             )
-            if resp.status_code == 401 or (
-                resp.status_code == 403
-                and "rate limit" not in resp.text.lower()
-                and "x-ratelimit-remaining" not in resp.headers
-            ):
+            if resp.status_code == 401:
                 raise HTTPException(
                     status_code=401,
                     detail="GitHub App authentication failed",
                 )
-            if resp.status_code == 429 or (
-                resp.status_code == 403
-                and (
-                    "rate limit" in resp.text.lower()
-                    or "x-ratelimit-remaining" in resp.headers
+            if resp.status_code == 403:
+                body_lower = resp.text.lower()
+                remaining = resp.headers.get("x-ratelimit-remaining")
+                retry_after = resp.headers.get("retry-after")
+                is_rate_limit = (
+                    remaining == "0"
+                    or retry_after is not None
+                    or "rate limit" in body_lower
+                    or "abuse" in body_lower
+                    or "secondary" in body_lower
                 )
-            ):
+                if is_rate_limit:
+                    raise HTTPException(
+                        status_code=429,
+                        detail="GitHub API rate limit exceeded",
+                    )
+                raise HTTPException(
+                    status_code=403,
+                    detail="GitHub App permission denied",
+                )
+            if resp.status_code == 429:
                 raise HTTPException(
                     status_code=429,
                     detail="GitHub API rate limit exceeded",

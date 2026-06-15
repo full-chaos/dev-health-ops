@@ -641,6 +641,10 @@ async def test_gitlab_base_url_key_used_for_self_hosted(client):
         ) as _,
         patch(_GL_CONNECTOR) as MockGLConnector,
         patch(_GL_MEMBERSHIP_HELPER, return_value=gl_repos) as MockMembership,
+        patch(
+            "dev_health_ops.api.admin.routers.credentials.socket.getaddrinfo",
+            return_value=[(2, 1, 6, "", ("8.8.8.8", 0))],
+        ),
     ):
         resp = await ac.get(
             f"/api/v1/admin/credentials/{state['cred_id']}/repos",
@@ -857,3 +861,107 @@ async def test_missing_token_returns_400(client):
 
     assert resp.status_code == 400
     assert "require either token" in resp.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Tests — Security / correctness fixes (review round 4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_gitlab_internal_url_rejected_ssrf(client):
+    """GitLab credential with an internal/private base_url → HTTP 400 (SSRF guard).
+
+    CHAOS-2449 review round 4 (FINDING 1 HIGH): the GitLab branch of
+    list_credential_repos must validate the resolved URL with _validate_external_url
+    before constructing GitLabConnector or calling _list_gitlab_membership_repos,
+    so a tenant-controlled base_url cannot be used to exfiltrate the GitLab token
+    to an internal host.
+    """
+    ac, state = client
+
+    for internal_url in (
+        "http://localhost",
+        "http://169.254.169.254",
+        "http://192.168.1.1",
+    ):
+        with (
+            patch(
+                _DECRYPT_PATCH,
+                return_value=_mock_credential(
+                    provider="gitlab",
+                    config={},
+                    credentials={"token": "glpat_fake", "url": internal_url},
+                ),
+            ) as _,
+            patch(_GL_CONNECTOR) as MockGLConnector,
+            patch(_GL_MEMBERSHIP_HELPER) as MockMembership,
+        ):
+            resp = await ac.get(
+                f"/api/v1/admin/credentials/{state['cred_id']}/repos",
+            )
+
+        assert resp.status_code == 400, (
+            f"Expected 400 for {internal_url}, got {resp.status_code}"
+        )
+        # Connector and membership helper must NOT have been called
+        MockGLConnector.assert_not_called()
+        MockMembership.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_github_app_403_permission_not_rate_limit(client):
+    """App installation helper: 403 with x-ratelimit-remaining=4999 and a
+    permission-error body → auth/permission error (HTTP 403), NOT 429.
+
+    CHAOS-2449 review round 4 (FINDING 2 MEDIUM): the previous logic treated any
+    403 carrying an x-ratelimit-remaining header as a rate limit, causing admins
+    to be wrongly told to wait when the real problem is a missing permission or
+    SSO requirement.  A 403 is only a rate limit when remaining==0, Retry-After
+    is present, or the body explicitly mentions rate/abuse/secondary limiting.
+    """
+    ac, state = client
+    app_credentials = {
+        "app_id": "12345",
+        "private_key": "not-a-real-github-app-private-key",
+        "installation_id": "67890",
+    }
+
+    class _FakeResp:
+        status_code = 403
+        text = "Resource not accessible by integration"
+        headers = {"x-ratelimit-remaining": "4999"}
+
+        def json(self):
+            return {"message": "Resource not accessible by integration"}
+
+    class _FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, *args, **kwargs):
+            return _FakeResp()
+
+    with (
+        patch(
+            _DECRYPT_PATCH,
+            return_value=_mock_credential(config={}, credentials=app_credentials),
+        ) as _,
+        patch(_GH_CONNECTOR),
+        patch(_GH_APP_PROVIDER) as MockProvider,
+        patch("httpx.AsyncClient", return_value=_FakeAsyncClient()),
+    ):
+        MockProvider.return_value.get_token.return_value = "ghs_token"
+        resp = await ac.get(
+            f"/api/v1/admin/credentials/{state['cred_id']}/repos",
+        )
+
+    # Must NOT be 429 — remaining=4999 means quota is not exhausted
+    assert resp.status_code != 429, (
+        "Permission 403 must not be misreported as rate limit"
+    )
+    # Must be a client-side auth/permission error
+    assert resp.status_code in (401, 403)

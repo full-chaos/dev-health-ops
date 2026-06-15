@@ -11,6 +11,7 @@ allocation-coverage and team-exchange views.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from typing import Any, cast
 
 from dev_health_ops.metrics.compute_work_item_state_durations import (
     compute_work_item_state_durations_daily,
@@ -423,7 +424,7 @@ def test_github_captures_external_keys_from_body_and_branch() -> None:
 
     deps = extract_github_dependencies(
         work_item_id="ghpr:full-chaos/ops#12",
-        issue_or_pr=_PR(),
+        issue_or_pr=cast(Any, _PR()),
         repo_full_name="full-chaos/ops",
     )
     targets = {d.target_work_item_id for d in deps}
@@ -443,7 +444,7 @@ def test_github_external_key_relationship_type_follows_keyword() -> None:
         head = _Head()
 
     deps = extract_github_dependencies(
-        work_item_id="ghpr:o/r#1", issue_or_pr=_PR(), repo_full_name="o/r"
+        work_item_id="ghpr:o/r#1", issue_or_pr=cast(Any, _PR()), repo_full_name="o/r"
     )
     rel_by_target = {
         d.target_work_item_id: d.relationship_type
@@ -466,7 +467,7 @@ def test_blocked_by_external_key_does_not_drive_inheritance_end_to_end() -> None
         head = _Head()
 
     deps = extract_github_dependencies(
-        work_item_id="ghpr:o/r#1", issue_or_pr=_PR(), repo_full_name="o/r"
+        work_item_id="ghpr:o/r#1", issue_or_pr=cast(Any, _PR()), repo_full_name="o/r"
     )
     donor = _wi("linear:CHAOS-1", "linear", project_key="CHAOS")
     pr = _wi("ghpr:o/r#1", "github", type="pr", project_id="o/r")

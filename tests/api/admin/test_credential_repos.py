@@ -145,6 +145,7 @@ _FAKE_REPOS = [
 
 _DECRYPT_PATCH = "dev_health_ops.api.services.configuration.IntegrationCredentialsService.get_decrypted_credentials_by_id"
 _GH_CONNECTOR = "dev_health_ops.connectors.github.GitHubConnector"
+_GL_CONNECTOR = "dev_health_ops.connectors.gitlab.GitLabConnector"
 _GH_APP_PROVIDER = "dev_health_ops.connectors.utils.github_app.GitHubAppTokenProvider"
 
 
@@ -336,8 +337,11 @@ async def test_rate_limit_returns_429(client):
 
 
 @pytest.mark.asyncio
-async def test_no_owner_returns_empty_without_calling_connector(client):
-    """No owner param and no config.org → 200 empty, connector never called."""
+async def test_no_owner_github_enumerates_token_wide(client):
+    """Blank owner + no config.org → connector called without org_name (token-wide).
+
+    CHAOS-2449: previously returned empty list; now enumerates all accessible repos.
+    """
     ac, state = client
 
     with (
@@ -347,6 +351,7 @@ async def test_no_owner_returns_empty_without_calling_connector(client):
         ) as _,
         patch(_GH_CONNECTOR) as MockConnector,
     ):
+        MockConnector.return_value.list_repositories.return_value = _FAKE_REPOS
         resp = await ac.get(
             f"/api/v1/admin/credentials/{state['cred_id']}/repos",
             # no owner query param
@@ -354,10 +359,12 @@ async def test_no_owner_returns_empty_without_calling_connector(client):
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["repos"] == []
-    assert body["total"] == 0
-    # Connector should never have been instantiated for the list call
-    MockConnector.return_value.list_repositories.assert_not_called()
+    assert body["total"] == 2
+    assert body["repos"][0]["name"] == "api-gateway"
+    # Connector must be called without org_name (None → token-wide)
+    MockConnector.return_value.list_repositories.assert_called_once_with(
+        org_name=None, search=None, max_repos=100
+    )
 
 
 @pytest.mark.asyncio
@@ -380,6 +387,53 @@ async def test_owner_falls_back_to_config_org(client):
     assert resp.json()["total"] == 2
     MockConnector.return_value.list_repositories.assert_called_once_with(
         org_name="my-org", search=None, max_repos=100
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_owner_gitlab_enumerates_token_wide(client):
+    """Blank owner + no config.group → GitLab connector called without org_name (token-wide).
+
+    CHAOS-2449: previously returned empty list; now enumerates all accessible projects.
+    """
+    ac, state = client
+
+    gl_repos = [
+        Repository(
+            id=10,
+            name="infra",
+            full_name="mygroup/infra",
+            default_branch="main",
+            description="Infrastructure repo",
+            url="https://gitlab.com/mygroup/infra",
+        ),
+    ]
+
+    with (
+        patch(
+            _DECRYPT_PATCH,
+            return_value=_mock_credential(
+                provider="gitlab",
+                config={},  # no group in config
+                credentials={"token": "glpat_fake"},
+            ),
+        ) as _,
+        patch(_GL_CONNECTOR) as MockGLConnector,
+    ):
+        MockGLConnector.return_value.list_repositories.return_value = gl_repos
+        resp = await ac.get(
+            f"/api/v1/admin/credentials/{state['cred_id']}/repos",
+            # no owner query param
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["provider"] == "gitlab"
+    assert body["total"] == 1
+    assert body["repos"][0]["name"] == "infra"
+    # Connector must be called without org_name (None → token-wide)
+    MockGLConnector.return_value.list_repositories.assert_called_once_with(
+        org_name=None, search=None, max_repos=100
     )
 
 

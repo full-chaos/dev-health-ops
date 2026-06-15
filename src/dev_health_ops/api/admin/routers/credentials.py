@@ -138,8 +138,6 @@ async def list_credential_repos(
             or _string_value(config.get("org"))
             or _string_value(decrypted.get("org"))
         )
-        if not effective_owner:
-            return DiscoveredReposResponse(provider=provider, repos=[], total=0)
         try:
             github_connector = GitHubConnector(credentials=github_credentials)
         except Exception as exc:
@@ -148,7 +146,7 @@ async def list_credential_repos(
             ) from exc
         try:
             repos = github_connector.list_repositories(
-                org_name=effective_owner,
+                org_name=effective_owner or None,
                 search=search,
                 max_repos=max_repos,
             )
@@ -173,11 +171,9 @@ async def list_credential_repos(
             )
         gitlab_connector = GitLabConnector(url=url, private_token=token)
         effective_owner = owner or _string_value(config.get("group"))
-        if not effective_owner:
-            return DiscoveredReposResponse(provider=provider, repos=[], total=0)
         try:
             repos = gitlab_connector.list_repositories(
-                org_name=effective_owner,
+                org_name=effective_owner or None,
                 search=search,
                 max_repos=max_repos,
             )

@@ -109,3 +109,85 @@ def test_run_backfill_for_config_raises_when_config_missing(
             since=date(2026, 1, 1),
             before=date(2026, 1, 10),
         )
+
+
+class _FakeConfig:
+    def __init__(self, org_id: str) -> None:
+        self.id = org_id
+        self.org_id = org_id
+        self.provider = "github"
+        self.sync_options: dict[str, object] = {}
+
+
+def _patch_session_with_config(monkeypatch: pytest.MonkeyPatch, config: object) -> None:
+    class _Query:
+        def filter(self, *args, **kwargs):
+            return self
+
+        def one_or_none(self):
+            return config
+
+    class _Session:
+        def query(self, *args, **kwargs):
+            return _Query()
+
+    class _Ctx:
+        def __enter__(self):
+            return _Session()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner.get_postgres_session_sync",
+        lambda: _Ctx(),
+    )
+
+
+def test_run_backfill_derives_org_from_config_when_org_omitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_org = "55555555-5555-5555-5555-555555555555"
+    _patch_session_with_config(monkeypatch, _FakeConfig(config_org))
+
+    captured: dict[str, object] = {}
+
+    def _fake_sync_job(*args, **kwargs):
+        captured["org_id"] = kwargs.get("org_id")
+
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner.run_work_items_sync_job",
+        _fake_sync_job,
+    )
+
+    result = run_backfill_for_config(
+        db_url="clickhouse://local",
+        sync_config_id="66666666-6666-6666-6666-666666666666",
+        org_id=None,
+        since=date(2026, 1, 1),
+        before=date(2026, 1, 3),
+    )
+
+    assert result["org_id"] == config_org
+    assert captured["org_id"] == config_org
+
+
+def test_run_backfill_raises_on_org_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_org = "77777777-7777-7777-7777-777777777777"
+    _patch_session_with_config(monkeypatch, _FakeConfig(config_org))
+
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner.run_work_items_sync_job",
+        lambda *args, **kwargs: None,
+    )
+
+    with pytest.raises(ValueError, match="Org mismatch"):
+        run_backfill_for_config(
+            db_url="clickhouse://local",
+            sync_config_id="88888888-8888-8888-8888-888888888888",
+            org_id="99999999-9999-9999-9999-999999999999",
+            since=date(2026, 1, 1),
+            before=date(2026, 1, 3),
+        )

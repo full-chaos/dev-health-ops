@@ -18,7 +18,7 @@ def run_backfill_for_config(
     *,
     db_url: str,
     sync_config_id: str,
-    org_id: str,
+    org_id: str | None = None,
     since: date,
     before: date,
     sink: str = "clickhouse",
@@ -27,16 +27,26 @@ def run_backfill_for_config(
 ) -> dict[str, Any]:
     config_uuid = uuid.UUID(sync_config_id)
     with get_postgres_session_sync() as session:
+        # The sync configuration owns its tenant, so the org is derived from the
+        # config id — callers do not need to pass --org. When an org_id IS given
+        # it is treated as an assertion: a mismatch is an explicit error rather
+        # than a silent "not found" (the previous behaviour filtered on both id
+        # AND org_id, so a wrong/empty --org just looked like a missing config).
         config = (
             session.query(SyncConfiguration)
-            .filter(
-                SyncConfiguration.id == config_uuid,
-                SyncConfiguration.org_id == org_id,
-            )
+            .filter(SyncConfiguration.id == config_uuid)
             .one_or_none()
         )
         if config is None:
             raise ValueError(f"Sync configuration not found: {sync_config_id}")
+
+        resolved_org_id = str(config.org_id)
+        if org_id and org_id != resolved_org_id:
+            raise ValueError(
+                f"Org mismatch: --org {org_id} does not own sync config "
+                f"{sync_config_id} (owned by {resolved_org_id})"
+            )
+        org_id = resolved_org_id
 
         provider = str(config.provider or "").strip().lower()
         sync_options = dict(config.sync_options or {})
@@ -63,6 +73,7 @@ def run_backfill_for_config(
         "status": "success",
         "provider": provider,
         "sync_config_id": sync_config_id,
+        "org_id": org_id,
         "window_count": len(windows),
         "since": since.isoformat(),
         "before": before.isoformat(),

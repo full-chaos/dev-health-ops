@@ -12,12 +12,19 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 
+from dev_health_ops.metrics.compute_work_item_state_durations import (
+    compute_work_item_state_durations_daily,
+)
 from dev_health_ops.metrics.compute_work_items import (
     build_linked_issue_team_resolver,
     compute_work_item_metrics_daily,
     resolve_base_team,
 )
-from dev_health_ops.models.work_items import WorkItem, WorkItemDependency
+from dev_health_ops.models.work_items import (
+    WorkItem,
+    WorkItemDependency,
+    WorkItemStatusTransition,
+)
 from dev_health_ops.providers.github.normalize import extract_github_dependencies
 from dev_health_ops.providers.gitlab.normalize import extract_gitlab_dependencies
 from dev_health_ops.providers.teams import ProjectKeyTeamResolver, TeamResolver
@@ -137,21 +144,52 @@ def test_unresolvable_extkey_yields_no_inheritance() -> None:
     assert resolver.resolve(pr.work_item_id) == (None, None)
 
 
-def test_first_donor_edge_wins() -> None:
+def test_multiple_donors_resolved_deterministically_regardless_of_order() -> None:
+    # ClickHouse rows have no inherent order; multi-donor selection must not
+    # depend on edge order. Smallest canonical target wins, both orderings.
     pr = _wi("ghpr:x/y#1", "github", type="pr", project_id="x/y")
     a = _wi("linear:AAA-1", "linear", project_key="AAA")
     b = _wi("linear:BBB-1", "linear", project_key="BBB")
-    deps = [
-        WorkItemDependency(pr.work_item_id, "extkey:AAA-1", "relates_to", "k"),
-        WorkItemDependency(pr.work_item_id, "extkey:BBB-1", "relates_to", "k"),
-    ]
     pkr = ProjectKeyTeamResolver(
         project_key_to_team={"AAA": ("aaa", "A"), "BBB": ("bbb", "B")}
     )
-    resolver = build_linked_issue_team_resolver(
-        work_items=[pr, a, b], dependencies=deps, project_key_resolver=pkr
+    forward = [
+        WorkItemDependency(pr.work_item_id, "extkey:AAA-1", "relates_to", "k"),
+        WorkItemDependency(pr.work_item_id, "extkey:BBB-1", "relates_to", "k"),
+    ]
+    reverse = list(reversed(forward))
+    r1 = build_linked_issue_team_resolver(
+        work_items=[pr, a, b], dependencies=forward, project_key_resolver=pkr
     )
-    assert resolver.resolve(pr.work_item_id) == ("aaa", "A")
+    r2 = build_linked_issue_team_resolver(
+        work_items=[pr, a, b], dependencies=reverse, project_key_resolver=pkr
+    )
+    # linear:AAA-1 < linear:BBB-1, so 'aaa' wins for both input orders.
+    assert r1.resolve(pr.work_item_id) == ("aaa", "A")
+    assert r2.resolve(pr.work_item_id) == ("aaa", "A")
+
+
+def test_donor_completed_outside_metrics_window_still_attributes() -> None:
+    # Regression for the daily-path donor-completeness fix: the donor issue
+    # completed long before the metrics day. The resolver is built from a
+    # window-independent donor superset, so the PR (computed on a later day)
+    # still inherits. The resolver itself is date-agnostic; this documents the
+    # contract the job relies on by supplying an old donor + a recent PR.
+    old_donor = _wi(
+        "linear:CHAOS-1",
+        "linear",
+        project_key="CHAOS",
+        created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        completed_at=datetime(2025, 1, 2, tzinfo=timezone.utc),
+    )
+    pr = _wi("ghpr:full-chaos/ops#99", "github", type="pr", project_id="full-chaos/ops")
+    deps = [WorkItemDependency(pr.work_item_id, "extkey:CHAOS-1", "relates_to", "k")]
+    resolver = build_linked_issue_team_resolver(
+        work_items=[old_donor, pr],
+        dependencies=deps,
+        project_key_resolver=_chaos_resolver(),
+    )
+    assert resolver.resolve(pr.work_item_id) == ("CHAOS", "Chaos Team")
 
 
 # --------------------------------------------------------------------------- #
@@ -188,6 +226,51 @@ def test_compute_stamps_inherited_team_on_cycle_times() -> None:
     assert by_id[pr.work_item_id].team_id == "CHAOS"
     assert by_id[pr.work_item_id].team_name == "Chaos Team"
     assert by_id[linear.work_item_id].team_id == "CHAOS"
+
+
+def test_cycle_times_and_state_durations_agree_on_inherited_team() -> None:
+    # The same PR must read with the SAME team in both work_item_cycle_times
+    # and work_item_state_durations — otherwise BI rollups that join the two
+    # see contradictory team slices.
+    day = date(2026, 6, 1)
+    linear = _wi("linear:CHAOS-2400", "linear", project_key="CHAOS")
+    pr = _wi("ghpr:full-chaos/ops#12", "github", type="pr", project_id="full-chaos/ops")
+    deps = [WorkItemDependency(pr.work_item_id, "extkey:CHAOS-2400", "relates_to", "k")]
+    pkr = _chaos_resolver()
+    resolver = build_linked_issue_team_resolver(
+        work_items=[linear, pr], dependencies=deps, project_key_resolver=pkr
+    )
+    # state-durations needs a transition to emit a row.
+    transitions = [
+        WorkItemStatusTransition(
+            work_item_id=pr.work_item_id,
+            provider="github",
+            occurred_at=START + timedelta(hours=1),
+            from_status_raw=None,
+            to_status_raw="closed",
+            from_status="in_progress",
+            to_status="done",
+        )
+    ]
+    _, _, cycle_times = compute_work_item_metrics_daily(
+        day=day,
+        work_items=[pr],
+        transitions=transitions,
+        computed_at=START,
+        project_key_resolver=pkr,
+        linked_issue_resolver=resolver,
+    )
+    state_rows = compute_work_item_state_durations_daily(
+        day=day,
+        work_items=[pr],
+        transitions=transitions,
+        computed_at=START + timedelta(hours=6),
+        project_key_resolver=pkr,
+        linked_issue_resolver=resolver,
+    )
+    assert cycle_times[0].team_id == "CHAOS"
+    assert state_rows, "expected at least one state-duration row"
+    assert {r.team_id for r in state_rows} == {"CHAOS"}
 
 
 def test_compute_without_resolver_leaves_pr_unassigned() -> None:

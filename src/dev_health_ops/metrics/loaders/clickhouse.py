@@ -280,6 +280,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         FROM work_item_dependencies
         WHERE 1 = 1
         {org_filter}
+        ORDER BY source_work_item_id, target_work_item_id, last_synced
         """
         try:
             dep_dicts = await _clickhouse_query_dicts(self.client, query, params)

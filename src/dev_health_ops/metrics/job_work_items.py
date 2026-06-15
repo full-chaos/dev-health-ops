@@ -460,6 +460,7 @@ def run_work_items_sync_job(
                 computed_at=computed_at,
                 team_resolver=team_resolver,
                 project_key_resolver=pk_resolver,
+                linked_issue_resolver=linked_issue_resolver,
             )
 
             # --- Issue Type Metrics ---

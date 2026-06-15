@@ -109,6 +109,53 @@ async def write_batch(records: List[Model], session: AsyncSession) -> int:
 - Use `argMax(<metric>, computed_at)` to get latest value
 - Re-computation is safe (idempotent via compound keys)
 
+### Work-item team attribution
+
+Every work item is stamped with a `team_id` at compute time
+(`metrics/compute_work_items.py`). Resolution is a fallback cascade
+(`resolve_base_team` + one inheritance tier), first match wins:
+
+1. **Scope key** — `ProjectKeyTeamResolver.resolve(work_scope_id)`: the Jira
+   project key, GitHub/GitLab repo path, or Linear project name.
+2. **Project key** — retry with `WorkItem.project_key` (Linear's TEAM key,
+   which differs from the project name when an issue sits in a project).
+3. **Assignee membership** — `TeamResolver` maps the primary assignee's
+   canonical identity to a team via `IdentityMapping.team_ids`.
+4. **Linked-issue inheritance** — `LinkedIssueTeamResolver`: an item that
+   still resolved to no team borrows the team of an issue it links to via
+   `work_item_dependencies`. This is **provider-agnostic** — a GitHub/GitLab
+   PR inherits the team of the Linear/Jira issue it closes — and is what lets
+   PRs (which match none of tiers 1–3) share a team dimension with the issue
+   trackers in the investment allocation-coverage and team-exchange views.
+5. **`unassigned`** — the normalized sentinel when every tier misses.
+
+Cross-provider links are captured during sync as provider-neutral
+`extkey:KEY` dependency edges (GitHub: PR body magic-words + head branch;
+GitLab: issue/MR description magic-words; Jira: native `issuelinks`). The
+key is resolved to the real `linear:`/`jira:` work item at inheritance time,
+so over-capturing is harmless — a key with no matching issue never resolves.
+When several donors match one source, the lexicographically smallest
+canonical target wins (a stable tiebreak, since ClickHouse rows are
+unordered).
+
+The resolver (`build_linked_issue_team_resolver`) is built **once per run**
+and applied identically to both `compute_work_item_metrics_daily`
+(cycle-times) and `compute_work_item_state_durations_daily`, so a PR reads
+with the same team in every work-item table. It must see a **donor-complete**
+set: `job_daily` loads donor work items org-wide (`repo_id=None`) and
+window-independent — a PR can link to an issue that completed long before the
+metrics day, or to a repo-less Linear/Jira issue that a per-repo window would
+exclude. Org-scoped edges come from
+`ClickHouseDataLoader.load_work_item_dependencies`. Because the edges are
+written during a **work-items sync**, a sync (not just a metrics recompute)
+is required for newly-captured links to take effect.
+
+> Note: branch-name capture trusts the head branch (the Linear convention),
+> so a contributor could in principle name a branch to force a team
+> inheritance. This is an analytics-attribution signal, not an authorization
+> boundary — the worst case is a self-inflicted mis-attribution of one PR's
+> team — so it is accepted rather than gated.
+
 ---
 
 ## 5. Visualization (dev-health-web)

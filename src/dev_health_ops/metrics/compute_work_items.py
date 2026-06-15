@@ -131,22 +131,29 @@ def build_linked_issue_team_resolver(
             return key_index.get(target_id.split(":", 1)[1].strip().upper())
         return target_id
 
-    inherited: dict[str, tuple[str, str]] = {}
+    # Collect every valid donor candidate per source, then pick deterministically
+    # so attribution never depends on edge/storage order (ClickHouse rows have no
+    # inherent ordering). When a source links several team-attributed issues, the
+    # lexicographically smallest canonical target wins — a stable, run-independent
+    # tiebreak. The common case is a single donor, where the choice is moot.
+    candidates: dict[str, list[tuple[str, tuple[str, str]]]] = {}
     for dep in dependencies:
         source_id = dep.source_work_item_id
         # Only items that resolve to no team of their own need a donor; never
         # override a real attribution. (missing => treat as unresolved.)
         if base_resolved.get(source_id) is not None:
             continue
-        if source_id in inherited:
-            continue  # first donor edge wins, preserving edge order
         target_id = _canonical_target(dep.target_work_item_id)
         if not target_id:
             continue
         donor = donor_team.get(target_id)
         if donor is not None:
-            inherited[source_id] = donor
+            candidates.setdefault(source_id, []).append((target_id, donor))
 
+    inherited: dict[str, tuple[str, str]] = {
+        source_id: min(cands, key=lambda c: c[0])[1]
+        for source_id, cands in candidates.items()
+    }
     return LinkedIssueTeamResolver(_inherited=inherited)
 
 

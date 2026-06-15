@@ -754,10 +754,29 @@ async def run_daily_metrics_job(
     # Defensive getattr: loaders without the method (or deployments missing the
     # table) simply skip inheritance instead of failing the daily job.
     work_item_dependencies: list[Any] = []
-    if load_work_items_enabled and load_work_items_from_db:
+    linked_issue_resolver = None
+    if load_work_items_enabled and load_work_items_from_db and days:
         _load_deps = getattr(loader, "load_work_item_dependencies", None)
         if _load_deps is not None:
             work_item_dependencies = await _load_deps()
+        # Build the linked-issue team-inheritance resolver ONCE from a
+        # donor-complete superset. A PR can link to an issue that completed
+        # before any metrics day, or to a Linear/Jira issue that has no
+        # repo_id — so load org-wide (repo_id=None) and window-independent
+        # (from the epoch) for donor resolution, NOT the per-day repo-scoped
+        # slice used for the metrics themselves. Reused across every day so a
+        # PR is attributed identically regardless of which day it lands on.
+        donor_start = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        donor_end = _utc_day_window(max(days))[1]
+        donor_items, _ = await loader.load_work_items(
+            donor_start, donor_end, None, None
+        )
+        linked_issue_resolver = build_linked_issue_team_resolver(
+            work_items=donor_items,
+            dependencies=work_item_dependencies,
+            team_resolver=team_resolver,
+            project_key_resolver=project_key_resolver,
+        )
 
     for d in days:
         logger.info("Computing metrics for day=%s", d.isoformat())
@@ -932,12 +951,6 @@ async def run_daily_metrics_job(
         wi_cycle_times: list[Any] = []
         wi_state_durations: list[Any] = []
         if work_items:
-            linked_issue_resolver = build_linked_issue_team_resolver(
-                work_items=work_items,
-                dependencies=work_item_dependencies,
-                team_resolver=team_resolver,
-                project_key_resolver=project_key_resolver,
-            )
             wi_metrics, wi_user_metrics, wi_cycle_times = (
                 compute_work_item_metrics_daily(
                     day=d,
@@ -962,6 +975,7 @@ async def run_daily_metrics_job(
                 computed_at=computed_at,
                 team_resolver=team_resolver,
                 project_key_resolver=project_key_resolver,
+                linked_issue_resolver=linked_issue_resolver,
             )
 
         review_edges = compute_review_edges_daily(

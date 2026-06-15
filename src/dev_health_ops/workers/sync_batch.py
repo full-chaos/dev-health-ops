@@ -197,6 +197,7 @@ def _is_batch_eligible(config) -> bool:
     - sync_options contains a 'search' key with a wildcard pattern (e.g. "org/*")
     - OR sync_options names an org/group without a concrete repo/project
     - OR sync_options contains 'discover: true'
+    - OR sync_options contains 'all_repos: true' for token-wide repository sync
     """
     provider = (config.provider or "").lower()
     if provider not in ("github", "gitlab"):
@@ -205,6 +206,9 @@ def _is_batch_eligible(config) -> bool:
     sync_options = dict(config.sync_options or {})
 
     if sync_options.get("discover") is True:
+        return True
+
+    if sync_options.get("all_repos") is True:
         return True
 
     search = sync_options.get("search")

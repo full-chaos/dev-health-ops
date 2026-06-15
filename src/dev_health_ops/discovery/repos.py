@@ -53,8 +53,15 @@ def discover_github_repos(
 
     search = sync_options.get("search", "")
     owner = sync_options.get("owner", "")
+    all_repos = sync_options.get("all_repos") is True
 
-    if isinstance(search, str) and "/" in search:
+    if all_repos and isinstance(search, str) and search.strip():
+        if "/" in search:
+            parts = search.split("/", 1)
+            repo_pattern = parts[1]
+        else:
+            repo_pattern = search.strip()
+    elif isinstance(search, str) and "/" in search:
         parts = search.split("/", 1)
         owner = parts[0]
         repo_pattern = parts[1]
@@ -64,10 +71,31 @@ def discover_github_repos(
     else:
         repo_pattern = "*"
 
+    g = Github(token) if token else Github()
+    if all_repos:
+        try:
+            repos = g.get_user().get_repos()
+        except Exception:
+            return []
+
+        result: list[tuple[str, ...]] = []
+        for repo in repos:
+            repo_name = getattr(repo, "name", "") or ""
+            if not fnmatch.fnmatch(repo_name, repo_pattern):
+                continue
+            repo_owner = getattr(getattr(repo, "owner", None), "login", "") or ""
+            if not repo_owner:
+                full_name = getattr(repo, "full_name", "") or ""
+                if "/" in full_name:
+                    repo_owner = full_name.split("/", 1)[0]
+            if repo_owner:
+                result.append((repo_owner, repo_name))
+
+        return result
+
     if not owner:
         return []
 
-    g = Github(token) if token else Github()
     try:
         org = g.get_organization(owner)
         repos = org.get_repos()
@@ -97,8 +125,15 @@ def discover_gitlab_repos(
         gitlab_url = str(sync_options.get("gitlab_url") or "https://gitlab.com")
     search = sync_options.get("search", "")
     group_path = sync_options.get("group", "")
+    all_repos = sync_options.get("all_repos") is True
 
-    if isinstance(search, str) and "/" in search:
+    if all_repos and isinstance(search, str) and search.strip():
+        if "/" in search:
+            parts = search.split("/", 1)
+            project_pattern = parts[1]
+        else:
+            project_pattern = search.strip()
+    elif isinstance(search, str) and "/" in search:
         parts = search.split("/", 1)
         group_path = parts[0]
         project_pattern = parts[1]
@@ -108,10 +143,25 @@ def discover_gitlab_repos(
     else:
         project_pattern = "*"
 
+    gl = gitlab_lib.Gitlab(gitlab_url, private_token=token)
+    if all_repos:
+        try:
+            projects = gl.projects.list(all=True, membership=True)
+        except Exception:
+            return []
+
+        result: list[tuple[str, ...]] = []
+        for project in projects:
+            name = getattr(project, "name", "") or ""
+            project_id = getattr(project, "id", None)
+            if project_id is not None and fnmatch.fnmatch(name, project_pattern):
+                result.append((str(project_id),))
+
+        return result
+
     if not group_path:
         return []
 
-    gl = gitlab_lib.Gitlab(gitlab_url, private_token=token)
     try:
         grp = gl.groups.get(group_path)
         projects = grp.projects.list(all=True)

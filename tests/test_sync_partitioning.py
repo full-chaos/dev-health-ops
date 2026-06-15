@@ -78,6 +78,15 @@ class TestIsBatchEligible:
         )
         assert _is_batch_eligible(config) is True
 
+    def test_github_with_all_repos_flag(self):
+        from dev_health_ops.workers.sync_batch import _is_batch_eligible
+
+        config = _make_config(
+            provider="github",
+            sync_options={"all_repos": True},
+        )
+        assert _is_batch_eligible(config) is True
+
     def test_github_bare_org_search_is_batch_eligible(self):
         from dev_health_ops.workers.sync_batch import _is_batch_eligible
 
@@ -114,6 +123,15 @@ class TestIsBatchEligible:
         config = _make_config(
             provider="gitlab",
             sync_options={"search": "my-group/*"},
+        )
+        assert _is_batch_eligible(config) is True
+
+    def test_gitlab_with_all_repos_flag(self):
+        from dev_health_ops.workers.sync_batch import _is_batch_eligible
+
+        config = _make_config(
+            provider="gitlab",
+            sync_options={"all_repos": True},
         )
         assert _is_batch_eligible(config) is True
 
@@ -238,6 +256,44 @@ class TestDiscoverGithubRepos:
         assert result == [("user", "my-repo")]
 
     @patch("github.Github")
+    def test_all_repos_lists_authenticated_repos_without_owner(self, mock_github_cls):
+        from dev_health_ops.discovery.repos import discover_github_repos
+
+        repos = [
+            SimpleNamespace(name="api", owner=SimpleNamespace(login="org-a")),
+            SimpleNamespace(name="web", owner=SimpleNamespace(login="org-b")),
+        ]
+        mock_user = MagicMock()
+        mock_user.get_repos.return_value = repos
+        mock_g = mock_github_cls.return_value
+        mock_g.get_user.return_value = mock_user
+
+        result = discover_github_repos({"all_repos": True, "search": ""}, "token")
+
+        mock_g.get_user.assert_called_once_with()
+        mock_g.get_organization.assert_not_called()
+        assert result == [("org-a", "api"), ("org-b", "web")]
+
+    @patch("github.Github")
+    def test_all_repos_filters_and_uses_full_name_owner_fallback(self, mock_github_cls):
+        from dev_health_ops.discovery.repos import discover_github_repos
+
+        repos = [
+            SimpleNamespace(name="api-service", owner=SimpleNamespace(login="org-a")),
+            SimpleNamespace(name="web-app", owner=SimpleNamespace(login="org-b")),
+            SimpleNamespace(
+                name="api-worker", owner=None, full_name="org-c/api-worker"
+            ),
+        ]
+        mock_user = MagicMock()
+        mock_user.get_repos.return_value = repos
+        mock_github_cls.return_value.get_user.return_value = mock_user
+
+        result = discover_github_repos({"all_repos": True, "search": "api-*"}, "token")
+
+        assert result == [("org-a", "api-service"), ("org-c", "api-worker")]
+
+    @patch("github.Github")
     def test_returns_empty_on_total_failure(self, mock_github_cls):
         from dev_health_ops.discovery.repos import discover_github_repos
 
@@ -248,7 +304,7 @@ class TestDiscoverGithubRepos:
         result = discover_github_repos({"search": "org/*"}, "token")
         assert result == []
 
-    def test_returns_empty_without_owner(self):
+    def test_returns_empty_without_owner_when_all_repos_false(self):
         from dev_health_ops.discovery.repos import discover_github_repos
 
         result = discover_github_repos({"search": ""}, "token")
@@ -294,7 +350,40 @@ class TestDiscoverGitlabRepos:
         result = discover_gitlab_repos({"search": "group/*"}, "token")
         assert result == []
 
-    def test_returns_empty_without_group(self):
+    @patch("gitlab.Gitlab")
+    def test_all_repos_lists_membership_projects_without_group(self, mock_gitlab_cls):
+        from dev_health_ops.discovery.repos import discover_gitlab_repos
+
+        projects = [
+            SimpleNamespace(name="api", id=100),
+            SimpleNamespace(name="web", id=200),
+        ]
+        mock_gitlab_cls.return_value.projects.list.return_value = projects
+
+        result = discover_gitlab_repos({"all_repos": True, "search": ""}, "token")
+
+        mock_gitlab_cls.return_value.projects.list.assert_called_once_with(
+            all=True, membership=True
+        )
+        mock_gitlab_cls.return_value.groups.get.assert_not_called()
+        assert result == [("100",), ("200",)]
+
+    @patch("gitlab.Gitlab")
+    def test_all_repos_filters_membership_projects(self, mock_gitlab_cls):
+        from dev_health_ops.discovery.repos import discover_gitlab_repos
+
+        projects = [
+            SimpleNamespace(name="api", id=100),
+            SimpleNamespace(name="web", id=200),
+            SimpleNamespace(name="api-worker", id=300),
+        ]
+        mock_gitlab_cls.return_value.projects.list.return_value = projects
+
+        result = discover_gitlab_repos({"all_repos": True, "search": "api*"}, "token")
+
+        assert result == [("100",), ("300",)]
+
+    def test_returns_empty_without_group_when_all_repos_false(self):
         from dev_health_ops.discovery.repos import discover_gitlab_repos
 
         result = discover_gitlab_repos({"search": ""}, "token")

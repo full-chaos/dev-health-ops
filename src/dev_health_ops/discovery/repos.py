@@ -11,10 +11,22 @@ def discover_repos_for_config(
     sync_options = dict(config.sync_options or {})
 
     if provider == "github":
-        token = _github_token_from_credentials(credentials)
+        from dev_health_ops.credentials.resolver import github_credentials_from_mapping
+
+        gh_credentials = github_credentials_from_mapping(credentials)
+        if (
+            gh_credentials is not None
+            and gh_credentials.is_app_auth
+            and sync_options.get("all_repos") is True
+        ):
+            token = ""
+        else:
+            token = _github_token_from_resolved_credentials(gh_credentials)
         # No token => attempt anonymous public-repo discovery (rate-limited,
         # public-only). Authenticated configs pass their token through.
-        return discover_github_repos(sync_options, token)
+        return discover_github_repos(
+            sync_options, token, github_credentials=gh_credentials
+        )
     if provider == "gitlab":
         from dev_health_ops.credentials.resolver import (
             gitlab_credentials_from_mapping,
@@ -37,6 +49,10 @@ def _github_token_from_credentials(credentials: dict[str, Any]) -> str:
     from dev_health_ops.credentials.resolver import github_credentials_from_mapping
 
     gh_credentials = github_credentials_from_mapping(credentials)
+    return _github_token_from_resolved_credentials(gh_credentials)
+
+
+def _github_token_from_resolved_credentials(gh_credentials: Any | None) -> str:
     if gh_credentials is None:
         return ""
     if gh_credentials.is_app_auth:
@@ -47,14 +63,24 @@ def _github_token_from_credentials(credentials: dict[str, Any]) -> str:
 
 
 def discover_github_repos(
-    sync_options: dict[str, Any], token: str
+    sync_options: dict[str, Any], token: str, github_credentials: Any | None = None
 ) -> list[tuple[str, ...]]:
     from github import Github
 
     search = sync_options.get("search", "")
     owner = sync_options.get("owner", "")
+    all_repos = sync_options.get("all_repos") is True
+    namespace = owner.strip() if all_repos and isinstance(owner, str) else ""
 
-    if isinstance(search, str) and "/" in search:
+    if all_repos and isinstance(search, str) and search.strip():
+        if "/" in search:
+            parts = search.split("/", 1)
+            if not namespace:
+                namespace = parts[0].strip()
+            repo_pattern = parts[1]
+        else:
+            repo_pattern = search.strip()
+    elif isinstance(search, str) and "/" in search:
         parts = search.split("/", 1)
         owner = parts[0]
         repo_pattern = parts[1]
@@ -63,6 +89,32 @@ def discover_github_repos(
         repo_pattern = "*"
     else:
         repo_pattern = "*"
+
+    if all_repos:
+        if getattr(github_credentials, "is_app_auth", False):
+            return _discover_github_app_installation_repos(
+                github_credentials, namespace=namespace, repo_pattern=repo_pattern
+            )
+
+        g = Github(token) if token else Github()
+        repos = g.get_user().get_repos()
+
+        result: list[tuple[str, ...]] = []
+        for repo in repos:
+            repo_name = getattr(repo, "name", "") or ""
+            if not fnmatch.fnmatch(repo_name, repo_pattern):
+                continue
+            repo_owner = getattr(getattr(repo, "owner", None), "login", "") or ""
+            if not repo_owner:
+                full_name = getattr(repo, "full_name", "") or ""
+                if "/" in full_name:
+                    repo_owner = full_name.split("/", 1)[0]
+            if namespace and repo_owner.lower() != namespace.lower():
+                continue
+            if repo_owner:
+                result.append((repo_owner, repo_name))
+
+        return result
 
     if not owner:
         return []
@@ -78,10 +130,78 @@ def discover_github_repos(
         except Exception:
             return []
 
-    result: list[tuple[str, ...]] = []
+    result = []
     for repo in repos:
         if fnmatch.fnmatch(repo.name, repo_pattern):
             result.append((owner, repo.name))
+
+    return result
+
+
+def _discover_github_app_installation_repos(
+    github_credentials: Any, *, namespace: str, repo_pattern: str
+) -> list[tuple[str, ...]]:
+    import requests
+
+    from dev_health_ops.connectors.utils.github_app import GitHubAppTokenProvider
+
+    app_id = getattr(github_credentials, "app_id", None)
+    private_key = getattr(github_credentials, "private_key", None)
+    installation_id = getattr(github_credentials, "installation_id", None)
+    if not app_id or not private_key or not installation_id:
+        raise ValueError(
+            "GitHub App credentials require app_id, private_key, and installation_id"
+        )
+
+    base_url = str(
+        getattr(github_credentials, "base_url", None) or "https://api.github.com"
+    ).rstrip("/")
+    token = GitHubAppTokenProvider(
+        app_id=str(app_id),
+        private_key=str(private_key),
+        installation_id=str(installation_id),
+        api_base_url=base_url,
+    ).get_token()
+
+    result: list[tuple[str, ...]] = []
+    page = 1
+    per_page = 100
+    while True:
+        response = requests.get(
+            f"{base_url}/installation/repositories",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            params={"per_page": per_page, "page": page},
+            timeout=30,
+        )
+        if response.status_code < 200 or response.status_code >= 300:
+            raise RuntimeError(
+                "GitHub App installation repositories request failed: "
+                f"HTTP {response.status_code}"
+            )
+
+        repositories = response.json().get("repositories") or []
+        for repo in repositories:
+            repo_name = str(repo.get("name") or "")
+            if not fnmatch.fnmatch(repo_name, repo_pattern):
+                continue
+            owner = repo.get("owner") or {}
+            repo_owner = str(owner.get("login") or "")
+            if not repo_owner:
+                full_name = str(repo.get("full_name") or "")
+                if "/" in full_name:
+                    repo_owner = full_name.split("/", 1)[0]
+            if namespace and repo_owner.lower() != namespace.lower():
+                continue
+            if repo_owner:
+                result.append((repo_owner, repo_name))
+
+        if len(repositories) < per_page:
+            break
+        page += 1
 
     return result
 
@@ -97,8 +217,28 @@ def discover_gitlab_repos(
         gitlab_url = str(sync_options.get("gitlab_url") or "https://gitlab.com")
     search = sync_options.get("search", "")
     group_path = sync_options.get("group", "")
+    owner = sync_options.get("owner", "")
+    all_repos = sync_options.get("all_repos") is True
+    namespace = ""
+    if all_repos:
+        if isinstance(group_path, str) and group_path.strip():
+            namespace = group_path.strip()
+        elif isinstance(owner, str) and owner.strip():
+            namespace = owner.strip()
 
-    if isinstance(search, str) and "/" in search:
+    if all_repos and isinstance(search, str) and search.strip():
+        if "/" in search:
+            # Split on the LAST slash so nested GitLab namespaces (e.g.
+            # "group/subgroup/*") resolve namespace="group/subgroup",
+            # pattern="*" instead of treating "subgroup/*" as a project name
+            # pattern (project names contain no slashes).
+            ns_part, _, pattern_part = search.rpartition("/")
+            if not namespace:
+                namespace = ns_part.strip()
+            project_pattern = pattern_part
+        else:
+            project_pattern = search.strip()
+    elif isinstance(search, str) and "/" in search:
         parts = search.split("/", 1)
         group_path = parts[0]
         project_pattern = parts[1]
@@ -108,20 +248,40 @@ def discover_gitlab_repos(
     else:
         project_pattern = "*"
 
+    gl = gitlab_lib.Gitlab(gitlab_url, private_token=token)
+    if all_repos:
+        projects = gl.projects.list(all=True, membership=True)
+
+        result: list[tuple[str, ...]] = []
+        for project in projects:
+            name = getattr(project, "name", "") or ""
+            project_id = getattr(project, "id", None)
+            path_with_namespace = getattr(project, "path_with_namespace", "") or ""
+            normalized_path = path_with_namespace.lower()
+            normalized_namespace = namespace.lower()
+            if normalized_namespace and not (
+                normalized_path == normalized_namespace
+                or normalized_path.startswith(f"{normalized_namespace}/")
+            ):
+                continue
+            if project_id is not None and fnmatch.fnmatch(name, project_pattern):
+                result.append((str(project_id),))
+
+        return result
+
     if not group_path:
         return []
 
-    gl = gitlab_lib.Gitlab(gitlab_url, private_token=token)
     try:
         grp = gl.groups.get(group_path)
-        projects = grp.projects.list(all=True)
+        group_projects = grp.projects.list(all=True)
     except Exception:
         return []
 
-    result: list[tuple[str, ...]] = []
-    for project in projects:
-        name = getattr(project, "name", "") or ""
-        project_id = getattr(project, "id", None)
+    result = []
+    for group_project in group_projects:
+        name = getattr(group_project, "name", "") or ""
+        project_id = getattr(group_project, "id", None)
         if project_id is not None and fnmatch.fnmatch(name, project_pattern):
             result.append((str(project_id),))
 

@@ -78,6 +78,24 @@ class TestIsBatchEligible:
         )
         assert _is_batch_eligible(config) is True
 
+    def test_github_with_all_repos_flag(self):
+        from dev_health_ops.workers.sync_batch import _is_batch_eligible
+
+        config = _make_config(
+            provider="github",
+            sync_options={"all_repos": True},
+        )
+        assert _is_batch_eligible(config) is True
+
+    def test_github_all_repos_with_concrete_repo_not_eligible(self):
+        from dev_health_ops.workers.sync_batch import _is_batch_eligible
+
+        config = _make_config(
+            provider="github",
+            sync_options={"all_repos": True, "owner": "org", "repo": "api"},
+        )
+        assert _is_batch_eligible(config) is False
+
     def test_github_bare_org_search_is_batch_eligible(self):
         from dev_health_ops.workers.sync_batch import _is_batch_eligible
 
@@ -116,6 +134,26 @@ class TestIsBatchEligible:
             sync_options={"search": "my-group/*"},
         )
         assert _is_batch_eligible(config) is True
+
+    def test_gitlab_with_all_repos_flag(self):
+        from dev_health_ops.workers.sync_batch import _is_batch_eligible
+
+        config = _make_config(
+            provider="gitlab",
+            sync_options={"all_repos": True},
+        )
+        assert _is_batch_eligible(config) is True
+
+    def test_gitlab_all_repos_with_concrete_project_not_eligible(self):
+        from dev_health_ops.workers.sync_batch import _is_batch_eligible
+
+        for sync_options in (
+            {"all_repos": True, "project_id": 100},
+            {"all_repos": True, "project": "api"},
+            {"all_repos": True, "repo": "api"},
+        ):
+            config = _make_config(provider="gitlab", sync_options=sync_options)
+            assert _is_batch_eligible(config) is False
 
     def test_jira_never_batch_eligible(self):
         from dev_health_ops.workers.sync_batch import _is_batch_eligible
@@ -158,6 +196,82 @@ class TestDiscoverReposForConfig:
         result = discover_repos_for_config(config, {"token": "ghp_test"})
         assert result == [("my-org", "repo-a"), ("my-org", "repo-b")]
         mock_gh.assert_called_once()
+
+    @patch("requests.get")
+    @patch("dev_health_ops.connectors.utils.github_app.GitHubAppTokenProvider")
+    def test_github_app_all_repos_lists_installation_repositories(
+        self, mock_token_provider_cls, mock_get
+    ):
+        from dev_health_ops.discovery.repos import discover_repos_for_config
+
+        mock_token_provider_cls.return_value.get_token.return_value = (
+            "installation-token"
+        )
+        mock_response = MagicMock(status_code=200)
+        mock_response.json.return_value = {
+            "repositories": [
+                {"name": "api", "owner": {"login": "orgA"}},
+                {"name": "web", "owner": {"login": "orgA"}},
+                {"name": "api-worker", "owner": {"login": "orgA"}},
+                {"name": "api", "owner": {"login": "orgB"}},
+            ]
+        }
+        mock_get.return_value = mock_response
+        config = _make_config(
+            provider="github",
+            sync_options={"all_repos": True, "search": "orgA/api*"},
+        )
+
+        result = discover_repos_for_config(
+            config,
+            {
+                "app_id": "123",
+                "private_key": "private-key",
+                "installation_id": "456",
+                "base_url": "https://api.github.test",
+            },
+        )
+
+        assert result == [("orgA", "api"), ("orgA", "api-worker")]
+        mock_token_provider_cls.assert_called_once_with(
+            app_id="123",
+            private_key="private-key",
+            installation_id="456",
+            api_base_url="https://api.github.test",
+        )
+        mock_get.assert_called_once()
+        assert mock_get.call_args.args[0] == (
+            "https://api.github.test/installation/repositories"
+        )
+        assert mock_get.call_args.kwargs["headers"]["Authorization"] == (
+            "Bearer installation-token"
+        )
+
+    @patch("requests.get")
+    @patch("dev_health_ops.connectors.utils.github_app.GitHubAppTokenProvider")
+    def test_github_app_all_repos_installation_api_failure_raises(
+        self, mock_token_provider_cls, mock_get
+    ):
+        from dev_health_ops.discovery.repos import discover_repos_for_config
+
+        mock_token_provider_cls.return_value.get_token.return_value = (
+            "installation-token"
+        )
+        mock_get.return_value = MagicMock(status_code=401, text="bad credentials")
+        config = _make_config(
+            provider="github",
+            sync_options={"all_repos": True, "search": "orgA/*"},
+        )
+
+        with pytest.raises(RuntimeError, match="HTTP 401"):
+            discover_repos_for_config(
+                config,
+                {
+                    "app_id": "123",
+                    "private_key": "private-key",
+                    "installation_id": "456",
+                },
+            )
 
     @patch("dev_health_ops.discovery.repos.discover_gitlab_repos")
     def test_gitlab_delegates_to_gitlab_discovery(self, mock_gl):
@@ -238,6 +352,89 @@ class TestDiscoverGithubRepos:
         assert result == [("user", "my-repo")]
 
     @patch("github.Github")
+    def test_all_repos_lists_authenticated_repos_without_owner(self, mock_github_cls):
+        from dev_health_ops.discovery.repos import discover_github_repos
+
+        repos = [
+            SimpleNamespace(name="api", owner=SimpleNamespace(login="org-a")),
+            SimpleNamespace(name="web", owner=SimpleNamespace(login="org-b")),
+        ]
+        mock_user = MagicMock()
+        mock_user.get_repos.return_value = repos
+        mock_g = mock_github_cls.return_value
+        mock_g.get_user.return_value = mock_user
+
+        result = discover_github_repos({"all_repos": True, "search": ""}, "token")
+
+        mock_g.get_user.assert_called_once_with()
+        mock_g.get_organization.assert_not_called()
+        assert result == [("org-a", "api"), ("org-b", "web")]
+
+    @patch("github.Github")
+    def test_all_repos_filters_and_uses_full_name_owner_fallback(self, mock_github_cls):
+        from dev_health_ops.discovery.repos import discover_github_repos
+
+        repos = [
+            SimpleNamespace(name="api-service", owner=SimpleNamespace(login="org-a")),
+            SimpleNamespace(name="web-app", owner=SimpleNamespace(login="org-b")),
+            SimpleNamespace(
+                name="api-worker", owner=None, full_name="org-c/api-worker"
+            ),
+        ]
+        mock_user = MagicMock()
+        mock_user.get_repos.return_value = repos
+        mock_github_cls.return_value.get_user.return_value = mock_user
+
+        result = discover_github_repos({"all_repos": True, "search": "api-*"}, "token")
+
+        assert result == [("org-a", "api-service"), ("org-c", "api-worker")]
+
+    @patch("github.Github")
+    def test_all_repos_search_namespace_limits_authenticated_repos(
+        self, mock_github_cls
+    ):
+        from dev_health_ops.discovery.repos import discover_github_repos
+
+        repos = [
+            SimpleNamespace(name="api", owner=SimpleNamespace(login="orgA")),
+            SimpleNamespace(name="web", owner=SimpleNamespace(login="orgA")),
+            SimpleNamespace(name="api", owner=SimpleNamespace(login="orgB")),
+        ]
+        mock_user = MagicMock()
+        mock_user.get_repos.return_value = repos
+        mock_github_cls.return_value.get_user.return_value = mock_user
+
+        result = discover_github_repos({"all_repos": True, "search": "orgA/*"}, "token")
+
+        assert result == [("orgA", "api"), ("orgA", "web")]
+
+    @patch("github.Github")
+    def test_all_repos_owner_limits_authenticated_repos(self, mock_github_cls):
+        from dev_health_ops.discovery.repos import discover_github_repos
+
+        repos = [
+            SimpleNamespace(name="api", owner=SimpleNamespace(login="orgA")),
+            SimpleNamespace(name="web", owner=SimpleNamespace(login="orgA")),
+            SimpleNamespace(name="api", owner=SimpleNamespace(login="orgB")),
+        ]
+        mock_user = MagicMock()
+        mock_user.get_repos.return_value = repos
+        mock_github_cls.return_value.get_user.return_value = mock_user
+
+        result = discover_github_repos({"all_repos": True, "owner": "orgA"}, "token")
+
+        assert result == [("orgA", "api"), ("orgA", "web")]
+
+    @patch("github.Github")
+    def test_all_repos_user_listing_failure_raises(self, mock_github_cls):
+        from dev_health_ops.discovery.repos import discover_github_repos
+
+        mock_github_cls.return_value.get_user.side_effect = RuntimeError("rate limited")
+
+        with pytest.raises(RuntimeError, match="rate limited"):
+            discover_github_repos({"all_repos": True, "search": "orgA/*"}, "token")
+
+    @patch("github.Github")
     def test_returns_empty_on_total_failure(self, mock_github_cls):
         from dev_health_ops.discovery.repos import discover_github_repos
 
@@ -248,7 +445,7 @@ class TestDiscoverGithubRepos:
         result = discover_github_repos({"search": "org/*"}, "token")
         assert result == []
 
-    def test_returns_empty_without_owner(self):
+    def test_returns_empty_without_owner_when_all_repos_false(self):
         from dev_health_ops.discovery.repos import discover_github_repos
 
         result = discover_github_repos({"search": ""}, "token")
@@ -294,7 +491,98 @@ class TestDiscoverGitlabRepos:
         result = discover_gitlab_repos({"search": "group/*"}, "token")
         assert result == []
 
-    def test_returns_empty_without_group(self):
+    @patch("gitlab.Gitlab")
+    def test_all_repos_lists_membership_projects_without_group(self, mock_gitlab_cls):
+        from dev_health_ops.discovery.repos import discover_gitlab_repos
+
+        projects = [
+            SimpleNamespace(name="api", id=100),
+            SimpleNamespace(name="web", id=200),
+        ]
+        mock_gitlab_cls.return_value.projects.list.return_value = projects
+
+        result = discover_gitlab_repos({"all_repos": True, "search": ""}, "token")
+
+        mock_gitlab_cls.return_value.projects.list.assert_called_once_with(
+            all=True, membership=True
+        )
+        mock_gitlab_cls.return_value.groups.get.assert_not_called()
+        assert result == [("100",), ("200",)]
+
+    @patch("gitlab.Gitlab")
+    def test_all_repos_filters_membership_projects(self, mock_gitlab_cls):
+        from dev_health_ops.discovery.repos import discover_gitlab_repos
+
+        projects = [
+            SimpleNamespace(name="api", id=100),
+            SimpleNamespace(name="web", id=200),
+            SimpleNamespace(name="api-worker", id=300),
+        ]
+        mock_gitlab_cls.return_value.projects.list.return_value = projects
+
+        result = discover_gitlab_repos({"all_repos": True, "search": "api*"}, "token")
+
+        assert result == [("100",), ("300",)]
+
+    @patch("gitlab.Gitlab")
+    def test_all_repos_group_limits_membership_projects(self, mock_gitlab_cls):
+        from dev_health_ops.discovery.repos import discover_gitlab_repos
+
+        projects = [
+            SimpleNamespace(name="api", id=100, path_with_namespace="grpA/api"),
+            SimpleNamespace(name="web", id=200, path_with_namespace="grpA/sub/web"),
+            SimpleNamespace(name="api", id=300, path_with_namespace="grpB/api"),
+        ]
+        mock_gitlab_cls.return_value.projects.list.return_value = projects
+
+        result = discover_gitlab_repos({"all_repos": True, "group": "grpA"}, "token")
+
+        assert result == [("100",), ("200",)]
+
+    @patch("gitlab.Gitlab")
+    def test_all_repos_owner_limits_membership_projects(self, mock_gitlab_cls):
+        from dev_health_ops.discovery.repos import discover_gitlab_repos
+
+        projects = [
+            SimpleNamespace(name="api", id=100, path_with_namespace="grpA/api"),
+            SimpleNamespace(name="web", id=200, path_with_namespace="grpA/sub/web"),
+            SimpleNamespace(name="api", id=300, path_with_namespace="grpB/api"),
+        ]
+        mock_gitlab_cls.return_value.projects.list.return_value = projects
+
+        result = discover_gitlab_repos({"all_repos": True, "owner": "grpA"}, "token")
+
+        assert result == [("100",), ("200",)]
+
+    @patch("gitlab.Gitlab")
+    def test_all_repos_nested_subgroup_search(self, mock_gitlab_cls):
+        from dev_health_ops.discovery.repos import discover_gitlab_repos
+
+        projects = [
+            SimpleNamespace(name="api", id=100, path_with_namespace="grpA/sub/api"),
+            SimpleNamespace(name="web", id=200, path_with_namespace="grpA/other/web"),
+            SimpleNamespace(name="db", id=300, path_with_namespace="elsewhere/db"),
+        ]
+        mock_gitlab_cls.return_value.projects.list.return_value = projects
+
+        result = discover_gitlab_repos(
+            {"all_repos": True, "search": "grpA/sub/*"}, "token"
+        )
+
+        assert result == [("100",)]
+
+    @patch("gitlab.Gitlab")
+    def test_all_repos_membership_listing_failure_raises(self, mock_gitlab_cls):
+        from dev_health_ops.discovery.repos import discover_gitlab_repos
+
+        mock_gitlab_cls.return_value.projects.list.side_effect = RuntimeError(
+            "token revoked"
+        )
+
+        with pytest.raises(RuntimeError, match="token revoked"):
+            discover_gitlab_repos({"all_repos": True, "search": "grpA/*"}, "token")
+
+    def test_returns_empty_without_group_when_all_repos_false(self):
         from dev_health_ops.discovery.repos import discover_gitlab_repos
 
         result = discover_gitlab_repos({"search": ""}, "token")
@@ -447,6 +735,42 @@ class TestDispatchBatchSync:
         mock_run_sync.apply_async.assert_called_once()
         # CHAOS-2299: the fallback dispatch stays on the provider's queue.
         assert mock_run_sync.apply_async.call_args.kwargs["queue"] == "sync.github"
+
+    @patch("dev_health_ops.workers.sync_batch.run_sync_config")
+    @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
+    @patch("dev_health_ops.workers.sync_batch._resolve_env_credentials")
+    @patch("dev_health_ops.db.get_postgres_session_sync")
+    def test_all_repos_discovery_failure_marks_error_without_fallback(
+        self,
+        mock_get_session,
+        mock_resolve_creds,
+        mock_discover,
+        mock_run_sync,
+        db_session,
+    ):
+        from dev_health_ops.workers.sync_batch import dispatch_batch_sync
+
+        config = _make_config(
+            provider="github",
+            sync_options={"all_repos": True, "search": "org/*"},
+        )
+        db_session.add(config)
+        db_session.flush()
+
+        mock_get_session.return_value = _fake_session_ctx(db_session)
+        mock_resolve_creds.return_value = {"token": "ghp_test"}
+        mock_discover.side_effect = RuntimeError("API rate limited")
+
+        task = dispatch_batch_sync
+        task.push_request(id="batch-dispatch-all-repos-failure")
+        try:
+            result = task(config_id=str(config.id), org_id="default")
+        finally:
+            task.pop_request()
+
+        assert result["status"] == "error"
+        assert "API rate limited" in result["error"]
+        mock_run_sync.apply_async.assert_not_called()
 
     @patch("dev_health_ops.workers.sync_batch.chord")
     @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
@@ -624,7 +948,7 @@ class TestDispatchBatchSync:
         mock_run_for_repo.s.side_effect = _capture_signature
         config = _make_config(
             provider="github",
-            sync_options={"search": "org/*"},
+            sync_options={"search": "org/*", "all_repos": True},
             sync_targets=["git", "work-items"],
         )
         db_session.add(config)
@@ -644,6 +968,7 @@ class TestDispatchBatchSync:
 
         assert result["status"] == "dispatched"
         assert captured_kwargs[0]["sync_options_override"]["search"] == "org/repo-1"
+        assert "all_repos" not in captured_kwargs[0]["sync_options_override"]
 
 
 class TestGitLabCredentialsFromMapping:
@@ -841,6 +1166,7 @@ class TestGitLabDispatchBatchSync:
             provider="gitlab",
             sync_options={
                 "search": "my-group/*",
+                "all_repos": True,
                 "gitlab_url": "https://gitlab.example.com",
             },
             sync_targets=["git", "prs"],
@@ -872,6 +1198,7 @@ class TestGitLabDispatchBatchSync:
         override = first["sync_options_override"]
         assert override["project_id"] == 100
         assert override["gitlab_url"] == "https://gitlab.example.com"
+        assert "all_repos" not in override
         assert "search" not in override
         assert "group" not in override
 

@@ -304,9 +304,10 @@ class TestDerivePRCommitLinks:
             {
                 "repo_id": repo_id,
                 "hash": "bbb222",
-                # Squash form is ambiguous with an issue ref -> must be ignored,
-                # even though PR #7 exists in this repo.
-                "message": "Add retry logic (#7)",
+                # A bare/plain issue mention is ambiguous with an issue ref and
+                # carries no squash suffix -> must be ignored, even though PR #7
+                # exists in this repo.
+                "message": "Add retry logic for #7",
                 "author_when": base_time,
             },
         ]
@@ -424,14 +425,17 @@ class TestDerivePRCommitLinks:
         assert count == 0
         fake_sink.write_work_graph_pr_commit.assert_not_called()
 
-    def test_squash_paren_ref_colliding_with_pr_number_is_not_linked(self):
-        """A parenthetical ``(#N)`` issue ref must NOT be linked to PR #N.
+    def test_squash_paren_ref_to_known_pr_is_linked_with_distinct_evidence(self):
+        """A squash ``(#N)`` matching a KNOWN PR links with lower-confidence,
+        distinctly-tagged evidence (CHAOS-2435 interim recovery).
 
-        Primary CHAOS-2375 round-2 corruption case: "Fix parser edge case (#42)"
-        is a hand-authored issue reference, but the squash convention produces the
-        identical "<subject> (#42)" shape. With PR #42 present in the same repo,
-        the old ``SQUASH_PR_PATTERN`` would have attached this unrelated commit to
-        PR #42. The fix drops the squash form, so no link is written.
+        GitHub's *squash and merge* writes ``"<subject> (#N)"`` with no explicit
+        merge keyword, so the strict :func:`extract_pr_refs` discards it -- which
+        zeroed PR->commit edges for squash-merge orgs. The interim approach
+        promotes the squash suffix when ``N`` is a real PR in the same
+        (org, repo), but tags it ``provenance=heuristic`` / ``confidence=0.6`` /
+        ``evidence='commit_message_squash_pr_ref'`` so downstream consumers can
+        weight or filter the (inherently more ambiguous) link.
         """
         repo_id = uuid.uuid4()
         pr_rows = [{"repo_id": repo_id, "number": 42}]
@@ -453,8 +457,95 @@ class TestDerivePRCommitLinks:
             count = builder._derive_pr_commit_links()
             builder.close()
 
+        assert count == 1
+        record = fake_sink.write_work_graph_pr_commit.call_args[0][0][0]
+        assert record.commit_hash == "f00d42"
+        assert record.pr_number == 42
+        assert record.repo_id == repo_id
+        assert record.provenance == "heuristic"
+        assert record.confidence == 0.6
+        assert record.evidence == "commit_message_squash_pr_ref"
+
+    def test_squash_paren_ref_to_unknown_pr_is_not_linked(self):
+        """A squash ``(#N)`` whose N is NOT a known PR must NOT link.
+
+        The known-PR corroboration is the only guard against attaching a
+        hand-authored parenthetical issue ref to an unrelated PR. If #99 is not
+        a real PR in this (org, repo), no link is written.
+        """
+        repo_id = uuid.uuid4()
+        pr_rows = [{"repo_id": repo_id, "number": 42}]
+        commit_rows = [
+            {
+                "repo_id": repo_id,
+                "hash": "f00d99",
+                "message": "Fix parser edge case (#99)",
+                "author_when": datetime(2024, 1, 1, tzinfo=timezone.utc),
+            },
+        ]
+        fake_sink = self._build_sink(pr_rows, commit_rows)
+
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default")
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            count = builder._derive_pr_commit_links()
+            builder.close()
+
         assert count == 0
         fake_sink.write_work_graph_pr_commit.assert_not_called()
+
+    def test_squash_paren_ref_does_not_link_across_orgs(self):
+        """A squash ``(#N)`` in org A must NEVER link to org B's PR #N.
+
+        CHAOS-2189 mirror: ``repo_id`` can collide across tenants. Org A owns
+        PR #5 in this repo; org B does not. A squash-merge commit that belongs
+        to **org B** referencing ``(#5)`` must not be corroborated against org
+        A's PR #5 -- known PRs are keyed by (org_id, repo_id) and a commit is
+        only matched against PRs in its own org. Only org A's own commit links.
+        """
+        repo_id = uuid.uuid4()  # shared across both tenants
+        base_time = datetime(2024, 6, 15, tzinfo=timezone.utc)
+        # Only org A owns PR #5 in this repo.
+        pr_rows = [{"org_id": "org-a", "repo_id": repo_id, "number": 5}]
+        commit_rows = [
+            {
+                "org_id": "org-a",
+                "repo_id": repo_id,
+                "hash": "aaa555",
+                "message": "Add caching layer (#5)",
+                "author_when": base_time,
+            },
+            {
+                "org_id": "org-b",
+                "repo_id": repo_id,
+                "hash": "bbb555",
+                # org B has no PR #5 -> this squash ref must NOT cross tenants.
+                "message": "Unrelated change (#5)",
+                "author_when": base_time,
+            },
+        ]
+        fake_sink = self._build_sink(pr_rows, commit_rows)
+
+        # Unscoped build: both orgs' rows are visible, so the per-org keying is
+        # what prevents the cross-tenant link (not a SQL org filter).
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default")
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            count = builder._derive_pr_commit_links()
+            builder.close()
+
+        assert count == 1
+        records = fake_sink.write_work_graph_pr_commit.call_args[0][0]
+        by_commit = {r.commit_hash: r for r in records}
+        # Only org A's own commit links to org A's PR #5.
+        assert "aaa555" in by_commit
+        assert by_commit["aaa555"].pr_number == 5
+        # org B's colliding squash ref is never promoted to org A's PR.
+        assert "bbb555" not in by_commit
 
     def test_revert_commit_is_not_linked_to_reverted_pr(self):
         """A revert of a merge commit must NOT produce a PR->commit link.

@@ -12,6 +12,7 @@ import bisect
 import logging
 import sys
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -27,6 +28,7 @@ from dev_health_ops.work_graph.extractors.text_parser import (
     extract_gitlab_issue_refs,
     extract_jira_keys,
     extract_pr_refs,
+    extract_squash_pr_refs,
 )
 from dev_health_ops.work_graph.ids import (
     generate_commit_id,
@@ -1334,25 +1336,43 @@ class WorkGraphBuilder:
         ``git_pull_requests`` and ``git_commits`` but never populates
         ``work_graph_pr_commit`` (only fixtures did), so the ``CONTAINS`` edges
         built by :meth:`_build_pr_commit_edges_from_fast_path` were empty for real
-        orgs. Here we parse merge commit messages for the PR/MR numbers GitHub and
-        GitLab embed via their explicit merge-keyword conventions
-        (``Merge pull request #N``, ``See merge request grp/proj!N``) and, when the
-        referenced number matches a known PR in the same repo, persist a
-        ``WorkGraphPRCommit`` link. Bare ``#N`` and squash ``(#N)`` forms are
-        deliberately *not* accepted: they are indistinguishable from ordinary issue
-        references and, with no persisted merge metadata to corroborate them, would
-        attach commits to unrelated PRs (see :func:`extract_pr_refs`). Re-running is
-        idempotent: ``work_graph_pr_commit`` is a ReplacingMergeTree keyed on
-        (org_id, repo_id, pr_number, commit_hash).
+        orgs. Here we parse commit messages for PR/MR numbers via two tiers:
+
+        1. **Explicit merge keywords** (``Merge pull request #N``,
+           ``See merge request grp/proj!N``) -- unambiguous, persisted with
+           ``provenance=explicit_text``, ``confidence=0.9`` and
+           ``evidence='commit_message_pr_ref'`` (see :func:`extract_pr_refs`).
+        2. **Squash-merge subject suffix** (``<subject> (#N)``) -- GitHub's
+           *squash and merge* default, which leaves no explicit merge keyword.
+           This form is ambiguous with a hand-authored issue reference, so it is
+           only promoted when ``N`` matches a *known* PR number in the **same
+           (org, repo)**, and is then tagged distinctly:
+           ``provenance=heuristic``, ``confidence=0.6`` and
+           ``evidence='commit_message_squash_pr_ref'`` so downstream consumers
+           can weight or filter it. Without this tier, squash-merge orgs lose
+           nearly all PR->commit edges (CHAOS-2435: live org a78c1a6a had only
+           22 explicit-merge edges while ~3218 squash commits were discarded).
+
+        Bare ``#N`` references are never accepted (indistinguishable from issue
+        mentions). Re-running is idempotent: ``work_graph_pr_commit`` is a
+        ReplacingMergeTree keyed on (org_id, repo_id, pr_number, commit_hash).
+
+        Tenant isolation: known PRs are keyed by ``(org_id, repo_id)`` and a
+        commit is only ever matched against PRs in its *own* org, so a squash
+        ``(#N)`` in org A can never link to org B's PR #N even when ``repo_id``
+        collides across tenants (CHAOS-2189 mirror).
 
         Returns:
             Number of PR->commit links written.
         """
         logger.info("Deriving PR->commit links from commit messages...")
 
-        # Known PR numbers per repo, so we only link to PRs that actually exist.
+        # Known PR numbers per (org, repo), so we only link to PRs that actually
+        # exist *within the same tenant*. ``repo_id`` can collide across orgs, so
+        # org_id MUST be part of the key (tenant isolation).
         pr_query = """
         SELECT
+            org_id,
             repo_id,
             number
         FROM git_pull_requests
@@ -1370,16 +1390,18 @@ class WorkGraphBuilder:
             logger.info("No PRs found; skipping PR->commit derivation")
             return 0
 
-        known_prs: dict[str, set[int]] = {}
+        known_prs: dict[tuple[str, str], set[int]] = {}
         for pr_row in pr_rows:
             repo_id = pr_row.get("repo_id")
             number = pr_row.get("number")
             if repo_id is None or number is None:
                 continue
-            known_prs.setdefault(str(repo_id), set()).add(int(number))
+            org_key = str(pr_row.get("org_id") or "")
+            known_prs.setdefault((org_key, str(repo_id)), set()).add(int(number))
 
         commit_query = """
         SELECT
+            org_id,
             repo_id,
             hash,
             message,
@@ -1408,8 +1430,26 @@ class WorkGraphBuilder:
         if not commit_rows:
             return 0
 
+        # Two extraction tiers, processed in order so the higher-confidence
+        # explicit-merge link wins the (org, repo, pr, hash) dedup over a squash
+        # match for the same pair:
+        #   1. explicit merge keywords  -> explicit_text, 0.9
+        #   2. squash subject "(#N)"    -> heuristic, 0.6 (ambiguous; corroborated
+        #      only against known PRs in the same (org, repo), tagged distinctly)
+        link_tiers: tuple[
+            tuple[Callable[[str], list[int]], float, Provenance, str], ...
+        ] = (
+            (extract_pr_refs, 0.9, Provenance.EXPLICIT_TEXT, "commit_message_pr_ref"),
+            (
+                extract_squash_pr_refs,
+                0.6,
+                Provenance.HEURISTIC,
+                "commit_message_squash_pr_ref",
+            ),
+        )
+
         links: list[WorkGraphPRCommit] = []
-        seen: set[tuple[str, int, str]] = set()
+        seen: set[tuple[str, str, int, str]] = set()
         for commit_row in commit_rows:
             repo_id = commit_row.get("repo_id")
             commit_hash = commit_row.get("hash")
@@ -1419,28 +1459,33 @@ class WorkGraphBuilder:
                 continue
 
             repo_id_str = str(repo_id)
-            repo_prs = known_prs.get(repo_id_str)
+            commit_hash_str = str(commit_hash)
+            org_key = str(commit_row.get("org_id") or "")
+            # Only PRs in this commit's *own* (org, repo) are candidates --
+            # never another tenant's PRs, even on a repo_id collision.
+            repo_prs = known_prs.get((org_key, repo_id_str))
             if not repo_prs:
                 continue
 
-            for pr_number in extract_pr_refs(message):
-                if pr_number not in repo_prs:
-                    continue
-                key = (repo_id_str, pr_number, str(commit_hash))
-                if key in seen:
-                    continue
-                seen.add(key)
-                links.append(
-                    WorkGraphPRCommit(
-                        repo_id=uuid.UUID(repo_id_str),
-                        pr_number=pr_number,
-                        commit_hash=str(commit_hash),
-                        confidence=0.9,
-                        provenance=Provenance.EXPLICIT_TEXT,
-                        evidence="commit_message_pr_ref",
-                        last_synced=self._now,
+            for extractor, confidence, provenance, evidence in link_tiers:
+                for pr_number in extractor(message):
+                    if pr_number not in repo_prs:
+                        continue
+                    key = (org_key, repo_id_str, pr_number, commit_hash_str)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    links.append(
+                        WorkGraphPRCommit(
+                            repo_id=uuid.UUID(repo_id_str),
+                            pr_number=pr_number,
+                            commit_hash=commit_hash_str,
+                            confidence=confidence,
+                            provenance=provenance,
+                            evidence=evidence,
+                            last_synced=self._now,
+                        )
                     )
-                )
 
         self._write_pr_commit_links(links)
         logger.info("Derived %d PR->commit links from commit messages", len(links))

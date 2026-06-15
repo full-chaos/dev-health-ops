@@ -438,6 +438,162 @@ async def test_no_owner_gitlab_enumerates_token_wide(client):
 
 
 # ---------------------------------------------------------------------------
+# Tests — Blank-owner search safety (review findings)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_no_owner_github_search_uses_pattern_not_global_search(client):
+    """Blank owner + search → client-side pattern filter, NOT global search_repositories.
+
+    Finding 1 (HIGH): passing search= to the connector with no owner triggers a
+    global GitHub search that returns repos the credential cannot access.
+    Fix: enumerate token-wide repos and apply search as a pattern filter.
+    """
+    ac, state = client
+
+    with (
+        patch(
+            _DECRYPT_PATCH,
+            return_value=_mock_credential(config={}),  # no org in config
+        ) as _,
+        patch(_GH_CONNECTOR) as MockConnector,
+    ):
+        MockConnector.return_value.list_repositories.return_value = _FAKE_REPOS
+        resp = await ac.get(
+            f"/api/v1/admin/credentials/{state['cred_id']}/repos",
+            params={"search": "api"},  # search but no owner
+        )
+
+    assert resp.status_code == 200
+    # Must NOT have called search_repositories (global search)
+    MockConnector.return_value.search_repositories = MagicMock()
+    MockConnector.return_value.search_repositories.assert_not_called()
+    # Must have called list_repositories with pattern= (client-side filter), search=None
+    call_kwargs = MockConnector.return_value.list_repositories.call_args
+    assert call_kwargs is not None
+    assert call_kwargs.kwargs.get("search") is None or call_kwargs.args[1:2] == ()
+    assert call_kwargs.kwargs.get("pattern") == "*api*"
+    assert call_kwargs.kwargs.get("org_name") is None
+
+
+@pytest.mark.asyncio
+async def test_no_owner_github_app_uses_installation_repos(client):
+    """Blank owner + GitHub App auth → installation/repositories endpoint.
+
+    Finding 2 (MEDIUM): get_user().get_repos() fails for App installation tokens
+    because App tokens have no user surface. Fix: enumerate via the
+    installation/repositories REST API.
+    """
+    ac, state = client
+    app_credentials = {
+        "app_id": "12345",
+        "private_key": "not-a-real-github-app-private-key",
+        "installation_id": "67890",
+    }
+
+    class _FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "repositories": [
+                    {
+                        "id": 1,
+                        "name": "install-repo",
+                        "full_name": "org/install-repo",
+                        "default_branch": "main",
+                        "description": "Installation repo",
+                        "html_url": "https://github.com/org/install-repo",
+                    }
+                ],
+                "total_count": 1,
+            }
+
+    class _FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, *args, **kwargs):
+            return _FakeResp()
+
+    with (
+        patch(
+            _DECRYPT_PATCH,
+            return_value=_mock_credential(config={}, credentials=app_credentials),
+        ) as _,
+        patch(_GH_CONNECTOR) as MockConnector,
+        patch(_GH_APP_PROVIDER) as MockProvider,
+        patch("httpx.AsyncClient", return_value=_FakeAsyncClient()),
+    ):
+        MockProvider.return_value.get_token.return_value = "ghs_installation_token"
+        resp = await ac.get(
+            f"/api/v1/admin/credentials/{state['cred_id']}/repos",
+            # no owner — App auth blank-owner path
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["repos"][0]["name"] == "install-repo"
+    # The connector's list_repositories must NOT have been called
+    # (we bypass it for App auth + blank owner)
+    MockConnector.return_value.list_repositories.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_no_owner_gitlab_search_uses_pattern_not_global_search(client):
+    """Blank owner + search → GitLab uses client-side pattern, not global search.
+
+    GitLab's list_projects passes search= to the API which can return public
+    projects beyond the token's membership scope. Fix: enumerate token-scoped
+    projects (search=None) and apply search as a client-side pattern filter.
+    """
+    ac, state = client
+
+    gl_repos = [
+        Repository(
+            id=10,
+            name="infra-api",
+            full_name="mygroup/infra-api",
+            default_branch="main",
+            description="Infrastructure API",
+            url="https://gitlab.com/mygroup/infra-api",
+        ),
+    ]
+
+    with (
+        patch(
+            _DECRYPT_PATCH,
+            return_value=_mock_credential(
+                provider="gitlab",
+                config={},  # no group in config
+                credentials={"token": "glpat_fake"},
+            ),
+        ) as _,
+        patch(_GL_CONNECTOR) as MockGLConnector,
+    ):
+        MockGLConnector.return_value.list_repositories.return_value = gl_repos
+        resp = await ac.get(
+            f"/api/v1/admin/credentials/{state['cred_id']}/repos",
+            params={"search": "api"},  # search but no owner
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["provider"] == "gitlab"
+    # Must have called list_repositories with pattern= (client-side), search=None
+    call_kwargs = MockGLConnector.return_value.list_repositories.call_args
+    assert call_kwargs is not None
+    assert call_kwargs.kwargs.get("search") is None
+    assert call_kwargs.kwargs.get("pattern") == "*api*"
+    assert call_kwargs.kwargs.get("org_name") is None
+
+
+# ---------------------------------------------------------------------------
 # Tests — Edge cases
 # ---------------------------------------------------------------------------
 

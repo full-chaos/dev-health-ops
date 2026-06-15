@@ -145,11 +145,31 @@ async def list_credential_repos(
                 status_code=401, detail="GitHub App authentication failed"
             ) from exc
         try:
-            repos = github_connector.list_repositories(
-                org_name=effective_owner or None,
-                search=search,
-                max_repos=max_repos,
-            )
+            if not effective_owner and github_credentials.is_app_auth:
+                # GitHub App installation tokens have no user surface.
+                # Enumerate installation repos directly via the REST API,
+                # then apply search as a client-side name filter.
+                repos = await _list_github_app_installation_repos(
+                    github_credentials=github_credentials,
+                    base_url=github_credentials.base_url or "https://api.github.com",
+                    search=search,
+                    max_repos=max_repos,
+                )
+            elif not effective_owner and search:
+                # Blank owner + search: enumerate token-wide repos and filter
+                # client-side via pattern to avoid a global GitHub search.
+                repos = github_connector.list_repositories(
+                    org_name=None,
+                    search=None,
+                    pattern=f"*{search}*",
+                    max_repos=max_repos,
+                )
+            else:
+                repos = github_connector.list_repositories(
+                    org_name=effective_owner or None,
+                    search=search,
+                    max_repos=max_repos,
+                )
         except NotFoundException:
             return DiscoveredReposResponse(provider=provider, repos=[], total=0)
         except AuthenticationException as exc:
@@ -172,11 +192,21 @@ async def list_credential_repos(
         gitlab_connector = GitLabConnector(url=url, private_token=token)
         effective_owner = owner or _string_value(config.get("group"))
         try:
-            repos = gitlab_connector.list_repositories(
-                org_name=effective_owner or None,
-                search=search,
-                max_repos=max_repos,
-            )
+            if not effective_owner and search:
+                # Blank owner + search: enumerate token-scoped projects and
+                # filter client-side to avoid a global public-project search.
+                repos = gitlab_connector.list_repositories(
+                    org_name=None,
+                    search=None,
+                    pattern=f"*{search}*",
+                    max_repos=max_repos,
+                )
+            else:
+                repos = gitlab_connector.list_repositories(
+                    org_name=effective_owner or None,
+                    search=search,
+                    max_repos=max_repos,
+                )
         except NotFoundException:
             return DiscoveredReposResponse(provider=provider, repos=[], total=0)
         except AuthenticationException as exc:
@@ -386,6 +416,83 @@ def _build_safe_url(validated_base: str, path: str) -> str:
         f"{base_path}/{path.lstrip('/')}" if base_path else f"/{path.lstrip('/')}"
     )
     return urlunparse((parsed.scheme, parsed.netloc, safe_path, "", "", ""))
+
+
+async def _list_github_app_installation_repos(
+    github_credentials: Any,
+    base_url: str,
+    search: str | None,
+    max_repos: int,
+) -> list[Any]:
+    """Enumerate repos accessible to a GitHub App installation.
+
+    Uses the installation/repositories REST endpoint (paginated) so that
+    blank-owner discovery works for App auth, which has no user surface.
+    Applies search as a client-side name filter (fnmatch) to avoid a global
+    GitHub search.
+    """
+    import fnmatch
+    import httpx
+
+    from dev_health_ops.connectors.utils.github_app import GitHubAppTokenProvider
+    from dev_health_ops.connectors.models import Repository
+
+    assert github_credentials.app_id is not None
+    assert github_credentials.private_key is not None
+    assert github_credentials.installation_id is not None
+
+    token = GitHubAppTokenProvider(
+        app_id=github_credentials.app_id,
+        private_key=github_credentials.private_key,
+        installation_id=github_credentials.installation_id,
+        api_base_url=base_url,
+    ).get_token()
+
+    pattern = f"*{search}*" if search else None
+    repos: list[Any] = []
+    page = 1
+    per_page = 100
+
+    async with httpx.AsyncClient() as client:
+        while True:
+            resp = await client.get(
+                _build_safe_url(base_url, "installation/repositories"),
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+                params={"per_page": per_page, "page": page},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                break
+            data = resp.json()
+            page_repos = data.get("repositories", [])
+            if not page_repos:
+                break
+            for r in page_repos:
+                if pattern and not fnmatch.fnmatch(
+                    (r.get("full_name") or "").lower(), pattern.lower()
+                ):
+                    continue
+                repos.append(
+                    Repository(
+                        id=r["id"],
+                        name=r["name"],
+                        full_name=r["full_name"],
+                        default_branch=r.get("default_branch") or "main",
+                        description=r.get("description"),
+                        url=r.get("html_url") or "",
+                    )
+                )
+                if len(repos) >= max_repos:
+                    return repos
+            if len(page_repos) < per_page:
+                break
+            page += 1
+
+    return repos
 
 
 async def _test_github_connection(creds: dict[str, Any]) -> tuple[bool, dict[str, Any]]:

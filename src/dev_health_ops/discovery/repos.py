@@ -130,7 +130,7 @@ def discover_github_repos(
         except Exception:
             return []
 
-    result: list[tuple[str, ...]] = []
+    result = []
     for repo in repos:
         if fnmatch.fnmatch(repo.name, repo_pattern):
             result.append((owner, repo.name))
@@ -274,14 +274,14 @@ def discover_gitlab_repos(
 
     try:
         grp = gl.groups.get(group_path)
-        projects = grp.projects.list(all=True)
+        group_projects = grp.projects.list(all=True)
     except Exception:
         return []
 
-    result: list[tuple[str, ...]] = []
-    for project in projects:
-        name = getattr(project, "name", "") or ""
-        project_id = getattr(project, "id", None)
+    result = []
+    for group_project in group_projects:
+        name = getattr(group_project, "name", "") or ""
+        project_id = getattr(group_project, "id", None)
         if project_id is not None and fnmatch.fnmatch(name, project_pattern):
             result.append((str(project_id),))
 

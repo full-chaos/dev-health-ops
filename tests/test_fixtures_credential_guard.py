@@ -17,7 +17,7 @@ from pathlib import Path
 import bcrypt
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.fixtures.runner import _merge_fixture_user, _seed_auth_data
@@ -697,3 +697,47 @@ async def test_multiple_users_partial_guard(session_maker):
     assert bcrypt.checkpw(
         _FIXTURE_PASSWORD.encode("utf-8"), b.password_hash.encode("utf-8")
     ), "Fixture user B must be seeded with the fixture hash"
+
+
+@pytest.mark.asyncio
+async def test_mixed_case_real_identity_not_duplicated(session_maker):
+    """A real user with mixed-case email/username must be detected
+    case-insensitively (matching the auth layer's lower() semantics) so the
+    seeder does not insert a duplicate lowercase demo account for the same
+    identity (CHAOS-2458 review follow-up)."""
+    real_id = uuid.uuid4()  # distinct from the deterministic fixture uuid5
+    async with session_maker() as session:
+        real_user = User(
+            id=real_id,
+            email="Admin@DevHealth.example",
+            username="Admin",
+            password_hash=_REAL_HASH,
+            full_name="Real Admin",
+            auth_provider="local",
+            is_active=True,
+            is_verified=True,
+            is_superuser=True,
+        )
+        session.add(real_user)
+        await session.commit()
+
+    async with session_maker() as session:
+        await _seed_auth_data(session, _build_user_data())
+
+    async with session_maker() as session:
+        rows = (
+            (
+                await session.execute(
+                    select(User).where(
+                        func.lower(User.email) == "admin@devhealth.example"
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(rows) == 1, "Seeder must not duplicate a mixed-case real identity"
+        assert rows[0].id == real_id
+        assert rows[0].password_hash == _REAL_HASH
+        # The lowercase fixture UUID must NOT have been inserted as a new row.
+        assert await session.get(User, _fixture_user_id()) is None

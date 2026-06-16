@@ -262,7 +262,7 @@ async def _merge_fixture_user(
     - overwrite_real_users=True: explicit opt-in to the previous destructive
       merge behavior for demo/dev refreshes.
     """
-    from sqlalchemy import or_, select
+    from sqlalchemy import func, or_, select
 
     from dev_health_ops.models.users import User
 
@@ -271,9 +271,17 @@ async def _merge_fixture_user(
         await session.merge(user)
         return "inserted"
 
-    natural_key_checks = [User.id == user.id, User.email == user.email]
+    # Match the auth layer's case-insensitive identity semantics (it stores and
+    # looks up email/username via lower()), so a real row like Admin@Host or
+    # username "Admin" is detected and never duplicated by a lowercase demo user.
+    natural_key_checks = [
+        User.id == user.id,
+        func.lower(User.email) == user.email.lower().strip(),
+    ]
     if user.username is not None:
-        natural_key_checks.append(User.username == user.username)
+        natural_key_checks.append(
+            func.lower(User.username) == user.username.lower().strip()
+        )
 
     existing: User | None = (
         await session.execute(select(User).where(or_(*natural_key_checks)).limit(1))

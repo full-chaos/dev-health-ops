@@ -1392,6 +1392,71 @@ class TestGitLabDispatchBatchSync:
         assert override["project_id"] == 100
         assert "search" not in override
 
+    @patch("dev_health_ops.workers.sync_batch._run_sync_for_repo")
+    @patch("dev_health_ops.workers.sync_batch.chord")
+    @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
+    @patch("dev_health_ops.workers.sync_batch._resolve_env_credentials")
+    @patch("dev_health_ops.db.get_postgres_session_sync")
+    def test_gitlab_work_items_child_empty_path_is_not_unscoped(
+        self,
+        mock_get_session,
+        mock_resolve_creds,
+        mock_discover,
+        mock_chord,
+        mock_run_for_repo,
+        db_session,
+    ):
+        """CHAOS-2450: a GitLab project discovered without a path_with_namespace
+        must NOT produce an empty/all-matching search (match_pattern treats an
+        empty pattern as "match every repo"), which would re-open the org-wide
+        work-items fanout. The child must carry a non-empty, non-wildcard scope
+        that cannot match any path_with_namespace.
+        """
+        from dev_health_ops.utils import match_pattern
+        from dev_health_ops.workers.sync_batch import dispatch_batch_sync
+
+        captured_kwargs = []
+
+        def _capture_signature(**kwargs):
+            captured_kwargs.append(kwargs)
+            return MagicMock()
+
+        mock_run_for_repo.s.side_effect = _capture_signature
+        config = _make_config(
+            provider="gitlab",
+            sync_options={
+                "all_repos": True,
+                "group": "grpA",
+                "gitlab_url": "https://gitlab.example.com",
+            },
+            sync_targets=["git", "work-items"],
+        )
+        db_session.add(config)
+        db_session.flush()
+
+        mock_get_session.return_value = _fake_session_ctx(db_session)
+        mock_resolve_creds.return_value = {"token": "glpat_test"}
+        # Degraded GitLab response: project with no path_with_namespace.
+        mock_discover.return_value = [("300", "")]
+        mock_chord.return_value = MagicMock()
+
+        task = dispatch_batch_sync
+        task.push_request(id="gl-wi-scope-empty")
+        try:
+            result = task(config_id=str(config.id), org_id="default")
+        finally:
+            task.pop_request()
+
+        assert result["status"] == "dispatched"
+        override = captured_kwargs[0]["sync_options_override"]
+        assert override["project_id"] == 300
+        search = override["search"]
+        # Must be a real, non-wildcard scope (not empty, not "*").
+        assert search not in ("", "*")
+        # And it must not match an arbitrary repo path (no org-wide fanout).
+        assert match_pattern("grpA/api", search) is False
+        assert match_pattern("other/repo", search) is False
+
 
 class TestRunSyncForRepoWatermarks:
     """Batch children must honour and stamp sync watermarks (CHAOS-2281),

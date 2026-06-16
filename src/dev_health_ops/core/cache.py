@@ -127,7 +127,14 @@ class RedisBackend(CacheBackend):
         try:
             self._client.setex(key, ttl_seconds, json.dumps(value))
         except Exception as e:
-            logger.warning("Redis set failed: %s", e)
+            logger.warning(
+                "Redis set failed for key=%s value_type=%s ttl=%s: %s",
+                key,
+                type(value).__name__,
+                ttl_seconds,
+                e,
+                exc_info=True,
+            )
 
     def status(self) -> str:
         if not self._available:

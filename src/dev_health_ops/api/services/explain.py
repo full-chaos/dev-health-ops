@@ -124,7 +124,7 @@ async def build_explain_response(
     cache_key = filter_cache_key("explain", org_id, filters, extra={"metric": metric})
     cached = cache.get(cache_key)
     if cached is not None:
-        return cached
+        return ExplainResponse.model_validate(cached)
 
     config = _METRIC_CONFIG.get(metric, _METRIC_CONFIG["cycle_time"])
     start_day, end_day, compare_start, compare_end = time_window(filters)
@@ -239,7 +239,7 @@ async def build_explain_response(
         },
     )
 
-    cache.set(cache_key, response)
+    cache.set(cache_key, response.model_dump(mode="json"))
     return response
 
 

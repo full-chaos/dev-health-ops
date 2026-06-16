@@ -76,6 +76,7 @@ class JiraClient:
         per_page: int = 100,
         gate: RateLimitGate | None = None,
         org_id: str | None = None,
+        max_retries_429: int = 3,
     ) -> None:
         import requests
 
@@ -89,6 +90,7 @@ class JiraClient:
             host=host,
             config=RateLimitConfig(initial_backoff_seconds=1.0),
         )
+        self.max_retries_429 = max(0, int(max_retries_429))
 
         self.session = requests.Session()
         self.session.auth = (auth.email, auth.api_token)
@@ -130,25 +132,41 @@ class JiraClient:
         import requests
 
         url = self._url(path)
-        self.gate.wait_sync()
-        try:
-            resp = self.session.get(url, params=params, timeout=self.timeout_seconds)
-            if resp.status_code == 429:
-                applied = penalize_from_response(self.gate, resp)
-                logger.info("Jira rate limited; backoff %.1fs (HTTP 429)", applied)
-            resp.raise_for_status()
-            self.gate.reset()
-            data = resp.json()
-            return data if isinstance(data, dict) else {}
-        except requests.HTTPError as exc:
+        attempts = self.max_retries_429 + 1
+        for attempt in range(attempts):
+            self.gate.wait_sync()
             try:
-                body = exc.response.text if exc.response is not None else ""
-            except Exception:
-                body = ""
-            logger.debug(
-                "Jira request failed: %s %s params=%s body=%s", "GET", url, params, body
-            )
-            raise
+                resp = self.session.get(
+                    url, params=params, timeout=self.timeout_seconds
+                )
+                if resp.status_code == 429:
+                    applied = penalize_from_response(self.gate, resp)
+                    logger.info(
+                        "Jira rate limited; backoff %.1fs (HTTP 429, attempt %d/%d)",
+                        applied,
+                        attempt + 1,
+                        attempts,
+                    )
+                    if attempt + 1 < attempts:
+                        continue
+                resp.raise_for_status()
+                self.gate.reset()
+                data = resp.json()
+                return data if isinstance(data, dict) else {}
+            except requests.HTTPError as exc:
+                try:
+                    body = exc.response.text if exc.response is not None else ""
+                except Exception:
+                    body = ""
+                logger.debug(
+                    "Jira request failed: %s %s params=%s body=%s",
+                    "GET",
+                    url,
+                    params,
+                    body,
+                )
+                raise
+        raise RuntimeError("Jira request retry loop exited without a result")
 
     def search_issues_page(
         self,

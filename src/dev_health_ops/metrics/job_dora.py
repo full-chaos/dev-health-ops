@@ -266,8 +266,10 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         help="Compute and persist DORA metrics from synced ClickHouse data.",
     )
     add_date_range_args(dora)
-    dora.add_argument("--repo-id", type=uuid.UUID)
-    dora.add_argument("--repo-name")
+    dora.add_argument(
+        "--repo-id", type=uuid.UUID, help="Filter to a specific repository UUID."
+    )
+    dora.add_argument("--repo-name", help="Filter to a specific repository by name.")
     add_sink_arg(dora)
     dora.add_argument(
         "--metrics",

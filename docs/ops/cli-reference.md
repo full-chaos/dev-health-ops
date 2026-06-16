@@ -6,11 +6,20 @@ Complete reference for the dev-health-ops command-line interface.
 
 ## Overview
 
-The CLI is implemented in `cli.py` and orchestrates:
-- Data synchronization from providers
-- Metric computation
-- Fixture generation
-- Team management
+The CLI entry point is `dev-hops` (module `dev_health_ops.cli`). Command groups:
+
+- `sync` — ingest provider data (git, prs, blame, cicd, deployments, incidents, security, tests, teams, work-items)
+- `metrics` — compute analytics (daily, rebuild, dora, complexity, capacity, release-impact, validate-flags, compounding-risk)
+- `audit` — diagnostics (completeness, schema, perf, coverage)
+- `fixtures` — synthetic/demo data (generate, validate, product-telemetry)
+- `work-graph` / `investment` / `recommendations` — graph, investment, and recommendation computation
+- `admin` — users, orgs, licenses, feature flags, billing plans, feature bundles
+- `billing` — Stripe reconciliation
+- `ai` — AI governance allowlist
+- `migrate` — PostgreSQL (Alembic) and ClickHouse schema migrations
+- `api` — run the REST/GraphQL API server
+- `workers` — Celery worker and beat scheduler
+- `maintenance` — operational cleanup
 
 ---
 
@@ -211,6 +220,38 @@ dev-hops sync incidents --provider github \
   --repo repo
 ```
 
+### `sync blame`
+
+Sync git blame data only (line-level authorship). Uses `CLICKHOUSE_URI`.
+
+```bash
+dev-hops sync blame --provider local --repo-path /path/to/repo
+```
+
+Accepts the same provider, auth, single-repo, batch-mode, and date-range options as [`sync git`](#sync-git). Providers: `local`, `github`, `gitlab`, `synthetic`.
+
+### `sync security`
+
+Sync security and dependency alerts (Dependabot, code-scanning, advisories, GitLab vulnerability/dependency findings). Uses `CLICKHOUSE_URI`.
+
+```bash
+dev-hops sync security --provider github \
+  --auth "$GITHUB_TOKEN" --owner org --repo repo
+```
+
+Accepts the same provider/auth/batch options as [`sync git`](#sync-git). Providers: `local`, `github`, `gitlab`, `synthetic`.
+
+### `sync tests`
+
+Sync CI test results and coverage (TestOps). Uses `CLICKHOUSE_URI`.
+
+```bash
+dev-hops sync tests --provider github \
+  --auth "$GITHUB_TOKEN" --owner org --repo repo
+```
+
+Accepts the same provider/auth/batch options as [`sync git`](#sync-git). Providers: `local`, `github`, `gitlab`, `synthetic`.
+
 ### `sync teams`
 
 Sync team definitions. Persists to the analytics store, so `CLICKHOUSE_URI` (or `--analytics-db`) is required regardless of the `--provider` source (see [Input Validation](#input-validation-preflight)).
@@ -279,6 +320,152 @@ dev-hops metrics daily \
 | `--backfill N` | Compute N days ending at `--before` (default: 1) |
 | `--repo-id` | Filter to specific repository |
 | `--sink` | Analytics backend (`clickhouse` only) |
+
+### `metrics rebuild`
+
+Recompute daily metrics for one or more repositories (or all repos) over a date range, then run a single partitioned finalize per day. Each repo/day is recomputed with finalize skipped, then the whole day is finalized once. Use after correcting or re-syncing source data for specific repos. Uses `CLICKHOUSE_URI`.
+
+```bash
+# Rebuild all repos for the last 7 days
+dev-hops metrics rebuild --backfill 7
+
+# Rebuild specific repos (repeatable --repo-id) over an explicit range
+dev-hops metrics rebuild \
+  --repo-id 550e8400-e29b-41d4-a716-446655440000 \
+  --repo-id 550e8400-e29b-41d4-a716-446655440001 \
+  --since 2025-01-01 --before 2025-02-01
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--repo-id` | Repo UUID to rebuild; repeatable. Omit to rebuild all repos |
+| `--since` | Start date (inclusive). Mutually exclusive with `--backfill` |
+| `--before` | End date (exclusive, default: tomorrow) |
+| `--backfill N` | Process N days ending at `--before` (default: 1) |
+| `--sink` | Analytics backend (`clickhouse` only) |
+| `--provider` | Restrict to a single provider (default: `auto`) |
+
+### `metrics dora`
+
+Compute and persist DORA metrics (deployment frequency, lead time, change failure rate, time to restore) from synced ClickHouse data. Uses `CLICKHOUSE_URI`.
+
+```bash
+dev-hops metrics dora --backfill 30
+
+# Compute a subset of metrics
+dev-hops metrics dora --backfill 30 --metrics deployment_frequency,lead_time
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--since` / `--before` / `--backfill N` | Date range (as in `metrics daily`) |
+| `--repo-id` / `--repo-name` | Filter to a specific repository |
+| `--metrics` | Comma-separated metric names (default: full DORA set) |
+| `--sink` | Analytics backend (`clickhouse` only) |
+
+### `metrics complexity`
+
+Compute file complexity and hotspot metrics from persisted `git_files`/`git_blame` data. Uses `CLICKHOUSE_URI`.
+
+```bash
+dev-hops metrics complexity --backfill 30
+
+# Scope to repos matching a glob and limit languages/files
+dev-hops metrics complexity \
+  -s "meridian/*" \
+  --lang "*.py" \
+  --exclude "*/tests/*" \
+  --max-files 500
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--since` / `--before` / `--backfill N` | Date range (as in `metrics daily`) |
+| `--repo-id` | Filter to a specific repo |
+| `-s, --search` | Repo name search pattern (glob) |
+| `--lang` | Include language globs (e.g. `*.py`) |
+| `--exclude` | Exclude language globs (e.g. `*/tests/*`) |
+| `--max-files` | Limit number of files scanned per repo |
+| `--sink` | Analytics backend (`clickhouse` only) |
+
+### `metrics capacity`
+
+Compute capacity / completion-date forecasts using Monte Carlo simulation over historical throughput. Takes its ClickHouse DSN via its own **required** `--db` flag (see the caveat under [Global Arguments](#global-arguments)).
+
+```bash
+# Forecast a single team
+dev-hops metrics capacity --db "$CLICKHOUSE_URI" --team-id eng-core
+
+# Forecast all discovered team/scope combinations, print without persisting
+dev-hops metrics capacity --db "$CLICKHOUSE_URI" --all-teams --dry-run
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--db` | ClickHouse connection string (**required**) |
+| `--team-id` | Filter by team ID |
+| `--work-scope-id` | Filter by work scope ID (project/board) |
+| `--target-items` | Number of items to complete (defaults to current backlog) |
+| `--target-date` | Target deadline (YYYY-MM-DD) |
+| `--history-days` | Days of history to use (default: 90) |
+| `--simulations` | Number of Monte Carlo simulations (default: 10000) |
+| `--all-teams` | Compute forecasts for all team/scope combinations |
+| `--dry-run` | Print forecasts without persisting |
+
+### `metrics release-impact`
+
+Compute release-impact daily metrics from telemetry signal buckets. Re-computes a trailing window on each run so late-arriving signals are captured. Uses `CLICKHOUSE_URI`.
+
+```bash
+dev-hops metrics release-impact --backfill 7
+
+# Widen the recomputation window
+dev-hops metrics release-impact --recomputation-window 14
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--since` / `--before` / `--backfill N` | Date range (as in `metrics daily`) |
+| `--recomputation-window N` | Days to recompute on each run (default: 7) |
+| `--sink` | Analytics backend (`clickhouse` only) |
+
+### `metrics validate-flags`
+
+Run feature-flag pipeline validation checks against recent data. Uses `CLICKHOUSE_URI`.
+
+```bash
+dev-hops metrics validate-flags --lookback 30
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--lookback N` | Number of days to inspect (default: 30) |
+| `--sink` | Analytics backend (`clickhouse` only) |
+
+### `metrics compounding-risk`
+
+Compute the Compounding Risk composite from persisted inputs (`repo_metrics_daily` + `repo_complexity_daily`) and write `compounding_risk_daily`. Requires `CLICKHOUSE_URI` **and** an organization id.
+
+```bash
+dev-hops metrics compounding-risk --org "$ORG_ID"
+
+# Backfill additional days ending at --day
+dev-hops metrics compounding-risk --day 2025-02-02 --backfill 7
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--day` | Target day (UTC, default: today) |
+| `--backfill N` | Additional days to backfill, inclusive (default: 0) |
+
+> Note: `metrics compounding-risk` uses `--day` + `--backfill` rather than the `--since`/`--before`/`--backfill` range shared by the other metrics commands.
 
 ---
 
@@ -434,6 +621,29 @@ Checks raw data counts, team mappings, cycle time metrics, work graph edges,
 connected components, security alert fixture coverage, AI fixture/rollup tables,
 and evidence bundle quality.
 
+### `fixtures product-telemetry`
+
+Seed `product_telemetry_events` across one or more orgs so the platform-admin dashboard and per-org product views have data locally. Uses `CLICKHOUSE_URI`, and reads org IDs from PostgreSQL when `--org` is not supplied.
+
+```bash
+# Seed the first 3 orgs from Postgres, 30 days each
+dev-hops fixtures product-telemetry --orgs 3 --days 30
+
+# Seed explicit orgs (repeatable --org)
+dev-hops fixtures product-telemetry \
+  --org 550e8400-e29b-41d4-a716-446655440000 \
+  --days 60 --sessions-per-day 50 --seed 42
+```
+
+**Options:**
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--orgs` | — | Number of orgs to seed when `--org` is not provided (first N from Postgres `organizations`; falls back to synthetic UUIDs) |
+| `--org` | — | Explicit org id to seed (repeatable; overrides `--orgs`) |
+| `--days` | — | Days of data per org |
+| `--sessions-per-day` | — | Average synthetic sessions per day per org |
+| `--seed` | random | Deterministic seed (mixed with org_id) for repeatable runs |
+
 ---
 
 ## Admin Commands
@@ -482,7 +692,7 @@ python -m dev_health_ops.cli admin orgs create \
 | `--name` | Organization name (required) |
 | `--slug` | URL-safe slug (auto-generated if omitted) |
 | `--description` | Organization description |
-| `--tier` | Subscription tier (default: `free`) |
+| `--tier` | Subscription tier (default: `community`) |
 | `--owner-email` | Email of initial owner |
 
 ### `admin users list`
@@ -500,6 +710,121 @@ List all organizations.
 ```bash
 python -m dev_health_ops.cli admin orgs list --include-inactive
 ```
+
+### `admin users update`
+
+Update an existing user (identified by `--id`, `--email`, or `--username`) and optionally manage org memberships. Uses `POSTGRES_URI`.
+
+```bash
+python -m dev_health_ops.cli admin users update \
+  --email user@example.com \
+  --full-name "New Name" \
+  --no-active
+
+# Add to an org with a role
+python -m dev_health_ops.cli admin users update \
+  --email user@example.com --org my-org --role admin
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--id` / `--email` / `--username` | Identify the user to update |
+| `--new-email` / `--new-username` | Change email/username (empty string clears username) |
+| `--full-name` | Set the user's full name |
+| `--password` | Set a new password (min 8 chars; revokes existing sessions) |
+| `--verified` / `--no-verified` | Set verified status |
+| `--superuser` / `--no-superuser` | Set superuser status |
+| `--active` / `--no-active` | Set active status |
+| `--org` | Org slug or ID: add the user or update their role |
+| `--role` | Membership role with `--org`: `owner`, `admin`, `member`, `viewer` (default: `member`) |
+| `--remove-from-org` | Org slug or ID: remove the user's membership |
+
+### `admin orgs delete`
+
+Delete an organization and all of its scoped data. Uses `POSTGRES_URI`.
+
+```bash
+# Preview the deletion plan
+python -m dev_health_ops.cli admin orgs delete --org-id <uuid> --dry-run
+
+# Delete
+python -m dev_health_ops.cli admin orgs delete --org-id <uuid>
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--org-id` | Organization ID (required) |
+| `--dry-run` | Return the deletion plan without deleting data |
+
+### `admin licenses`
+
+Offline license key management (Ed25519-signed). `create` uses `POSTGRES_URI`.
+
+```bash
+# Generate a signing key pair
+python -m dev_health_ops.cli admin licenses keygen
+
+# Create a signed license key
+python -m dev_health_ops.cli admin licenses create \
+  --org-id <uuid> --tier enterprise --duration-days 365 \
+  --org-name "Acme" --contact-email billing@acme.com
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `keygen` | Generate an Ed25519 key pair for license signing |
+| `create` | Create a signed license key (`--org-id`, `--tier {community,team,enterprise}`, `--duration-days` (default 365), `--org-name`, `--contact-email`) |
+
+### `admin features`
+
+Feature flag management. Uses `POSTGRES_URI`.
+
+```bash
+python -m dev_health_ops.cli admin features seed
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `seed` | Seed standard feature flags into the database |
+
+### `admin billing`
+
+Billing plan management and Stripe synchronization. Uses `POSTGRES_URI`.
+
+```bash
+python -m dev_health_ops.cli admin billing seed
+python -m dev_health_ops.cli admin billing list
+python -m dev_health_ops.cli admin billing pull-stripe --dry-run
+python -m dev_health_ops.cli admin billing sync-stripe
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `seed` | Seed standard billing plans (Community, Team, Enterprise) with prices |
+| `list` | List all billing plans with prices and Stripe sync status |
+| `pull-stripe` | Pull billing plans from Stripe into the database (`--dry-run` to preview) |
+| `sync-stripe` | Push unsynced billing plans to Stripe |
+
+### `admin bundles`
+
+Feature bundle management (groups of feature keys mapped to plans/orgs). Uses `POSTGRES_URI`.
+
+```bash
+python -m dev_health_ops.cli admin bundles create \
+  --key pro --name "Pro" --features "metrics,investment,reports"
+python -m dev_health_ops.cli admin bundles list
+python -m dev_health_ops.cli admin bundles assign-plan --bundle-key pro --plan-key team
+python -m dev_health_ops.cli admin bundles assign-org --org-id <uuid> --feature-key reports
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `create` | Create a bundle (`--key`, `--name`, `--features` comma-separated, `--description`) |
+| `list` | List all bundles with features and plan assignments |
+| `assign-plan` | Assign a bundle to a billing plan (`--bundle-key`, `--plan-key`) |
+| `assign-org` | Grant an org a feature override (`--org-id`, `--feature-key`, `--reason`, `--expires-days`) |
 
 ---
 
@@ -535,6 +860,203 @@ Backfill depth is limited by organization tier:
 | Enterprise | Unlimited |
 
 > **Important:** Backfill never updates SyncWatermarks. Incremental sync state is preserved.
+
+## API Server
+
+### `api`
+
+Run the Dev Health Ops API server (FastAPI/uvicorn), which serves REST and GraphQL for `dev-health-web`. Uses both `POSTGRES_URI` and `CLICKHOUSE_URI`.
+
+```bash
+dev-hops api --reload
+dev-hops api --host 0.0.0.0 --port 8000 --workers 4
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--host` | Bind host |
+| `--port` | Bind port |
+| `--workers` | Number of worker processes |
+| `--reload` | Enable auto-reload for local development |
+
+OpenAPI docs are served at `/docs` and GraphQL at the API's GraphQL endpoint when the server is running.
+
+---
+
+## Workers
+
+Background jobs run on Celery with a Valkey/Redis broker. Configure with `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND`.
+
+### `workers start-worker`
+
+Start a Celery worker consuming one or more queues.
+
+```bash
+dev-hops workers start-worker --queues default metrics sync reports --concurrency 4
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--queues` | Queues to consume (default: `default metrics sync`) |
+| `--concurrency` | Number of concurrent worker processes |
+
+### `workers start-scheduler`
+
+Start the Celery beat scheduler (dispatches periodic/beat tasks such as scheduled reports).
+
+```bash
+dev-hops workers start-scheduler
+```
+
+---
+
+## Maintenance
+
+Operational cleanup tasks. Use `POSTGRES_URI`.
+
+### `maintenance cleanup-tokens`
+
+Delete expired refresh tokens.
+
+```bash
+dev-hops maintenance cleanup-tokens
+```
+
+### `maintenance cleanup-all`
+
+Run all maintenance cleanup tasks (currently refresh-token cleanup).
+
+```bash
+dev-hops maintenance cleanup-all
+```
+
+---
+
+## Billing
+
+### `billing reconcile`
+
+Run billing reconciliation against Stripe. Uses `POSTGRES_URI`.
+
+```bash
+# Reconcile all orgs
+dev-hops billing reconcile
+
+# Reconcile a single org since a date
+dev-hops billing reconcile --org-id <uuid> --since 2025-01-01
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--org-id` | Reconcile a single organization (UUID). Omit to reconcile all orgs |
+| `--since` | Only reconcile invoices on or after this date (ISO YYYY-MM-DD) |
+
+---
+
+## AI Governance
+
+### `ai allowlist`
+
+Manage the org-level AI tool allowlist (which AI tools/models are permitted). Requires `CLICKHOUSE_URI` **and** an organization id.
+
+```bash
+# Set a policy for a tool (optionally a specific model)
+dev-hops ai allowlist set --tool claude-code --status allowed --reason "approved"
+dev-hops ai allowlist set --tool claude-code --model opus --status deprecated
+
+# List the latest allowlist entries for the org
+dev-hops ai allowlist list
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `set` | Create/update an entry (`--tool`, optional `--model`, `--status {allowed,disallowed,deprecated}`, `--reason`) |
+| `list` | Show the latest allowlist entries for the org |
+
+---
+
+## Work Graph
+
+### `work-graph build`
+
+Build work graph edges from raw data (issue → PR → commit linkages). Takes its ClickHouse DSN via its own **required** `--db` flag.
+
+```bash
+dev-hops work-graph build --db "$CLICKHOUSE_URI" \
+  --from 2025-01-01 --to 2025-02-01
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--db` | ClickHouse connection string (**required**) |
+| `--from` | Start date (YYYY-MM-DD, default: 30 days ago) |
+| `--to` | End date (YYYY-MM-DD, default: today) |
+| `--repo-id` | Filter to a specific repository UUID |
+| `--heuristic-window` | Days window for heuristic issue→PR matching (default: 7) |
+| `--heuristic-confidence` | Confidence score for heuristic matches (default: 0.3) |
+| `--allow-degenerate` | Allow single connected-component graphs (default: fail) |
+| `--check-components` | Perform component analysis (enabled by default) |
+
+---
+
+## Investment
+
+### `investment materialize`
+
+Materialize WorkUnit investment categorization (theme/subcategory distributions and edges) into ClickHouse sinks. Takes its ClickHouse DSN via its own `--db` flag (default: `CLICKHOUSE_URI`).
+
+```bash
+# Full org materialization (publishes coverage marker)
+dev-hops investment materialize --db "$CLICKHOUSE_URI" --org "$ORG_ID"
+
+# Date-windowed refresh (does NOT publish org-wide coverage marker)
+dev-hops investment materialize --window-days 30 --llm-provider none
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--db` | ClickHouse connection string (default: `CLICKHOUSE_URI`) |
+| `--from` / `--to` | Date range (`--from` defaults to `--window-days` before `--to`; `--to` defaults to now) |
+| `--window-days` | Window size when `--from` is not set (default: 30). Marks the run as date-windowed: refreshes investments only, no org-wide coverage marker |
+| `--repo-id` / `--team-id` | Filter to specific repos/teams |
+| `-l, --llm-provider` | LLM provider (`auto`, `openai`, `anthropic`, `local`, `mock`, `none`). Use `none` for distributions without explanations |
+| `-m, --model` | LLM model name (overrides provider default) |
+| `--persist-evidence-snippets` / `--no-persist-evidence-snippets` | Persist or skip extractive evidence quotes |
+| `--force` | Force re-materialization |
+
+> Investment categorization runs at **compute time** and persists distributions through sinks only. See the [LLM categorization contract](../llm/categorization-contract.md).
+
+---
+
+## Recommendations
+
+### `recommendations compute`
+
+Evaluate rule-based recommendations for a team and persist results to ClickHouse — both fired recommendations and explicit `fired=False` tombstones, so a recovered signal is cleared rather than left lingering. Uses `CLICKHOUSE_URI`.
+
+```bash
+dev-hops recommendations compute --team eng-core --window 7d
+
+# Override the window with an explicit date range and print JSON
+dev-hops recommendations compute --team eng-core \
+  --since 2025-01-01 --until 2025-01-31 --output-json
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--team` | Team ID to evaluate (required) |
+| `--window` | Evaluation window, e.g. `7d` or `14d` (default: `7d`) |
+| `--since` | Override window start (exclusive end = `--until`) |
+| `--until` | Override window end (inclusive). Requires `--since` |
+| `--output-json` | Print fired recommendations as JSON to stdout |
+
+---
 
 ## Reports
 
@@ -688,6 +1210,13 @@ dev-hops migrate clickhouse upgrade
 
 # Show applied and pending migrations
 dev-hops migrate clickhouse status
+
+# Exit non-zero if any migration is pending (read-only wait primitive for deploy tooling)
+dev-hops migrate clickhouse status --check
+
+# Remediate stale duplicate repo rows (dry-run unless --apply)
+dev-hops migrate clickhouse repair
+dev-hops migrate clickhouse repair --apply
 ```
 
 > **Important:** Run `dev-hops migrate clickhouse` after setting up a fresh environment, before running any sync or metrics commands. ClickHouse tables are **not** auto-created — they require migrations to be applied first.

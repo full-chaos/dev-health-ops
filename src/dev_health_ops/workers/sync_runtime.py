@@ -758,6 +758,14 @@ def run_sync_config(
 
         if "work-items" in sync_targets and provider != "jira":
             backfill_days = int(sync_options.get("backfill_days", 1))
+            work_items_credentials: dict[str, Any] | None = credentials or None
+            if provider == "gitlab" and work_items_credentials:
+                gl_creds = gitlab_credentials_from_mapping(work_items_credentials)
+                if gl_creds is not None:
+                    work_items_credentials = {
+                        **work_items_credentials,
+                        "gitlab_url": resolve_gitlab_url(sync_options, gl_creds),
+                    }
             run_work_items_sync_job(
                 db_url=db_url,
                 day=utc_today(),
@@ -766,7 +774,7 @@ def run_sync_config(
                 repo_name=sync_options.get("repo"),
                 search_pattern=sync_options.get("search"),
                 org_id=org_id,
-                credentials=credentials,
+                credentials=work_items_credentials,
             )
             result_payload["work_items_synced"] = True
 

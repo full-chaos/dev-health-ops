@@ -541,3 +541,53 @@ async def test_install_callback_rejects_replayed_state(session_maker, monkeypatc
     assert first.status_code == 200, first.text
     assert second.status_code == 400, second.text
     assert second.json()["detail"] == "GitHub user authorization could not be verified"
+
+
+@pytest.mark.asyncio
+async def test_install_url_includes_redirect_uri_when_configured(
+    session_maker, monkeypatch
+):
+    org_id = str(uuid.uuid4())
+    monkeypatch.setenv("GITHUB_APP_SLUG", "dev-health-test")
+    monkeypatch.setenv(
+        "GITHUB_APP_CALLBACK_URL",
+        "http://localhost:3000/admin/integrations/github-app/callback",
+    )
+    app = _app(session_maker, org_id)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post("/admin/integrations/github/install-url")
+
+    assert response.status_code == 200, response.text
+    install_url = response.json()["install_url"]
+    parsed = urlparse(install_url)
+    qs = parse_qs(parsed.query)
+    assert qs["redirect_uri"] == [
+        "http://localhost:3000/admin/integrations/github-app/callback"
+    ]
+    assert "state" in qs
+    assert verify_github_app_install_state(qs["state"][0]).org_id == org_id
+
+
+@pytest.mark.asyncio
+async def test_install_url_omits_redirect_uri_when_not_configured(
+    session_maker, monkeypatch
+):
+    org_id = str(uuid.uuid4())
+    monkeypatch.setenv("GITHUB_APP_SLUG", "dev-health-test")
+    monkeypatch.delenv("GITHUB_APP_CALLBACK_URL", raising=False)
+    app = _app(session_maker, org_id)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post("/admin/integrations/github/install-url")
+
+    assert response.status_code == 200, response.text
+    install_url = response.json()["install_url"]
+    parsed = urlparse(install_url)
+    qs = parse_qs(parsed.query)
+    assert "redirect_uri" not in qs
+    assert "state" in qs

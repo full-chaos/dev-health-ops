@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.admin.middleware import get_admin_org_id
 from dev_health_ops.api.integrations.github_app_config import (
+    github_app_callback_url,
     github_app_client_id,
     github_app_client_secret,
     github_app_id,
@@ -65,7 +66,11 @@ async def create_github_install_url(
     if not slug:
         raise HTTPException(status_code=400, detail="GITHUB_APP_SLUG is not configured")
     state = mint_github_app_install_state(org_id)
-    query = urlencode({"state": state})
+    params: dict[str, str] = {"state": state}
+    callback_url = github_app_callback_url()
+    if callback_url:
+        params["redirect_uri"] = callback_url
+    query = urlencode(params)
     install_url = (
         f"https://github.com/apps/{quote(slug, safe='')}/installations/new?{query}"
     )

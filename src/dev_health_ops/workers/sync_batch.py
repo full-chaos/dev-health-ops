@@ -451,7 +451,28 @@ def dispatch_batch_sync(
             elif provider == "gitlab":
                 project_id = repo_tuple[0]
                 per_repo_options["project_id"] = int(project_id)
-                per_repo_options.pop("search", None)
+                if "work-items" in sync_targets:
+                    project_path = repo_tuple[1] if len(repo_tuple) > 1 else ""
+                    if project_path:
+                        per_repo_options["search"] = project_path
+                    else:
+                        # Never pass an empty/all-matching search to a
+                        # work-items child: match_pattern("", ...) treats an
+                        # empty pattern as "match every repo", re-opening the
+                        # org-wide work-items fanout (CHAOS-2450). Scope to a
+                        # sentinel that cannot match any GitLab
+                        # path_with_namespace (which always contains "/") so
+                        # this project's work-items are skipped rather than
+                        # fanning out to all repos.
+                        logger.warning(
+                            "GitLab work-items child for project_id=%s has no "
+                            "project path; skipping work-items scope to avoid "
+                            "org-wide fanout",
+                            project_id,
+                        )
+                        per_repo_options["search"] = f"noscope-{project_id}"
+                else:
+                    per_repo_options.pop("search", None)
                 per_repo_options.pop("group", None)
 
             child_signature = getattr(_run_sync_for_repo, "s")(

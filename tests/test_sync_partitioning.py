@@ -277,13 +277,13 @@ class TestDiscoverReposForConfig:
     def test_gitlab_delegates_to_gitlab_discovery(self, mock_gl):
         from dev_health_ops.discovery.repos import discover_repos_for_config
 
-        mock_gl.return_value = [("123",), ("456",)]
+        mock_gl.return_value = [("123", "grp/proj-a"), ("456", "grp/proj-b")]
         config = _make_config(
             provider="gitlab",
             sync_options={"search": "my-group/*"},
         )
         result = discover_repos_for_config(config, {"token": "glpat_test"})
-        assert result == [("123",), ("456",)]
+        assert result == [("123", "grp/proj-a"), ("456", "grp/proj-b")]
         mock_gl.assert_called_once()
 
     def test_unsupported_provider_returns_empty(self):
@@ -466,7 +466,24 @@ class TestDiscoverGitlabRepos:
         mock_gitlab_cls.return_value.groups.get.return_value = mock_grp
 
         result = discover_gitlab_repos({"search": "my-group/api*"}, "glpat_token")
-        assert result == [("100",)]
+        assert result == [("100", "my-group/api")]
+
+    @patch("gitlab.Gitlab")
+    def test_group_project_scope_uses_path_slug_not_display_name(self, mock_gitlab_cls):
+        """CHAOS-2450: when a group project lacks path_with_namespace, the scope
+        must use the URL path slug (canonical, matches the stored repo full_name)
+        not the display name, which can diverge and silently fail work-items
+        scoping.
+        """
+        from dev_health_ops.discovery.repos import discover_gitlab_repos
+
+        proj = SimpleNamespace(name="API Service", path="api-service", id=100)
+        mock_grp = MagicMock()
+        mock_grp.projects.list.return_value = [proj]
+        mock_gitlab_cls.return_value.groups.get.return_value = mock_grp
+
+        result = discover_gitlab_repos({"search": "my-group/*"}, "glpat_token")
+        assert result == [("100", "my-group/api-service")]
 
     @patch("gitlab.Gitlab")
     def test_bare_group_search_lists_all_group_projects(self, mock_gitlab_cls):
@@ -481,7 +498,7 @@ class TestDiscoverGitlabRepos:
         result = discover_gitlab_repos({"search": "my-group"}, "glpat_token")
 
         mock_gitlab_cls.return_value.groups.get.assert_called_once_with("my-group")
-        assert result == [("100",), ("200",)]
+        assert result == [("100", "my-group/api"), ("200", "my-group/web")]
 
     @patch("gitlab.Gitlab")
     def test_returns_empty_on_group_error(self, mock_gitlab_cls):
@@ -496,8 +513,8 @@ class TestDiscoverGitlabRepos:
         from dev_health_ops.discovery.repos import discover_gitlab_repos
 
         projects = [
-            SimpleNamespace(name="api", id=100),
-            SimpleNamespace(name="web", id=200),
+            SimpleNamespace(name="api", id=100, path_with_namespace="ns/api"),
+            SimpleNamespace(name="web", id=200, path_with_namespace="ns/web"),
         ]
         mock_gitlab_cls.return_value.projects.list.return_value = projects
 
@@ -507,22 +524,24 @@ class TestDiscoverGitlabRepos:
             all=True, membership=True
         )
         mock_gitlab_cls.return_value.groups.get.assert_not_called()
-        assert result == [("100",), ("200",)]
+        assert result == [("100", "ns/api"), ("200", "ns/web")]
 
     @patch("gitlab.Gitlab")
     def test_all_repos_filters_membership_projects(self, mock_gitlab_cls):
         from dev_health_ops.discovery.repos import discover_gitlab_repos
 
         projects = [
-            SimpleNamespace(name="api", id=100),
-            SimpleNamespace(name="web", id=200),
-            SimpleNamespace(name="api-worker", id=300),
+            SimpleNamespace(name="api", id=100, path_with_namespace="ns/api"),
+            SimpleNamespace(name="web", id=200, path_with_namespace="ns/web"),
+            SimpleNamespace(
+                name="api-worker", id=300, path_with_namespace="ns/api-worker"
+            ),
         ]
         mock_gitlab_cls.return_value.projects.list.return_value = projects
 
         result = discover_gitlab_repos({"all_repos": True, "search": "api*"}, "token")
 
-        assert result == [("100",), ("300",)]
+        assert result == [("100", "ns/api"), ("300", "ns/api-worker")]
 
     @patch("gitlab.Gitlab")
     def test_all_repos_group_limits_membership_projects(self, mock_gitlab_cls):
@@ -537,7 +556,7 @@ class TestDiscoverGitlabRepos:
 
         result = discover_gitlab_repos({"all_repos": True, "group": "grpA"}, "token")
 
-        assert result == [("100",), ("200",)]
+        assert result == [("100", "grpA/api"), ("200", "grpA/sub/web")]
 
     @patch("gitlab.Gitlab")
     def test_all_repos_owner_limits_membership_projects(self, mock_gitlab_cls):
@@ -552,7 +571,7 @@ class TestDiscoverGitlabRepos:
 
         result = discover_gitlab_repos({"all_repos": True, "owner": "grpA"}, "token")
 
-        assert result == [("100",), ("200",)]
+        assert result == [("100", "grpA/api"), ("200", "grpA/sub/web")]
 
     @patch("gitlab.Gitlab")
     def test_all_repos_nested_subgroup_search(self, mock_gitlab_cls):
@@ -569,7 +588,7 @@ class TestDiscoverGitlabRepos:
             {"all_repos": True, "search": "grpA/sub/*"}, "token"
         )
 
-        assert result == [("100",)]
+        assert result == [("100", "grpA/sub/api")]
 
     @patch("gitlab.Gitlab")
     def test_all_repos_membership_listing_failure_raises(self, mock_gitlab_cls):
@@ -1176,7 +1195,10 @@ class TestGitLabDispatchBatchSync:
 
         mock_get_session.return_value = _fake_session_ctx(db_session)
         mock_resolve_creds.return_value = {"token": "glpat_test"}
-        mock_discover.return_value = [("100",), ("200",)]
+        mock_discover.return_value = [
+            ("100", "my-group/proj-a"),
+            ("200", "my-group/proj-b"),
+        ]
         mock_chord.return_value = MagicMock()
 
         task = dispatch_batch_sync
@@ -1208,7 +1230,7 @@ class TestGitLabDispatchBatchSync:
     def test_discovery_resolves_gitlab_url_from_credentials(self, mock_gl):
         from dev_health_ops.discovery.repos import discover_repos_for_config
 
-        mock_gl.return_value = [("100",)]
+        mock_gl.return_value = [("100", "my-group/proj-a")]
         config = _make_config(
             provider="gitlab",
             sync_options={"search": "my-group/*"},
@@ -1216,7 +1238,7 @@ class TestGitLabDispatchBatchSync:
         result = discover_repos_for_config(
             config, {"token": "glpat_test", "url": "https://gl.corp.internal"}
         )
-        assert result == [("100",)]
+        assert result == [("100", "my-group/proj-a")]
         args, kwargs = mock_gl.call_args
         assert args[1] == "glpat_test"
         assert kwargs["gitlab_url"] == "https://gl.corp.internal"
@@ -1259,6 +1281,198 @@ class TestGitLabDispatchBatchSync:
             },
         )
         assert _is_batch_eligible(single) is False
+
+    @patch("dev_health_ops.workers.sync_batch._run_sync_for_repo")
+    @patch("dev_health_ops.workers.sync_batch.chord")
+    @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
+    @patch("dev_health_ops.workers.sync_batch._resolve_env_credentials")
+    @patch("dev_health_ops.db.get_postgres_session_sync")
+    def test_gitlab_work_items_child_search_is_scoped_to_project_path(
+        self,
+        mock_get_session,
+        mock_resolve_creds,
+        mock_discover,
+        mock_chord,
+        mock_run_for_repo,
+        db_session,
+    ):
+        """CHAOS-2450: GitLab work-items batch children must carry a project-scoped
+        search (path_with_namespace) so run_work_items_sync_job filters to exactly
+        one project instead of syncing every discovered repo.
+        """
+        from dev_health_ops.workers.sync_batch import dispatch_batch_sync
+
+        captured_kwargs = []
+
+        def _capture_signature(**kwargs):
+            captured_kwargs.append(kwargs)
+            return MagicMock()
+
+        mock_run_for_repo.s.side_effect = _capture_signature
+        config = _make_config(
+            provider="gitlab",
+            sync_options={
+                "all_repos": True,
+                "group": "grpA",
+                "gitlab_url": "https://gitlab.example.com",
+            },
+            sync_targets=["git", "work-items"],
+        )
+        db_session.add(config)
+        db_session.flush()
+
+        mock_get_session.return_value = _fake_session_ctx(db_session)
+        mock_resolve_creds.return_value = {"token": "glpat_test"}
+        # Two projects in the group, each with a distinct path_with_namespace.
+        mock_discover.return_value = [
+            ("100", "grpA/api"),
+            ("200", "grpA/sub/worker"),
+        ]
+        mock_chord.return_value = MagicMock()
+
+        task = dispatch_batch_sync
+        task.push_request(id="gl-wi-scope-1")
+        try:
+            result = task(config_id=str(config.id), org_id="default")
+        finally:
+            task.pop_request()
+
+        assert result["status"] == "dispatched"
+        assert len(captured_kwargs) == 2
+
+        # Each child must carry the project-specific path as search so
+        # run_work_items_sync_job scopes to exactly that one project.
+        assert captured_kwargs[0]["sync_options_override"]["search"] == "grpA/api"
+        assert captured_kwargs[0]["sync_options_override"]["project_id"] == 100
+        assert (
+            captured_kwargs[1]["sync_options_override"]["search"] == "grpA/sub/worker"
+        )
+        assert captured_kwargs[1]["sync_options_override"]["project_id"] == 200
+
+        # Batch-level keys must be stripped from every child.
+        for kw in captured_kwargs:
+            assert "all_repos" not in kw["sync_options_override"]
+            assert "group" not in kw["sync_options_override"]
+
+    @patch("dev_health_ops.workers.sync_batch._run_sync_for_repo")
+    @patch("dev_health_ops.workers.sync_batch.chord")
+    @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
+    @patch("dev_health_ops.workers.sync_batch._resolve_env_credentials")
+    @patch("dev_health_ops.db.get_postgres_session_sync")
+    def test_gitlab_no_work_items_child_has_no_search(
+        self,
+        mock_get_session,
+        mock_resolve_creds,
+        mock_discover,
+        mock_chord,
+        mock_run_for_repo,
+        db_session,
+    ):
+        """CHAOS-2450: when work-items is NOT in sync_targets the GitLab child
+        must NOT carry a search key (mirrors existing GitHub behaviour).
+        """
+        from dev_health_ops.workers.sync_batch import dispatch_batch_sync
+
+        captured_kwargs = []
+
+        def _capture_signature(**kwargs):
+            captured_kwargs.append(kwargs)
+            return MagicMock()
+
+        mock_run_for_repo.s.side_effect = _capture_signature
+        config = _make_config(
+            provider="gitlab",
+            sync_options={
+                "all_repos": True,
+                "group": "grpA",
+                "gitlab_url": "https://gitlab.example.com",
+            },
+            sync_targets=["git", "prs"],
+        )
+        db_session.add(config)
+        db_session.flush()
+
+        mock_get_session.return_value = _fake_session_ctx(db_session)
+        mock_resolve_creds.return_value = {"token": "glpat_test"}
+        mock_discover.return_value = [("100", "grpA/api")]
+        mock_chord.return_value = MagicMock()
+
+        task = dispatch_batch_sync
+        task.push_request(id="gl-wi-scope-2")
+        try:
+            result = task(config_id=str(config.id), org_id="default")
+        finally:
+            task.pop_request()
+
+        assert result["status"] == "dispatched"
+        override = captured_kwargs[0]["sync_options_override"]
+        assert override["project_id"] == 100
+        assert "search" not in override
+
+    @patch("dev_health_ops.workers.sync_batch._run_sync_for_repo")
+    @patch("dev_health_ops.workers.sync_batch.chord")
+    @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
+    @patch("dev_health_ops.workers.sync_batch._resolve_env_credentials")
+    @patch("dev_health_ops.db.get_postgres_session_sync")
+    def test_gitlab_work_items_child_empty_path_is_not_unscoped(
+        self,
+        mock_get_session,
+        mock_resolve_creds,
+        mock_discover,
+        mock_chord,
+        mock_run_for_repo,
+        db_session,
+    ):
+        """CHAOS-2450: a GitLab project discovered without a path_with_namespace
+        must NOT produce an empty/all-matching search (match_pattern treats an
+        empty pattern as "match every repo"), which would re-open the org-wide
+        work-items fanout. The child must carry a non-empty, non-wildcard scope
+        that cannot match any path_with_namespace.
+        """
+        from dev_health_ops.utils import match_pattern
+        from dev_health_ops.workers.sync_batch import dispatch_batch_sync
+
+        captured_kwargs = []
+
+        def _capture_signature(**kwargs):
+            captured_kwargs.append(kwargs)
+            return MagicMock()
+
+        mock_run_for_repo.s.side_effect = _capture_signature
+        config = _make_config(
+            provider="gitlab",
+            sync_options={
+                "all_repos": True,
+                "group": "grpA",
+                "gitlab_url": "https://gitlab.example.com",
+            },
+            sync_targets=["git", "work-items"],
+        )
+        db_session.add(config)
+        db_session.flush()
+
+        mock_get_session.return_value = _fake_session_ctx(db_session)
+        mock_resolve_creds.return_value = {"token": "glpat_test"}
+        # Degraded GitLab response: project with no path_with_namespace.
+        mock_discover.return_value = [("300", "")]
+        mock_chord.return_value = MagicMock()
+
+        task = dispatch_batch_sync
+        task.push_request(id="gl-wi-scope-empty")
+        try:
+            result = task(config_id=str(config.id), org_id="default")
+        finally:
+            task.pop_request()
+
+        assert result["status"] == "dispatched"
+        override = captured_kwargs[0]["sync_options_override"]
+        assert override["project_id"] == 300
+        search = override["search"]
+        # Must be a real, non-wildcard scope (not empty, not "*").
+        assert search not in ("", "*")
+        # And it must not match an arbitrary repo path (no org-wide fanout).
+        assert match_pattern("grpA/api", search) is False
+        assert match_pattern("other/repo", search) is False
 
 
 class TestRunSyncForRepoWatermarks:
@@ -2023,7 +2237,7 @@ class TestBatchChildrenQueueRouting:
 
         mock_get_session.return_value = _fake_session_ctx(db_session)
         mock_resolve_creds.return_value = {"token": "glpat_test"}
-        mock_discover.return_value = [("100",)]
+        mock_discover.return_value = [("100", "my-group/proj-a")]
         mock_chord.return_value = MagicMock()
 
         task = dispatch_batch_sync
@@ -2430,7 +2644,7 @@ class TestDispatchBatchSyncCredentialConfig:
             ),
         ):
             mock_run_for_repo.s.side_effect = _capture_signature
-            mock_discover.return_value = [("100",)]
+            mock_discover.return_value = [("100", "my-group/proj-a")]
 
             task = dispatch_batch_sync
             task.push_request(id=f"gl-cred-config-{_uuid.uuid4()}")

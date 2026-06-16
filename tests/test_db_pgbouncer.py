@@ -76,6 +76,57 @@ class TestAsyncEngineKwargs:
         assert kw["max_overflow"] == 25
 
 
+class TestAsyncPostgresUrlNormalization:
+    def test_converts_plain_postgres_to_asyncpg(self):
+        uri = "postgresql://u:p@h/d"
+
+        assert db._ensure_async_postgres(uri) == "postgresql+asyncpg://u:p@h/d"
+
+    def test_translates_neon_sslmode_for_asyncpg(self):
+        uri = "postgresql://u:p@h/d?sslmode=require&channel_binding=require"
+
+        assert (
+            db._ensure_async_postgres(uri) == "postgresql+asyncpg://u:p@h/d?ssl=require"
+        )
+
+    def test_preserves_existing_asyncpg_ssl_query(self):
+        uri = "postgresql+asyncpg://u:p@h/d?ssl=true&sslmode=require"
+
+        assert db._ensure_async_postgres(uri) == "postgresql+asyncpg://u:p@h/d?ssl=true"
+
+    def test_strips_channel_binding_without_injecting_ssl(self):
+        uri = "postgresql://u:p@h/d?channel_binding=require"
+
+        assert db._ensure_async_postgres(uri) == "postgresql+asyncpg://u:p@h/d"
+
+    def test_preserves_asyncpg_uri_without_query(self):
+        uri = "postgresql+asyncpg://u:p@h/d"
+
+        assert db._ensure_async_postgres(uri) == uri
+
+    def test_preserves_asyncpg_ssl_query_without_sslmode(self):
+        uri = "postgresql+asyncpg://u:p@h/d?ssl=require"
+
+        assert db._ensure_async_postgres(uri) == uri
+
+    def test_existing_ssl_query_takes_precedence_over_sslmode(self):
+        uri = "postgresql+asyncpg://u:p@h/d?ssl=true&sslmode=verify-full"
+
+        assert db._ensure_async_postgres(uri) == "postgresql+asyncpg://u:p@h/d?ssl=true"
+
+    def test_preserves_asyncpg_supported_sslmode_values(self):
+        uri = "postgresql+asyncpg://u:p@h/d?sslmode=prefer"
+
+        assert (
+            db._ensure_async_postgres(uri) == "postgresql+asyncpg://u:p@h/d?ssl=prefer"
+        )
+
+    def test_preserves_non_postgres_uri(self):
+        uri = "clickhouse://u:p@h/d?sslmode=require"
+
+        assert db._ensure_async_postgres(uri) == uri
+
+
 class TestPoolSizeParsing:
     def test_defaults(self):
         assert db._pg_pool_size() == (20, 10)

@@ -19,7 +19,7 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import create_engine
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -108,10 +108,29 @@ def get_clickhouse_uri() -> str | None:
 def _ensure_async_postgres(uri: str) -> str:
     """Ensure semantic DB URIs use an async driver."""
     if uri.startswith("postgresql://"):
-        return uri.replace("postgresql://", "postgresql+asyncpg://", 1)
-    if uri.startswith("sqlite://") and not uri.startswith("sqlite+aiosqlite://"):
+        uri = uri.replace("postgresql://", "postgresql+asyncpg://", 1)
+    elif uri.startswith("sqlite://") and not uri.startswith("sqlite+aiosqlite://"):
         return uri.replace("sqlite://", "sqlite+aiosqlite://", 1)
-    return uri
+    return _normalize_asyncpg_postgres_query(uri)
+
+
+def _normalize_asyncpg_postgres_query(uri: str) -> str:
+    if not uri.startswith("postgresql+asyncpg://"):
+        return uri
+
+    url = make_url(uri)
+    query = dict(url.query)
+    original_query = query.copy()
+    sslmode = query.pop("sslmode", None)
+    query.pop("channel_binding", None)
+
+    if sslmode is not None and "ssl" not in query:
+        query["ssl"] = sslmode
+
+    if query == original_query:
+        return uri
+
+    return url.set(query=query).render_as_string(hide_password=False)
 
 
 def get_postgres_engine() -> AsyncEngine:

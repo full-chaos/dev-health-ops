@@ -609,12 +609,12 @@ async def test_guard_emits_warning_for_real_user(session_maker, caplog):
 
 @pytest.mark.asyncio
 async def test_multiple_users_partial_guard(session_maker):
-    """When user_data has multiple users, guard applies per-user independently.
+    """Default-path auth seeding is all-or-nothing on a populated DB.
 
-    The fixture org is fresh (safe-inserted this run) and both users are members
-    of it, so the org-safety gate is satisfied and per-user guarding decides:
-    - user A: real user (different hash) already exists -> identity match -> skipped
-    - user B: absent -> inserted
+    With a pre-existing real user the empty-graph guard skips the ENTIRE auth
+    seeding pass (no new fixture users/orgs/memberships), leaving the real user
+    untouched. overwrite_real_users=True is the explicit opt-in to seed/refresh
+    into a populated database.
     """
     from dev_health_ops.licensing.types import LicenseTier
 
@@ -627,8 +627,6 @@ async def test_multiple_users_partial_guard(session_maker):
 
     # Pre-seed user A with a real (non-fixture) hash.
     async with session_maker() as session:
-        # NB: do not pre-seed the org -- it must be freshly inserted (safe) so
-        # the org-safety gate permits inserting new fixture user B.
         real_a = User(
             id=user_a_id,
             email="alice@example.com",
@@ -699,6 +697,8 @@ async def test_multiple_users_partial_guard(session_maker):
         "default_password": _FIXTURE_PASSWORD,
     }
 
+    # Default path: a pre-existing real user makes the auth graph non-empty, so
+    # the seeder writes NOTHING -- real user A untouched, fixture user B absent.
     async with session_maker() as session:
         await _seed_auth_data(session, user_data)
 
@@ -706,15 +706,22 @@ async def test_multiple_users_partial_guard(session_maker):
         a = await session.get(User, user_a_id)
         b = await session.get(User, user_b_id)
 
-    # User A: real hash must be preserved.
     assert a is not None
     assert a.password_hash == _REAL_HASH, "Real user A's hash must not be overwritten"
+    assert b is None, (
+        "Default path must not seed fixture users into a non-empty auth DB"
+    )
 
-    # User B: fixture user must be created.
+    # Explicit opt-in: overwrite_real_users=True seeds into the populated DB.
+    async with session_maker() as session:
+        await _seed_auth_data(session, user_data, overwrite_real_users=True)
+
+    async with session_maker() as session:
+        b = await session.get(User, user_b_id)
     assert b is not None
     assert bcrypt.checkpw(
         _FIXTURE_PASSWORD.encode("utf-8"), b.password_hash.encode("utf-8")
-    ), "Fixture user B must be seeded with the fixture hash"
+    ), "Fixture user B must be seeded with the fixture hash under opt-in"
 
 
 @pytest.mark.asyncio

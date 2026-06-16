@@ -408,22 +408,42 @@ async def _seed_auth_data(
 
     Credential guard (CHAOS-2458)
     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    By default (``overwrite_real_users=False``) this function treats any
-    existing user/org/license row matched by primary or natural key as
-    pre-existing real data and never mutates it.  Membership and license writes
-    are filtered to users and orgs inserted by this invocation, so skipped users
-    cannot be added to fixture tenants and skipped orgs cannot have owners or
-    licenses replaced.  Pass ``overwrite_real_users=True`` only in fully-isolated
-    demo/CI environments where clobbering existing auth graph state is
-    explicitly acceptable.
+    By default (``overwrite_real_users=False``) fixture auth seeding only runs
+    against an EMPTY auth database: if any organization or user already exists,
+    the whole pass is skipped and nothing is written.  This is the primary guard
+    and closes every injection/overwrite/duplicate path at once (including the
+    known-password admin superuser).  Per-entity insert-if-absent checks remain
+    as defense-in-depth.  Pass ``overwrite_real_users=True`` only in
+    fully-isolated demo/CI environments where seeding or refreshing auth data in
+    a populated database is explicitly acceptable.
     """
+    from sqlalchemy import select
     from sqlalchemy.dialects.postgresql import insert as pg_insert
     from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-    from dev_health_ops.models.users import Membership
+    from dev_health_ops.models.users import Membership, Organization, User
 
     bind = await session.connection()
     dialect = bind.dialect.name
+
+    # Primary credential guard (CHAOS-2458): fixture auth seeding must never
+    # write into a populated auth database on the default path. If ANY org or
+    # user already exists, refuse to seed auth data at all -- this closes every
+    # injection/overwrite/duplicate path (incl. the known-password superuser)
+    # in one place. overwrite_real_users=True opts into seeding a populated DB
+    # (fully-isolated demo/CI only).
+    if not overwrite_real_users:
+        has_org = (await session.execute(select(Organization.id).limit(1))).first()
+        has_user = (await session.execute(select(User.id).limit(1))).first()
+        if has_org is not None or has_user is not None:
+            logging.warning(
+                "FIXTURES-GUARD: refusing to seed fixture auth data into a "
+                "non-empty auth database (existing organizations/users found). "
+                "No users, orgs, memberships, or licenses were written. Pass "
+                "overwrite_real_users=True to seed/refresh in a populated DB "
+                "(demo/CI only)."
+            )
+            return
 
     safe_org_ids: set[Any] = set()
     for org in user_data["organizations"]:

@@ -251,59 +251,127 @@ async def _merge_fixture_user(
     session,
     user,
     *,
-    default_password: str | None,
     overwrite_real_users: bool,
-) -> None:
-    """Safely merge a single fixture user, guarding real credentials.
+) -> str:
+    """Safely write a single fixture user and report whether dependents are safe.
 
     Rules (CHAOS-2458):
-    - Row absent → INSERT via merge (safe, new fixture user).
-    - Row present, password verifies against fixture default_password → it is
-      a fixture-owned row; merge to refresh non-credential fields.
-    - Row present, password does NOT verify → real user; skip entirely and
-      emit a warning.  Pass overwrite_real_users=True to bypass (CI/demo
-      only).
+    - overwrite_real_users=False: insert only when neither the primary key nor
+      natural keys already exist. Any existing row is treated as real and left
+      untouched; dependents must not be written for skipped users.
+    - overwrite_real_users=True: explicit opt-in to the previous destructive
+      merge behavior for demo/dev refreshes.
     """
-    import bcrypt
+    from sqlalchemy import or_, select
 
     from dev_health_ops.models.users import User
-
-    existing: User | None = await session.get(User, user.id)
-    if existing is None:
-        # No collision — safe to insert.
-        await session.merge(user)
-        return
 
     if overwrite_real_users:
         # Explicit opt-in: caller accepts credential clobber risk.
         await session.merge(user)
-        return
+        return "inserted"
 
-    # Row exists.  Determine whether it is fixture-owned by checking whether
-    # its stored hash verifies against the known fixture password.
-    existing_hash: str | None = existing.password_hash
-    is_fixture_owned = False
-    if default_password is not None and existing_hash is not None:
-        try:
-            is_fixture_owned = bcrypt.checkpw(
-                default_password.encode("utf-8"),
-                existing_hash.encode("utf-8"),
-            )
-        except Exception:
-            # Malformed hash or bcrypt error — treat as non-fixture.
-            is_fixture_owned = False
+    natural_key_checks = [User.id == user.id, User.email == user.email]
+    if user.username is not None:
+        natural_key_checks.append(User.username == user.username)
 
-    if is_fixture_owned:
+    existing: User | None = (
+        await session.execute(select(User).where(or_(*natural_key_checks)).limit(1))
+    ).scalar_one_or_none()
+    if existing is None:
         await session.merge(user)
-    else:
-        logging.warning(
-            "FIXTURES-GUARD: skipping password_hash overwrite for user %s (%s) —"
-            " existing row was not created by the fixture seeder"
-            " (password does not match fixture default)."
-            " Pass overwrite_real_users=True to bypass (demo/CI only).",
-            user.id,
-            user.email,
+        return "inserted"
+
+    logging.warning(
+        "FIXTURES-GUARD: skipping fixture user %s (%s) because an existing "
+        "user row matched by id/email/username. No user fields, password_hash, "
+        "memberships, org ownership, or tenant data will be mutated. Pass "
+        "overwrite_real_users=True to bypass (demo/CI only).",
+        user.id,
+        user.email,
+    )
+    return "skipped_existing"
+
+
+async def _merge_fixture_org(
+    session,
+    org,
+    *,
+    overwrite_real_users: bool,
+) -> str:
+    """Insert a fixture org only when absent unless destructive merge is enabled."""
+    from sqlalchemy import or_, select
+
+    from dev_health_ops.models.users import Organization
+
+    if overwrite_real_users:
+        await session.merge(org)
+        return "inserted"
+
+    existing: Organization | None = (
+        await session.execute(
+            select(Organization)
+            .where(or_(Organization.id == org.id, Organization.slug == org.slug))
+            .limit(1)
         )
+    ).scalar_one_or_none()
+    if existing is None:
+        await session.merge(org)
+        return "inserted"
+
+    logging.warning(
+        "FIXTURES-GUARD: skipping fixture org %s (%s) because an existing "
+        "tenant matched by id/slug. No org fields, owner memberships, or "
+        "license rows will be mutated. Pass overwrite_real_users=True to "
+        "bypass (demo/CI only).",
+        org.id,
+        org.slug,
+    )
+    return "skipped_existing"
+
+
+async def _add_fixture_license_if_absent(
+    session,
+    org_license,
+    *,
+    overwrite_real_users: bool,
+) -> str:
+    """Insert fixture license without replacing existing tenant license by default."""
+    from sqlalchemy import delete, or_, select
+
+    from dev_health_ops.models.licensing import OrgLicense
+
+    existing: OrgLicense | None = (
+        await session.execute(
+            select(OrgLicense)
+            .where(
+                or_(
+                    OrgLicense.id == org_license.id,
+                    OrgLicense.org_id == org_license.org_id,
+                )
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    if existing is not None:
+        if overwrite_real_users:
+            await session.execute(
+                delete(OrgLicense).where(OrgLicense.org_id == org_license.org_id)
+            )
+            session.add(org_license)
+            return "inserted"
+
+        logging.warning(
+            "FIXTURES-GUARD: skipping fixture license for org %s because an "
+            "existing license matched by id/org_id. Pass overwrite_real_users=True "
+            "to bypass (demo/CI only).",
+            org_license.org_id,
+        )
+        return "skipped_existing"
+
+    session.add(org_license)
+    return "inserted"
 
 
 async def _seed_auth_data(
@@ -312,7 +380,7 @@ async def _seed_auth_data(
     *,
     overwrite_real_users: bool = False,
 ) -> None:
-    """Merge orgs/users, upsert memberships, replace licenses into Postgres.
+    """Seed auth orgs/users/memberships/licenses into Postgres.
 
     Idempotent against re-runs. Memberships use an explicit
     ``INSERT ... ON CONFLICT (user_id, org_id) DO NOTHING`` because
@@ -327,40 +395,52 @@ async def _seed_auth_data(
 
     Credential guard (CHAOS-2458)
     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    By default (``overwrite_real_users=False``) this function will NEVER
-    overwrite the ``password_hash`` of a user row that was not itself
-    created by the fixture seeder.  For each fixture user it checks
-    whether an existing row's hash verifies against the fixture
-    ``default_password``; if it does not, the row is skipped and a
-    warning is logged.  Pass ``overwrite_real_users=True`` only in
-    fully-isolated demo/CI environments where clobbering credentials is
+    By default (``overwrite_real_users=False``) this function treats any
+    existing user/org/license row matched by primary or natural key as
+    pre-existing real data and never mutates it.  Membership and license writes
+    are filtered to users and orgs inserted by this invocation, so skipped users
+    cannot be added to fixture tenants and skipped orgs cannot have owners or
+    licenses replaced.  Pass ``overwrite_real_users=True`` only in fully-isolated
+    demo/CI environments where clobbering existing auth graph state is
     explicitly acceptable.
     """
-    from sqlalchemy import delete
     from sqlalchemy.dialects.postgresql import insert as pg_insert
     from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-    from dev_health_ops.models.licensing import OrgLicense
     from dev_health_ops.models.users import Membership
 
     bind = await session.connection()
     dialect = bind.dialect.name
 
+    safe_org_ids: set[Any] = set()
     for org in user_data["organizations"]:
-        await session.merge(org)
-    await session.commit()
-
-    default_password: str | None = user_data.get("default_password")
-    for user in user_data["users"]:
-        await _merge_fixture_user(
+        status = await _merge_fixture_org(
             session,
-            user,
-            default_password=default_password,
+            org,
             overwrite_real_users=overwrite_real_users,
         )
+        if status == "inserted":
+            safe_org_ids.add(org.id)
+    await session.commit()
+
+    safe_user_ids: set[Any] = set()
+    for user in user_data["users"]:
+        status = await _merge_fixture_user(
+            session,
+            user,
+            overwrite_real_users=overwrite_real_users,
+        )
+        if status == "inserted":
+            safe_user_ids.add(user.id)
     await session.commit()
 
     memberships = user_data.get("memberships") or []
+    if not overwrite_real_users:
+        memberships = [
+            membership
+            for membership in memberships
+            if membership.user_id in safe_user_ids and membership.org_id in safe_org_ids
+        ]
     if memberships:
         rows = [
             {
@@ -400,10 +480,13 @@ async def _seed_auth_data(
     await session.commit()
 
     for org_license in user_data.get("licenses", []):
-        await session.execute(
-            delete(OrgLicense).where(OrgLicense.org_id == org_license.org_id)
+        if not overwrite_real_users and org_license.org_id not in safe_org_ids:
+            continue
+        await _add_fixture_license_if_absent(
+            session,
+            org_license,
+            overwrite_real_users=overwrite_real_users,
         )
-        session.add(org_license)
     await session.commit()
 
 

@@ -1,11 +1,11 @@
-"""Tests for CHAOS-2458: fixture seeder must not clobber real users' password_hash.
+"""Tests for CHAOS-2458: fixture seeder must not clobber real auth graph rows.
 
 Covers:
 1. Seeding into a DB with an existing NON-fixture user of the same id/email does
    NOT change that user's password_hash.
-2. Seeding still correctly creates/refreshes genuine fixture users.
+2. Seeding still correctly creates genuine fixture users and memberships.
 3. overwrite_real_users=True bypasses the guard (explicit opt-in).
-4. _merge_fixture_user handles missing default_password gracefully (skips).
+4. Existing users/orgs/licenses are treated as real without bcrypt ownership checks.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from pathlib import Path
 import bcrypt
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.fixtures.runner import _merge_fixture_user, _seed_auth_data
@@ -38,6 +39,9 @@ _REAL_PASSWORD = "s3cr3t-real-password-not-demo"
 _REAL_HASH = bcrypt.hashpw(_REAL_PASSWORD.encode("utf-8"), bcrypt.gensalt()).decode(
     "utf-8"
 )
+_REAL_DEMO_PASSWORD_HASH = bcrypt.hashpw(
+    _FIXTURE_PASSWORD.encode("utf-8"), bcrypt.gensalt()
+).decode("utf-8")
 
 
 @pytest_asyncio.fixture
@@ -176,28 +180,182 @@ async def test_real_user_password_not_overwritten(session_maker):
 
 
 @pytest.mark.asyncio
+async def test_real_user_not_added_to_fixture_org_or_membership(session_maker):
+    """A skipped real user must not receive fixture org membership."""
+    user_id = _fixture_user_id()
+    org = _make_org()
+
+    async with session_maker() as session:
+        session.add(
+            User(
+                id=user_id,
+                email="admin@devhealth.example",
+                username="admin",
+                password_hash=_REAL_HASH,
+                full_name="Real Admin",
+                auth_provider="local",
+                is_active=True,
+                is_verified=True,
+                is_superuser=False,
+            )
+        )
+        await session.commit()
+
+    async with session_maker() as session:
+        await _seed_auth_data(session, _build_user_data())
+
+    async with session_maker() as session:
+        memberships = (
+            (
+                await session.execute(
+                    select(Membership).where(
+                        Membership.user_id == user_id,
+                        Membership.org_id == org.id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        user = await session.get(User, user_id)
+
+    assert user is not None
+    assert user.is_superuser is False
+    assert memberships == []
+
+
+@pytest.mark.asyncio
+async def test_real_user_with_demo_password_is_still_not_overwritten(session_maker):
+    """Password equality is not an ownership signal for existing rows."""
+    user_id = _fixture_user_id()
+
+    async with session_maker() as session:
+        session.add(
+            User(
+                id=user_id,
+                email="admin@devhealth.example",
+                username="admin",
+                password_hash=_REAL_DEMO_PASSWORD_HASH,
+                full_name="Real Admin Using Demo Password",
+                auth_provider="local",
+                is_active=True,
+                is_verified=False,
+                is_superuser=False,
+            )
+        )
+        await session.commit()
+
+    async with session_maker() as session:
+        await _seed_auth_data(session, _build_user_data())
+
+    async with session_maker() as session:
+        user = await session.get(User, user_id)
+        memberships = (
+            (
+                await session.execute(
+                    select(Membership).where(Membership.user_id == user_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    assert user is not None
+    assert user.password_hash == _REAL_DEMO_PASSWORD_HASH
+    assert user.full_name == "Real Admin Using Demo Password"
+    assert user.is_verified is False
+    assert user.is_superuser is False
+    assert memberships == []
+
+
+@pytest.mark.asyncio
+async def test_existing_org_license_not_replaced(session_maker):
+    """A pre-existing tenant keeps its org and license state by default."""
+    from dev_health_ops.licensing.types import LicenseTier
+
+    org = _make_org()
+    real_license_id = uuid.uuid5(org.id, "real-license")
+
+    async with session_maker() as session:
+        session.add(
+            Organization(
+                id=org.id,
+                slug=org.slug,
+                name="Real Tenant",
+                tier="community",
+                is_active=True,
+            )
+        )
+        real_license = OrgLicense(
+            org_id=org.id,
+            tier=LicenseTier.COMMUNITY.value,
+            license_type="self-hosted",
+            licensed_users=3,
+            licensed_repos=2,
+            issued_at=datetime.now(timezone.utc),
+        )
+        real_license.id = real_license_id
+        session.add(real_license)
+        await session.commit()
+
+    async with session_maker() as session:
+        await _seed_auth_data(session, _build_user_data())
+
+    async with session_maker() as session:
+        saved_org = await session.get(Organization, org.id)
+        licenses = (
+            (
+                await session.execute(
+                    select(OrgLicense).where(OrgLicense.org_id == org.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    assert saved_org is not None
+    assert saved_org.name == "Real Tenant"
+    assert saved_org.tier == "community"
+    assert len(licenses) == 1
+    assert licenses[0].id == real_license_id
+    assert licenses[0].tier == LicenseTier.COMMUNITY.value
+    assert licenses[0].license_type == "self-hosted"
+    assert licenses[0].licensed_users == 3
+
+
+@pytest.mark.asyncio
 async def test_fixture_user_created_when_absent(session_maker):
-    """Seeding into an empty DB must create the fixture user correctly."""
+    """Seeding into an empty DB must create the fixture user auth graph."""
     async with session_maker() as session:
         await _seed_auth_data(session, _build_user_data())
 
     async with session_maker() as session:
         user = await session.get(User, _fixture_user_id())
         assert user is not None
+        memberships = (
+            (
+                await session.execute(
+                    select(Membership).where(Membership.user_id == user.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        licenses = (await session.execute(select(OrgLicense))).scalars().all()
         assert user.email == "admin@devhealth.example"
         # The stored hash must verify against the fixture password.
         assert bcrypt.checkpw(
             _FIXTURE_PASSWORD.encode("utf-8"), user.password_hash.encode("utf-8")
         )
+        assert len(memberships) == 1
+        assert memberships[0].role == "owner"
+        assert len(licenses) == 1
+        assert licenses[0].tier == "enterprise"
 
 
 @pytest.mark.asyncio
-async def test_fixture_user_refreshed_on_reseed(session_maker):
-    """Re-seeding a genuine fixture user (same fixture hash) must succeed.
-
-    This covers the idempotent re-seed path: the existing row has the fixture
-    hash, so the guard recognises it as fixture-owned and allows the merge.
-    """
+async def test_fixture_user_not_refreshed_on_default_reseed(session_maker):
+    """Re-seeding existing rows is a safe no-op by default."""
     async with session_maker() as session:
         await _seed_auth_data(session, _build_user_data())
 
@@ -207,14 +365,14 @@ async def test_fixture_user_refreshed_on_reseed(session_maker):
         user.full_name = "Mutated Name"
         await session.commit()
 
-    # Re-seed — should restore full_name and keep the fixture hash.
+    # Re-seed — should not mutate any existing user fields by default.
     async with session_maker() as session:
         await _seed_auth_data(session, _build_user_data())
 
     async with session_maker() as session:
         user = await session.get(User, _fixture_user_id())
         assert user is not None
-        assert user.full_name == "Admin User"
+        assert user.full_name == "Mutated Name"
         assert bcrypt.checkpw(
             _FIXTURE_PASSWORD.encode("utf-8"), user.password_hash.encode("utf-8")
         )
@@ -223,9 +381,21 @@ async def test_fixture_user_refreshed_on_reseed(session_maker):
 @pytest.mark.asyncio
 async def test_overwrite_real_users_opt_in_clobbers_hash(session_maker):
     """overwrite_real_users=True must bypass the guard (explicit opt-in path)."""
+    from dev_health_ops.licensing.types import LicenseTier
+
     user_id = _fixture_user_id()
+    org = _make_org()
 
     async with session_maker() as session:
+        session.add(
+            Organization(
+                id=org.id,
+                slug=org.slug,
+                name="Real Tenant",
+                tier="community",
+                is_active=True,
+            )
+        )
         real_user = User(
             id=user_id,
             email="admin@devhealth.example",
@@ -234,10 +404,20 @@ async def test_overwrite_real_users_opt_in_clobbers_hash(session_maker):
             full_name="Real Admin",
             auth_provider="local",
             is_active=True,
-            is_verified=True,
-            is_superuser=True,
+            is_verified=False,
+            is_superuser=False,
         )
         session.add(real_user)
+        real_license = OrgLicense(
+            org_id=org.id,
+            tier=LicenseTier.COMMUNITY.value,
+            license_type="self-hosted",
+            licensed_users=3,
+            licensed_repos=2,
+            issued_at=datetime.now(timezone.utc),
+        )
+        real_license.id = uuid.uuid5(org.id, "real-license")
+        session.add(real_license)
         await session.commit()
 
     # Explicit opt-in: caller accepts credential clobber.
@@ -246,11 +426,42 @@ async def test_overwrite_real_users_opt_in_clobbers_hash(session_maker):
 
     async with session_maker() as session:
         user = await session.get(User, user_id)
+        saved_org = await session.get(Organization, org.id)
+        memberships = (
+            (
+                await session.execute(
+                    select(Membership).where(Membership.user_id == user_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        licenses = (
+            (
+                await session.execute(
+                    select(OrgLicense).where(OrgLicense.org_id == org.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
         assert user is not None
         # Hash must now be the fixture hash (clobbered).
         assert bcrypt.checkpw(
             _FIXTURE_PASSWORD.encode("utf-8"), user.password_hash.encode("utf-8")
         )
+        assert user.full_name == "Admin User"
+        assert user.is_verified is True
+        assert user.is_superuser is True
+        assert saved_org is not None
+        assert saved_org.name == "Demo Org"
+        assert saved_org.tier == "enterprise"
+        assert len(memberships) == 1
+        assert memberships[0].role == "owner"
+        assert len(licenses) == 1
+        assert licenses[0].tier == LicenseTier.ENTERPRISE.value
+        assert licenses[0].license_type == "saas"
+        assert licenses[0].licensed_users is None
 
 
 # ---------------------------------------------------------------------------
@@ -268,13 +479,13 @@ async def test_merge_fixture_user_inserts_when_absent(session_maker):
         await session.merge(org)
         await session.commit()
 
-        await _merge_fixture_user(
+        status = await _merge_fixture_user(
             session,
             user,
-            default_password=_FIXTURE_PASSWORD,
             overwrite_real_users=False,
         )
         await session.commit()
+        assert status == "inserted"
 
     async with session_maker() as session:
         result = await session.get(User, user.id)
@@ -304,13 +515,13 @@ async def test_merge_fixture_user_skips_real_user(session_maker):
 
     fixture_user = _make_fixture_user()  # has _FIXTURE_HASH
     async with session_maker() as session:
-        await _merge_fixture_user(
+        status = await _merge_fixture_user(
             session,
             fixture_user,
-            default_password=_FIXTURE_PASSWORD,
             overwrite_real_users=False,
         )
         await session.commit()
+        assert status == "skipped_existing"
 
     async with session_maker() as session:
         user = await session.get(User, user_id)
@@ -318,8 +529,8 @@ async def test_merge_fixture_user_skips_real_user(session_maker):
 
 
 @pytest.mark.asyncio
-async def test_merge_fixture_user_no_default_password_skips_existing(session_maker):
-    """When default_password is None, existing rows must not be overwritten."""
+async def test_merge_fixture_user_skips_existing_without_password_check(session_maker):
+    """Existing rows are skipped without using password ownership checks."""
     user_id = _fixture_user_id()
 
     async with session_maker() as session:
@@ -339,13 +550,13 @@ async def test_merge_fixture_user_no_default_password_skips_existing(session_mak
 
     fixture_user = _make_fixture_user()
     async with session_maker() as session:
-        await _merge_fixture_user(
+        status = await _merge_fixture_user(
             session,
             fixture_user,
-            default_password=None,  # no password provided
             overwrite_real_users=False,
         )
         await session.commit()
+        assert status == "skipped_existing"
 
     async with session_maker() as session:
         user = await session.get(User, user_id)

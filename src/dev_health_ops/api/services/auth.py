@@ -388,13 +388,14 @@ class AuthService:
             token_version = 0 if user.token_version is None else int(user.token_version)
         except (TypeError, ValueError):
             logger.warning(
-                "JWT token version claim is invalid for user: %s", user.user_id
+                "Access denied: stale-session check unreadable for user %s",
+                user.user_id,
             )
             return None
 
         current_token_version = int(db_user.token_version or 0)
         if token_version != current_token_version:
-            logger.warning("JWT token version mismatch for user: %s", user.user_id)
+            logger.warning("Access denied: stale session for user %s", user.user_id)
             return None
 
         user.token_version = token_version

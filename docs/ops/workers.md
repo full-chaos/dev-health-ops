@@ -169,3 +169,77 @@ celery -A dev_health_ops.workers.celery_app inspect ping
 ```
 
 The `health_check` task can also be invoked to verify worker responsiveness.
+
+## Queue Cleanup and Stale Jobs
+
+Celery uses Valkey as both broker and result backend on database 0 by default:
+`CELERY_BROKER_URL=redis://.../0` and `CELERY_RESULT_BACKEND=redis://.../0`.
+The app's separate `REDIS_URL` cache/streams connection uses database 1, so do
+not flush that database when clearing Celery.
+
+### Queue names
+
+The broker queues are:
+
+- `default`
+- `metrics`
+- `sync`
+- `sync.github`
+- `sync.gitlab`
+- `sync.linear`
+- `sync.jira`
+- `sync.launchdarkly`
+- `backfill`
+- `webhooks`
+- `ingest`
+- `reports`
+- `monitoring`
+
+When `PROVIDER_SYNC_QUEUES_ENABLED=false`, provider sync tasks stay on the
+shared `sync` queue. When the flag is enabled, known providers route to their
+`sync.<provider>` queues.
+
+### Clear queued messages
+
+Use Celery to purge one queue or everything on the broker. Run the
+`valkey-cli` commands on a host that has the CLI installed, or prefix them
+with `docker compose exec valkey` inside the compose stack.
+
+```bash
+# Inspect queue depth first
+valkey-cli -n 0 LLEN sync.linear
+
+# Remove one queue's pending messages
+celery -A dev_health_ops.workers.celery_app purge -Q sync.linear -f
+
+# Remove all pending broker messages
+celery -A dev_health_ops.workers.celery_app purge -f
+```
+
+### Clear stale reserved jobs
+
+If a worker dies while holding reservations, remove the broker's unacked state
+after stopping workers:
+
+```bash
+valkey-cli -n 0 DEL unacked unacked_index
+```
+
+### Clear failed result metadata
+
+Failed jobs usually live in the result backend rather than the queue. Celery's
+result keys use the default naming convention, so they can be removed directly
+if you need to clear task history from Valkey:
+
+```bash
+valkey-cli -n 0 --scan --pattern 'celery-task-meta-*'
+```
+
+```bash
+for key in $(valkey-cli -n 0 --scan --pattern 'celery-task-meta-*'); do
+  valkey-cli -n 0 DEL "$key"
+done
+```
+
+Results auto-expire after 24 hours, so manual cleanup is usually only needed
+for stale test runs, failed-job triage, or a dedicated broker reset.

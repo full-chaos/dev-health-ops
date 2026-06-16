@@ -75,6 +75,8 @@ All deployment methods use the same environment variables:
 ---
 
 ## Kubernetes Deployment
+See also: [Worker horizontal-scaling readiness](../architecture/worker-scaling-readiness.md)
+
 
 ### File Structure
 

@@ -13,6 +13,8 @@ Workers execute long-running tasks (syncs, metrics computation, webhooks) asynch
 - **Redis** -- message broker and result backend
 
 On startup, workers automatically apply pending Alembic migrations and initialize logging, Sentry, and OpenTelemetry tracing.
+See also: [Worker horizontal-scaling readiness](../architecture/worker-scaling-readiness.md)
+
 
 ---
 

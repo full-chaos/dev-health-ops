@@ -45,6 +45,7 @@ nav:
       - Middleware Impersonation: architecture/middleware-impersonation.md
       - Auth User Journeys: architecture/auth-journey.md
       - Database Architecture: architecture/database-architecture.md
+      - Worker Scaling Readiness: architecture/worker-scaling-readiness.md
       - Normalization Helpers: architecture/normalization-helpers.md
       - Enterprise Overview: architecture/enterprise-overview.md
       - Licensing: architecture/licensing.md

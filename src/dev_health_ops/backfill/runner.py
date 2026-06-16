@@ -24,6 +24,7 @@ def run_backfill_for_config(
     sink: str = "clickhouse",
     chunk_days: int = 7,
     progress_cb: ProgressCallback | None = None,
+    credentials: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     config_uuid = uuid.UUID(sync_config_id)
     with get_postgres_session_sync() as session:
@@ -67,6 +68,7 @@ def run_backfill_for_config(
             repo_name=sync_options.get("repo"),
             search_pattern=sync_options.get("search"),
             org_id=org_id,
+            credentials=credentials,
         )
 
     return {

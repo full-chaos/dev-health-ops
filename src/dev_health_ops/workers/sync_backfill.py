@@ -3,16 +3,10 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import date, datetime, timezone
+from typing import Any
 
 from dev_health_ops.workers.celery_app import celery_app
-from dev_health_ops.workers.task_utils import (
-    _as_str,
-    _credential_mapping,
-    _extract_provider_token,
-    _get_db_url,
-    _inject_provider_token,
-    _resolve_env_credentials,
-)
+from dev_health_ops.workers.task_utils import _credential_mapping, _get_db_url
 
 logger = logging.getLogger(__name__)
 
@@ -33,10 +27,7 @@ def run_backfill(
 ) -> dict:
     from dev_health_ops.backfill.runner import run_backfill_for_config
     from dev_health_ops.db import get_postgres_session_sync
-    from dev_health_ops.models.settings import (
-        IntegrationCredential,
-        SyncConfiguration,
-    )
+    from dev_health_ops.models.settings import IntegrationCredential, SyncConfiguration
 
     sync_config_uuid = uuid.UUID(sync_config_id)
     started_at = datetime.now(timezone.utc)
@@ -54,7 +45,7 @@ def run_backfill(
             if config is None:
                 raise ValueError(f"Sync configuration not found: {sync_config_id}")
 
-            provider = _as_str(config.provider).lower()
+            credentials: dict[str, Any] | None = None
             if config.credential_id:
                 credential = (
                     session.query(IntegrationCredential)
@@ -68,15 +59,7 @@ def run_backfill(
                     raise ValueError(
                         f"Credential not found for sync configuration: {config.credential_id}"
                     )
-                # Merge non-sensitive credential.config (e.g. self-hosted
-                # GitLab url) under the decrypted secrets (CHAOS-2282).
                 credentials = _credential_mapping(credential)
-            else:
-                credentials = _resolve_env_credentials(provider)
-
-            token = _extract_provider_token(provider, credentials)
-            if token:
-                _inject_provider_token(provider, token)
 
         if backfill_job_id:
             with get_postgres_session_sync() as session:
@@ -129,6 +112,7 @@ def run_backfill(
             sink="clickhouse",
             chunk_days=7,
             progress_cb=_backfill_progress,
+            credentials=credentials,
         )
 
         completed_at = datetime.now(timezone.utc)

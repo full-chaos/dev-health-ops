@@ -2793,9 +2793,9 @@ class TestRunSyncConfigGitLabCredentialConfig:
 class TestGitLabWorkItemsUrlInjection:
     """Self-hosted GitLab work-items must reach the configured instance.
 
-    fetch_gitlab_work_items builds GitLabWorkClient.from_env() (GITLAB_URL), so
-    _run_sync_for_repo injects the resolved URL before the work-items chunk
-    (post-rebase Codex finding on CHAOS-2282).
+    Credentials (token + gitlab_url) are now threaded explicitly into
+    run_work_items_sync_job via the ``credentials`` kwarg — no env injection
+    (CHAOS-2461). The URL must NOT be written to os.environ.
     """
 
     @patch.dict(os.environ, {}, clear=False)
@@ -2828,8 +2828,11 @@ class TestGitLabWorkItemsUrlInjection:
         finally:
             task.pop_request()
 
-        assert os.environ.get("GITLAB_URL") == "https://gitlab.example.com"
+        # Credentials are threaded explicitly — GITLAB_URL must NOT be injected.
+        assert os.environ.get("GITLAB_URL") is None
         assert mock_run_job.call_args.kwargs["provider"] == "gitlab"
+        # The credentials dict is passed through to run_work_items_sync_job.
+        assert mock_run_job.call_args.kwargs["credentials"] is not None
 
     @patch.dict(os.environ, {}, clear=False)
     @patch("dev_health_ops.sync.watermarks.set_watermark")

@@ -139,7 +139,9 @@ class GitLabClientProtocol(Protocol):
 
 
 class GitLabClientFactory(Protocol):
-    def __call__(self) -> GitLabClientProtocol: ...
+    def __call__(
+        self, *, token: str, gitlab_url: str | None = None
+    ) -> GitLabClientProtocol: ...
 
 
 @dataclass(frozen=True)
@@ -240,8 +242,15 @@ def _default_make_github_client(*, token: str) -> GitHubClientProtocol:
     )
 
 
-def _default_make_gitlab_client() -> GitLabClientProtocol:
-    return gitlab_client_module.GitLabWorkClient.from_env()
+def _default_make_gitlab_client(
+    *, token: str, gitlab_url: str | None = None
+) -> GitLabClientProtocol:
+    return gitlab_client_module.GitLabWorkClient(
+        auth=gitlab_client_module.GitLabAuth(
+            token=token,
+            base_url=gitlab_url or "https://gitlab.com",
+        )
+    )
 
 
 _registry = MetricsDependencyRegistry(

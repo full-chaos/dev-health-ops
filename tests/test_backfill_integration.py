@@ -542,7 +542,10 @@ def test_run_backfill_resolves_credentials_from_db(
 
     assert result["status"] == "success"
     assert captured["sync_config_id"] == str(sync_config_id)
-    assert os.environ.get("LINEAR_API_KEY") == "lin_test_cred_from_db"
+    # Credential resolved from DB is threaded EXPLICITLY into the backfill
+    # runner (CHAOS-2461) — never injected into os.environ.
+    assert captured["credentials"] == {"api_key": "lin_test_cred_from_db"}
+    assert os.environ.get("LINEAR_API_KEY") is None
 
     engine.dispose()
 

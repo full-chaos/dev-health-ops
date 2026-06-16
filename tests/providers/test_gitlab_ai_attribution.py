@@ -343,7 +343,9 @@ def _patch_common(
     # Inject the fake GitLab client at the metrics-dependency seam that
     # fetch_gitlab_work_items resolves via get_metrics_dependencies().
     base = work_items_module.get_metrics_dependencies()
-    overridden = dataclasses.replace(base, gitlab_client_factory=lambda: fake_client)
+    overridden = dataclasses.replace(
+        base, gitlab_client_factory=lambda *, token, gitlab_url=None: fake_client
+    )
     monkeypatch.setattr(
         work_items_module,
         "get_metrics_dependencies",
@@ -378,6 +380,7 @@ def test_gitlab_work_items_sync_writes_ai_attribution_with_org_id(
         backfill_days=1,
         provider="gitlab",
         org_id=str(org_id),
+        credentials={"token": "test-gitlab-token"},
     )
 
     # MR-derived attribution records reached the sink, org-scoped to the real org.

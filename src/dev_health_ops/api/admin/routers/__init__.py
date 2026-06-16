@@ -9,6 +9,7 @@ from .credentials import (
     router as credentials_router,
 )
 from .features import router as features_router
+from .github_app import router as github_app_router
 from .governance import router as governance_router
 from .identities import router as identities_router
 from .orgs import router as orgs_router
@@ -23,6 +24,7 @@ __all__ = [
     "features_router",
     "get_session",
     "get_user_id",
+    "github_app_router",
     "governance_router",
     "identities_router",
     "orgs_router",

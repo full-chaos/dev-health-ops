@@ -9,6 +9,7 @@ from .routers import (
     features_router,
     get_session,
     get_user_id,
+    github_app_router,
     governance_router,
     identities_router,
     orgs_router,
@@ -41,6 +42,7 @@ router.include_router(users_router)
 router.include_router(orgs_router)
 router.include_router(platform_router)
 router.include_router(features_router)
+router.include_router(github_app_router)
 router.include_router(governance_router)
 
 __all__ = [

@@ -25,9 +25,7 @@ from dev_health_ops.workers.sync_runtime import (
 )
 from dev_health_ops.workers.task_utils import (
     _credential_mapping,
-    _extract_provider_token,
     _get_db_url,
-    _inject_provider_token,
     _merge_sync_flags,
     _normalize_sync_targets,
     _resolve_env_credentials,
@@ -705,18 +703,6 @@ def _run_sync_for_repo(
             )
 
         if "work-items" in sync_targets:
-            token = _extract_provider_token(provider, credentials)
-            if token:
-                _inject_provider_token(provider, token)
-            if provider == "gitlab":
-                # fetch_gitlab_work_items builds GitLabWorkClient.from_env(),
-                # which reads GITLAB_URL — inject the resolved instance URL so
-                # self-hosted work-items don't fall back to gitlab.com while
-                # code sync above talks to the right host.
-                os.environ["GITLAB_URL"] = resolve_gitlab_url(
-                    sync_options_override,
-                    gitlab_credentials_from_mapping(credentials),
-                )
             backfill_days = int(sync_options_override.get("backfill_days", 1))
             chunk_index = int(sync_options_override.get("chunk_index", 0))
             chunk_since = sync_options_override.get("since")

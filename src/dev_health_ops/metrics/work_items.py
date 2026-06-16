@@ -429,6 +429,8 @@ def fetch_gitlab_work_items(
     since: datetime,
     status_mapping: StatusMapping,
     identity: IdentityResolver,
+    token: str,
+    gitlab_url: str | None = None,
     include_label_events: bool = True,
     max_label_events: int = 300,
     org_id: str = "",
@@ -452,7 +454,8 @@ def fetch_gitlab_work_items(
     skipped entirely when ``org_id`` is blank (a CLI-only run with no tenant
     scope) so a blank-tenant row is never persisted.
 
-    Requires `GITLAB_TOKEN` and optional `GITLAB_URL`.
+    Credentials (``token`` and optional ``gitlab_url``) are threaded explicitly
+    by the caller; this function never reads from ``os.environ``.
     """
     from uuid import UUID
 
@@ -461,7 +464,7 @@ def fetch_gitlab_work_items(
 
     deps = get_metrics_dependencies()
 
-    client = deps.gitlab_client_factory()
+    client = deps.gitlab_client_factory(token=token, gitlab_url=gitlab_url)
     work_items: dict[str, WorkItem] = {}
     transitions: list[WorkItemStatusTransition] = []
     ai_attributions: list[AIAttributionRecord] = []

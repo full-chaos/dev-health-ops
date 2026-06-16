@@ -103,6 +103,46 @@ def _build_github_work_client(
     return GitHubWorkClient(auth=GitHubAuth.from_credentials(resolved_credentials))
 
 
+def _build_gitlab_work_client(
+    *, org_id: str, credentials: dict[str, Any] | None = None
+) -> tuple[str, str | None]:
+    """Resolve GitLab credentials and return (token, gitlab_url) for explicit threading.
+
+    Precedence: explicit ``credentials`` mapping → database credential scoped
+    to ``org_id`` → environment variables as a last resort. An org-scoped
+    caller must never silently pick up ambient ``GITLAB_TOKEN``/URL env vars
+    over its org's database credential (tenant boundary, CHAOS-2461); env
+    resolution applies only when no organization scope is available (a
+    pure-CLI run) or when org-scoped resolution finds no database row
+    (DB-less dev setups, via ``CredentialResolver``'s env fallback).
+    """
+    from dev_health_ops.credentials.resolver import (
+        gitlab_credentials_from_mapping,
+        resolve_credentials_sync,
+    )
+    from dev_health_ops.credentials.types import GitLabCredentials
+
+    if credentials:
+        gitlab_credentials = gitlab_credentials_from_mapping(credentials)
+        if gitlab_credentials is None:
+            raise ValueError("Missing GitLab token for work-items sync configuration")
+        return gitlab_credentials.token, gitlab_credentials.base_url or None
+
+    if not org_id:
+        import os
+
+        token = os.environ.get("GITLAB_TOKEN", "")
+        gitlab_url = os.environ.get("GITLAB_URL") or None
+        return token, gitlab_url
+
+    resolved_credentials = resolve_credentials_sync(
+        "gitlab", org_id=org_id, allow_env_fallback=True
+    )
+    if not isinstance(resolved_credentials, GitLabCredentials):
+        raise ValueError("Resolved credentials are not GitLab credentials")
+    return resolved_credentials.token, resolved_credentials.base_url or None
+
+
 def run_work_items_sync_job(
     *,
     db_url: str,
@@ -294,11 +334,16 @@ def run_work_items_sync_job(
                 transitions.extend(list(proj_tr or []))
 
         if "gitlab" in provider_set:
+            gl_token, gl_url = _build_gitlab_work_client(
+                org_id=org_id, credentials=credentials
+            )
             items, tr, gl_ai_attributions = fetch_gitlab_work_items(
                 repos=discovered_repos,
                 since=since_dt,
                 status_mapping=status_mapping,
                 identity=identity,
+                token=gl_token,
+                gitlab_url=gl_url,
                 include_label_events=True,
                 org_id=org_id,
             )

@@ -30,9 +30,7 @@ from dev_health_ops.workers.task_utils import (
     _as_uuid,
     _credential_mapping,
     _extract_owner_repo,
-    _extract_provider_token,
     _get_db_url,
-    _inject_provider_token,
     _merge_sync_flags,
     _normalize_sync_targets,
     _resolve_env_credentials,
@@ -759,10 +757,6 @@ def run_sync_config(
             )
 
         if "work-items" in sync_targets and provider != "jira":
-            if provider != "github":
-                token = _extract_provider_token(provider, credentials)
-                if token:
-                    _inject_provider_token(provider, token)
             backfill_days = int(sync_options.get("backfill_days", 1))
             run_work_items_sync_job(
                 db_url=db_url,
@@ -772,7 +766,7 @@ def run_sync_config(
                 repo_name=sync_options.get("repo"),
                 search_pattern=sync_options.get("search"),
                 org_id=org_id,
-                credentials=credentials if provider == "github" else None,
+                credentials=credentials,
             )
             result_payload["work_items_synced"] = True
 

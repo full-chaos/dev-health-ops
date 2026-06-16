@@ -897,6 +897,7 @@ dependencies = [
     { name = "stripe" },
     { name = "tqdm" },
     { name = "typing-extensions" },
+    { name = "tzlocal" },
     { name = "uvicorn" },
     { name = "valkey" },
 ]
@@ -975,6 +976,7 @@ requires-dist = [
     { name = "stripe", specifier = ">=7.0.0" },
     { name = "tqdm", specifier = ">=4.67.3" },
     { name = "typing-extensions", specifier = ">=4.15.0" },
+    { name = "tzlocal", specifier = ">=5.0" },
     { name = "uvicorn", specifier = ">=0.46.0" },
     { name = "valkey", specifier = ">=6.0.0" },
 ]

@@ -123,7 +123,9 @@ class TeamDiscoveryService:
             from dev_health_ops.providers.linear.client import LinearAuth, LinearClient
 
             DiscoveredTeam = _get_discovered_team_cls()
-            with LinearClient(auth=LinearAuth(api_key=api_key)) as client:
+            with LinearClient(
+                auth=LinearAuth(api_key=api_key), org_id=self.org_id
+            ) as client:
                 teams: list[Any] = []
                 for team in client.iter_teams():
                     teams.append(

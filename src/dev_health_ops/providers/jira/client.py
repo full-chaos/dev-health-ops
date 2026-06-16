@@ -4,11 +4,12 @@ import logging
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
-from dev_health_ops.connectors.utils import retry_with_backoff
 from dev_health_ops.connectors.utils.rate_limit_queue import (
     RateLimitConfig,
     RateLimitGate,
+    create_rate_limit_gate,
 )
 from dev_health_ops.providers._ratelimit import penalize_from_response
 from dev_health_ops.providers.utils import EnvSpec, read_env_spec
@@ -74,20 +75,27 @@ class JiraClient:
         timeout_seconds: int = 30,
         per_page: int = 100,
         gate: RateLimitGate | None = None,
+        org_id: str | None = None,
     ) -> None:
         import requests
 
         self.auth = auth
         self.timeout_seconds = int(timeout_seconds)
         self.per_page = max(1, min(100, int(per_page)))
-        self.gate = gate or RateLimitGate(RateLimitConfig(initial_backoff_seconds=1.0))
+        host = urlparse(auth.base_url).hostname or "_"
+        self.gate = gate or create_rate_limit_gate(
+            "jira",
+            org_id=org_id,
+            host=host,
+            config=RateLimitConfig(initial_backoff_seconds=1.0),
+        )
 
         self.session = requests.Session()
         self.session.auth = (auth.email, auth.api_token)
         self.session.headers.update({"Accept": "application/json"})
 
     @classmethod
-    def from_env(cls) -> JiraClient:
+    def from_env(cls, *, org_id: str | None = None) -> JiraClient:
         env = read_env_spec(
             EnvSpec(
                 required={
@@ -105,7 +113,8 @@ class JiraClient:
                 base_url=_normalize_jira_base_url(str(env["base_url"])),
                 email=str(env["email"]),
                 api_token=str(env["api_token"]),
-            )
+            ),
+            org_id=org_id,
         )
 
     def close(self) -> None:
@@ -141,7 +150,6 @@ class JiraClient:
             )
             raise
 
-    @retry_with_backoff(max_retries=5, initial_delay=1.0, max_delay=60.0)
     def search_issues_page(
         self,
         *,
@@ -220,7 +228,6 @@ class JiraClient:
                 logger.debug("Jira search complete (isLast=true); fetched=%d", fetched)
                 break
 
-    @retry_with_backoff(max_retries=5, initial_delay=1.0, max_delay=60.0)
     def fetch_issue_comments_page(
         self,
         *,
@@ -266,7 +273,6 @@ class JiraClient:
             if (page or {}).get("isLast") is True:
                 break
 
-    @retry_with_backoff(max_retries=5, initial_delay=1.0, max_delay=60.0)
     def get_sprint(self, *, sprint_id: str) -> dict[str, Any]:
         return self._request_json(
             path=f"/rest/agile/1.0/sprint/{sprint_id}",

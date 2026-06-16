@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import hashlib
+import asyncio
 import time
 from unittest.mock import MagicMock, patch
 
@@ -12,7 +12,6 @@ from dev_health_ops.connectors.utils.rate_limit_queue import (
     DistributedRateLimitGate,
     RateLimitConfig,
     RateLimitGate,
-    _token_hash,
     create_rate_limit_gate,
 )
 
@@ -26,35 +25,54 @@ def _make_redis_mock(*, script_load_ok: bool = True) -> MagicMock:
     return client
 
 
+class _SharedRedisStub:
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+
+    def script_load(self, _script: str) -> str:
+        return "fake_sha"
+
+    def evalsha(
+        self, _sha: str, _num_keys: int, key: str, proposed: str, _ttl: str
+    ) -> str:
+        current = float(self.store.get(key, "0"))
+        value = max(current, float(proposed))
+        self.store[key] = str(value)
+        return str(value)
+
+    def get(self, key: str) -> str | None:
+        return self.store.get(key)
+
+    def delete(self, key: str) -> None:
+        self.store.pop(key, None)
+
+
 class TestTokenHash:
-    def test_consistent_output(self):
-        assert _token_hash("my-secret") == _token_hash("my-secret")
+    def test_key_uses_provider_org_and_host(self):
+        client = _make_redis_mock()
+        gate = DistributedRateLimitGate(
+            "github", org_id="org-1", host="api.github.com", redis_client=client
+        )
+        assert gate._redis_key == "rate_limit:github:org-1:api.github.com"
 
-    def test_length_is_8(self):
-        assert len(_token_hash("anything")) == 8
-
-    def test_matches_sha256_prefix(self):
-        token = "ghp_abc123"
-        expected = hashlib.sha256(token.encode()).hexdigest()[:8]
-        assert _token_hash(token) == expected
-
-    def test_different_tokens_differ(self):
-        assert _token_hash("token-a") != _token_hash("token-b")
+    def test_key_uses_stable_sentinel_for_missing_parts(self):
+        client = _make_redis_mock()
+        gate = DistributedRateLimitGate("github", redis_client=client)
+        assert gate._redis_key == "rate_limit:github:_:_"
 
 
 class TestDistributedGateInit:
     def test_redis_key_without_token(self):
         client = _make_redis_mock()
         gate = DistributedRateLimitGate("github", redis_client=client)
-        assert gate._redis_key == "rate_limit:github"
+        assert gate._redis_key == "rate_limit:github:_:_"
 
     def test_redis_key_with_token(self):
         client = _make_redis_mock()
         gate = DistributedRateLimitGate(
             "github", token_hint="ghp_abc", redis_client=client
         )
-        expected_hash = _token_hash("ghp_abc")
-        assert gate._redis_key == f"rate_limit:github:{expected_hash}"
+        assert gate._redis_key == "rate_limit:github:_:ghp_abc"
 
     def test_ttl_is_2x_max_backoff(self):
         cfg = RateLimitConfig(max_backoff_seconds=600.0)
@@ -91,7 +109,7 @@ class TestDistributedPenalize:
         args = client.evalsha.call_args
         assert args[0][0] == "fake_sha"
         assert args[0][1] == 1
-        assert args[0][2] == "rate_limit:gh"
+        assert args[0][2] == "rate_limit:gh:_:_"
 
     def test_penalize_exponential_backoff(self):
         cfg = RateLimitConfig(initial_backoff_seconds=2.0, backoff_factor=3.0)
@@ -183,6 +201,32 @@ class TestDistributedGatePenalizeClamping:
 
 
 class TestDistributedSleepSeconds:
+    def test_same_provider_org_host_share_backoff_window(self):
+        redis = _SharedRedisStub()
+        first = DistributedRateLimitGate(
+            "github", org_id="org-1", host="api.github.com", redis_client=redis
+        )
+        second = DistributedRateLimitGate(
+            "github", org_id="org-1", host="api.github.com", redis_client=redis
+        )
+
+        first.penalize(10.0)
+
+        assert second._sleep_seconds() == pytest.approx(10.0, abs=0.5)
+
+    def test_different_org_has_independent_backoff_window(self):
+        redis = _SharedRedisStub()
+        first = DistributedRateLimitGate(
+            "github", org_id="org-1", host="api.github.com", redis_client=redis
+        )
+        second = DistributedRateLimitGate(
+            "github", org_id="org-2", host="api.github.com", redis_client=redis
+        )
+
+        first.penalize(10.0)
+
+        assert second._sleep_seconds() == 0.0
+
     def test_reads_from_redis(self):
         client = _make_redis_mock()
         future = time.time() + 5.0
@@ -191,7 +235,7 @@ class TestDistributedSleepSeconds:
 
         seconds = gate._sleep_seconds()
         assert 4.0 < seconds <= 5.0
-        client.get.assert_called_once_with("rate_limit:gh")
+        client.get.assert_called_once_with("rate_limit:gh:_:_")
 
     def test_returns_zero_when_key_missing(self):
         client = _make_redis_mock()
@@ -224,8 +268,7 @@ class TestDistributedWait:
             mock_sleep.assert_called_once()
             assert mock_sleep.call_args[0][0] > 0
 
-    @pytest.mark.asyncio
-    async def test_wait_async_sleeps(self):
+    def test_wait_async_sleeps(self):
         client = _make_redis_mock()
         client.get.return_value = str(time.time() + 0.05)
         gate = DistributedRateLimitGate("gh", redis_client=client)
@@ -237,7 +280,7 @@ class TestDistributedWait:
             "dev_health_ops.connectors.utils.rate_limit_queue.asyncio.sleep",
             side_effect=_noop,
         ) as mock_sleep:
-            await gate.wait_async()
+            asyncio.run(gate.wait_async())
             mock_sleep.assert_called_once()
 
 
@@ -246,7 +289,7 @@ class TestDistributedReset:
         client = _make_redis_mock()
         gate = DistributedRateLimitGate("gh", redis_client=client)
         gate.reset()
-        client.delete.assert_called_once_with("rate_limit:gh")
+        client.delete.assert_called_once_with("rate_limit:gh:_:_")
 
     def test_reset_falls_back_on_redis_error(self):
         client = _make_redis_mock()
@@ -282,7 +325,7 @@ class TestLuaScript:
         args = client.evalsha.call_args[0]
         assert args[0] == "fake_sha"
         assert args[1] == 1
-        assert args[2] == "rate_limit:gh"
+        assert args[2] == "rate_limit:gh:_:_"
         proposed = float(args[3])
         assert proposed > time.time()
         ttl = int(args[4])
@@ -333,9 +376,22 @@ class TestFactory:
 
         with patch.dict("os.environ", {"REDIS_URL": "redis://localhost:6379"}):
             with patch("valkey.from_url", return_value=mock_redis):
-                gate = create_rate_limit_gate("github", "token123")
+                gate = create_rate_limit_gate("github", token_hint="token123")
 
         assert isinstance(gate, DistributedRateLimitGate)
+
+    def test_factory_uses_provider_org_host_key(self):
+        mock_redis = _make_redis_mock()
+        mock_redis.ping.return_value = True
+
+        with patch.dict("os.environ", {"REDIS_URL": "redis://localhost:6379"}):
+            with patch("valkey.from_url", return_value=mock_redis):
+                gate = create_rate_limit_gate(
+                    "gitlab", org_id="org-a", host="gitlab.example.com"
+                )
+
+        assert isinstance(gate, DistributedRateLimitGate)
+        assert gate._redis_key == "rate_limit:gitlab:org-a:gitlab.example.com"
 
     def test_returns_local_when_no_redis_url(self):
         with patch.dict("os.environ", {}, clear=True):

@@ -5,10 +5,12 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
+from urllib.parse import urlparse
 
 from dev_health_ops.connectors.utils.rate_limit_queue import (
     RateLimitConfig,
     RateLimitGate,
+    create_rate_limit_gate,
 )
 from dev_health_ops.providers._ratelimit import gate_call
 from dev_health_ops.providers.utils import EnvSpec, read_env_spec
@@ -55,12 +57,19 @@ class GitLabWorkClient:
         auth: GitLabAuth,
         per_page: int = 100,
         gate: RateLimitGate | None = None,
+        org_id: str | None = None,
     ) -> None:
         import gitlab  # python-gitlab
 
         self.auth = auth
         self.per_page = max(1, min(100, int(per_page)))
-        self.gate = gate or RateLimitGate(RateLimitConfig(initial_backoff_seconds=1.0))
+        host = urlparse(auth.base_url).hostname or "gitlab.com"
+        self.gate = gate or create_rate_limit_gate(
+            "gitlab",
+            org_id=org_id,
+            host=host,
+            config=RateLimitConfig(initial_backoff_seconds=1.0),
+        )
 
         self.gl = gitlab.Gitlab(
             auth.base_url,
@@ -69,7 +78,7 @@ class GitLabWorkClient:
         )
 
     @classmethod
-    def from_env(cls) -> GitLabWorkClient:
+    def from_env(cls, *, org_id: str | None = None) -> GitLabWorkClient:
         env = read_env_spec(
             EnvSpec(
                 required={"token": "GITLAB_TOKEN"},
@@ -81,7 +90,8 @@ class GitLabWorkClient:
             auth=GitLabAuth(
                 token=str(env["token"]),
                 base_url=str(env["base_url"]),
-            )
+            ),
+            org_id=org_id,
         )
 
     def get_project(self, project_id_or_path: str) -> Any:
@@ -100,7 +110,8 @@ class GitLabWorkClient:
         params: dict[str, Any] = {"state": state}
         if updated_after is not None:
             params["updated_after"] = updated_after.isoformat()
-        issues = project.issues.list(iterator=True, **params)
+        with gate_call(self.gate):
+            issues = project.issues.list(iterator=True, **params)
         count = 0
         for issue in issues:
             yield issue
@@ -121,7 +132,8 @@ class GitLabWorkClient:
         params: dict[str, Any] = {"state": state}
         if updated_after is not None:
             params["updated_after"] = updated_after.isoformat()
-        mrs = project.mergerequests.list(iterator=True, **params)
+        with gate_call(self.gate):
+            mrs = project.mergerequests.list(iterator=True, **params)
         count = 0
         for mr in mrs:
             yield mr
@@ -231,7 +243,8 @@ class GitLabWorkClient:
     ) -> Iterable[Any]:
         """Iterate milestones for a project."""
         project = self.get_project(project_id_or_path)
-        milestones = project.milestones.list(state=state, iterator=True)
+        with gate_call(self.gate):
+            milestones = project.milestones.list(state=state, iterator=True)
         yield from milestones
 
     def iter_group_milestones(
@@ -244,7 +257,8 @@ class GitLabWorkClient:
         try:
             with gate_call(self.gate):
                 group = self.gl.groups.get(group_id_or_path)
-            milestones = group.milestones.list(state=state, iterator=True)
+            with gate_call(self.gate):
+                milestones = group.milestones.list(state=state, iterator=True)
             yield from milestones
         except Exception as exc:
             logger.debug("Failed to fetch group milestones: %s", exc)

@@ -90,7 +90,9 @@ def _build_github_work_client(
             raise ValueError(
                 "Missing GitHub token or App credentials for work-items sync configuration"
             )
-        return GitHubWorkClient(auth=GitHubAuth.from_credentials(github_credentials))
+        return GitHubWorkClient(
+            auth=GitHubAuth.from_credentials(github_credentials), org_id=org_id
+        )
 
     if not org_id:
         return GitHubWorkClient.from_env()
@@ -100,7 +102,9 @@ def _build_github_work_client(
     )
     if not isinstance(resolved_credentials, GitHubCredentials):
         raise ValueError("Resolved credentials are not GitHub credentials")
-    return GitHubWorkClient(auth=GitHubAuth.from_credentials(resolved_credentials))
+    return GitHubWorkClient(
+        auth=GitHubAuth.from_credentials(resolved_credentials), org_id=org_id
+    )
 
 
 def run_work_items_sync_job(

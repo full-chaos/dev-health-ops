@@ -910,6 +910,9 @@ Start the Celery beat scheduler (dispatches periodic/beat tasks such as schedule
 dev-hops workers start-scheduler
 ```
 
+For queue cleanup, stale reserved jobs, and failed-result cleanup, see
+[Workers & Celery](workers.md#queue-cleanup-and-stale-jobs).
+
 ---
 
 ## Maintenance

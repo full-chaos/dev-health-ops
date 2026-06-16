@@ -432,6 +432,12 @@ async def _seed_auth_data(
     # injection/overwrite/duplicate path (incl. the known-password superuser)
     # in one place. overwrite_real_users=True opts into seeding a populated DB
     # (fully-isolated demo/CI only).
+    #
+    # NOTE: this is a best-effort, non-atomic check (TOCTOU): a concurrent
+    # first-ever registration racing in during the seed pass is not covered.
+    # An atomic advisory-lock + single-transaction hardening is tracked as a
+    # follow-up. In practice this seeder is an operator/CI tool and must not be
+    # run against a live production DB; the check blocks the realistic case.
     if not overwrite_real_users:
         has_org = (await session.execute(select(Organization.id).limit(1))).first()
         has_user = (await session.execute(select(User.id).limit(1))).first()

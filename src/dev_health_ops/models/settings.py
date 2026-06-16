@@ -406,6 +406,12 @@ class ScheduledJob(Base):
         UniqueConstraint(
             "org_id", "provider", "name", name="uq_scheduled_job_org_provider_name"
         ),
+        UniqueConstraint(
+            "org_id",
+            "sync_config_id",
+            "job_type",
+            name="uq_scheduled_job_org_sync_config_type",
+        ),
         Index("ix_scheduled_job_org_type", "org_id", "job_type"),
         Index("ix_scheduled_job_next_run", "next_run_at"),
     )

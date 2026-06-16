@@ -124,9 +124,16 @@ def test_evaluate_state_mixes_fired_and_tombstones():
         success_criterion="WIP < 3",
         evidence=(),
     )
+
     # Force only 'saturation' to fire; all other evaluators return None.
+    def fired_evaluator(_snapshot: object, _now: datetime) -> Recommendation | None:
+        return fired_rec
+
+    def empty_evaluator(_snapshot: object, _now: datetime) -> Recommendation | None:
+        return None
+
     evaluators = {
-        rid: (lambda s, n: fired_rec) if rid == "saturation" else (lambda s, n: None)
+        rid: fired_evaluator if rid == "saturation" else empty_evaluator
         for rid in RULE_EVALUATORS
     }
     engine = RuleEngine(

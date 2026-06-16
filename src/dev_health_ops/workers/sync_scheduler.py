@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -61,6 +62,86 @@ def _session_dialect_name(session: Session) -> str:
     return getattr(getattr(bind, "dialect", None), "name", "")
 
 
+def _new_sync_scheduled_job(config: SyncConfiguration, cron_expr: str) -> ScheduledJob:
+    from dev_health_ops.models.settings import JobStatus, ScheduledJob
+
+    provider = _as_str(config.provider).lower()
+    sync_config_id = _as_uuid(config.id)
+    return ScheduledJob(
+        name=f"sync-config-{sync_config_id}",
+        job_type="sync",
+        schedule_cron=cron_expr,
+        org_id=_as_str(config.org_id),
+        provider=provider,
+        job_config={
+            "provider": provider,
+            "sync_config_id": str(sync_config_id),
+        },
+        sync_config_id=sync_config_id,
+        tz=str(_as_dict(config.sync_options).get("timezone") or "UTC"),
+        status=JobStatus.ACTIVE.value,
+    )
+
+
+def _scheduled_job_insert_values(
+    config: SyncConfiguration, cron_expr: str
+) -> dict[str, object]:
+    job = _new_sync_scheduled_job(config, cron_expr)
+    created_at = datetime.now(timezone.utc)
+    return {
+        "id": uuid.uuid4(),
+        "org_id": job.org_id,
+        "name": job.name,
+        "job_type": job.job_type,
+        "provider": job.provider,
+        "schedule_cron": job.schedule_cron,
+        "timezone": job.timezone,
+        "job_config": job.job_config,
+        "sync_config_id": job.sync_config_id,
+        "status": job.status,
+        "is_running": False,
+        "run_count": 0,
+        "failure_count": 0,
+        "created_at": created_at,
+        "updated_at": created_at,
+    }
+
+
+def _ensure_due_job_marker(
+    session: Session,
+    config: SyncConfiguration,
+    cron_expr: str,
+) -> ScheduledJob | None:
+    """Create and lock the ScheduledJob marker for a due sync config."""
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    from dev_health_ops.models.settings import ScheduledJob
+
+    job_query = session.query(ScheduledJob).filter(
+        ScheduledJob.sync_config_id == _as_uuid(config.id),
+        ScheduledJob.org_id == _as_str(config.org_id),
+        ScheduledJob.job_type == "sync",
+    )
+
+    if _session_dialect_name(session) == "postgresql":
+        session.execute(
+            pg_insert(ScheduledJob)
+            .values(_scheduled_job_insert_values(config, cron_expr))
+            .on_conflict_do_nothing(constraint="uq_scheduled_job_org_sync_config_type")
+        )
+        job = job_query.with_for_update(skip_locked=True).one_or_none()
+        if job is None and job_query.with_entities(ScheduledJob.id).first() is not None:
+            return None
+        return job
+
+    job = job_query.one_or_none()
+    if job is None:
+        job = _new_sync_scheduled_job(config, cron_expr)
+        session.add(job)
+        session.flush()
+    return job
+
+
 def _maybe_dispatch_config(
     session: Session, config: SyncConfiguration, now: datetime
 ) -> bool:
@@ -90,9 +171,11 @@ def _maybe_dispatch_config(
     if not config_cron:
         return False
 
+    sync_config_id = _as_uuid(config.id)
+    org_id = _as_str(config.org_id)
     job_query = session.query(ScheduledJob).filter(
-        ScheduledJob.sync_config_id == config.id,
-        ScheduledJob.org_id == config.org_id,
+        ScheduledJob.sync_config_id == sync_config_id,
+        ScheduledJob.org_id == org_id,
         ScheduledJob.job_type == "sync",
     )
     if _session_dialect_name(session) == "postgresql":
@@ -135,51 +218,55 @@ def _maybe_dispatch_config(
     if not next_run <= now:
         return False
 
-    # Per-provider routing (CHAOS-2299): "is Linear stuck?" must be one LLEN.
-    sync_queue = sync_queue_for_provider(_as_str(config.provider))
-    if _is_batch_eligible(config):
-        dispatch_batch_sync.apply_async(
-            kwargs={
-                "config_id": str(config.id),
-                "org_id": config.org_id,
-                "triggered_by": "schedule",
-            },
-            queue=sync_queue,
-        )
-    else:
-        run_sync_config.apply_async(
-            kwargs={
-                "config_id": str(config.id),
-                "org_id": config.org_id,
-                "triggered_by": "schedule",
-            },
-            queue=sync_queue,
-        )
-
-    # Stamp the dispatch marker. Create the ScheduledJob row if missing
-    # (mirrors run_sync_config, which would otherwise create it on pickup --
-    # too late to dedupe dispatches while the task waits in the queue).
     if job is None:
-        provider = _as_str(config.provider).lower()
-        job = ScheduledJob(
-            name=f"sync-config-{_as_uuid(config.id)}",
-            job_type="sync",
-            schedule_cron=cron_expr,
-            org_id=_as_str(config.org_id),
-            provider=provider,
-            job_config={
-                "provider": provider,
-                "sync_config_id": str(config.id),
-            },
-            sync_config_id=_as_uuid(config.id),
-            tz=str(_as_dict(config.sync_options).get("timezone") or "UTC"),
-        )
-        session.add(job)
+        job = _ensure_due_job_marker(session, config, cron_expr)
+        if job is None:
+            return False
+
+        next_allowed = _ensure_utc(_as_datetime_or_none(job.next_run_at))
+        if next_allowed is not None and next_allowed > now:
+            return False
+
+        if int(job.status) != JobStatus.ACTIVE.value:
+            return False
+
+        if bool(job.is_running):
+            if not _running_marker_is_stale(job, now):
+                return False
+            logger.warning(
+                "Sync job %s for config %s has is_running set for more than %ss; "
+                "treating the marker as stale and re-evaluating dispatch",
+                job.id,
+                config.id,
+                STALE_RUNNING_TTL_SECONDS,
+            )
 
     marker = croniter(cron_expr, now).get_next(datetime)
     if isinstance(marker, datetime):
         job.next_run_at = marker
     session.flush()
+
+    dispatch_kwargs = {
+        "config_id": str(sync_config_id),
+        "org_id": org_id,
+        "triggered_by": "schedule",
+    }
+    sync_queue = sync_queue_for_provider(_as_str(config.provider))
+    is_batch = _is_batch_eligible(config)
+
+    session.commit()
+
+    # Per-provider routing (CHAOS-2299): "is Linear stuck?" must be one LLEN.
+    if is_batch:
+        getattr(dispatch_batch_sync, "apply_async")(
+            kwargs=dispatch_kwargs,
+            queue=sync_queue,
+        )
+    else:
+        getattr(run_sync_config, "apply_async")(
+            kwargs=dispatch_kwargs,
+            queue=sync_queue,
+        )
 
     return True
 

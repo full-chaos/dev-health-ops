@@ -9,6 +9,7 @@ Nothing here imports from dev_health_ops.api.*.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -17,6 +18,20 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_key_label(key: str) -> str:
+    """Return a log-safe label for a cache key.
+
+    Cache keys built by ``filter_cache_key`` embed the full serialized filter
+    payload (org_id plus user-controlled scope/repo/developer filters), so the
+    raw key must never reach centralized logs. We log the prefix (before the
+    first ':') plus a short stable digest, which still lets repeated failures
+    for the same key be correlated without leaking tenant data.
+    """
+    prefix = key.split(":", 1)[0]
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
+    return f"{prefix}:{digest}"
 
 
 class CacheBackend(ABC):
@@ -127,7 +142,14 @@ class RedisBackend(CacheBackend):
         try:
             self._client.setex(key, ttl_seconds, json.dumps(value))
         except Exception as e:
-            logger.warning("Redis set failed: %s", e)
+            logger.warning(
+                "Redis set failed for key=%s value_type=%s ttl=%s: %s",
+                _safe_key_label(key),
+                type(value).__name__,
+                ttl_seconds,
+                e,
+                exc_info=True,
+            )
 
     def status(self) -> str:
         if not self._available:

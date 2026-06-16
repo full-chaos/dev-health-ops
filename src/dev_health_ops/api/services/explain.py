@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import TypedDict
+
+from pydantic import ValidationError
 
 from ..models.filters import MetricFilter
 from ..models.schemas import Contributor, ExplainResponse
@@ -16,6 +19,8 @@ from .identity import (
     resolve_scope_display_names,
     scope_kind_for_group_by,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class _MetricConfig(TypedDict):
@@ -124,7 +129,16 @@ async def build_explain_response(
     cache_key = filter_cache_key("explain", org_id, filters, extra={"metric": metric})
     cached = cache.get(cache_key)
     if cached is not None:
-        return cached
+        try:
+            return ExplainResponse.model_validate(cached)
+        except ValidationError:
+            # Best-effort cache: a stale-schema or corrupt entry must degrade
+            # to a recompute, never take the endpoint down until TTL expiry.
+            logger.warning(
+                "Discarding invalid explain cache entry for metric=%s; recomputing",
+                metric,
+                exc_info=True,
+            )
 
     config = _METRIC_CONFIG.get(metric, _METRIC_CONFIG["cycle_time"])
     start_day, end_day, compare_start, compare_end = time_window(filters)
@@ -239,7 +253,7 @@ async def build_explain_response(
         },
     )
 
-    cache.set(cache_key, response)
+    cache.set(cache_key, response.model_dump(mode="json"))
     return response
 
 

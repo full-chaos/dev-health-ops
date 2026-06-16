@@ -265,7 +265,7 @@ def discover_gitlab_repos(
             ):
                 continue
             if project_id is not None and fnmatch.fnmatch(name, project_pattern):
-                result.append((str(project_id),))
+                result.append((str(project_id), path_with_namespace))
 
         return result
 
@@ -283,6 +283,10 @@ def discover_gitlab_repos(
         name = getattr(group_project, "name", "") or ""
         project_id = getattr(group_project, "id", None)
         if project_id is not None and fnmatch.fnmatch(name, project_pattern):
-            result.append((str(project_id),))
+            path_with_namespace = (
+                getattr(group_project, "path_with_namespace", "")
+                or f"{group_path}/{name}"
+            )
+            result.append((str(project_id), path_with_namespace))
 
     return result

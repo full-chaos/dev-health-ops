@@ -451,7 +451,10 @@ def dispatch_batch_sync(
             elif provider == "gitlab":
                 project_id = repo_tuple[0]
                 per_repo_options["project_id"] = int(project_id)
-                per_repo_options.pop("search", None)
+                if "work-items" in sync_targets:
+                    per_repo_options["search"] = repo_tuple[1]
+                else:
+                    per_repo_options.pop("search", None)
                 per_repo_options.pop("group", None)
 
             child_signature = getattr(_run_sync_for_repo, "s")(

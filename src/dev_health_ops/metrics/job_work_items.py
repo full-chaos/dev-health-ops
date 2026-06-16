@@ -147,6 +147,76 @@ def _build_gitlab_work_client(
     return resolved_credentials.token, resolved_credentials.base_url or None
 
 
+def _build_jira_work_client(
+    *, org_id: str, credentials: dict[str, Any] | None = None
+) -> Any:
+    from dev_health_ops.credentials.resolver import (
+        jira_credentials_from_mapping,
+        resolve_credentials_sync,
+    )
+    from dev_health_ops.credentials.types import JiraCredentials
+    from dev_health_ops.providers.jira.client import (
+        JiraAuth,
+        JiraClient,
+        _normalize_jira_base_url,
+    )
+
+    if credentials:
+        jira_credentials = jira_credentials_from_mapping(credentials)
+        if jira_credentials is None:
+            raise ValueError(
+                "Missing Jira credentials for work-items sync configuration"
+            )
+    elif org_id:
+        resolved_credentials = resolve_credentials_sync(
+            "jira", org_id=org_id, allow_env_fallback=True
+        )
+        if not isinstance(resolved_credentials, JiraCredentials):
+            raise ValueError("Resolved credentials are not Jira credentials")
+        jira_credentials = resolved_credentials
+    else:
+        return JiraClient.from_env()
+
+    return JiraClient(
+        auth=JiraAuth(
+            base_url=_normalize_jira_base_url(jira_credentials.base_url),
+            email=jira_credentials.email,
+            api_token=jira_credentials.api_token,
+        ),
+        org_id=org_id or None,
+    )
+
+
+def _build_linear_work_client(
+    *, org_id: str, credentials: dict[str, Any] | None = None
+) -> Any:
+    from dev_health_ops.credentials.resolver import (
+        linear_credentials_from_mapping,
+        resolve_credentials_sync,
+    )
+    from dev_health_ops.credentials.types import LinearCredentials
+    from dev_health_ops.providers.linear.client import LinearAuth, LinearClient
+
+    if credentials:
+        linear_credentials = linear_credentials_from_mapping(credentials)
+        if linear_credentials is None:
+            raise ValueError("Missing Linear API key for work-items sync configuration")
+    elif org_id:
+        resolved_credentials = resolve_credentials_sync(
+            "linear", org_id=org_id, allow_env_fallback=True
+        )
+        if not isinstance(resolved_credentials, LinearCredentials):
+            raise ValueError("Resolved credentials are not Linear credentials")
+        linear_credentials = resolved_credentials
+    else:
+        return LinearClient.from_env()
+
+    return LinearClient(
+        auth=LinearAuth(api_key=linear_credentials.api_key),
+        org_id=org_id or None,
+    )
+
+
 def run_work_items_sync_job(
     *,
     db_url: str,
@@ -159,6 +229,9 @@ def run_work_items_sync_job(
     search_pattern: str | None = None,
     org_id: str = "",
     credentials: dict[str, Any] | None = None,
+    jira_project_keys: list[str] | None = None,
+    jira_jql: str | None = None,
+    jira_fetch_all: bool | None = None,
 ) -> None:
     """
     Sync work tracking facts from provider APIs and write derived work item tables.
@@ -281,6 +354,11 @@ def run_work_items_sync_job(
                 until=until_dt,
                 status_mapping=status_mapping,
                 identity=identity,
+                client=_build_jira_work_client(org_id=org_id, credentials=credentials),
+                project_keys=jira_project_keys,
+                jql_override=jira_jql,
+                fetch_all=jira_fetch_all,
+                use_env_query_options=not bool(org_id or credentials),
             )
             work_items.extend(items)
             transitions.extend(tr)
@@ -387,6 +465,9 @@ def run_work_items_sync_job(
             linear_provider = LinearProvider(
                 status_mapping=status_mapping,
                 identity=identity,
+                client=_build_linear_work_client(
+                    org_id=org_id, credentials=credentials
+                ),
             )
             ctx = IngestionContext(
                 window=IngestionWindow(updated_since=since_dt, active_until=until_dt),

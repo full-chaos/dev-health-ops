@@ -2862,3 +2862,192 @@ class TestGitLabWorkItemsUrlInjection:
             task.pop_request()
 
         mock_set_watermark.assert_not_called()
+
+
+class TestWorkItemsProviderCredentialIsolation:
+    def _run_sync_config_with_credential(
+        self,
+        db_session,
+        *,
+        provider: str,
+        decrypted: dict,
+        config: dict | None = None,
+        sync_options: dict | None = None,
+    ):
+        import uuid as _uuid
+
+        from dev_health_ops.models.settings import IntegrationCredential
+        from dev_health_ops.workers.sync_runtime import run_sync_config
+
+        credential = IntegrationCredential(
+            org_id="default",
+            provider=provider,
+            name="default",
+            credentials_encrypted="ciphertext",
+            config=config or {},
+        )
+        db_session.add(credential)
+        db_session.flush()
+
+        sync_config = _make_config(
+            provider=provider,
+            sync_options={"backfill_days": 1, **(sync_options or {})},
+            sync_targets=["work-items"],
+            org_id="default",
+        )
+        sync_config.credential_id = credential.id
+        db_session.add(sync_config)
+        db_session.flush()
+
+        with (
+            patch(
+                "dev_health_ops.workers.sync_runtime._get_db_url",
+                return_value="clickhouse://localhost/dev",
+            ),
+            patch("dev_health_ops.workers.sync_runtime._dispatch_post_sync_tasks"),
+            patch(
+                "dev_health_ops.metrics.job_work_items.run_work_items_sync_job"
+            ) as mock_run_work_items,
+            patch(
+                "dev_health_ops.workers.task_utils._decrypt_credential_sync",
+                return_value=decrypted,
+            ),
+            patch(
+                "dev_health_ops.db.get_postgres_session_sync",
+                side_effect=lambda *a, **k: _fake_session_ctx(db_session),
+            ),
+        ):
+            task = run_sync_config
+            task.push_request(id=f"{provider}-runtime-cred-{_uuid.uuid4()}")
+            try:
+                result = task(config_id=str(sync_config.id), org_id="default")
+            finally:
+                task.pop_request()
+
+        return result, mock_run_work_items
+
+    def test_run_sync_config_forwards_linear_credentials(self, db_session):
+        result, mock_run_work_items = self._run_sync_config_with_credential(
+            db_session,
+            provider="linear",
+            decrypted={"api_key": "lin_runtime"},
+        )
+
+        assert result["status"] == "success"
+        assert mock_run_work_items.call_args.kwargs["credentials"] == {
+            "api_key": "lin_runtime"
+        }
+
+    def test_run_sync_config_forwards_jira_credentials(self, db_session):
+        result, mock_run_work_items = self._run_sync_config_with_credential(
+            db_session,
+            provider="jira",
+            decrypted={
+                "base_url": "https://tenant.atlassian.net",
+                "email": "tenant@example.com",
+                "api_token": "jira_runtime",
+            },
+            sync_options={"project_keys": ["OPS"], "jql": "project = OPS"},
+        )
+
+        assert result["status"] == "success"
+        assert mock_run_work_items.call_args.kwargs["credentials"] == {
+            "base_url": "https://tenant.atlassian.net",
+            "email": "tenant@example.com",
+            "api_token": "jira_runtime",
+        }
+        assert mock_run_work_items.call_args.kwargs["jira_project_keys"] == ["OPS"]
+        assert mock_run_work_items.call_args.kwargs["jira_jql"] == "project = OPS"
+
+    @patch.dict(os.environ, {}, clear=True)
+    @patch("dev_health_ops.metrics.job_work_items.ClickHouseMetricsSink")
+    @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
+    def test_linear_work_items_use_explicit_credentials_not_env(
+        self, mock_from_env, mock_sink_class
+    ):
+        from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
+        from dev_health_ops.providers.linear.client import LinearClient
+
+        sink = MagicMock()
+        sink.query_dicts.return_value = []
+        mock_sink_class.return_value = sink
+
+        captured_clients: list[object] = []
+
+        def _fake_iter_ingest(self, ctx):
+            client = self._make_client()
+            captured_clients.append(client)
+            return iter(())
+
+        with patch(
+            "dev_health_ops.providers.linear.provider.LinearProvider.iter_ingest",
+            new=_fake_iter_ingest,
+        ):
+            run_work_items_sync_job(
+                db_url="clickhouse://localhost/dev",
+                day=datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
+                backfill_days=1,
+                provider="linear",
+                org_id="00000000-0000-0000-0000-000000000001",
+                credentials={"api_key": "lin_explicit"},
+            )
+
+        mock_from_env.assert_not_called()
+        assert captured_clients
+        assert isinstance(captured_clients[0], LinearClient)
+        assert captured_clients[0].auth.api_key == "lin_explicit"
+
+    @patch.dict(
+        os.environ,
+        {"JIRA_JQL": "project = ENV", "JIRA_PROJECT_KEYS": "ENV"},
+        clear=True,
+    )
+    @patch("dev_health_ops.metrics.job_work_items.ClickHouseMetricsSink")
+    @patch("dev_health_ops.providers.jira.client.JiraClient.from_env")
+    def test_jira_work_items_use_explicit_credentials_not_env(
+        self, mock_from_env, mock_sink_class
+    ):
+        from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
+
+        sink = MagicMock()
+        sink.query_dicts.return_value = []
+        mock_sink_class.return_value = sink
+
+        captured_clients: list[object] = []
+        captured_jqls: list[str] = []
+
+        class FakeJiraClient:
+            def iter_issues(self, **kwargs):
+                captured_clients.append(self)
+                captured_jqls.append(kwargs["jql"])
+                return iter(())
+
+            def close(self):
+                pass
+
+        with patch(
+            "dev_health_ops.providers.jira.client.JiraClient",
+            return_value=FakeJiraClient(),
+        ) as mock_jira_client:
+            run_work_items_sync_job(
+                db_url="clickhouse://localhost/dev",
+                day=datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
+                backfill_days=1,
+                provider="jira",
+                org_id="00000000-0000-0000-0000-000000000001",
+                credentials={
+                    "base_url": "https://tenant.atlassian.net",
+                    "email": "tenant@example.com",
+                    "api_token": "jira_explicit",
+                },
+            )
+
+        mock_from_env.assert_not_called()
+        assert captured_clients
+        kwargs = mock_jira_client.call_args.kwargs
+        assert isinstance(captured_clients[0], FakeJiraClient)
+        assert captured_jqls
+        assert all("ENV" not in jql for jql in captured_jqls)
+        assert kwargs["auth"].base_url == "https://tenant.atlassian.net"
+        assert kwargs["auth"].email == "tenant@example.com"
+        assert kwargs["auth"].api_token == "jira_explicit"

@@ -189,6 +189,37 @@ def _as_str_list(value: object | None) -> list[str]:
     return [str(item) for item in value if item is not None]
 
 
+def _jira_query_options(
+    sync_options: dict[str, Any],
+) -> tuple[list[str] | None, str | None, bool | None]:
+    project_keys_raw = sync_options.get("project_keys")
+    if project_keys_raw is None:
+        project_key = sync_options.get("project_key")
+        project_keys = [str(project_key)] if project_key else None
+    elif isinstance(project_keys_raw, str):
+        project_keys = [
+            key.strip() for key in project_keys_raw.split(",") if key.strip()
+        ]
+    else:
+        project_keys = _as_str_list(project_keys_raw) or None
+
+    jql_raw = sync_options.get("jql") or sync_options.get("jira_jql")
+    fetch_all_raw = sync_options.get("fetch_all")
+    if fetch_all_raw is None:
+        fetch_all_raw = sync_options.get("jira_fetch_all")
+
+    fetch_all = None
+    if fetch_all_raw is not None:
+        fetch_all = str(fetch_all_raw).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+
+    return project_keys, str(jql_raw) if jql_raw else None, fetch_all
+
+
 def _as_dict(value: object | None) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}

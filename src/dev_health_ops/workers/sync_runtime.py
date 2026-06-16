@@ -31,6 +31,7 @@ from dev_health_ops.workers.task_utils import (
     _credential_mapping,
     _extract_owner_repo,
     _get_db_url,
+    _jira_query_options,
     _merge_sync_flags,
     _normalize_sync_targets,
     _resolve_env_credentials,
@@ -742,12 +743,19 @@ def run_sync_config(
 
         elif provider == "jira":
             backfill_days = int(sync_options.get("backfill_days", 1))
+            jira_project_keys, jira_jql, jira_fetch_all = _jira_query_options(
+                sync_options
+            )
             run_work_items_sync_job(
                 db_url=db_url,
                 day=utc_today(),
                 backfill_days=backfill_days,
                 provider="jira",
                 org_id=org_id,
+                credentials=credentials or None,
+                jira_project_keys=jira_project_keys,
+                jira_jql=jira_jql,
+                jira_fetch_all=jira_fetch_all,
             )
             result_payload["backfill_days"] = backfill_days
 

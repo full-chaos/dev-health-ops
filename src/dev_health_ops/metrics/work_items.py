@@ -7,6 +7,7 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from dev_health_ops.metrics.dependencies import get_metrics_dependencies
 from dev_health_ops.models.ai_attribution import AIAttributionRecord
@@ -85,6 +86,10 @@ def fetch_jira_work_items_with_extras(
     status_mapping: StatusMapping,
     identity: IdentityResolver,
     project_keys: Sequence[str] | None = None,
+    client: Any | None = None,
+    jql_override: str | None = None,
+    fetch_all: bool | None = None,
+    use_env_query_options: bool = True,
 ) -> tuple[
     list[WorkItem],
     list[WorkItemStatusTransition],
@@ -102,19 +107,26 @@ def fetch_jira_work_items_with_extras(
     """
     deps = get_metrics_dependencies()
 
-    if project_keys is None:
+    if project_keys is None and use_env_query_options:
         raw_keys = os.getenv("JIRA_PROJECT_KEYS") or ""
         project_keys = [k.strip() for k in raw_keys.split(",") if k.strip()] or None
 
-    jql_override = (os.getenv("JIRA_JQL") or "").strip()
-    fetch_all = (os.getenv("JIRA_FETCH_ALL") or "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    jql_override = (
+        str(jql_override or "").strip()
+        if jql_override is not None or not use_env_query_options
+        else (os.getenv("JIRA_JQL") or "").strip()
+    )
+    if fetch_all is None:
+        fetch_all = use_env_query_options and (
+            os.getenv("JIRA_FETCH_ALL") or ""
+        ).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
 
-    if _env_flag("JIRA_USE_PROVIDER", False):
+    if client is None and _env_flag("JIRA_USE_PROVIDER", False):
         if project_keys:
             if len(project_keys) != 1:
                 logger.warning(
@@ -151,7 +163,7 @@ def fetch_jira_work_items_with_extras(
             batch_sprints,
         )
 
-    client = deps.jira_client_factory()
+    jira_client: Any = client or deps.jira_client_factory()
     work_items: list[WorkItem] = []
     transitions: list[WorkItemStatusTransition] = []
     dependencies: list[WorkItemDependency] = []
@@ -209,7 +221,7 @@ def fetch_jira_work_items_with_extras(
 
     for jql in jqls:
         logger.debug("Jira: JQL=%s", jql)
-        for issue in client.iter_issues(jql=jql, expand_changelog=True):
+        for issue in jira_client.iter_issues(jql=jql, expand_changelog=True):
             issue_key = issue.get("key") if isinstance(issue, dict) else None
             wi, wi_transitions = deps.jira_issue_to_work_item(
                 issue=issue,
@@ -234,7 +246,7 @@ def fetch_jira_work_items_with_extras(
             if fetch_comments and issue_key:
                 try:
                     comment_count = 0
-                    for comment in client.iter_issue_comments(
+                    for comment in jira_client.iter_issue_comments(
                         issue_id_or_key=str(issue_key)
                     ):
                         if comments_limit > 0 and comment_count >= comments_limit:
@@ -262,7 +274,7 @@ def fetch_jira_work_items_with_extras(
         if sprint_id in sprint_cache:
             continue
         try:
-            payload = client.get_sprint(sprint_id=str(sprint_id))
+            payload = jira_client.get_sprint(sprint_id=str(sprint_id))
         except Exception as exc:
             logger.warning("Jira: failed to fetch sprint %s: %s", sprint_id, exc)
             continue
@@ -273,7 +285,7 @@ def fetch_jira_work_items_with_extras(
 
     logger.info("Fetched %d Jira work items (since %s)", len(work_items), updated_since)
     try:
-        client.close()
+        jira_client.close()
     except Exception as exc:
         logger.warning("Failed to close Jira client: %s", exc)
     return work_items, transitions, dependencies, reopen_events, interactions, sprints

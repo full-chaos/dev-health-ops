@@ -247,8 +247,153 @@ def validate_work_unit_investment_density_and_coverage(
     return True
 
 
-async def _seed_auth_data(session, user_data: dict) -> None:
-    """Merge orgs/users, upsert memberships, replace licenses into Postgres.
+async def _merge_fixture_user(
+    session,
+    user,
+    *,
+    overwrite_real_users: bool,
+) -> str:
+    """Safely write a single fixture user and report whether dependents are safe.
+
+    Rules (CHAOS-2458):
+    - overwrite_real_users=False: insert only when neither the primary key nor
+      natural keys already exist. Any existing row is treated as real and left
+      untouched; dependents must not be written for skipped users.
+    - overwrite_real_users=True: explicit opt-in to the previous destructive
+      merge behavior for demo/dev refreshes.
+    """
+    from sqlalchemy import func, or_, select
+
+    from dev_health_ops.models.users import User
+
+    if overwrite_real_users:
+        # Explicit opt-in: caller accepts credential clobber risk.
+        await session.merge(user)
+        return "inserted"
+
+    # Match the auth layer's case-insensitive identity semantics (it stores and
+    # looks up email/username via lower()), so a real row like Admin@Host or
+    # username "Admin" is detected and never duplicated by a lowercase demo user.
+    natural_key_checks = [
+        User.id == user.id,
+        func.lower(User.email) == user.email.lower().strip(),
+    ]
+    if user.username is not None:
+        natural_key_checks.append(
+            func.lower(User.username) == user.username.lower().strip()
+        )
+
+    existing: User | None = (
+        await session.execute(select(User).where(or_(*natural_key_checks)).limit(1))
+    ).scalar_one_or_none()
+    if existing is None:
+        await session.merge(user)
+        return "inserted"
+
+    logging.warning(
+        "FIXTURES-GUARD: skipping fixture user %s (%s) because an existing "
+        "user row matched by id/email/username. No user fields, password_hash, "
+        "memberships, org ownership, or tenant data will be mutated. Pass "
+        "overwrite_real_users=True to bypass (demo/CI only).",
+        user.id,
+        user.email,
+    )
+    return "skipped_existing"
+
+
+async def _merge_fixture_org(
+    session,
+    org,
+    *,
+    overwrite_real_users: bool,
+) -> str:
+    """Insert a fixture org only when absent unless destructive merge is enabled."""
+    from sqlalchemy import func, or_, select
+
+    from dev_health_ops.models.users import Organization
+
+    if overwrite_real_users:
+        await session.merge(org)
+        return "inserted"
+
+    existing: Organization | None = (
+        await session.execute(
+            select(Organization)
+            .where(
+                or_(
+                    Organization.id == org.id,
+                    func.lower(Organization.slug) == org.slug.lower().strip(),
+                )
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        await session.merge(org)
+        return "inserted"
+
+    logging.warning(
+        "FIXTURES-GUARD: skipping fixture org %s (%s) because an existing "
+        "tenant matched by id/slug. No org fields, owner memberships, or "
+        "license rows will be mutated. Pass overwrite_real_users=True to "
+        "bypass (demo/CI only).",
+        org.id,
+        org.slug,
+    )
+    return "skipped_existing"
+
+
+async def _add_fixture_license_if_absent(
+    session,
+    org_license,
+    *,
+    overwrite_real_users: bool,
+) -> str:
+    """Insert fixture license without replacing existing tenant license by default."""
+    from sqlalchemy import delete, or_, select
+
+    from dev_health_ops.models.licensing import OrgLicense
+
+    existing: OrgLicense | None = (
+        await session.execute(
+            select(OrgLicense)
+            .where(
+                or_(
+                    OrgLicense.id == org_license.id,
+                    OrgLicense.org_id == org_license.org_id,
+                )
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    if existing is not None:
+        if overwrite_real_users:
+            await session.execute(
+                delete(OrgLicense).where(OrgLicense.org_id == org_license.org_id)
+            )
+            session.add(org_license)
+            return "inserted"
+
+        logging.warning(
+            "FIXTURES-GUARD: skipping fixture license for org %s because an "
+            "existing license matched by id/org_id. Pass overwrite_real_users=True "
+            "to bypass (demo/CI only).",
+            org_license.org_id,
+        )
+        return "skipped_existing"
+
+    session.add(org_license)
+    return "inserted"
+
+
+async def _seed_auth_data(
+    session,
+    user_data: dict,
+    *,
+    overwrite_real_users: bool = False,
+) -> None:
+    """Seed auth orgs/users/memberships/licenses into Postgres.
 
     Idempotent against re-runs. Memberships use an explicit
     ``INSERT ... ON CONFLICT (user_id, org_id) DO NOTHING`` because
@@ -260,26 +405,104 @@ async def _seed_auth_data(session, user_data: dict) -> None:
     even though the merging row has a deterministic id (CHAOS-1717).
     Existing licenses already use a delete + add idempotency dance for
     similar reasons.
+
+    Credential guard (CHAOS-2458)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    By default (``overwrite_real_users=False``) fixture auth seeding only runs
+    against an EMPTY auth database: if any organization or user already exists,
+    the whole pass is skipped and nothing is written.  This is the primary guard
+    and closes every injection/overwrite/duplicate path at once (including the
+    known-password admin superuser).  Per-entity insert-if-absent checks remain
+    as defense-in-depth.  Pass ``overwrite_real_users=True`` only in
+    fully-isolated demo/CI environments where seeding or refreshing auth data in
+    a populated database is explicitly acceptable.
     """
-    from sqlalchemy import delete
+    from sqlalchemy import select
     from sqlalchemy.dialects.postgresql import insert as pg_insert
     from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-    from dev_health_ops.models.licensing import OrgLicense
-    from dev_health_ops.models.users import Membership
+    from dev_health_ops.models.users import Membership, Organization, User
 
     bind = await session.connection()
     dialect = bind.dialect.name
 
+    # Primary credential guard (CHAOS-2458): fixture auth seeding must never
+    # write into a populated auth database on the default path. If ANY org or
+    # user already exists, refuse to seed auth data at all -- this closes every
+    # injection/overwrite/duplicate path (incl. the known-password superuser)
+    # in one place. overwrite_real_users=True opts into seeding a populated DB
+    # (fully-isolated demo/CI only).
+    #
+    # NOTE: this is a best-effort, non-atomic check (TOCTOU): a concurrent
+    # first-ever registration racing in during the seed pass is not covered.
+    # An atomic advisory-lock + single-transaction hardening is tracked as a
+    # follow-up. In practice this seeder is an operator/CI tool and must not be
+    # run against a live production DB; the check blocks the realistic case.
+    if not overwrite_real_users:
+        has_org = (await session.execute(select(Organization.id).limit(1))).first()
+        has_user = (await session.execute(select(User.id).limit(1))).first()
+        if has_org is not None or has_user is not None:
+            logging.warning(
+                "FIXTURES-GUARD: refusing to seed fixture auth data into a "
+                "non-empty auth database (existing organizations/users found). "
+                "No users, orgs, memberships, or licenses were written. Pass "
+                "overwrite_real_users=True to seed/refresh in a populated DB "
+                "(demo/CI only)."
+            )
+            return
+
+    safe_org_ids: set[Any] = set()
     for org in user_data["organizations"]:
-        await session.merge(org)
+        status = await _merge_fixture_org(
+            session,
+            org,
+            overwrite_real_users=overwrite_real_users,
+        )
+        if status == "inserted":
+            safe_org_ids.add(org.id)
     await session.commit()
 
+    # Gate fixture-user insertion on safe-org insertion (CHAOS-2458): on the
+    # default path, never introduce a fixture account (e.g. the known-password
+    # admin@devhealth.example superuser) for a tenant that already exists. A
+    # fixture user is eligible only if it belongs to at least one org that was
+    # freshly inserted this run; users tied only to pre-existing (skipped) orgs
+    # are left out entirely. overwrite_real_users=True keeps the full pass.
+    all_memberships = user_data.get("memberships") or []
+    user_org_map: dict[Any, set[Any]] = {}
+    for membership in all_memberships:
+        user_org_map.setdefault(membership.user_id, set()).add(membership.org_id)
+
+    safe_user_ids: set[Any] = set()
     for user in user_data["users"]:
-        await session.merge(user)
+        if not overwrite_real_users and not (
+            user_org_map.get(user.id, set()) & safe_org_ids
+        ):
+            logging.warning(
+                "FIXTURES-GUARD: skipping fixture user %s (%s) because it is not "
+                "tied to any newly-seeded fixture org; refusing to inject a "
+                "fixture account next to existing tenant data. Pass "
+                "overwrite_real_users=True to bypass (demo/CI only).",
+                user.id,
+                user.email,
+            )
+            continue
+        status = await _merge_fixture_user(
+            session,
+            user,
+            overwrite_real_users=overwrite_real_users,
+        )
+        if status == "inserted":
+            safe_user_ids.add(user.id)
     await session.commit()
 
     memberships = user_data.get("memberships") or []
+    if not overwrite_real_users:
+        memberships = [
+            membership
+            for membership in memberships
+            if membership.user_id in safe_user_ids and membership.org_id in safe_org_ids
+        ]
     if memberships:
         rows = [
             {
@@ -319,10 +542,13 @@ async def _seed_auth_data(session, user_data: dict) -> None:
     await session.commit()
 
     for org_license in user_data.get("licenses", []):
-        await session.execute(
-            delete(OrgLicense).where(OrgLicense.org_id == org_license.org_id)
+        if not overwrite_real_users and org_license.org_id not in safe_org_ids:
+            continue
+        await _add_fixture_license_if_absent(
+            session,
+            org_license,
+            overwrite_real_users=overwrite_real_users,
         )
-        session.add(org_license)
     await session.commit()
 
 

@@ -33,7 +33,7 @@ from dev_health_ops.api.services.auth import (
 logger = logging.getLogger(__name__)
 
 
-def get_authenticated_user_from_headers(
+async def get_authenticated_user_from_headers(
     headers: Iterable[tuple[bytes, bytes]],
 ) -> AuthenticatedUser | None:
     for key, value in headers:
@@ -41,7 +41,12 @@ def get_authenticated_user_from_headers(
             token = extract_token_from_header(value.decode("latin-1"))
             if not token:
                 return None
-            return get_auth_service().get_authenticated_user(token)
+            from dev_health_ops.db import get_postgres_session
+
+            async with get_postgres_session() as session:
+                return await get_auth_service().authenticate_access_token(
+                    token, session
+                )
     return None
 
 
@@ -84,7 +89,7 @@ class OrgIdMiddleware:
                 header_org_id = value.decode("latin-1").strip() or None
                 break
 
-        user = get_authenticated_user_from_headers(headers)
+        user = await get_authenticated_user_from_headers(headers)
 
         resolved_org_id: str | None = None
         if header_org_id and user is not None:

@@ -61,6 +61,7 @@ async def get_context(request: Request) -> GraphQLContext:
         get_current_org_id,
         get_impersonation_context,
     )
+    from dev_health_ops.db import get_postgres_session
 
     db_url = os.getenv("CLICKHOUSE_URI") or DEFAULT_CLICKHOUSE_URI
     persisted_query_id = request.headers.get("X-Persisted-Query-Id")
@@ -72,7 +73,8 @@ async def get_context(request: Request) -> GraphQLContext:
         token = extract_token_from_header(auth_header)
         if token:
             auth_service = get_auth_service()
-            user = auth_service.get_authenticated_user(token)
+            async with get_postgres_session() as db:
+                user = await auth_service.authenticate_access_token(token, db)
             logger.debug("Authenticated user: %s", user.email if user else None)
 
     if _graphql_auth_required() and user is None:

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -59,7 +59,7 @@ async def test_header_for_non_member_org_is_rejected():
     with (
         patch(
             "dev_health_ops.api.middleware.get_authenticated_user_from_headers",
-            return_value=user,
+            AsyncMock(return_value=user),
         ),
         patch(
             "dev_health_ops.api.middleware.user_is_member_of_org",
@@ -99,7 +99,7 @@ async def test_header_for_member_org_is_accepted():
     with (
         patch(
             "dev_health_ops.api.middleware.get_authenticated_user_from_headers",
-            return_value=user,
+            AsyncMock(return_value=user),
         ),
         patch(
             "dev_health_ops.api.middleware.user_is_member_of_org",
@@ -144,7 +144,7 @@ async def test_superuser_with_header_bypasses_membership_check():
 
     with patch(
         "dev_health_ops.api.middleware.get_authenticated_user_from_headers",
-        return_value=super_user,
+        AsyncMock(return_value=super_user),
     ):
         try:
             async with httpx.AsyncClient(
@@ -179,7 +179,7 @@ async def test_anonymous_request_with_header_passes_through():
 
     with patch(
         "dev_health_ops.api.middleware.get_authenticated_user_from_headers",
-        return_value=None,
+        AsyncMock(return_value=None),
     ):
         try:
             async with httpx.AsyncClient(
@@ -206,7 +206,7 @@ async def test_missing_header_falls_back_to_jwt_org():
 
     with patch(
         "dev_health_ops.api.middleware.get_authenticated_user_from_headers",
-        return_value=user,
+        AsyncMock(return_value=user),
     ):
         try:
             async with httpx.AsyncClient(

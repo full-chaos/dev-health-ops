@@ -16,6 +16,10 @@ from typing import Any
 
 import jwt
 from jwt.exceptions import InvalidTokenError
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from dev_health_ops.models.users import User
 
 logger = logging.getLogger(__name__)
 
@@ -344,6 +348,57 @@ class AuthService:
             impersonated_by=payload.get("impersonating_user_id"),
             token_version=payload.get("tv"),
         )
+
+    async def authenticate_access_token(
+        self,
+        token: str,
+        db: AsyncSession,
+    ) -> AuthenticatedUser | None:
+        """Validate an access JWT against the database-backed user state.
+
+        Missing legacy ``tv`` claims are treated as version 0 so access tokens
+        issued before token-version rollout remain valid for users whose
+        persisted token_version is still the backfilled default. Present claims
+        must match the current database value exactly.
+        """
+        user = self.get_authenticated_user(token)
+        if not user:
+            return None
+
+        try:
+            user_uuid = uuid.UUID(user.user_id)
+        except ValueError:
+            logger.warning("JWT contains invalid user id claim: %s", user.user_id)
+            return None
+
+        result = await db.execute(
+            select(User.id, User.is_active, User.token_version).where(
+                User.id == user_uuid
+            )
+        )
+        db_user = result.one_or_none()
+        if db_user is None:
+            logger.warning("JWT valid but user not found in DB: %s", user.user_id)
+            return None
+        if not db_user.is_active:
+            logger.warning("JWT valid but user is deactivated: %s", user.user_id)
+            return None
+
+        try:
+            token_version = 0 if user.token_version is None else int(user.token_version)
+        except (TypeError, ValueError):
+            logger.warning(
+                "JWT token version claim is invalid for user: %s", user.user_id
+            )
+            return None
+
+        current_token_version = int(db_user.token_version or 0)
+        if token_version != current_token_version:
+            logger.warning("JWT token version mismatch for user: %s", user.user_id)
+            return None
+
+        user.token_version = token_version
+        return user
 
     def refresh_access_token(
         self,

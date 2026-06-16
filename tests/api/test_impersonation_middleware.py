@@ -463,7 +463,7 @@ async def test_impersonation_overrides_orgid_when_inner():
 
     with (
         patch(_PATCH_TARGET, AsyncMock(return_value=session)),
-        patch(_ORGID_USER_PATCH, return_value=state_user),
+        patch(_ORGID_USER_PATCH, AsyncMock(return_value=state_user)),
     ):
         try:
             async with httpx.AsyncClient(
@@ -506,7 +506,7 @@ async def test_orgid_clobbers_impersonation_when_orgid_inner():
 
     with (
         patch(_PATCH_TARGET, AsyncMock(return_value=session)),
-        patch(_ORGID_USER_PATCH, return_value=state_user),
+        patch(_ORGID_USER_PATCH, AsyncMock(return_value=state_user)),
     ):
         try:
             async with httpx.AsyncClient(

@@ -112,11 +112,16 @@ def test_run_backfill_for_config_raises_when_config_missing(
 
 
 class _FakeConfig:
-    def __init__(self, org_id: str) -> None:
+    def __init__(
+        self,
+        org_id: str,
+        provider: str = "github",
+        sync_options: dict[str, object] | None = None,
+    ) -> None:
         self.id = org_id
         self.org_id = org_id
-        self.provider = "github"
-        self.sync_options: dict[str, object] = {}
+        self.provider = provider
+        self.sync_options = sync_options or {}
 
 
 def _patch_session_with_config(monkeypatch: pytest.MonkeyPatch, config: object) -> None:
@@ -191,3 +196,38 @@ def test_run_backfill_raises_on_org_mismatch(
             since=date(2026, 1, 1),
             before=date(2026, 1, 3),
         )
+
+
+def test_run_backfill_forwards_jira_query_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_org = "55555555-5555-5555-5555-555555555555"
+    _patch_session_with_config(
+        monkeypatch,
+        _FakeConfig(
+            config_org,
+            provider="jira",
+            sync_options={"project_keys": ["OPS"], "jql": "project = OPS"},
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_sync_job(*args, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner.run_work_items_sync_job",
+        _fake_sync_job,
+    )
+
+    run_backfill_for_config(
+        db_url="clickhouse://local",
+        sync_config_id="66666666-6666-6666-6666-666666666666",
+        org_id=None,
+        since=date(2026, 1, 1),
+        before=date(2026, 1, 3),
+    )
+
+    assert captured["provider"] == "jira"
+    assert captured["jira_project_keys"] == ["OPS"]
+    assert captured["jira_jql"] == "project = OPS"

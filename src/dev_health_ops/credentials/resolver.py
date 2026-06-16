@@ -318,6 +318,51 @@ def gitlab_credentials_from_mapping(
         return None
 
 
+def jira_credentials_from_mapping(
+    cred_dict: dict[str, Any],
+    *,
+    source: CredentialSource = CredentialSource.DATABASE,
+    credential_name: str = "default",
+) -> JiraCredentials | None:
+    api_token = str(cred_dict.get("api_token") or cred_dict.get("apiToken") or "")
+    email = str(cred_dict.get("email") or "")
+    base_url = str(
+        cred_dict.get("base_url")
+        or cred_dict.get("baseUrl")
+        or cred_dict.get("url")
+        or ""
+    )
+    try:
+        return JiraCredentials(
+            api_token=api_token,
+            email=email,
+            base_url=base_url,
+            source=source,
+            credential_name=credential_name,
+        )
+    except (ValueError, TypeError):
+        logger.debug("Jira credentials mapping was incomplete or invalid")
+        return None
+
+
+def linear_credentials_from_mapping(
+    cred_dict: dict[str, Any],
+    *,
+    source: CredentialSource = CredentialSource.DATABASE,
+    credential_name: str = "default",
+) -> LinearCredentials | None:
+    api_key = str(cred_dict.get("api_key") or cred_dict.get("apiKey") or "")
+    try:
+        return LinearCredentials(
+            api_key=api_key,
+            source=source,
+            credential_name=credential_name,
+        )
+    except (ValueError, TypeError):
+        logger.debug("Linear credentials mapping was incomplete or invalid")
+        return None
+
+
 def resolve_gitlab_url(
     sync_options: dict[str, Any],
     gitlab_credentials: GitLabCredentials | None,

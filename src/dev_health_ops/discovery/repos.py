@@ -283,10 +283,18 @@ def discover_gitlab_repos(
         name = getattr(group_project, "name", "") or ""
         project_id = getattr(group_project, "id", None)
         if project_id is not None and fnmatch.fnmatch(name, project_pattern):
+            # Prefer the canonical path_with_namespace, then the URL *path*
+            # slug. The display name can differ from the slug stored as the
+            # repo full_name downstream, so it is only a last resort for
+            # objects that expose neither path_with_namespace nor path. Leave
+            # empty if nothing usable is available; dispatch_batch_sync guards
+            # against an empty scope.
             path_with_namespace = (
-                getattr(group_project, "path_with_namespace", "")
-                or f"{group_path}/{name}"
+                getattr(group_project, "path_with_namespace", "") or ""
             )
+            if not path_with_namespace:
+                slug = getattr(group_project, "path", "") or name
+                path_with_namespace = f"{group_path}/{slug}" if slug else ""
             result.append((str(project_id), path_with_namespace))
 
     return result

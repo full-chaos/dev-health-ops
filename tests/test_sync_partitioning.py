@@ -469,6 +469,23 @@ class TestDiscoverGitlabRepos:
         assert result == [("100", "my-group/api")]
 
     @patch("gitlab.Gitlab")
+    def test_group_project_scope_uses_path_slug_not_display_name(self, mock_gitlab_cls):
+        """CHAOS-2450: when a group project lacks path_with_namespace, the scope
+        must use the URL path slug (canonical, matches the stored repo full_name)
+        not the display name, which can diverge and silently fail work-items
+        scoping.
+        """
+        from dev_health_ops.discovery.repos import discover_gitlab_repos
+
+        proj = SimpleNamespace(name="API Service", path="api-service", id=100)
+        mock_grp = MagicMock()
+        mock_grp.projects.list.return_value = [proj]
+        mock_gitlab_cls.return_value.groups.get.return_value = mock_grp
+
+        result = discover_gitlab_repos({"search": "my-group/*"}, "glpat_token")
+        assert result == [("100", "my-group/api-service")]
+
+    @patch("gitlab.Gitlab")
     def test_bare_group_search_lists_all_group_projects(self, mock_gitlab_cls):
         from dev_health_ops.discovery.repos import discover_gitlab_repos
 

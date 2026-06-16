@@ -6,14 +6,16 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
 from dev_health_ops.connectors.utils.rate_limit_queue import (
     RateLimitConfig,
     RateLimitGate,
+    create_rate_limit_gate,
 )
-from dev_health_ops.providers._ratelimit import penalize_from_response
+from dev_health_ops.providers._ratelimit import gate_call
 from dev_health_ops.providers.utils import EnvSpec, read_env_spec
 
 logger = logging.getLogger(__name__)
@@ -41,6 +43,12 @@ class LinearComplexityLimitError(LinearGraphQLError):
 
 class LinearRateLimitError(RuntimeError):
     """Linear kept returning HTTP 429 after exhausting all retry attempts."""
+
+
+class _LinearHTTPRateLimit(RuntimeError):
+    def __init__(self, retry_after_seconds: float | None) -> None:
+        super().__init__("Linear HTTP 429")
+        self.retry_after_seconds = retry_after_seconds
 
 
 ISSUES_QUERY = """
@@ -379,10 +387,17 @@ class LinearClient:
         per_page: int = 50,
         gate: RateLimitGate | None = None,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+        org_id: str | None = None,
     ) -> None:
         self.auth = auth
         self.per_page = max(1, min(100, int(per_page)))
-        self.gate = gate or RateLimitGate(RateLimitConfig(initial_backoff_seconds=1.0))
+        host = urlparse(LINEAR_API_URL).hostname or "api.linear.app"
+        self.gate = gate or create_rate_limit_gate(
+            "linear",
+            org_id=org_id,
+            host=host,
+            config=RateLimitConfig(initial_backoff_seconds=1.0),
+        )
         self.max_attempts = max(1, int(max_attempts))
         self._rate_limit: RateLimitInfo | None = None
         self._client = httpx.Client(
@@ -394,14 +409,14 @@ class LinearClient:
         )
 
     @classmethod
-    def from_env(cls) -> LinearClient:
+    def from_env(cls, *, org_id: str | None = None) -> LinearClient:
         env = read_env_spec(
             EnvSpec(
                 required={"api_key": "LINEAR_API_KEY"},
                 missing_error="Linear API key required (set LINEAR_API_KEY)",
             )
         )
-        return cls(auth=LinearAuth(api_key=str(env["api_key"])))
+        return cls(auth=LinearAuth(api_key=str(env["api_key"])), org_id=org_id)
 
     def _execute(
         self,
@@ -414,17 +429,15 @@ class LinearClient:
 
         last_delay = 0.0
         for attempt in range(1, self.max_attempts + 1):
-            self.gate.wait_sync()
-            self._wait_for_rate_limit()
-
-            response = self._client.post(LINEAR_API_URL, json=payload)
-            self._update_rate_limit(response)
-
-            if response.status_code == 429:
-                # Respect Retry-After when present; otherwise the gate
-                # applies exponential backoff (1s * 2^n, capped at the
-                # gate's max_backoff_seconds).
-                last_delay = penalize_from_response(self.gate, response)
+            try:
+                with gate_call(self.gate):
+                    self._wait_for_rate_limit()
+                    response = self._client.post(LINEAR_API_URL, json=payload)
+                    self._update_rate_limit(response)
+                    if response.status_code == 429:
+                        raise _LinearHTTPRateLimit(self._retry_after_seconds(response))
+            except _LinearHTTPRateLimit as exc:
+                last_delay = self._last_applied_delay(exc.retry_after_seconds)
                 logger.warning(
                     "Linear rate limit hit (attempt %d/%d), backing off %.1fs",
                     attempt,
@@ -442,7 +455,6 @@ class LinearClient:
                 self._raise_graphql_errors(errors)
 
             response.raise_for_status()
-            self.gate.reset()
             data = body if isinstance(body, dict) else {}
             return data.get("data") or {}
 
@@ -450,6 +462,28 @@ class LinearClient:
             f"Linear API rate limited: giving up after {self.max_attempts} "
             f"attempts (last backoff {last_delay:.1f}s)"
         )
+
+    def _last_applied_delay(self, retry_after_seconds: float | None) -> float:
+        if retry_after_seconds is not None:
+            return max(
+                0.0,
+                min(float(retry_after_seconds), self.gate._config.max_backoff_seconds),
+            )
+        factor = self.gate._config.backoff_factor or 1.0
+        if factor <= 0:
+            return self.gate._config.initial_backoff_seconds
+        return min(
+            self.gate._current_backoff / factor,
+            self.gate._config.max_backoff_seconds,
+        )
+
+    @staticmethod
+    def _retry_after_seconds(response: httpx.Response) -> float | None:
+        try:
+            raw = response.headers.get("Retry-After")
+            return float(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _parse_body(response: httpx.Response) -> Any:

@@ -111,7 +111,9 @@ class TeamMembershipService:
 
             DiscoveredMember = _get_discovered_member_cls()
             normalized_key = team_key.removeprefix("linear:")
-            with LinearClient(auth=LinearAuth(api_key=api_key)) as client:
+            with LinearClient(
+                auth=LinearAuth(api_key=api_key), org_id=self.org_id
+            ) as client:
                 for team in client.iter_teams():
                     if team.get("key") != normalized_key:
                         continue

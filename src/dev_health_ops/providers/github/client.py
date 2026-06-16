@@ -5,13 +5,15 @@ import logging
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Protocol, TypedDict, TypeVar
+from typing import Any, Protocol, TypedDict, TypeVar, cast
+from urllib.parse import urlparse
 
 from dev_health_ops.connectors.utils.github_app import GitHubAppTokenProvider
 from dev_health_ops.connectors.utils.graphql import GitHubGraphQLClient
 from dev_health_ops.connectors.utils.rate_limit_queue import (
     RateLimitConfig,
     RateLimitGate,
+    create_rate_limit_gate,
 )
 from dev_health_ops.credentials.resolver import (
     CredentialResolutionError,
@@ -126,8 +128,7 @@ class _GitHubIssueBaseLike(Protocol):
 
 
 class _GitHubIssueLike(_GitHubIssueBaseLike, Protocol):
-    def get_events(self) -> Iterable[_GitHubEventLike]:
-        pass
+    def get_events(self) -> Iterable[_GitHubEventLike]: ...
 
 
 class _GitHubPullRequestLike(_GitHubIssueBaseLike, Protocol):
@@ -203,12 +204,20 @@ class GitHubWorkClient:
         auth: GitHubAuth,
         per_page: int = 100,
         gate: RateLimitGate | None = None,
+        org_id: str | None = None,
     ) -> None:
         from github import Github  # PyGithub
 
         self.auth = auth
         self.per_page = max(1, min(100, int(per_page)))
-        self.gate = gate or RateLimitGate(RateLimitConfig(initial_backoff_seconds=1.0))
+        base_url = auth.base_url or "https://api.github.com"
+        host = urlparse(base_url).hostname or "api.github.com"
+        self.gate = gate or create_rate_limit_gate(
+            "github",
+            org_id=org_id,
+            host=host,
+            config=RateLimitConfig(initial_backoff_seconds=1.0),
+        )
         self._app_token_provider: GitHubAppTokenProvider | None = None
 
         token = auth.token
@@ -246,7 +255,7 @@ class GitHubWorkClient:
         self.graphql = GitHubGraphQLClient(token, token_provider=token_provider)
 
     @classmethod
-    def from_env(cls) -> GitHubWorkClient:
+    def from_env(cls, *, org_id: str | None = None) -> GitHubWorkClient:
         try:
             credentials = resolve_credentials_sync("github", allow_env_fallback=True)
         except CredentialResolutionError as exc:
@@ -257,10 +266,11 @@ class GitHubWorkClient:
             ) from exc
         if not isinstance(credentials, GitHubCredentials):
             raise ValueError("Resolved credentials are not GitHub credentials")
-        return cls(auth=GitHubAuth.from_credentials(credentials))
+        return cls(auth=GitHubAuth.from_credentials(credentials), org_id=org_id)
 
     def get_repo(self, *, owner: str, repo: str) -> Any:
-        return self.github.get_repo(f"{owner}/{repo}")
+        with gate_call(self.gate):
+            return self.github.get_repo(f"{owner}/{repo}")
 
     def _iter_with_limit(
         self,
@@ -295,7 +305,8 @@ class GitHubWorkClient:
         limit: int | None = None,
     ) -> Iterable[_GitHubIssueLike]:
         gh_repo = self.get_repo(owner=owner, repo=repo)
-        issues = gh_repo.get_issues(state=state, since=since)
+        with gate_call(self.gate):
+            issues = gh_repo.get_issues(state=state, since=since)
         yield from self._iter_with_limit(
             issues,
             limit=limit,
@@ -314,11 +325,17 @@ class GitHubWorkClient:
         Accepts both Issues and PullRequests: PyGithub's Issue exposes the
         endpoint as get_events(), PullRequest as get_issue_events().
         """
-        if hasattr(issue, "get_events"):
-            events = issue.get_events()
+        get_events = getattr(issue, "get_events", None)
+        if callable(get_events):
+            with gate_call(self.gate):
+                events = get_events()
         else:
-            events = issue.get_issue_events()
-        yield from self._iter_with_limit(events, limit=limit)
+            get_issue_events = getattr(issue, "get_issue_events")
+            with gate_call(self.gate):
+                events = get_issue_events()
+        yield from self._iter_with_limit(
+            cast(Iterable[_GitHubEventLike], events), limit=limit
+        )
 
     def iter_pull_requests(
         self,
@@ -334,7 +351,8 @@ class GitHubWorkClient:
         Iterate pull requests in a repository via REST.
         """
         gh_repo = self.get_repo(owner=owner, repo=repo)
-        pulls = gh_repo.get_pulls(state=state, sort=sort, direction=direction)
+        with gate_call(self.gate):
+            pulls = gh_repo.get_pulls(state=state, sort=sort, direction=direction)
         yield from self._iter_with_limit(pulls, limit=limit)
 
     def iter_issue_comments(
@@ -343,7 +361,9 @@ class GitHubWorkClient:
         """
         Iterate comments on an issue via REST.
         """
-        yield from self._iter_with_limit(issue.get_comments(), limit=limit)
+        with gate_call(self.gate):
+            comments = issue.get_comments()
+        yield from self._iter_with_limit(comments, limit=limit)
 
     def iter_pr_comments(
         self, pr: _GitHubPullRequestLike, *, limit: int | None = None
@@ -360,7 +380,9 @@ class GitHubWorkClient:
         """
         Iterate review comments on a pull request.
         """
-        yield from self._iter_with_limit(pr.get_review_comments(), limit=limit)
+        with gate_call(self.gate):
+            comments = pr.get_review_comments()
+        yield from self._iter_with_limit(comments, limit=limit)
 
     def iter_pr_social_data_batch(
         self,
@@ -740,9 +762,9 @@ class GitHubWorkClient:
         Iterate milestones in a repository via REST.
         """
         gh_repo = self.get_repo(owner=owner, repo=repo)
-        yield from self._iter_with_limit(
-            gh_repo.get_milestones(state=state), limit=limit
-        )
+        with gate_call(self.gate):
+            milestones = gh_repo.get_milestones(state=state)
+        yield from self._iter_with_limit(milestones, limit=limit)
 
     def iter_project_v2_items(
         self,

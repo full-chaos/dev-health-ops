@@ -64,7 +64,8 @@ class JiraActivityInferenceService:
         from dev_health_ops.providers.jira.client import JiraAuth, JiraClient
 
         client = JiraClient(
-            auth=JiraAuth(base_url=jira_url, email=email, api_token=api_token)
+            auth=JiraAuth(base_url=jira_url, email=email, api_token=api_token),
+            org_id=self.org_id,
         )
 
         def _fetch_issues() -> list[dict[str, Any]]:

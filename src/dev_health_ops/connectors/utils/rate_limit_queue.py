@@ -15,7 +15,6 @@ unavailable.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import os
 import threading
@@ -118,9 +117,9 @@ end
 """
 
 
-def _token_hash(token: str) -> str:
-    """Return first 8 hex chars of SHA-256 of *token*."""
-    return hashlib.sha256(token.encode()).hexdigest()[:8]
+def _key_part(value: str | None) -> str:
+    part = str(value or "").strip()
+    return part or "_"
 
 
 class DistributedRateLimitGate(RateLimitGate):
@@ -134,6 +133,8 @@ class DistributedRateLimitGate(RateLimitGate):
     def __init__(
         self,
         provider: str,
+        org_id: str | None = None,
+        host: str | None = None,
         token_hint: str = "",
         config: RateLimitConfig | None = None,
         *,
@@ -141,10 +142,11 @@ class DistributedRateLimitGate(RateLimitGate):
     ) -> None:
         super().__init__(config=config)
         self._provider = provider
+        self._org_id = _key_part(org_id)
+        self._host = _key_part(host or token_hint)
         self._token_hint = token_hint
 
-        token_part = f":{_token_hash(token_hint)}" if token_hint else ""
-        self._redis_key = f"rate_limit:{provider}{token_part}"
+        self._redis_key = f"rate_limit:{provider}:{self._org_id}:{self._host}"
         self._ttl = int((self._config.max_backoff_seconds or 300) * 2)
 
         self._redis: Any = None
@@ -293,6 +295,8 @@ _factory_lock = threading.Lock()
 
 def create_rate_limit_gate(
     provider: str,
+    org_id: str | None = None,
+    host: str | None = None,
     token_hint: str = "",
     config: RateLimitConfig | None = None,
 ) -> RateLimitGate:
@@ -312,6 +316,8 @@ def create_rate_limit_gate(
     try:
         gate = DistributedRateLimitGate(
             provider=provider,
+            org_id=org_id,
+            host=host,
             token_hint=token_hint,
             config=config,
         )

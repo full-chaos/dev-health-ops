@@ -421,6 +421,7 @@ class TestDiscoverLinear:
         ]
 
         service = TeamDiscoveryService.__new__(TeamDiscoveryService)
+        service.org_id = "test-org"
         result = asyncio.run(service.discover_linear(api_key="test-key"))
 
         assert len(result) == 2
@@ -446,6 +447,7 @@ class TestDiscoverLinear:
         mock_client.iter_teams.return_value = []
 
         service = TeamDiscoveryService.__new__(TeamDiscoveryService)
+        service.org_id = "test-org"
         result = asyncio.run(service.discover_linear(api_key="test-key"))
 
         assert result == []
@@ -471,6 +473,7 @@ class TestDiscoverLinear:
         ]
 
         service = TeamDiscoveryService.__new__(TeamDiscoveryService)
+        service.org_id = "test-org"
         result = asyncio.run(service.discover_linear(api_key="test-key"))
 
         assert len(result) == 1
@@ -499,6 +502,7 @@ class TestDiscoverLinear:
         ]
 
         service = TeamDiscoveryService.__new__(TeamDiscoveryService)
+        service.org_id = "test-org"
         asyncio.run(service.discover_linear(api_key="test-key"))
 
         # Context-manager protocol guarantees cleanup via __exit__

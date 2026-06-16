@@ -91,7 +91,13 @@ class LinearProvider(ProviderWithClient[LinearClient]):
             linear_issue_to_work_item,
         )
 
-        client = self._make_client()
+        client = (
+            self._client
+            if self._client is not None
+            else self.client_cls.from_env(
+                org_id=str(ctx.org_id) if ctx.org_id is not None else None
+            )
+        )
 
         def _issue_dependencies(
             issue: dict, work_item_id: str

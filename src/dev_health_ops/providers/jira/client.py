@@ -4,11 +4,12 @@ import logging
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
-from dev_health_ops.connectors.utils import retry_with_backoff
 from dev_health_ops.connectors.utils.rate_limit_queue import (
     RateLimitConfig,
     RateLimitGate,
+    create_rate_limit_gate,
 )
 from dev_health_ops.providers._ratelimit import penalize_from_response
 from dev_health_ops.providers.utils import EnvSpec, read_env_spec
@@ -74,20 +75,29 @@ class JiraClient:
         timeout_seconds: int = 30,
         per_page: int = 100,
         gate: RateLimitGate | None = None,
+        org_id: str | None = None,
+        max_retries_429: int = 3,
     ) -> None:
         import requests
 
         self.auth = auth
         self.timeout_seconds = int(timeout_seconds)
         self.per_page = max(1, min(100, int(per_page)))
-        self.gate = gate or RateLimitGate(RateLimitConfig(initial_backoff_seconds=1.0))
+        host = urlparse(auth.base_url).hostname or "_"
+        self.gate = gate or create_rate_limit_gate(
+            "jira",
+            org_id=org_id,
+            host=host,
+            config=RateLimitConfig(initial_backoff_seconds=1.0),
+        )
+        self.max_retries_429 = max(0, int(max_retries_429))
 
         self.session = requests.Session()
         self.session.auth = (auth.email, auth.api_token)
         self.session.headers.update({"Accept": "application/json"})
 
     @classmethod
-    def from_env(cls) -> JiraClient:
+    def from_env(cls, *, org_id: str | None = None) -> JiraClient:
         env = read_env_spec(
             EnvSpec(
                 required={
@@ -105,7 +115,8 @@ class JiraClient:
                 base_url=_normalize_jira_base_url(str(env["base_url"])),
                 email=str(env["email"]),
                 api_token=str(env["api_token"]),
-            )
+            ),
+            org_id=org_id,
         )
 
     def close(self) -> None:
@@ -121,27 +132,42 @@ class JiraClient:
         import requests
 
         url = self._url(path)
-        self.gate.wait_sync()
-        try:
-            resp = self.session.get(url, params=params, timeout=self.timeout_seconds)
-            if resp.status_code == 429:
-                applied = penalize_from_response(self.gate, resp)
-                logger.info("Jira rate limited; backoff %.1fs (HTTP 429)", applied)
-            resp.raise_for_status()
-            self.gate.reset()
-            data = resp.json()
-            return data if isinstance(data, dict) else {}
-        except requests.HTTPError as exc:
+        attempts = self.max_retries_429 + 1
+        for attempt in range(attempts):
+            self.gate.wait_sync()
             try:
-                body = exc.response.text if exc.response is not None else ""
-            except Exception:
-                body = ""
-            logger.debug(
-                "Jira request failed: %s %s params=%s body=%s", "GET", url, params, body
-            )
-            raise
+                resp = self.session.get(
+                    url, params=params, timeout=self.timeout_seconds
+                )
+                if resp.status_code == 429:
+                    applied = penalize_from_response(self.gate, resp)
+                    logger.info(
+                        "Jira rate limited; backoff %.1fs (HTTP 429, attempt %d/%d)",
+                        applied,
+                        attempt + 1,
+                        attempts,
+                    )
+                    if attempt + 1 < attempts:
+                        continue
+                resp.raise_for_status()
+                self.gate.reset()
+                data = resp.json()
+                return data if isinstance(data, dict) else {}
+            except requests.HTTPError as exc:
+                try:
+                    body = exc.response.text if exc.response is not None else ""
+                except Exception:
+                    body = ""
+                logger.debug(
+                    "Jira request failed: %s %s params=%s body=%s",
+                    "GET",
+                    url,
+                    params,
+                    body,
+                )
+                raise
+        raise RuntimeError("Jira request retry loop exited without a result")
 
-    @retry_with_backoff(max_retries=5, initial_delay=1.0, max_delay=60.0)
     def search_issues_page(
         self,
         *,
@@ -220,7 +246,6 @@ class JiraClient:
                 logger.debug("Jira search complete (isLast=true); fetched=%d", fetched)
                 break
 
-    @retry_with_backoff(max_retries=5, initial_delay=1.0, max_delay=60.0)
     def fetch_issue_comments_page(
         self,
         *,
@@ -266,7 +291,6 @@ class JiraClient:
             if (page or {}).get("isLast") is True:
                 break
 
-    @retry_with_backoff(max_retries=5, initial_delay=1.0, max_delay=60.0)
     def get_sprint(self, *, sprint_id: str) -> dict[str, Any]:
         return self._request_json(
             path=f"/rest/agile/1.0/sprint/{sprint_id}",

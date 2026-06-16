@@ -937,6 +937,34 @@ class TestLinearProviderIngest:
 class TestLinearClientRetry:
     """Retry/backoff behaviour of LinearClient._execute (CHAOS-2280)."""
 
+    def test_default_gate_uses_linear_org_host_scope(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from dev_health_ops.connectors.utils.rate_limit_queue import RateLimitGate
+        from dev_health_ops.providers.linear import client as linear_client_module
+        from dev_health_ops.providers.linear.client import LinearAuth, LinearClient
+
+        gate = RateLimitGate()
+        calls: list[dict[str, Any]] = []
+
+        def fake_create_rate_limit_gate(*args: Any, **kwargs: Any) -> RateLimitGate:
+            calls.append({"args": args, "kwargs": kwargs})
+            return gate
+
+        monkeypatch.setattr(
+            linear_client_module,
+            "create_rate_limit_gate",
+            fake_create_rate_limit_gate,
+        )
+
+        client = LinearClient(auth=LinearAuth(api_key="test-key"), org_id="org-1")
+
+        assert client.gate is gate
+        assert calls[0]["args"] == ("linear",)
+        assert calls[0]["kwargs"]["org_id"] == "org-1"
+        assert calls[0]["kwargs"]["host"] == "api.linear.app"
+        assert calls[0]["kwargs"]["config"].initial_backoff_seconds == 1.0
+
     @staticmethod
     def _make_client() -> Any:
         from dev_health_ops.providers.linear.client import LinearAuth, LinearClient

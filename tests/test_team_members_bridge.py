@@ -125,6 +125,7 @@ class TestDiscoverMembersLinear:
         ]
 
         service = TeamMembershipService.__new__(TeamMembershipService)
+        service.org_id = "test-org"
         members = asyncio.run(
             service.discover_members_linear(api_key="k", team_key="ENG")
         )
@@ -151,6 +152,7 @@ class TestDiscoverMembersLinear:
         ]
 
         service = TeamMembershipService.__new__(TeamMembershipService)
+        service.org_id = "test-org"
         members = asyncio.run(
             service.discover_members_linear(api_key="k", team_key="ENG")
         )
@@ -177,6 +179,7 @@ class TestDiscoverMembersLinear:
         ]
 
         service = TeamMembershipService.__new__(TeamMembershipService)
+        service.org_id = "test-org"
 
         prefixed = asyncio.run(
             service.discover_members_linear(api_key="k", team_key="linear:ENG")

@@ -308,7 +308,7 @@ async def _merge_fixture_org(
     overwrite_real_users: bool,
 ) -> str:
     """Insert a fixture org only when absent unless destructive merge is enabled."""
-    from sqlalchemy import or_, select
+    from sqlalchemy import func, or_, select
 
     from dev_health_ops.models.users import Organization
 
@@ -319,7 +319,12 @@ async def _merge_fixture_org(
     existing: Organization | None = (
         await session.execute(
             select(Organization)
-            .where(or_(Organization.id == org.id, Organization.slug == org.slug))
+            .where(
+                or_(
+                    Organization.id == org.id,
+                    func.lower(Organization.slug) == org.slug.lower().strip(),
+                )
+            )
             .limit(1)
         )
     ).scalar_one_or_none()

@@ -741,3 +741,45 @@ async def test_mixed_case_real_identity_not_duplicated(session_maker):
         assert rows[0].password_hash == _REAL_HASH
         # The lowercase fixture UUID must NOT have been inserted as a new row.
         assert await session.get(User, _fixture_user_id()) is None
+
+
+@pytest.mark.asyncio
+async def test_mixed_case_real_org_slug_not_duplicated(session_maker):
+    """A real org with a mixed-case slug must be detected case-insensitively
+    (matching the org service's lower(slug) lookup) so the seeder does not
+    insert a duplicate tenant + fixture license/memberships (CHAOS-2458
+    review follow-up)."""
+    real_org_id = uuid.uuid4()  # distinct from the deterministic fixture uuid5
+    async with session_maker() as session:
+        real_org = Organization(
+            id=real_org_id,
+            slug="Default-Org",
+            name="Real Tenant",
+            tier="enterprise",
+            is_active=True,
+        )
+        session.add(real_org)
+        await session.commit()
+
+    async with session_maker() as session:
+        await _seed_auth_data(session, _build_user_data())
+
+    async with session_maker() as session:
+        orgs = (
+            (
+                await session.execute(
+                    select(Organization).where(
+                        func.lower(Organization.slug) == "default-org"
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(orgs) == 1, "Seeder must not duplicate a mixed-case real org slug"
+        assert orgs[0].id == real_org_id
+        # The deterministic fixture org id must NOT have been inserted.
+        assert await session.get(Organization, _make_org().id) is None
+        # No fixture license rows should exist for the duplicate tenant.
+        licenses = (await session.execute(select(OrgLicense))).scalars().all()
+        assert all(lic.org_id == real_org_id for lic in licenses) or not licenses

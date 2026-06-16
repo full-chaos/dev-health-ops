@@ -306,6 +306,13 @@ class WorkGraphEdgeFilterInput:
     source_type: WorkGraphNodeTypeInput | None = None
     target_type: WorkGraphNodeTypeInput | None = None
     edge_type: WorkGraphEdgeTypeInput | None = None
+    # Plural edge-type filter (wire: ``edgeTypes``). Lets a tab fetch its OWN
+    # edge types BEFORE the row cap so a starved category (e.g. the
+    # Dependencies tab's issue↔issue edges) is never hidden behind the LIMIT
+    # by an unrelated dominant edge type (CHAOS-2442). Applied as
+    # ``edge_type IN (...)``. When BOTH ``edge_type`` and ``edge_types`` are
+    # given, they AND (both clauses apply).
+    edge_types: list[WorkGraphEdgeTypeInput] | None = None
     node_id: str | None = None
     theme: str | None = None
     subcategory: str | None = None

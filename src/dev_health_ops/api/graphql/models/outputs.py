@@ -571,6 +571,63 @@ class WorkGraphEdgesResult:
     degraded_reason: str | None = None
 
 
+@strawberry.type
+class WorkGraphFlowRow:
+    """Inflow/outflow edge counts for one node type, computed over the FULL
+    edge set (correct at any scale — NOT derived from a capped edge page).
+
+    ``inflow`` counts edges whose TARGET is this node type; ``outflow`` counts
+    edges whose SOURCE is this node type (CHAOS-2442 Inflow/Outflow tab).
+    """
+
+    node_type: WorkGraphNodeType
+    inflow: int
+    outflow: int
+
+
+@strawberry.type
+class WorkGraphFlowResult:
+    """Per-node-type inflow/outflow aggregate over the whole work graph.
+
+    ``degraded_reason`` follows the same contract as ``WorkGraphEdgesResult``:
+    ``"MEMBERSHIP_NOT_MATERIALIZED"`` only when a theme/subcategory filter is
+    active, the aggregate is empty, and the org has investments but no complete
+    membership run yet; ``None`` otherwise (CHAOS-2442).
+    """
+
+    rows: list[WorkGraphFlowRow]
+    degraded_reason: str | None = None
+
+
+@strawberry.type
+class WorkGraphArtifactRow:
+    """A single node ranked by degree (edges touching it as source OR target),
+    computed over the FULL edge set (CHAOS-2442 Artifacts tab).
+
+    ``display_name`` is the A7/A8-resolved label (None → client Unresolved
+    badge, never a raw UUID). ``evidence`` is an opaque sample edge evidence
+    string (or None).
+    """
+
+    node_type: WorkGraphNodeType
+    node_id: str
+    display_name: str | None
+    degree: int
+    evidence: str | None
+
+
+@strawberry.type
+class WorkGraphArtifactsResult:
+    """Top-N nodes by degree across the whole work graph.
+
+    ``degraded_reason`` follows the same contract as ``WorkGraphEdgesResult``
+    (CHAOS-2442).
+    """
+
+    rows: list[WorkGraphArtifactRow]
+    degraded_reason: str | None = None
+
+
 # =============================================================================
 # Capacity Planning types
 # =============================================================================

@@ -135,6 +135,29 @@ def _load_yaml(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
+def _command_string(service: dict) -> str:
+    command = service.get("command") or service.get("entrypoint") or ""
+    return (
+        " ".join(str(part) for part in command)
+        if isinstance(command, list)
+        else str(command)
+    )
+
+
+def _is_beat_service(name: str, service: dict) -> bool:
+    command = _command_string(service).split()
+    return name == "beat" or ("celery" in command and "beat" in command)
+
+
+def _assert_compose_beat_singleton(path: Path) -> None:
+    services = _load_yaml(path).get("services") or {}
+    for name, service in services.items():
+        if not _is_beat_service(name, service):
+            continue
+        replicas = (service.get("deploy") or {}).get("replicas")
+        assert replicas in (None, 1), f"{path.name}:{name} must not exceed 1 replica"
+
+
 def test_production_compose_has_one_shot_migrate_service() -> None:
     services = _load_yaml(_PROD_COMPOSE)["services"]
     migrate = services.get("migrate")
@@ -291,6 +314,17 @@ def test_helm_chart_runs_migrations_as_pre_upgrade_hook() -> None:
 
     values = _load_yaml(_HELM_DIR / "values.yaml")
     assert values["migrations"]["hook"]["enabled"] is True
+
+
+def test_deploy_stacks_keep_celery_beat_singleton() -> None:
+    for stack in (_REPO_ROOT / "compose.yml", _PROD_COMPOSE, _SWARM_STACK):
+        _assert_compose_beat_singleton(stack)
+
+    beat_template = (_HELM_DIR / "templates" / "beat-deployment.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert "SINGLETON: exactly 1 beat replica" in beat_template
+    assert "replicas: 1" in beat_template
 
 
 def test_celery_worker_prefetch_multiplier_is_one() -> None:

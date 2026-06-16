@@ -56,6 +56,11 @@ def _running_marker_is_stale(job: ScheduledJob, now: datetime) -> bool:
     return (now - marker).total_seconds() > STALE_RUNNING_TTL_SECONDS
 
 
+def _session_dialect_name(session: Session) -> str:
+    bind = session.get_bind()
+    return getattr(getattr(bind, "dialect", None), "name", "")
+
+
 def _maybe_dispatch_config(
     session: Session, config: SyncConfiguration, now: datetime
 ) -> bool:
@@ -85,15 +90,17 @@ def _maybe_dispatch_config(
     if not config_cron:
         return False
 
-    job = (
-        session.query(ScheduledJob)
-        .filter(
-            ScheduledJob.sync_config_id == config.id,
-            ScheduledJob.org_id == config.org_id,
-            ScheduledJob.job_type == "sync",
-        )
-        .one_or_none()
+    job_query = session.query(ScheduledJob).filter(
+        ScheduledJob.sync_config_id == config.id,
+        ScheduledJob.org_id == config.org_id,
+        ScheduledJob.job_type == "sync",
     )
+    if _session_dialect_name(session) == "postgresql":
+        job = job_query.with_for_update(skip_locked=True).one_or_none()
+        if job is None and job_query.with_entities(ScheduledJob.id).first() is not None:
+            return False
+    else:
+        job = job_query.one_or_none()
 
     # PAUSED/DISABLED jobs (manual-only, org teardown) are never dispatched.
     if job is not None and int(job.status) != JobStatus.ACTIVE.value:

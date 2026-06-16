@@ -247,7 +247,71 @@ def validate_work_unit_investment_density_and_coverage(
     return True
 
 
-async def _seed_auth_data(session, user_data: dict) -> None:
+async def _merge_fixture_user(
+    session,
+    user,
+    *,
+    default_password: str | None,
+    overwrite_real_users: bool,
+) -> None:
+    """Safely merge a single fixture user, guarding real credentials.
+
+    Rules (CHAOS-2458):
+    - Row absent → INSERT via merge (safe, new fixture user).
+    - Row present, password verifies against fixture default_password → it is
+      a fixture-owned row; merge to refresh non-credential fields.
+    - Row present, password does NOT verify → real user; skip entirely and
+      emit a warning.  Pass overwrite_real_users=True to bypass (CI/demo
+      only).
+    """
+    import bcrypt
+
+    from dev_health_ops.models.users import User
+
+    existing: User | None = await session.get(User, user.id)
+    if existing is None:
+        # No collision — safe to insert.
+        await session.merge(user)
+        return
+
+    if overwrite_real_users:
+        # Explicit opt-in: caller accepts credential clobber risk.
+        await session.merge(user)
+        return
+
+    # Row exists.  Determine whether it is fixture-owned by checking whether
+    # its stored hash verifies against the known fixture password.
+    existing_hash: str | None = existing.password_hash
+    is_fixture_owned = False
+    if default_password is not None and existing_hash is not None:
+        try:
+            is_fixture_owned = bcrypt.checkpw(
+                default_password.encode("utf-8"),
+                existing_hash.encode("utf-8"),
+            )
+        except Exception:
+            # Malformed hash or bcrypt error — treat as non-fixture.
+            is_fixture_owned = False
+
+    if is_fixture_owned:
+        await session.merge(user)
+    else:
+        logging.warning(
+            "FIXTURES-GUARD: skipping password_hash overwrite for user %s (%s) —"
+            " existing row was not created by the fixture seeder"
+            " (password does not match fixture default)."
+            " Pass overwrite_real_users=True to bypass (demo/CI only).",
+            user.id,
+            user.email,
+        )
+
+
+async def _seed_auth_data(
+    session,
+    user_data: dict,
+    *,
+    overwrite_real_users: bool = False,
+) -> None:
     """Merge orgs/users, upsert memberships, replace licenses into Postgres.
 
     Idempotent against re-runs. Memberships use an explicit
@@ -260,6 +324,17 @@ async def _seed_auth_data(session, user_data: dict) -> None:
     even though the merging row has a deterministic id (CHAOS-1717).
     Existing licenses already use a delete + add idempotency dance for
     similar reasons.
+
+    Credential guard (CHAOS-2458)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    By default (``overwrite_real_users=False``) this function will NEVER
+    overwrite the ``password_hash`` of a user row that was not itself
+    created by the fixture seeder.  For each fixture user it checks
+    whether an existing row's hash verifies against the fixture
+    ``default_password``; if it does not, the row is skipped and a
+    warning is logged.  Pass ``overwrite_real_users=True`` only in
+    fully-isolated demo/CI environments where clobbering credentials is
+    explicitly acceptable.
     """
     from sqlalchemy import delete
     from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -275,8 +350,14 @@ async def _seed_auth_data(session, user_data: dict) -> None:
         await session.merge(org)
     await session.commit()
 
+    default_password: str | None = user_data.get("default_password")
     for user in user_data["users"]:
-        await session.merge(user)
+        await _merge_fixture_user(
+            session,
+            user,
+            default_password=default_password,
+            overwrite_real_users=overwrite_real_users,
+        )
     await session.commit()
 
     memberships = user_data.get("memberships") or []

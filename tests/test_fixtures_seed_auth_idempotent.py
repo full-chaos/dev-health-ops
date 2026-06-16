@@ -46,11 +46,22 @@ async def session_maker(tmp_path: Path):
         await engine.dispose()
 
 
+_IDEMPOTENT_TEST_PASSWORD = "devhealth-idempotent-test"
+_IDEMPOTENT_TEST_HASH = (
+    __import__("bcrypt")
+    .hashpw(_IDEMPOTENT_TEST_PASSWORD.encode("utf-8"), __import__("bcrypt").gensalt())
+    .decode("utf-8")
+)
+
+
 def _build_user_data() -> dict:
     """Build the same user_data shape the fixtures generator produces.
 
     Two users (admin + alice) bound to one org, one license. Deterministic
     UUIDs so a second invocation lands on identical PKs.
+
+    Uses a real bcrypt hash + default_password so the CHAOS-2458 credential
+    guard recognises these rows as fixture-owned on re-seed.
     """
     target_org_id = uuid.UUID("ae600a94-76bc-4166-bf36-051ee4247c73")
 
@@ -58,7 +69,7 @@ def _build_user_data() -> dict:
         id=uuid.uuid5(_NS, "admin@devhealth.example"),
         email="admin@devhealth.example",
         username="admin",
-        password_hash="$2b$12$dummy",
+        password_hash=_IDEMPOTENT_TEST_HASH,
         full_name="Admin",
         auth_provider="local",
         is_active=True,
@@ -69,7 +80,7 @@ def _build_user_data() -> dict:
         id=uuid.uuid5(_NS, "alice@example.com"),
         email="alice@example.com",
         username="alice",
-        password_hash="$2b$12$dummy",
+        password_hash=_IDEMPOTENT_TEST_HASH,
         full_name="Alice",
         auth_provider="local",
         is_active=True,
@@ -112,6 +123,7 @@ def _build_user_data() -> dict:
         "users": [admin, alice],
         "memberships": [admin_membership, alice_membership],
         "licenses": [license_row],
+        "default_password": _IDEMPOTENT_TEST_PASSWORD,
     }
 
 

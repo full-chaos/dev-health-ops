@@ -1462,17 +1462,32 @@ async def run_daily_metrics_finalize(
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
     daily = subparsers.add_parser("daily", help="Compute daily metrics.")
     add_date_range_args(daily)
-    daily.add_argument("--repo-id", type=uuid.UUID)
-    daily.add_argument("--repo-name")
-    daily.add_argument("--no-commits", dest="commit_metrics", action="store_false")
+    daily.add_argument(
+        "--repo-id", type=uuid.UUID, help="Filter to a specific repository UUID."
+    )
+    daily.add_argument("--repo-name", help="Filter to a specific repository by name.")
+    daily.add_argument(
+        "--no-commits",
+        dest="commit_metrics",
+        action="store_false",
+        help="Skip per-commit metrics; compute work-item and derived metrics only.",
+    )
     daily.set_defaults(commit_metrics=True)
     add_sink_arg(daily)
-    daily.add_argument("--provider", default="auto")
+    daily.add_argument(
+        "--provider",
+        default="auto",
+        help="Restrict to a single provider (default: auto = all providers).",
+    )
     daily.set_defaults(func=_cmd_metrics_daily)
 
     rebuild = subparsers.add_parser(
         "rebuild",
-        help="Rebuild metrics for specific repos with partitioned finalize.",
+        help=(
+            "Recompute daily metrics for one or more repos (or all repos) over a "
+            "date range, then run a single partitioned finalize per day. Use after "
+            "correcting or re-syncing source data for specific repositories."
+        ),
     )
     add_date_range_args(rebuild)
     rebuild.add_argument(
@@ -1481,10 +1496,14 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         action="append",
         dest="repo_ids",
         default=[],
-        help="Repo UUID (repeatable)",
+        help="Repo UUID to rebuild; repeatable. Omit to rebuild all repos.",
     )
     add_sink_arg(rebuild)
-    rebuild.add_argument("--provider", default="auto")
+    rebuild.add_argument(
+        "--provider",
+        default="auto",
+        help="Restrict to a single provider (default: auto = all providers).",
+    )
     rebuild.set_defaults(func=_cmd_metrics_rebuild)
 
 

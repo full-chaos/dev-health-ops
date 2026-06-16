@@ -20,8 +20,18 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     reconcile_parser = billing_subparsers.add_parser(
         "reconcile", help="Run billing reconciliation."
     )
-    reconcile_parser.add_argument("--org-id", dest="org_id", default=None)
-    reconcile_parser.add_argument("--since", dest="since", default=None)
+    reconcile_parser.add_argument(
+        "--org-id",
+        dest="org_id",
+        default=None,
+        help="Reconcile a single organization (UUID). Omit to reconcile all orgs.",
+    )
+    reconcile_parser.add_argument(
+        "--since",
+        dest="since",
+        default=None,
+        help="Only reconcile invoices on or after this date (ISO YYYY-MM-DD).",
+    )
     reconcile_parser.set_defaults(func=run_reconcile)
 
 

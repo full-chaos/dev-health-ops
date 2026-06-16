@@ -135,6 +135,12 @@ def _call(task) -> dict:
         task.pop_request()
 
 
+def _aware(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
 class TestDispatchIdempotency:
     def test_due_config_dispatched_once_not_redispatched_on_second_tick(
         self, monkeypatch, db_session
@@ -147,12 +153,18 @@ class TestDispatchIdempotency:
 
         task, run_sync_mock, _ = _run_dispatch(monkeypatch, db_session)
 
+        def assert_marker_stamped_before_enqueue(*_args, **_kwargs) -> None:
+            assert job.next_run_at is not None
+            assert _aware(job.next_run_at) > now
+
+        run_sync_mock.apply_async.side_effect = assert_marker_stamped_before_enqueue
+
         first = _call(task)
         assert str(config.id) in first["dispatched"]
         assert run_sync_mock.apply_async.call_count == 1
         # The dispatch marker was stamped to the next cron occurrence.
         assert job.next_run_at is not None
-        assert job.next_run_at > now
+        assert _aware(job.next_run_at) > now
 
         second = _call(task)
         assert second["dispatched"] == []
@@ -173,7 +185,7 @@ class TestDispatchIdempotency:
         assert str(config.id) in result["dispatched"]
         assert run_sync_mock.apply_async.call_count == 1
         assert job.next_run_at is not None
-        assert job.next_run_at > now
+        assert _aware(job.next_run_at) > now
 
     def test_fresh_is_running_marker_skips_dispatch(self, monkeypatch, db_session):
         now = datetime.now(timezone.utc)

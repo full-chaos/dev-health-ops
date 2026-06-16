@@ -175,6 +175,25 @@ def test_legacy_compose_has_one_shot_migrate_service() -> None:
     assert "dev-hops migrate postgres" in entrypoint
 
 
+def test_legacy_compose_migrate_waits_for_postgres_health() -> None:
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    migrate = services["migrate"]
+
+    depends_on = migrate.get("depends_on") or {}
+    assert depends_on.get("postgres", {}).get("condition") == "service_healthy"
+    assert depends_on.get("clickhouse", {}).get("condition") == "service_healthy"
+
+
+def test_legacy_compose_migrate_uses_local_build_matching_api() -> None:
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    migrate = services["migrate"]
+    api = services["api"]
+
+    assert migrate.get("image") is None
+    assert isinstance(migrate.get("build"), dict)
+    assert migrate["build"] == api["build"]
+
+
 def test_legacy_compose_disables_ambient_migrations() -> None:
     services = _load_yaml(_LEGACY_COMPOSE)["services"]
     for name in ("api", "billing-edge", "worker", "worker-ingest", "worker-heavy"):

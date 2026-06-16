@@ -95,7 +95,12 @@ services:
       start_period: 5s
 
   migrate:
-    image: ghcr.io/full-chaos/dev-hops-api:latest
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+      target: api
+      args:
+        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
     container_name: dev-health-migrate
     restart: "no"
     entrypoint:
@@ -109,6 +114,8 @@ services:
       CLICKHOUSE_URI: clickhouse://ch:ch@clickhouse:8123/${CLICKHOUSE_DB:-default}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:
+      postgres:
+        condition: service_healthy
       clickhouse:
         condition: service_healthy
 

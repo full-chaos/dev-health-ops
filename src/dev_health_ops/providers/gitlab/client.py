@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
@@ -98,6 +98,22 @@ class GitLabWorkClient:
         with gate_call(self.gate):
             return self.gl.projects.get(project_id_or_path)
 
+    def _gated_iter(self, iterable: Any) -> Iterator[Any]:
+        """Consume a python-gitlab lazy iterator with each page fetch routed
+        through the shared rate-limit gate. ``list(iterator=True)`` fetches
+        pages lazily as the iterator is consumed, so gating only the list()
+        creation leaves later page requests uncoordinated; gating each
+        ``next()`` keeps multi-page fetches under the distributed gate.
+        """
+        iterator = iter(iterable)
+        while True:
+            with gate_call(self.gate):
+                try:
+                    item = next(iterator)
+                except StopIteration:
+                    return
+            yield item
+
     def iter_project_issues(
         self,
         *,
@@ -113,7 +129,7 @@ class GitLabWorkClient:
         with gate_call(self.gate):
             issues = project.issues.list(iterator=True, **params)
         count = 0
-        for issue in issues:
+        for issue in self._gated_iter(issues):
             yield issue
             count += 1
             if limit is not None and count >= int(limit):
@@ -135,7 +151,7 @@ class GitLabWorkClient:
         with gate_call(self.gate):
             mrs = project.mergerequests.list(iterator=True, **params)
         count = 0
-        for mr in mrs:
+        for mr in self._gated_iter(mrs):
             yield mr
             count += 1
             if limit is not None and count >= int(limit):
@@ -245,7 +261,7 @@ class GitLabWorkClient:
         project = self.get_project(project_id_or_path)
         with gate_call(self.gate):
             milestones = project.milestones.list(state=state, iterator=True)
-        yield from milestones
+        yield from self._gated_iter(milestones)
 
     def iter_group_milestones(
         self,
@@ -259,7 +275,7 @@ class GitLabWorkClient:
                 group = self.gl.groups.get(group_id_or_path)
             with gate_call(self.gate):
                 milestones = group.milestones.list(state=state, iterator=True)
-            yield from milestones
+            yield from self._gated_iter(milestones)
         except Exception as exc:
             logger.debug("Failed to fetch group milestones: %s", exc)
             return
@@ -306,7 +322,7 @@ class GitLabWorkClient:
                 epics = group.epics.list(iterator=True, **params)
 
             count = 0
-            for epic in epics:
+            for epic in self._gated_iter(epics):
                 yield epic
                 count += 1
                 if limit is not None and count >= int(limit):

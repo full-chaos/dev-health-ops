@@ -49,7 +49,9 @@ from .models.outputs import (
     SecurityAlertConnection,
     SecurityOverview,
     ThroughputForecast,
+    WorkGraphArtifactsResult,
     WorkGraphEdgesResult,
+    WorkGraphFlowResult,
 )
 from .models.recommendations import (
     Recommendation,
@@ -263,6 +265,34 @@ class Query:
 
         context = get_context(info)
         return await resolve_work_graph_edges(context, filters)
+
+    @strawberry.field(
+        description="Per-node-type inflow/outflow over the full work graph"
+    )
+    async def work_graph_flow(
+        self,
+        info: Info,
+        org_id: str,
+        filters: WorkGraphEdgeFilterInput | None = None,
+    ) -> WorkGraphFlowResult:
+        from .resolvers.work_graph import resolve_work_graph_flow
+
+        context = get_context(info)
+        return await resolve_work_graph_flow(context, filters)
+
+    @strawberry.field(
+        description="Top-N work graph nodes ranked by degree over the full graph"
+    )
+    async def work_graph_artifacts(
+        self,
+        info: Info,
+        org_id: str,
+        filters: WorkGraphEdgeFilterInput | None = None,
+    ) -> WorkGraphArtifactsResult:
+        from .resolvers.work_graph import resolve_work_graph_artifacts
+
+        context = get_context(info)
+        return await resolve_work_graph_artifacts(context, filters)
 
     @strawberry.field(description="Paginated list of security alerts")
     async def security_alerts(

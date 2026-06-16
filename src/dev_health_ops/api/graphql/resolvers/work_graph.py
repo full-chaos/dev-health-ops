@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import defaultdict
 from typing import Any
 
 from dev_health_ops.api.services.identity import looks_like_uuid
@@ -13,9 +14,13 @@ from ..context import GraphQLContext
 from ..models.inputs import WorkGraphEdgeFilterInput
 from ..models.outputs import (
     PageInfo,
+    WorkGraphArtifactRow,
+    WorkGraphArtifactsResult,
     WorkGraphEdgeResult,
     WorkGraphEdgesResult,
     WorkGraphEdgeType,
+    WorkGraphFlowResult,
+    WorkGraphFlowRow,
     WorkGraphNodeType,
     WorkGraphProvenance,
 )
@@ -737,6 +742,99 @@ def _empty_edges_result(degraded_reason: str | None = None) -> WorkGraphEdgesRes
     )
 
 
+def _empty_flow_result(degraded_reason: str | None = None) -> WorkGraphFlowResult:
+    """An empty, well-formed flow aggregate — impossible filters + degraded state."""
+    return WorkGraphFlowResult(rows=[], degraded_reason=degraded_reason)
+
+
+def _empty_artifacts_result(
+    degraded_reason: str | None = None,
+) -> WorkGraphArtifactsResult:
+    """An empty, well-formed artifacts aggregate — impossible filters + degraded."""
+    return WorkGraphArtifactsResult(rows=[], degraded_reason=degraded_reason)
+
+
+def _build_work_graph_where(
+    filters: WorkGraphEdgeFilterInput | None,
+    org_id: str,
+    *,
+    include_edge_filters: bool,
+) -> tuple[str, dict[str, Any]]:
+    """Build the shared WHERE clause + params for the edge list AND aggregates.
+
+    ALWAYS applies the graph-wide filters: org_id (cross-tenant safety),
+    repo_ids, and the theme/subcategory correlated-EXISTS semi-join. These
+    describe the WHOLE graph, so both the capped edge list and the full-set
+    aggregates (flow / artifacts) apply them identically.
+
+    When ``include_edge_filters`` is True, ALSO applies the edge-list-only
+    filters — source_type/target_type/edge_type/edge_types/node_id — which
+    narrow WHICH edges a single view shows. The aggregates describe the whole
+    graph and therefore pass ``include_edge_filters=False``.
+
+    org_id is ALWAYS the first predicate (and lives inside the EXISTS join
+    predicate too — see ``_theme_membership_exists_clause``). Callers MUST
+    screen for ``_theme_subcategory_conflict`` first and short-circuit to an
+    empty result; this builder assumes a non-conflicting theme/subcategory.
+    """
+    params: dict[str, Any] = {"org_id": org_id}
+    where_clauses: list[str] = ["org_id = %(org_id)s"]
+
+    theme_filter = filters.theme if filters else None
+    subcategory_filter = filters.subcategory if filters else None
+
+    if filters:
+        if filters.repo_ids:
+            where_clauses.append("repo_id IN %(repo_ids)s")
+            params["repo_ids"] = filters.repo_ids
+
+        if include_edge_filters:
+            if filters.source_type:
+                where_clauses.append("source_type = %(source_type)s")
+                params["source_type"] = filters.source_type.value
+
+            if filters.target_type:
+                where_clauses.append("target_type = %(target_type)s")
+                params["target_type"] = filters.target_type.value
+
+            if filters.edge_type:
+                where_clauses.append("edge_type = %(edge_type)s")
+                params["edge_type"] = filters.edge_type.value
+
+            # Plural edge_types: fetched BEFORE the cap so a tab's own edge
+            # types can never be starved by an unrelated dominant type
+            # (CHAOS-2442). ANDs with the singular edge_type when both given.
+            if filters.edge_types:
+                where_clauses.append("edge_type IN %(edge_types)s")
+                params["edge_types"] = [e.value for e in filters.edge_types]
+
+            if filters.node_id:
+                where_clauses.append(
+                    "(source_id = %(node_id)s OR target_id = %(node_id)s)"
+                )
+                params["node_id"] = filters.node_id
+
+    # --- Server-side theme/subcategory filter (CHAOS-2430) --------------------
+    # The membership constraint is pushed INTO the query as a correlated EXISTS
+    # semi-join, so repo_id/edge filters AND the membership filter AND any LIMIT
+    # all execute in ONE ClickHouse plan. This keeps the before-LIMIT guarantee
+    # (a sparse theme's edges are never hidden behind the row cap) WITHOUT
+    # round-tripping an unbounded matched-node set through Python. An edge
+    # matches if EITHER endpoint is a member of the requested theme/subcategory
+    # (multi-membership), with the theme+subcategory "both required" semantics
+    # enforced inside the subquery.
+    if theme_filter or subcategory_filter:
+        exists_clause, theme_params = _build_theme_filter(
+            theme_filter, subcategory_filter
+        )
+        if exists_clause:
+            where_clauses.append(exists_clause)
+            params.update(theme_params)
+
+    where_sql = f"WHERE {' AND '.join(where_clauses)}"
+    return where_sql, params
+
+
 async def resolve_work_graph_edges(
     context: GraphQLContext,
     filters: WorkGraphEdgeFilterInput | None = None,
@@ -750,8 +848,6 @@ async def resolve_work_graph_edges(
         raise RuntimeError("Database client not available")
 
     limit = filters.limit if filters else 1000
-    params: dict[str, Any] = {"limit": int(limit), "org_id": org_id}
-    where_clauses: list[str] = ["org_id = %(org_id)s"]
 
     theme_filter = filters.theme if filters else None
     subcategory_filter = filters.subcategory if filters else None
@@ -770,47 +866,39 @@ async def resolve_work_graph_edges(
         )
         return _empty_edges_result()
 
-    if filters:
-        if filters.repo_ids:
-            where_clauses.append("repo_id IN %(repo_ids)s")
-            params["repo_ids"] = filters.repo_ids
+    where_sql, params = _build_work_graph_where(
+        filters, org_id, include_edge_filters=True
+    )
+    params["limit"] = int(limit)
 
-        if filters.source_type:
-            where_clauses.append("source_type = %(source_type)s")
-            params["source_type"] = filters.source_type.value
-
-        if filters.target_type:
-            where_clauses.append("target_type = %(target_type)s")
-            params["target_type"] = filters.target_type.value
-
-        if filters.edge_type:
-            where_clauses.append("edge_type = %(edge_type)s")
-            params["edge_type"] = filters.edge_type.value
-
-        if filters.node_id:
-            where_clauses.append("(source_id = %(node_id)s OR target_id = %(node_id)s)")
-            params["node_id"] = filters.node_id
-
-    # --- Server-side theme/subcategory filter (CHAOS-2430) --------------------
-    # The membership constraint is pushed INTO the edge query as a correlated
-    # EXISTS semi-join, so repo_id/edge_type/source filters AND the membership
-    # filter AND the LIMIT all execute in ONE ClickHouse plan. This keeps the
-    # before-LIMIT guarantee (a sparse theme's edges are never hidden behind the
-    # row cap) WITHOUT round-tripping an unbounded matched-node set through
-    # Python (which could blow param limits / time out at tenant scale and
-    # ignored repo/edge filters). An edge matches if EITHER endpoint is a member
-    # of the requested theme/subcategory (multi-membership), with the
-    # theme+subcategory "both required" semantics enforced inside the subquery.
-    if theme_filter_active:
-        exists_clause, theme_params = _build_theme_filter(
-            theme_filter, subcategory_filter
+    # ORDER BY confidence DESC, edge_id ASC (CHAOS-2442) — GATED on a narrowing
+    # filter being active. The table is sorted by (source_type, source_id,
+    # edge_type, target_type, target_id), NOT confidence, so a GLOBAL relevance
+    # sort would force ClickHouse to read the org's ENTIRE edge set and top-sort
+    # before returning the first page — defeating early-LIMIT termination (a
+    # timeout path for large tenants). We therefore only sort when the candidate
+    # set is ALREADY bounded by a narrowing filter (edge_type(s)/source/target/
+    # node_id/theme/subcategory/repo_ids). For the fully-unfiltered default
+    # overview we emit NO ORDER BY, keeping the cap-bounded hot path — that's
+    # acceptable because the Dependencies tab fetches its own edge_types and the
+    # aggregates (work_graph_flow / work_graph_artifacts) are exact at any scale,
+    # so the broad overview does not need the global sort to be useful.
+    has_narrowing_filter = bool(
+        filters
+        and (
+            filters.repo_ids
+            or filters.source_type
+            or filters.target_type
+            or filters.edge_type
+            or filters.edge_types
+            or filters.node_id
+            or filters.theme
+            or filters.subcategory
         )
-        if exists_clause:
-            where_clauses.append(exists_clause)
-            params.update(theme_params)
-
-    where_sql = f"WHERE {' AND '.join(where_clauses)}"
-
+    )
+    order_by_sql = (
+        "ORDER BY confidence DESC, edge_id ASC" if has_narrowing_filter else ""
+    )
     query = f"""
         SELECT
             edge_id,
@@ -826,6 +914,7 @@ async def resolve_work_graph_edges(
             evidence
         FROM work_graph_edges
         {where_sql}
+        {order_by_sql}
         LIMIT %(limit)s
     """
 
@@ -879,3 +968,216 @@ async def resolve_work_graph_edges(
         ),
         degraded_reason=degraded_reason,
     )
+
+
+async def resolve_work_graph_flow(
+    context: GraphQLContext,
+    filters: WorkGraphEdgeFilterInput | None = None,
+) -> WorkGraphFlowResult:
+    """Per-node-type inflow/outflow counts over the FULL edge set (CHAOS-2442).
+
+    A true server-side aggregate: it GROUPs the whole work graph by
+    (source_type, target_type), so it reflects the REAL direction mix and is
+    correct at any scale — NOT derived from the capped edge page (which, for the
+    demo org, was dominated by `references` and collapsed Inflow/Outflow into a
+    degenerate Issue-in / Commit-out split). Applies ONLY the graph-wide filters
+    (org_id + repo_ids + theme/subcategory); edge-list-only filters do not apply.
+    """
+    from dev_health_ops.api.queries.client import query_dicts
+
+    org_id = require_org_id(context)
+    client = context.client
+
+    if client is None:
+        raise RuntimeError("Database client not available")
+
+    theme_filter = filters.theme if filters else None
+    subcategory_filter = filters.subcategory if filters else None
+    theme_filter_active = bool(theme_filter or subcategory_filter)
+
+    if _theme_subcategory_conflict(theme_filter, subcategory_filter):
+        logger.info(
+            "work_graph_flow theme filter conflict: theme=%r does not own "
+            "subcategory=%r — returning empty result",
+            theme_filter,
+            subcategory_filter,
+        )
+        return _empty_flow_result()
+
+    where_sql, params = _build_work_graph_where(
+        filters, org_id, include_edge_filters=False
+    )
+
+    # uniqExact(edge_id), NOT raw count(): work_graph_edges is a
+    # ReplacingMergeTree(last_synced) whose logical dedup key is edge_id (the
+    # deterministic hash of source_type/source_id/edge_type/target_type/
+    # target_id). Un-merged retry/backfill duplicate physical rows are visible
+    # until a background merge, so count() would inflate the direction mix.
+    # edge_id is unique per logical edge and falls in exactly ONE
+    # (source_type, target_type) group, so uniqExact(edge_id) is exact.
+    query = f"""
+        SELECT source_type, target_type, uniqExact(edge_id) AS cnt
+        FROM work_graph_edges
+        {where_sql}
+        GROUP BY source_type, target_type
+    """
+
+    try:
+        rows = await query_dicts(client, query, params)
+    except Exception as exc:
+        # Same NARROW degraded contract as resolve_work_graph_edges: only a
+        # code-60 missing-membership-table error under an active theme filter is
+        # downgraded; every other error propagates (project rule — no blanket
+        # except/return-default).
+        if theme_filter_active and _is_missing_membership_table_error(exc):
+            logger.warning(
+                "work_unit_membership table missing for org %s during "
+                "work_graph_flow theme filter — returning degraded state "
+                "(CHAOS-2442).",
+                org_id,
+            )
+            return _empty_flow_result(MEMBERSHIP_NOT_MATERIALIZED)
+        raise
+
+    inflow: dict[WorkGraphNodeType, int] = defaultdict(int)
+    outflow: dict[WorkGraphNodeType, int] = defaultdict(int)
+    for row in rows:
+        cnt = int(row.get("cnt") or 0)
+        source_type = _map_node_type(str(row.get("source_type", "")))
+        target_type = _map_node_type(str(row.get("target_type", "")))
+        outflow[source_type] += cnt
+        inflow[target_type] += cnt
+
+    flow_rows = [
+        WorkGraphFlowRow(
+            node_type=node_type,
+            inflow=inflow.get(node_type, 0),
+            outflow=outflow.get(node_type, 0),
+        )
+        for node_type in set(inflow) | set(outflow)
+        if inflow.get(node_type, 0) > 0 or outflow.get(node_type, 0) > 0
+    ]
+    # Sort by total degree desc; node_type value as a deterministic tiebreaker.
+    flow_rows.sort(key=lambda r: (-(r.inflow + r.outflow), r.node_type.value))
+
+    degraded_reason: str | None = None
+    if theme_filter_active and not flow_rows:
+        degraded_reason = await _detect_membership_degraded_reason(client, org_id)
+
+    return WorkGraphFlowResult(rows=flow_rows, degraded_reason=degraded_reason)
+
+
+async def resolve_work_graph_artifacts(
+    context: GraphQLContext,
+    filters: WorkGraphEdgeFilterInput | None = None,
+) -> WorkGraphArtifactsResult:
+    """Top-N nodes by degree over the FULL edge set (CHAOS-2442 Artifacts tab).
+
+    Degree = edges touching a node as SOURCE or TARGET, counted across the whole
+    graph (a UNION ALL of source/target projections), so the ranking is correct
+    at any scale rather than reflecting whatever happened to land in the capped
+    edge page. Applies ONLY the graph-wide filters (org_id + repo_ids +
+    theme/subcategory). ``filters.limit`` is the top-N (the web client passes 50;
+    default 1000). Display names reuse the edge-list batch resolver / A7-A8
+    fallback so a UUID that cannot be resolved surfaces as None (Unresolved
+    badge), never a raw UUID.
+    """
+    from dev_health_ops.api.queries.client import query_dicts
+
+    org_id = require_org_id(context)
+    client = context.client
+
+    if client is None:
+        raise RuntimeError("Database client not available")
+
+    limit = filters.limit if filters else 1000
+
+    theme_filter = filters.theme if filters else None
+    subcategory_filter = filters.subcategory if filters else None
+    theme_filter_active = bool(theme_filter or subcategory_filter)
+
+    if _theme_subcategory_conflict(theme_filter, subcategory_filter):
+        logger.info(
+            "work_graph_artifacts theme filter conflict: theme=%r does not own "
+            "subcategory=%r — returning empty result",
+            theme_filter,
+            subcategory_filter,
+        )
+        return _empty_artifacts_result()
+
+    where_sql, params = _build_work_graph_where(
+        filters, org_id, include_edge_filters=False
+    )
+    params["limit"] = int(limit)
+
+    # The {where} (including the correlated theme EXISTS clause that references
+    # work_graph_edges.{source,target}_{type,id}) appears TWICE — once per UNION
+    # ALL branch. Both branches select FROM work_graph_edges so the correlated
+    # references resolve, and because the param NAMES are identical in both
+    # occurrences, the single params dict serves both.
+    #
+    # degree = uniqExact(edge_id), NOT raw count(): work_graph_edges is a
+    # ReplacingMergeTree(last_synced) keyed logically on edge_id, so un-merged
+    # duplicate physical rows would inflate a count(). uniqExact(edge_id) also
+    # makes a self-loop (source==target, same node) count ONCE — the node's two
+    # UNION ALL projections carry the SAME edge_id, so a self-referential edge
+    # contributes degree 1 (one edge touching the node), not 2.
+    query = f"""
+        SELECT node_type, node_id, uniqExact(edge_id) AS degree, any(evidence) AS evidence
+        FROM (
+            SELECT source_type AS node_type, source_id AS node_id, edge_id, evidence
+            FROM work_graph_edges
+            {where_sql}
+            UNION ALL
+            SELECT target_type AS node_type, target_id AS node_id, edge_id, evidence
+            FROM work_graph_edges
+            {where_sql}
+        )
+        GROUP BY node_type, node_id
+        ORDER BY degree DESC, node_id ASC
+        LIMIT %(limit)s
+    """
+
+    try:
+        rows = await query_dicts(client, query, params)
+    except Exception as exc:
+        if theme_filter_active and _is_missing_membership_table_error(exc):
+            logger.warning(
+                "work_unit_membership table missing for org %s during "
+                "work_graph_artifacts theme filter — returning degraded state "
+                "(CHAOS-2442).",
+                org_id,
+            )
+            return _empty_artifacts_result(MEMBERSHIP_NOT_MATERIALIZED)
+        raise
+
+    # Reuse the edge-list display-name batch resolver by shaping each aggregate
+    # row as a pseudo-edge whose SOURCE endpoint is the node (target endpoint
+    # blank so it is ignored). One query per entity type — no N+1.
+    pseudo_rows = [
+        {
+            "source_id": str(row.get("node_id", "")),
+            "source_type": str(row.get("node_type", "")),
+            "target_id": "",
+            "target_type": "",
+        }
+        for row in rows
+    ]
+    resolved = await _batch_resolve_display_names(client, org_id, pseudo_rows)
+
+    artifact_rows = [
+        WorkGraphArtifactRow(
+            node_type=_map_node_type(str(row.get("node_type", ""))),
+            node_id=str(row.get("node_id", "")),
+            display_name=_display_name_for(str(row.get("node_id", "")), resolved),
+            degree=int(row.get("degree") or 0),
+            evidence=str(row["evidence"]) if row.get("evidence") else None,
+        )
+        for row in rows
+    ]
+
+    degraded_reason: str | None = None
+    if theme_filter_active and not artifact_rows:
+        degraded_reason = await _detect_membership_degraded_reason(client, org_id)
+
+    return WorkGraphArtifactsResult(rows=artifact_rows, degraded_reason=degraded_reason)

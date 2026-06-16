@@ -126,6 +126,7 @@ def test_monitoring_queue_declared_and_consumed_redundantly() -> None:
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _PROD_COMPOSE = _REPO_ROOT / "deploy" / "docker-compose" / "compose.production.yml"
+_LEGACY_COMPOSE = _REPO_ROOT / "compose.yml"
 _SWARM_STACK = _REPO_ROOT / "deploy" / "docker-swarm" / "stack.yml"
 _K8S_DIR = _REPO_ROOT / "deploy" / "kubernetes"
 _HELM_DIR = _REPO_ROOT / "deploy" / "helm" / "dev-health"
@@ -162,6 +163,35 @@ def test_production_compose_disables_ambient_migrations() -> None:
             f"{name} must set AUTO_RUN_MIGRATIONS=false — schema is applied by "
             f"the one-shot migrate service"
         )
+
+
+def test_legacy_compose_has_one_shot_migrate_service() -> None:
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    migrate = services.get("migrate")
+    assert migrate is not None, "compose.yml must define a migrate service"
+    assert migrate.get("restart") == "no"
+    entrypoint = " ".join(str(p) for p in migrate["entrypoint"])
+    assert "dev-hops migrate clickhouse" in entrypoint
+    assert "dev-hops migrate postgres" in entrypoint
+
+
+def test_legacy_compose_disables_ambient_migrations() -> None:
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    for name in ("api", "billing-edge", "worker", "worker-ingest", "worker-heavy"):
+        env = services[name].get("environment") or {}
+        assert env.get("AUTO_RUN_MIGRATIONS") == "false", (
+            f"{name} must set AUTO_RUN_MIGRATIONS=false — schema is applied by "
+            f"the one-shot migrate service"
+        )
+
+
+def test_legacy_compose_app_services_gate_on_migrate() -> None:
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    for name in ("api", "billing-edge", "worker", "worker-ingest", "worker-heavy"):
+        deps = services[name].get("depends_on") or {}
+        assert (
+            deps.get("migrate", {}).get("condition") == "service_completed_successfully"
+        ), f"{name} must gate on migrate completing successfully"
 
 
 def test_swarm_stack_has_migrate_service_and_disables_ambient_migrations() -> None:

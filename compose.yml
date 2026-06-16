@@ -94,6 +94,24 @@ services:
       retries: 3
       start_period: 5s
 
+  migrate:
+    image: ghcr.io/full-chaos/dev-hops-api:latest
+    container_name: dev-health-migrate
+    restart: "no"
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        if [ -n "$$POSTGRES_URI" ]; then dev-hops migrate postgres; fi
+        && dev-hops migrate clickhouse
+    environment:
+      POSTGRES_URI: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-postgres}
+      CLICKHOUSE_URI: clickhouse://ch:ch@clickhouse:8123/${CLICKHOUSE_DB:-default}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+
   api:
     build:
       context: .
@@ -120,6 +138,7 @@ services:
       # SAME change. Bare-image deployments must follow the two-phase rollout
       # in workers/queues.py: expand consumer -Q lists first, then flip this.
       PROVIDER_SYNC_QUEUES_ENABLED: "true"
+      AUTO_RUN_MIGRATIONS: "false"
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       STRIPE_PRICE_ID_TEAM: ${STRIPE_PRICE_ID_TEAM:-}
@@ -145,6 +164,8 @@ services:
         condition: service_healthy
       valkey:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       pgbouncer:
         condition: service_started
     ports:
@@ -183,9 +204,12 @@ services:
     environment:
       <<: *env
       POSTGRES_URI: "postgresql+asyncpg://postgres:postgres@pgbouncer:6432/postgres"
+      AUTO_RUN_MIGRATIONS: "false"
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       pgbouncer:
         condition: service_started
     ports:
@@ -226,6 +250,7 @@ services:
       <<: *env
       CELERY_BROKER_URL: redis://valkey:6379/0
       CELERY_RESULT_BACKEND: redis://valkey:6379/0
+      AUTO_RUN_MIGRATIONS: "false"
       # Email (Resend) — worker sends billing emails via Celery task
       EMAIL_PROVIDER: ${EMAIL_PROVIDER:-console}
       EMAIL_API_KEY: ${EMAIL_API_KEY:-}
@@ -235,6 +260,8 @@ services:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       pgbouncer:
         condition: service_started
     volumes:

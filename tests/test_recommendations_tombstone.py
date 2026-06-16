@@ -126,7 +126,7 @@ def test_evaluate_state_mixes_fired_and_tombstones():
     )
     # Force only 'saturation' to fire; all other evaluators return None.
     evaluators = {
-        rid: (lambda s, n: fired_rec) if rid == "saturation" else (lambda s, n: None)
+        rid: (lambda s, n: fired_rec) if rid == "saturation" else (lambda s, n: None)  # type: ignore[return-value]
         for rid in RULE_EVALUATORS
     }
     engine = RuleEngine(

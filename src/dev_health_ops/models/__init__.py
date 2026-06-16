@@ -38,6 +38,7 @@ from .retention import (
     RetentionResourceType,
 )
 from .settings import (
+    GithubAppInstallation,
     IdentityMapping,
     IntegrationCredential,
     IntegrationProvider,
@@ -96,6 +97,7 @@ __all__ = [
     "GitCommit",
     "GitCommitStat",
     "GitFile",
+    "GithubAppInstallation",
     "IdentityMapping",
     "IntegrationCredential",
     "IntegrationProvider",

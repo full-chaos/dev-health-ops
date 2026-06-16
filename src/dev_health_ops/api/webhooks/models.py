@@ -42,6 +42,9 @@ class WebhookEventType(str, Enum):
     DEPLOYMENT = "deployment"
     CHECK_RUN = "check_run"
 
+    INSTALLATION = "installation"
+    MARKETPLACE_PURCHASE = "marketplace_purchase"
+
     # Unknown/unsupported
     UNKNOWN = "unknown"
 
@@ -129,6 +132,9 @@ GITHUB_EVENT_MAP: dict[str, WebhookEventType] = {
     "deployment_status": WebhookEventType.DEPLOYMENT,
     "check_run": WebhookEventType.CHECK_RUN,
     "check_suite": WebhookEventType.CHECK_RUN,
+    "installation": WebhookEventType.INSTALLATION,
+    "installation_repositories": WebhookEventType.INSTALLATION,
+    "marketplace_purchase": WebhookEventType.MARKETPLACE_PURCHASE,
 }
 
 GITLAB_EVENT_MAP: dict[str, WebhookEventType] = {

@@ -33,6 +33,21 @@ class TestGitHubEventMapping:
     def test_check_run(self):
         assert map_github_event("check_run") == WebhookEventType.CHECK_RUN
 
+    def test_installation(self):
+        assert map_github_event("installation") == WebhookEventType.INSTALLATION
+
+    def test_installation_repositories(self):
+        assert (
+            map_github_event("installation_repositories")
+            == WebhookEventType.INSTALLATION
+        )
+
+    def test_marketplace_purchase(self):
+        assert (
+            map_github_event("marketplace_purchase")
+            == WebhookEventType.MARKETPLACE_PURCHASE
+        )
+
     def test_unknown_event(self):
         assert map_github_event("unknown_event") == WebhookEventType.UNKNOWN
 
@@ -85,6 +100,10 @@ class TestWebhookEventModel:
             provider=WebhookProvider.GITHUB,
             event_type=WebhookEventType.PUSH,
             raw_event_type="push",
+            delivery_id=None,
+            org_id=None,
+            repo_id=None,
+            repo_name=None,
         )
         assert event.id is not None
 
@@ -93,6 +112,10 @@ class TestWebhookEventModel:
             provider=WebhookProvider.GITLAB,
             event_type=WebhookEventType.MERGE_REQUEST,
             raw_event_type="Merge Request Hook",
+            delivery_id=None,
+            org_id=None,
+            repo_id=None,
+            repo_name=None,
         )
         assert event.received_at is not None
 
@@ -102,6 +125,10 @@ class TestWebhookEventModel:
             provider=WebhookProvider.JIRA,
             event_type=WebhookEventType.ISSUE_CREATED,
             raw_event_type="jira:issue_created",
+            delivery_id=None,
+            org_id=None,
+            repo_id=None,
+            repo_name=None,
             payload=payload,
         )
         assert event.payload == payload

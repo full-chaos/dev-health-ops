@@ -66,7 +66,6 @@ def process_webhook_event(
                     "reason": "duplicate_delivery",
                     "delivery_id": delivery_id,
                 }
-            _record_delivery(provider, delivery_id)
 
         if provider == "github":
             result = _process_github_event(event_type, payload, org_id, repo_name)
@@ -80,6 +79,9 @@ def process_webhook_event(
 
         if org_id is not None:
             _invalidate_sync_cache(provider, org_id)
+
+        if delivery_id and result.get("processed") is not False:
+            _record_delivery(provider, delivery_id)
 
         return {
             "status": "success",
@@ -142,6 +144,13 @@ def _process_github_event(
     """Process a GitHub webhook event."""
     if not payload:
         return {"processed": False, "reason": "empty_payload"}
+
+    if event_type == "installation":
+        return _process_github_installation_event(payload)
+    if event_type == "marketplace_purchase":
+        logger.info("Received GitHub marketplace_purchase webhook")
+        # CHAOS-2236: entitlement mapping deferred
+        return {"processed": True, "event": event_type}
 
     # Import specialized sync processors
     from dev_health_ops.processors.github import process_github_repo
@@ -225,6 +234,84 @@ def _process_github_event(
     except Exception as e:
         logger.error("Failed to process GitHub webhook %s: %s", event_type, e)
         return {"processed": False, "error": str(e)}
+
+
+def _process_github_installation_event(payload: dict) -> dict:
+    installation_payload = payload.get("installation") or {}
+    installation_id = installation_payload.get("id")
+    if not isinstance(installation_id, int):
+        return {"processed": False, "reason": "missing_installation_id"}
+
+    account_payload = installation_payload.get("account") or {}
+    action = payload.get("action")
+    now = datetime.now(timezone.utc)
+
+    from sqlalchemy import select
+    from sqlalchemy.exc import IntegrityError
+
+    from dev_health_ops.db import get_postgres_session_sync
+    from dev_health_ops.models.settings import (
+        GithubAppInstallation,
+        IntegrationCredential,
+    )
+
+    with get_postgres_session_sync() as session:
+        result = session.execute(
+            select(GithubAppInstallation).where(
+                GithubAppInstallation.installation_id == installation_id
+            )
+        )
+        installation = result.scalar_one_or_none()
+        if installation is None:
+            try:
+                with session.begin_nested():
+                    installation = GithubAppInstallation()
+                    installation.installation_id = installation_id
+                    installation.created_at = now
+                    session.add(installation)
+                    session.flush()
+            except IntegrityError as exc:
+                result = session.execute(
+                    select(GithubAppInstallation).where(
+                        GithubAppInstallation.installation_id == installation_id
+                    )
+                )
+                installation = result.scalar_one_or_none()
+                if installation is None:
+                    raise exc
+
+        login = account_payload.get("login")
+        if isinstance(login, str):
+            installation.account_login = login
+        account_type = account_payload.get("type")
+        if isinstance(account_type, str):
+            installation.account_type = account_type
+        if action in {"created", "unsuspend"}:
+            installation.suspended_at = None
+        elif action in {"suspend", "deleted"}:
+            installation.suspended_at = now
+        installation.updated_at = now
+
+        if action == "deleted" and installation.org_id:
+            credential_result = session.execute(
+                select(IntegrationCredential).where(
+                    IntegrationCredential.org_id == installation.org_id,
+                    IntegrationCredential.provider == "github",
+                    IntegrationCredential.name == "github-app",
+                )
+            )
+            credential = credential_result.scalar_one_or_none()
+            if credential is not None:
+                credential.is_active = False
+                credential.updated_at = now
+        session.flush()
+
+    return {
+        "processed": True,
+        "event": "installation",
+        "installation_id": installation_id,
+        "action": action,
+    }
 
 
 def _process_gitlab_event(

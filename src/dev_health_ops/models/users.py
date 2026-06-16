@@ -84,6 +84,9 @@ class User(Base):
     is_superuser: Mapped[bool | None] = mapped_column(
         Boolean, default=False, nullable=False
     )
+    token_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
 
     # Timestamps
     last_login_at: Mapped[datetime | None] = mapped_column(

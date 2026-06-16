@@ -116,6 +116,7 @@ class AuthenticatedUser:
     username: str | None = None
     full_name: str | None = None
     impersonated_by: str | None = None
+    token_version: int | None = None
 
     @property
     def is_admin(self) -> bool:
@@ -158,6 +159,7 @@ class AuthService:
         is_superuser: bool = False,
         username: str | None = None,
         full_name: str | None = None,
+        token_version: int = 0,
         impersonating_user_id: str | None = None,
         expires_delta: timedelta | None = None,
     ) -> str:
@@ -178,6 +180,7 @@ class AuthService:
             "exp": expire,
             "iat": datetime.now(timezone.utc),
             "jti": str(uuid.uuid4()),
+            "tv": token_version,
         }
         if username:
             payload["username"] = username
@@ -253,6 +256,7 @@ class AuthService:
         is_superuser: bool = False,
         username: str | None = None,
         full_name: str | None = None,
+        token_version: int = 0,
     ) -> TokenPair:
         """Create both access and refresh tokens."""
         access_token = self.create_access_token(
@@ -263,6 +267,7 @@ class AuthService:
             is_superuser=is_superuser,
             username=username,
             full_name=full_name,
+            token_version=token_version,
         )
         refresh_token = self.create_refresh_token(user_id=user_id, org_id=org_id)
         return TokenPair(access_token=access_token, refresh_token=refresh_token)
@@ -337,6 +342,7 @@ class AuthService:
             username=payload.get("username"),
             full_name=payload.get("full_name"),
             impersonated_by=payload.get("impersonating_user_id"),
+            token_version=payload.get("tv"),
         )
 
     def refresh_access_token(
@@ -347,6 +353,7 @@ class AuthService:
         is_superuser: bool = False,
         username: str | None = None,
         full_name: str | None = None,
+        token_version: int = 0,
     ) -> str | None:
         """Create a new access token from a valid refresh token."""
         payload = self.validate_token(refresh_token, token_type="refresh")
@@ -361,6 +368,7 @@ class AuthService:
             is_superuser=is_superuser,
             username=username,
             full_name=full_name,
+            token_version=token_version,
         )
 
 

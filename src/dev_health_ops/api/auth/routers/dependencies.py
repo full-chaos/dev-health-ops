@@ -58,7 +58,9 @@ async def get_current_user(
 
     async with get_postgres_session() as db:
         result = await db.execute(
-            select(User.id, User.is_active).where(User.id == user_uuid)
+            select(User.id, User.is_active, User.token_version).where(
+                User.id == user_uuid
+            )
         )
         db_user = result.one_or_none()
 
@@ -75,6 +77,14 @@ async def get_current_user(
         raise HTTPException(
             status_code=401,
             detail=error_detail("Account is disabled"),
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if user.token_version != int(db_user.token_version or 0):
+        logger.warning("JWT token version mismatch for user: %s", user.user_id)
+        raise HTTPException(
+            status_code=401,
+            detail=error_detail("Invalid or expired token"),
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -105,11 +115,15 @@ async def get_current_user_optional(
 
     async with get_postgres_session() as db:
         result = await db.execute(
-            select(User.id, User.is_active).where(User.id == user_uuid)
+            select(User.id, User.is_active, User.token_version).where(
+                User.id == user_uuid
+            )
         )
         db_user = result.one_or_none()
 
     if not db_user or not db_user.is_active:
+        return None
+    if user.token_version != int(db_user.token_version or 0):
         return None
 
     return user

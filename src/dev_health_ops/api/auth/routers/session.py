@@ -226,11 +226,15 @@ async def validate_token(
 
     async with get_postgres_session() as db:
         result = await db.execute(
-            select(User.id, User.is_active).where(User.id == user_uuid)
+            select(User.id, User.is_active, User.token_version).where(
+                User.id == user_uuid
+            )
         )
         db_user = result.one_or_none()
 
     if not db_user or not db_user.is_active:
+        return TokenValidateResponse(valid=False)
+    if user.token_version != int(db_user.token_version or 0):
         return TokenValidateResponse(valid=False)
 
     return TokenValidateResponse(

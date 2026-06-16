@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import importlib
 import logging
+import uuid
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func, select
 
 from dev_health_ops.api.middleware.rate_limit import get_auth_key, limiter
+from dev_health_ops.api.utils.audit import emit_audit_log
 from dev_health_ops.api.utils.errors import error_detail
 from dev_health_ops.api.utils.logging import sanitize_for_log
-from dev_health_ops.models.users import User
+from dev_health_ops.models.audit import AuditAction, AuditResourceType
+from dev_health_ops.models.users import Membership, User
 
 from .common import VerifyEmailResponse
 
@@ -75,7 +78,10 @@ async def forgot_password(
 
 
 @router.post("/reset-password", response_model=VerifyEmailResponse)
-async def reset_password(payload: ResetPasswordRequest) -> VerifyEmailResponse:
+async def reset_password(
+    payload: ResetPasswordRequest,
+    request: Request,
+) -> VerifyEmailResponse:
     from dev_health_ops.api.auth.router import get_postgres_session
 
     password_reset_service = importlib.import_module(
@@ -89,6 +95,21 @@ async def reset_password(payload: ResetPasswordRequest) -> VerifyEmailResponse:
             raise HTTPException(
                 status_code=400,
                 detail=error_detail("Invalid or expired token"),
+            )
+        membership_result = await db.execute(
+            select(Membership.org_id).where(Membership.user_id == user.id).limit(1)
+        )
+        audit_org_id = membership_result.scalar_one_or_none()
+        if audit_org_id is not None:
+            emit_audit_log(
+                db,
+                org_id=audit_org_id,
+                action=AuditAction.PASSWORD_RESET,
+                resource_type=AuditResourceType.USER,
+                resource_id=str(user.id),
+                user_id=uuid.UUID(str(user.id)),
+                description="User reset password",
+                request=request,
             )
         await db.commit()
 

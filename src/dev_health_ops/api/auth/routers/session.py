@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import uuid as uuid_mod
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -214,23 +213,10 @@ async def validate_token(
     from dev_health_ops.api.auth.router import get_auth_service, get_postgres_session
 
     auth_service = get_auth_service()
-    user = auth_service.get_authenticated_user(payload.token)
+    async with get_postgres_session() as db:
+        user = await auth_service.authenticate_access_token(payload.token, db)
 
     if not user:
-        return TokenValidateResponse(valid=False)
-
-    try:
-        user_uuid = uuid_mod.UUID(user.user_id)
-    except ValueError:
-        return TokenValidateResponse(valid=False)
-
-    async with get_postgres_session() as db:
-        result = await db.execute(
-            select(User.id, User.is_active).where(User.id == user_uuid)
-        )
-        db_user = result.one_or_none()
-
-    if not db_user or not db_user.is_active:
         return TokenValidateResponse(valid=False)
 
     return TokenValidateResponse(

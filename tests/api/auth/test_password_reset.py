@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from dev_health_ops.api.middleware.rate_limit import limiter as rate_limiter
 from dev_health_ops.api.services.password_reset import create_password_reset_token
-from dev_health_ops.models.audit import AuditLog
+from dev_health_ops.models.audit import AuditAction, AuditLog
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.password_reset_token import PasswordResetToken
 from dev_health_ops.models.refresh_token import RefreshToken
@@ -71,8 +71,10 @@ async def seeded_user(session_maker):
         is_active=True,
         is_verified=True,
     )
+    org = Organization(id=uuid.uuid4(), slug="reset-org", name="Reset Org")
+    membership = Membership(user_id=user.id, org_id=org.id, role="member")
     async with session_maker() as session:
-        session.add(user)
+        session.add_all([user, org, membership])
         await session.commit()
     return user
 
@@ -189,6 +191,50 @@ async def test_reset_password_valid_token_updates_password_hash(
         new_password.encode("utf-8"),
         updated_user.password_hash.encode("utf-8"),
     )
+
+
+@pytest.mark.asyncio
+async def test_reset_password_valid_token_increments_token_version(
+    client, session_maker, seeded_user
+):
+    async_client, _ = client
+    async with session_maker() as session:
+        token = await create_password_reset_token(session, seeded_user.id)
+        await session.commit()
+
+    response = await async_client.post(
+        "/api/v1/auth/reset-password",
+        json={"token": token, "new_password": "NewPassword@456"},
+    )
+
+    assert response.status_code == 200
+    async with session_maker() as session:
+        result = await session.execute(select(User).where(User.id == seeded_user.id))
+        updated_user = result.scalar_one()
+    assert updated_user.token_version == 1
+
+
+@pytest.mark.asyncio
+async def test_reset_password_valid_token_emits_audit_log(
+    client, session_maker, seeded_user
+):
+    async_client, _ = client
+    async with session_maker() as session:
+        token = await create_password_reset_token(session, seeded_user.id)
+        await session.commit()
+
+    response = await async_client.post(
+        "/api/v1/auth/reset-password",
+        json={"token": token, "new_password": "NewPassword@456"},
+    )
+
+    assert response.status_code == 200
+    async with session_maker() as session:
+        result = await session.execute(
+            select(AuditLog).where(AuditLog.resource_id == str(seeded_user.id))
+        )
+        audit_log = result.scalar_one()
+    assert audit_log.action == AuditAction.PASSWORD_RESET.value
 
 
 @pytest.mark.asyncio

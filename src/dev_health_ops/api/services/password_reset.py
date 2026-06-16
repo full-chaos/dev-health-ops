@@ -118,6 +118,7 @@ async def reset_password_with_token(
         bcrypt.gensalt(),
     ).decode("utf-8")
     user.password_hash = password_hash
+    user.token_version = int(user.token_version or 0) + 1
     user.updated_at = now
 
     revoke_all_for_user = importlib.import_module(

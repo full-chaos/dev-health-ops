@@ -168,6 +168,7 @@ async def social_login(
             is_superuser=bool(user.is_superuser),
             username=str(user.username) if user.username is not None else None,
             full_name=str(user.full_name) if user.full_name is not None else None,
+            token_version=int(getattr(user, "token_version", 0) or 0),
         )
 
         refresh_payload = auth_service.validate_token(

@@ -16,6 +16,10 @@ from typing import Any
 
 import jwt
 from jwt.exceptions import InvalidTokenError
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from dev_health_ops.models.users import User
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +120,7 @@ class AuthenticatedUser:
     username: str | None = None
     full_name: str | None = None
     impersonated_by: str | None = None
+    token_version: int | None = None
 
     @property
     def is_admin(self) -> bool:
@@ -158,6 +163,7 @@ class AuthService:
         is_superuser: bool = False,
         username: str | None = None,
         full_name: str | None = None,
+        token_version: int = 0,
         impersonating_user_id: str | None = None,
         expires_delta: timedelta | None = None,
     ) -> str:
@@ -178,6 +184,7 @@ class AuthService:
             "exp": expire,
             "iat": datetime.now(timezone.utc),
             "jti": str(uuid.uuid4()),
+            "tv": token_version,
         }
         if username:
             payload["username"] = username
@@ -253,6 +260,7 @@ class AuthService:
         is_superuser: bool = False,
         username: str | None = None,
         full_name: str | None = None,
+        token_version: int = 0,
     ) -> TokenPair:
         """Create both access and refresh tokens."""
         access_token = self.create_access_token(
@@ -263,6 +271,7 @@ class AuthService:
             is_superuser=is_superuser,
             username=username,
             full_name=full_name,
+            token_version=token_version,
         )
         refresh_token = self.create_refresh_token(user_id=user_id, org_id=org_id)
         return TokenPair(access_token=access_token, refresh_token=refresh_token)
@@ -337,7 +346,60 @@ class AuthService:
             username=payload.get("username"),
             full_name=payload.get("full_name"),
             impersonated_by=payload.get("impersonating_user_id"),
+            token_version=payload.get("tv"),
         )
+
+    async def authenticate_access_token(
+        self,
+        token: str,
+        db: AsyncSession,
+    ) -> AuthenticatedUser | None:
+        """Validate an access JWT against the database-backed user state.
+
+        Missing legacy ``tv`` claims are treated as version 0 so access tokens
+        issued before token-version rollout remain valid for users whose
+        persisted token_version is still the backfilled default. Present claims
+        must match the current database value exactly.
+        """
+        user = self.get_authenticated_user(token)
+        if not user:
+            return None
+
+        try:
+            user_uuid = uuid.UUID(user.user_id)
+        except ValueError:
+            logger.warning("JWT contains invalid user id claim: %s", user.user_id)
+            return None
+
+        result = await db.execute(
+            select(User.id, User.is_active, User.token_version).where(
+                User.id == user_uuid
+            )
+        )
+        db_user = result.one_or_none()
+        if db_user is None:
+            logger.warning("JWT valid but user not found in DB: %s", user.user_id)
+            return None
+        if not db_user.is_active:
+            logger.warning("JWT valid but user is deactivated: %s", user.user_id)
+            return None
+
+        try:
+            token_version = 0 if user.token_version is None else int(user.token_version)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Access denied: stale-session check unreadable for user %s",
+                user.user_id,
+            )
+            return None
+
+        current_token_version = int(db_user.token_version or 0)
+        if token_version != current_token_version:
+            logger.warning("Access denied: stale session for user %s", user.user_id)
+            return None
+
+        user.token_version = token_version
+        return user
 
     def refresh_access_token(
         self,
@@ -347,6 +409,7 @@ class AuthService:
         is_superuser: bool = False,
         username: str | None = None,
         full_name: str | None = None,
+        token_version: int = 0,
     ) -> str | None:
         """Create a new access token from a valid refresh token."""
         payload = self.validate_token(refresh_token, token_type="refresh")
@@ -361,6 +424,7 @@ class AuthService:
             is_superuser=is_superuser,
             username=username,
             full_name=full_name,
+            token_version=token_version,
         )
 
 

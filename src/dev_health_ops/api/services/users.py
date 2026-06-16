@@ -134,7 +134,7 @@ class UserService:
             raise ValueError(f"User with username {username} already exists")
 
         password_hash = None
-        if password:
+        if password is not None:
             if len(password) < PASSWORD_MIN_LENGTH:
                 raise ValueError(
                     f"Password must be at least {PASSWORD_MIN_LENGTH} characters"
@@ -211,6 +211,7 @@ class UserService:
                 f"Password must be at least {PASSWORD_MIN_LENGTH} characters"
             )
         user.password_hash = _hash_password(password)
+        user.token_version = int(user.token_version or 0) + 1
         user.updated_at = datetime.now(timezone.utc)
         await revoke_all_for_user(self.session, user_id)
         await self.session.flush()

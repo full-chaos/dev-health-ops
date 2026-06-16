@@ -663,6 +663,7 @@ async def saml_acs_callback(
             is_superuser=bool(user.is_superuser),
             username=_present_str(user.username, "user.username"),
             full_name=_present_str(user.full_name, "user.full_name"),
+            token_version=int(getattr(user, "token_version", 0) or 0),
         )
 
         return SSOLoginResponse(
@@ -859,6 +860,7 @@ async def oidc_callback(
             is_superuser=bool(user.is_superuser),
             username=_present_str(user.username, "user.username"),
             full_name=_present_str(user.full_name, "user.full_name"),
+            token_version=int(getattr(user, "token_version", 0) or 0),
         )
 
         return SSOLoginResponse(
@@ -1290,6 +1292,7 @@ async def oauth_callback(
             is_superuser=bool(user.is_superuser),
             username=_present_str(user.username, "user.username"),
             full_name=_present_str(user.full_name, "user.full_name"),
+            token_version=int(getattr(user, "token_version", 0) or 0),
         )
 
         return SSOLoginResponse(

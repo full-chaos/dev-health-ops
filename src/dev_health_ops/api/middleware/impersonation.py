@@ -57,7 +57,7 @@ class ImpersonationMiddleware:
             await self.app(scope, receive, send)
             return
 
-        real_user = _extract_user(scope)
+        real_user = await _extract_user(scope)
         if real_user is None or not getattr(real_user, "is_superuser", False):
             await self.app(scope, receive, send)
             return
@@ -148,7 +148,7 @@ def _may_be_superuser(scope: Scope) -> bool:
         return False
 
 
-def _extract_user(scope: Scope) -> Any | None:
+async def _extract_user(scope: Scope) -> Any | None:
     """Extract authenticated user from scope state or authorization header."""
     state = scope.get("state")
     if state is not None:
@@ -169,7 +169,10 @@ def _extract_user(scope: Scope) -> Any | None:
     token = extract_token_from_header(auth_header)
     if not token:
         return None
-    return get_auth_service().get_authenticated_user(token)
+    from dev_health_ops.db import get_postgres_session
+
+    async with get_postgres_session() as db:
+        return await get_auth_service().authenticate_access_token(token, db)
 
 
 async def _expire_session(session: Any, admin_user_id: str) -> None:

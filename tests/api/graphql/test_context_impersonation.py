@@ -14,6 +14,7 @@ service, so no DB or real JWT is required.
 from __future__ import annotations
 
 import types
+from contextlib import asynccontextmanager
 
 import pytest
 
@@ -43,8 +44,14 @@ def _stub_admin_auth(monkeypatch: pytest.MonkeyPatch, *, admin_org: str) -> None
         role="owner",
         is_superuser=True,
     )
+
+    async def _authenticate_access_token(
+        _token: str, _db: object
+    ) -> types.SimpleNamespace:
+        return fake_admin
+
     fake_service = types.SimpleNamespace(
-        get_authenticated_user=lambda _token: fake_admin
+        authenticate_access_token=_authenticate_access_token
     )
     monkeypatch.setattr(
         "dev_health_ops.api.services.auth.get_auth_service",
@@ -60,6 +67,12 @@ def _stub_admin_auth(monkeypatch: pytest.MonkeyPatch, *, admin_org: str) -> None
         _no_client,
     )
     monkeypatch.setenv("GRAPHQL_AUTH_REQUIRED", "true")
+
+    @asynccontextmanager
+    async def _fake_session():
+        yield object()
+
+    monkeypatch.setattr("dev_health_ops.db.get_postgres_session", _fake_session)
 
 
 @pytest.mark.asyncio

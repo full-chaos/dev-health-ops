@@ -262,6 +262,7 @@ async def _issue_membership_tokens(
         is_superuser=bool(db_user.is_superuser),
         username=str(db_user.username) if db_user.username is not None else None,
         full_name=str(db_user.full_name) if db_user.full_name is not None else None,
+        token_version=int(getattr(db_user, "token_version", 0) or 0),
     )
 
     refresh_payload = auth_service.validate_token(

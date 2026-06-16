@@ -611,8 +611,10 @@ async def test_guard_emits_warning_for_real_user(session_maker, caplog):
 async def test_multiple_users_partial_guard(session_maker):
     """When user_data has multiple users, guard applies per-user independently.
 
-    - user A: real user (different hash) → must be skipped
-    - user B: absent → must be inserted
+    The fixture org is fresh (safe-inserted this run) and both users are members
+    of it, so the org-safety gate is satisfied and per-user guarding decides:
+    - user A: real user (different hash) already exists -> identity match -> skipped
+    - user B: absent -> inserted
     """
     from dev_health_ops.licensing.types import LicenseTier
 
@@ -625,7 +627,8 @@ async def test_multiple_users_partial_guard(session_maker):
 
     # Pre-seed user A with a real (non-fixture) hash.
     async with session_maker() as session:
-        await session.merge(org)
+        # NB: do not pre-seed the org -- it must be freshly inserted (safe) so
+        # the org-safety gate permits inserting new fixture user B.
         real_a = User(
             id=user_a_id,
             email="alice@example.com",
@@ -673,10 +676,25 @@ async def test_multiple_users_partial_guard(session_maker):
     )
     license_row.id = uuid.uuid5(org.id, "org-license")
 
+    membership_a = Membership(
+        id=uuid.uuid5(user_a_id, str(org.id)),
+        user_id=user_a_id,
+        org_id=org.id,
+        role="owner",
+        joined_at=now,
+    )
+    membership_b = Membership(
+        id=uuid.uuid5(user_b_id, str(org.id)),
+        user_id=user_b_id,
+        org_id=org.id,
+        role="member",
+        joined_at=now,
+    )
+
     user_data = {
         "organizations": [org],
         "users": [fixture_a, fixture_b],
-        "memberships": [],
+        "memberships": [membership_a, membership_b],
         "licenses": [license_row],
         "default_password": _FIXTURE_PASSWORD,
     }
@@ -783,3 +801,46 @@ async def test_mixed_case_real_org_slug_not_duplicated(session_maker):
         # No fixture license rows should exist for the duplicate tenant.
         licenses = (await session.execute(select(OrgLicense))).scalars().all()
         assert all(lic.org_id == real_org_id for lic in licenses) or not licenses
+
+
+@pytest.mark.asyncio
+async def test_existing_org_blocks_fixture_superuser_injection(session_maker):
+    """If a real org pre-exists (matched by slug) but the fixture admin identity
+    does NOT collide, the seeder must NOT inject the known-password fixture
+    superuser next to the real tenant (CHAOS-2458 review follow-up)."""
+    real_org_id = uuid.uuid4()
+    async with session_maker() as session:
+        real_org = Organization(
+            id=real_org_id,
+            slug="default-org",  # same slug as fixture, different id
+            name="Real Tenant",
+            tier="enterprise",
+            is_active=True,
+        )
+        session.add(real_org)
+        await session.commit()
+
+    async with session_maker() as session:
+        await _seed_auth_data(session, _build_user_data())
+
+    async with session_maker() as session:
+        # The fixture superuser must NOT have been inserted.
+        assert await session.get(User, _fixture_user_id()) is None, (
+            "Fixture superuser must not be injected next to an existing tenant"
+        )
+        users = (
+            (
+                await session.execute(
+                    select(User).where(
+                        func.lower(User.email) == "admin@devhealth.example"
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert users == []
+        # No fixture org/membership created for the real tenant.
+        assert await session.get(Organization, _make_org().id) is None
+        memberships = (await session.execute(select(Membership))).scalars().all()
+        assert memberships == []

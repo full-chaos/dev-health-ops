@@ -436,8 +436,31 @@ async def _seed_auth_data(
             safe_org_ids.add(org.id)
     await session.commit()
 
+    # Gate fixture-user insertion on safe-org insertion (CHAOS-2458): on the
+    # default path, never introduce a fixture account (e.g. the known-password
+    # admin@devhealth.example superuser) for a tenant that already exists. A
+    # fixture user is eligible only if it belongs to at least one org that was
+    # freshly inserted this run; users tied only to pre-existing (skipped) orgs
+    # are left out entirely. overwrite_real_users=True keeps the full pass.
+    all_memberships = user_data.get("memberships") or []
+    user_org_map: dict[Any, set[Any]] = {}
+    for membership in all_memberships:
+        user_org_map.setdefault(membership.user_id, set()).add(membership.org_id)
+
     safe_user_ids: set[Any] = set()
     for user in user_data["users"]:
+        if not overwrite_real_users and not (
+            user_org_map.get(user.id, set()) & safe_org_ids
+        ):
+            logging.warning(
+                "FIXTURES-GUARD: skipping fixture user %s (%s) because it is not "
+                "tied to any newly-seeded fixture org; refusing to inject a "
+                "fixture account next to existing tenant data. Pass "
+                "overwrite_real_users=True to bypass (demo/CI only).",
+                user.id,
+                user.email,
+            )
+            continue
         status = await _merge_fixture_user(
             session,
             user,

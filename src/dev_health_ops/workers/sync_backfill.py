@@ -3,9 +3,10 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import date, datetime, timezone
+from typing import Any
 
 from dev_health_ops.workers.celery_app import celery_app
-from dev_health_ops.workers.task_utils import _get_db_url
+from dev_health_ops.workers.task_utils import _credential_mapping, _get_db_url
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,7 @@ def run_backfill(
 ) -> dict:
     from dev_health_ops.backfill.runner import run_backfill_for_config
     from dev_health_ops.db import get_postgres_session_sync
-    from dev_health_ops.models.settings import SyncConfiguration
+    from dev_health_ops.models.settings import IntegrationCredential, SyncConfiguration
 
     sync_config_uuid = uuid.UUID(sync_config_id)
     started_at = datetime.now(timezone.utc)
@@ -43,6 +44,22 @@ def run_backfill(
             )
             if config is None:
                 raise ValueError(f"Sync configuration not found: {sync_config_id}")
+
+            credentials: dict[str, Any] | None = None
+            if config.credential_id:
+                credential = (
+                    session.query(IntegrationCredential)
+                    .filter(
+                        IntegrationCredential.id == config.credential_id,
+                        IntegrationCredential.org_id == org_id,
+                    )
+                    .one_or_none()
+                )
+                if credential is None:
+                    raise ValueError(
+                        f"Credential not found for sync configuration: {config.credential_id}"
+                    )
+                credentials = _credential_mapping(credential)
 
         if backfill_job_id:
             with get_postgres_session_sync() as session:
@@ -95,6 +112,7 @@ def run_backfill(
             sink="clickhouse",
             chunk_days=7,
             progress_cb=_backfill_progress,
+            credentials=credentials,
         )
 
         completed_at = datetime.now(timezone.utc)

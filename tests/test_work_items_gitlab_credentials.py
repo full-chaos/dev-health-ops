@@ -148,7 +148,7 @@ def test_fetch_gitlab_work_items_passes_credentials_to_factory(
                 2024, 1, 1, tzinfo=__import__("datetime").timezone.utc
             ),
             status_mapping=StatusMapping({}, {}, {}, {}),
-            identity=IdentityResolver([]),
+            identity=IdentityResolver({}),
             token="threaded-token",
             gitlab_url="https://gitlab.example.com",
             org_id="",

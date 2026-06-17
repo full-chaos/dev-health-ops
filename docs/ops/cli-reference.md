@@ -21,6 +21,11 @@ The CLI entry point is `dev-hops` (module `dev_health_ops.cli`). Command groups:
 - `workers` — Celery worker and beat scheduler
 - `maintenance` — operational cleanup
 
+### Inline Execution vs. Celery-Backed Operations
+
+Bare CLI commands run inline, executing immediately in your terminal session. However, several commands have argument-enforcement gaps (CHAOS-2475). These operations require credentials or inputs that the CLI doesn't enforce at startup. Running them inline without these inputs can lead to silent failures or incomplete runs.
+
+Until these gaps are fixed, we recommend triggering the equivalent Celery jobs instead of running the commands inline. Celery workers run in a managed environment where credentials and configurations are fully validated. You can find the list of Celery tasks and queue configurations in [workers.md](workers.md).
 ---
 
 ## Global Arguments
@@ -94,6 +99,10 @@ Requires: ClickHouse (--analytics-db / CLICKHOUSE_URI), organization (--org / OR
 ---
 
 ## Sync Commands
+
+> ⚠️ **Warning (CHAOS-2475):** Sync commands run inline and require provider credentials (such as `GITHUB_TOKEN`, `GITLAB_TOKEN`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, or `LINEAR_API_KEY`) that the CLI doesn't enforce at startup. Running them inline without these inputs can cause silent failures.
+>
+> **Interim Workaround:** We recommend triggering the sync via the API endpoint `POST /api/v1/admin/sync-configs/{config_id}/trigger` (which dispatches the `run_sync_config` task to the `sync` queue). See [workers.md](workers.md) for details on Celery worker configuration.
 
 ### `sync git`
 
@@ -285,6 +294,10 @@ sync is expected.
 ---
 
 ## Metrics Commands
+
+> ⚠️ **Warning (CHAOS-2475):** Metrics commands run inline and require database connections and configurations that the CLI doesn't enforce at startup. Running them inline can cause silent failures or incomplete computations.
+>
+> **Interim Workaround:** We recommend triggering the equivalent Celery jobs on the `metrics` queue. See [workers.md](workers.md) for details on Celery worker configuration.
 
 ### `metrics daily`
 
@@ -832,6 +845,10 @@ python -m dev_health_ops.cli admin bundles assign-org --org-id <uuid> --feature-
 
 ### `backfill run`
 
+> ⚠️ **Warning (CHAOS-2475):** The `backfill run` command runs inline and requires provider credentials that the CLI doesn't enforce at startup. Running it inline can cause silent failures. Additionally, there is a known preflight-token bug (CHAOS-2479) where the CLI fails to validate credentials correctly.
+>
+> **Interim Workaround:** We recommend triggering the backfill via the API endpoint `POST /api/v1/admin/sync-configs/{config_id}/backfill` (which dispatches the `run_backfill` task to the `backfill` queue). See [workers.md](workers.md) for details on Celery worker configuration.
+
 Run historical data backfill for a sync configuration. Data is synced in chunked 7-day windows. Uses `CLICKHOUSE_URI`.
 
 ```bash
@@ -985,6 +1002,10 @@ dev-hops ai allowlist list
 
 ### `work-graph build`
 
+> ⚠️ **Warning (CHAOS-2475):** The `work-graph build` command runs inline and requires configurations that the CLI doesn't enforce at startup. Running it inline can cause silent failures.
+>
+> **Interim Workaround:** We recommend triggering the equivalent Celery job on the `metrics` queue. See [workers.md](workers.md) for details on Celery worker configuration.
+
 Build work graph edges from raw data (issue → PR → commit linkages). Takes its ClickHouse DSN via its own **required** `--db` flag.
 
 ```bash
@@ -1040,6 +1061,10 @@ dev-hops investment materialize --window-days 30 --llm-provider none
 
 ### `recommendations compute`
 
+> ⚠️ **Warning (CHAOS-2475):** The `recommendations compute` command runs inline and requires configurations that the CLI doesn't enforce at startup. Running it inline can cause silent failures.
+>
+> **Interim Workaround:** We recommend triggering the equivalent Celery job on the `metrics` queue. See [workers.md](workers.md) for details on Celery worker configuration.
+
 Evaluate rule-based recommendations for a team and persist results to ClickHouse — both fired recommendations and explicit `fired=False` tombstones, so a recovered signal is cleared rather than left lingering. Uses `CLICKHOUSE_URI`.
 
 ```bash
@@ -1062,6 +1087,8 @@ dev-hops recommendations compute --team eng-core \
 ---
 
 ## Reports
+
+> ℹ️ **Note:** Reports are not managed or triggered via the CLI. They are managed entirely through the GraphQL API or the Report Center UI. See [reports.md](../user-guide/reports.md) for details.
 
 AI-generated reports are managed through the GraphQL API and executed as Celery tasks. Reports are not triggered via CLI — they are created, triggered, and scheduled through the Report Center UI or GraphQL mutations.
 

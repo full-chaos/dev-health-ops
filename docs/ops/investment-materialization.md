@@ -50,6 +50,12 @@ reads these edges.
 
 ## Step 2 — Materialize investments
 
+> ⚠️ **Warning (CHAOS-2475, CHAOS-2476):** The `investment materialize` command defaults to `--llm-provider auto`. If an LLM API key (such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`) doesn't exist in the environment, the command silently falls back to a `MockProvider`. It then persists mock categorization data to ClickHouse and exits with code `0`.
+>
+> **Interim Workarounds:**
+> 1. **Trigger via Celery:** We recommend triggering the `run_investment_materialize` task via the worker (where worker-side API keys apply). See [workers.md](workers.md) for details on Celery worker configuration.
+> 2. **Explicit CLI Flags:** If running inline, explicitly set `--llm-provider` and ensure the corresponding API key is present in your environment.
+
 ```bash
 dev-hops investment materialize \
   --db "$CLICKHOUSE_URI" \

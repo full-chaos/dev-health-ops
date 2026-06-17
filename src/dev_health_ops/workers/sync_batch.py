@@ -652,6 +652,7 @@ def _run_sync_for_repo(
                     sync_cicd=merged_flags.get("sync_cicd", False),
                     sync_deployments=merged_flags.get("sync_deployments", False),
                     sync_incidents=merged_flags.get("sync_incidents", False),
+                    sync_security=merged_flags.get("sync_security", False),
                     sync_tests=merged_flags.get("sync_tests", False),
                 )
 
@@ -689,6 +690,7 @@ def _run_sync_for_repo(
                     sync_cicd=merged_flags.get("sync_cicd", False),
                     sync_deployments=merged_flags.get("sync_deployments", False),
                     sync_incidents=merged_flags.get("sync_incidents", False),
+                    sync_security=merged_flags.get("sync_security", False),
                     sync_tests=merged_flags.get("sync_tests", False),
                 )
 

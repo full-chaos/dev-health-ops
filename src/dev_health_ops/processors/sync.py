@@ -21,6 +21,7 @@ from dev_health_ops.processors.gitlab import (
 )
 from dev_health_ops.processors.local import process_local_blame, process_local_repo
 from dev_health_ops.storage import detect_db_type, run_with_store
+from dev_health_ops.sync.datasets import processor_sync_targets
 from dev_health_ops.utils.cli import (
     add_date_range_args,
     add_sink_arg,
@@ -374,19 +375,10 @@ def run_sync_target(ns: argparse.Namespace) -> int:
     if provider not in {"local", "github", "gitlab", "synthetic"}:
         raise SystemExit("Provider must be one of: local, github, gitlab, synthetic.")
 
-    if target not in {
-        "git",
-        "prs",
-        "blame",
-        "cicd",
-        "deployments",
-        "incidents",
-        "security",
-        "tests",
-    }:
+    target_choices = processor_sync_targets()
+    if target not in target_choices:
         raise SystemExit(
-            "Sync target must be git, prs, blame, cicd, deployments, incidents, "
-            "security, or tests."
+            "Sync target must be one of: " + ", ".join(target_choices) + "."
         )
 
     if provider == "local":
@@ -449,7 +441,7 @@ def _add_sync_target_args(parser: argparse.ArgumentParser) -> None:
 
 
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
-    target_parsers = {
+    target_help = {
         "git": "Sync commits and commit stats.",
         "prs": "Sync pull/merge requests.",
         "blame": "Sync blame data only.",
@@ -460,7 +452,8 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         "tests": "Sync CI test results and coverage (TestOps).",
     }
 
-    for target, help_text in target_parsers.items():
+    for target in processor_sync_targets():
+        help_text = target_help[target]
         target_parser = subparsers.add_parser(target, help=help_text)
         _add_sync_target_args(target_parser)
         target_parser.set_defaults(func=run_sync_target, sync_target=target)

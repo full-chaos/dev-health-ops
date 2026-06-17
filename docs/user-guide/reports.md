@@ -42,8 +42,7 @@ When a report is created without an explicit `ReportPlan`, the system generates 
 
 ### Manual Trigger
 
-Click **Run Now** on the report detail page. This creates a `ReportRun` with status `PENDING` and dispatches a Celery task to the `reports` queue.
-
+Clicking **Run Now** on the report detail page triggers the `triggerReport` mutation. This creates a `ReportRun` (with `triggered_by="api"` and status `PENDING`) and dispatches the `execute_saved_report` Celery task to the `reports` queue. The mutation serves as an example of the preferred Celery-job trigger pattern (CHAOS-2475, CHAOS-2482) to avoid running resource-intensive or credential-heavy operations inline. Using this pattern ensures credentials aren't exposed or bypassed. See [workers.md](../ops/workers.md) for details on Celery worker configuration.
 ### Scheduled Execution
 
 Reports with a schedule (Weekly or Monthly) are triggered automatically by the `dispatch_scheduled_reports` beat task, which runs every 5 minutes and checks for due reports based on their cron expression.

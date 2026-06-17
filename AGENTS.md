@@ -294,6 +294,21 @@ Explanation format:
 * Daily rollups:
 
   * `CLICKHOUSE_URI=clickhouse://... dev-hops metrics daily`
+### 6.5 Interim Workaround: Trigger via Celery Jobs (CHAOS-2475)
+
+Bare CLI commands run inline. The CLI preflight does not enforce credentials like provider tokens, LLM keys, or Stripe keys. As an interim workaround, trigger the equivalent Celery job instead of running bare CLI commands. Workers carry the credentials that the bare CLI does not enforce.
+
+Start the worker process using:
+```bash
+dev-hops workers start-worker --queues default metrics sync reports
+```
+
+Triggered jobs run in the worker environment. Trigger them using:
+- The sync-config trigger or backfill endpoints for data syncs.
+- The `triggerReport` mutation for reports.
+
+This serves as a temporary workaround, not a permanent contract change. For details on worker setup and queues, see the runbook at [docs/ops/workers.md](docs/ops/workers.md). Tracked in CHAOS-2475 and CHAOS-2482.
+
 
 ---
 

@@ -54,8 +54,12 @@ class WorkItem:
 
     # Optional dimensions.
     repo_id: uuid.UUID | None = None
+    # Raw provider team key (Linear `issue.team.key`). None for GitHub/GitLab
+    # (work items have no native team) and Jira (ops team is a separate sync).
+    native_team_key: str | None = None
     project_key: str | None = None
     project_id: str | None = None
+    project_name: str | None = None
 
     assignees: list[str] = field(
         default_factory=list
@@ -88,24 +92,28 @@ class WorkItem:
 
         Notes:
         - Jira: uses `project_key` when present.
-        - GitHub/GitLab: uses `project_id` (e.g. owner/repo, group/project) when present.
-        - Linear: uses `project_id` (the Linear PROJECT name) when the issue
-          sits in a project, else `project_key` (the Linear TEAM key).
+        - GitHub/GitLab: uses `project_id` (e.g. owner/repo, group/project).
+        - Linear: uses `project_id` (the real Linear project id) when the issue
+          sits in a project, then `project_name`, then falls back to
+          `native_team_key` (the Linear team key) so a team-only issue still
+          carries a non-empty scope key.
         - May be empty when the provider object is not scoped (e.g. GitHub draft project cards).
 
-        IMPORTANT — work scope is NOT the team-attribution key. In Linear,
-        projects and teams are different things: issues always belong to a
-        team (`project_key` = team key) and only sometimes to a project
-        (`project_id`). Team attribution must therefore try `project_key`
-        when a `work_scope_id` lookup misses; see
-        ``ProjectKeyTeamResolver`` callers in ``metrics/compute_work_items.py``
-        and ``metrics/job_work_items.py``. (Jira's project-as-scope is also
-        only a fallback for attribution — teams are membership-based first.)
+        NOTE - work scope is NOT the team-attribution key. The raw Linear team
+        key now lives in `native_team_key` (no longer overloaded onto
+        `project_key`). It is surfaced here only as a last-resort SCOPE
+        fallback so a team-only Linear issue keeps a non-empty scope; full
+        team attribution FROM `native_team_key` is wired up by the
+        compute-time resolver in a later phase and is NOT consumed here yet.
         """
         if self.provider == "jira" and self.project_key:
             return str(self.project_key)
         if self.project_id:
             return str(self.project_id)
+        if self.project_name:
+            return str(self.project_name)
+        if self.native_team_key:
+            return str(self.native_team_key)
         if self.project_key:
             return str(self.project_key)
         return ""

@@ -13,6 +13,7 @@ from dev_health_ops.api.graphql.models.inputs import (
     DimensionInput,
     FilterInput,
     MeasureInput,
+    SankeyRequestInput,
     ScopeFilterInput,
     ScopeLevelInput,
     WhatFilterInput,
@@ -36,6 +37,22 @@ def _breakdown_batch(filters: FilterInput) -> AnalyticsRequestInput:
                 ),
             )
         ],
+        use_investment=True,
+        filters=filters,
+    )
+
+
+def _sankey_batch(filters: FilterInput | None = None) -> AnalyticsRequestInput:
+    return AnalyticsRequestInput(
+        sankey=SankeyRequestInput(
+            path=[DimensionInput.THEME, DimensionInput.REPO],
+            measure=MeasureInput.COUNT,
+            date_range=DateRangeInput(
+                start_date=date(2026, 6, 1),
+                end_date=date(2026, 6, 17),
+            ),
+            use_investment=True,
+        ),
         use_investment=True,
         filters=filters,
     )
@@ -104,3 +121,48 @@ async def test_analytics_resolves_repo_name_filters_to_repo_ids(
     assert matching_params
     assert all(params[param_name] == [REPO_UUID] for params in matching_params)
     assert result.breakdowns[0].items[0].value == 1.0
+
+
+@pytest.mark.asyncio
+async def test_sankey_coverage_respects_resolved_repo_name_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_coverage_params: list[dict[str, Any]] = []
+
+    async def fake_query_dicts(_client: object, sql: str, params: dict[str, Any]):
+        if "FROM repos" in sql:
+            assert params["repo_names"] == [REPO_FULL_NAME]
+            return [{"repo_id": REPO_UUID, "repo": REPO_FULL_NAME}]
+        if "countIf(" in sql and "assigned_team" in sql:
+            captured_coverage_params.append(dict(params))
+            if params.get("repo_filter_ids") == [REPO_UUID]:
+                return [{"total": 2, "assigned_team": 1, "assigned_repo": 2}]
+            return [{"total": 4, "assigned_team": 4, "assigned_repo": 4}]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.queries.client.query_dicts",
+        fake_query_dicts,
+    )
+
+    context = GraphQLContext(
+        org_id="org-1", db_url="clickhouse://test", client=object()
+    )
+
+    org_wide = await analytics_resolver.resolve_analytics(
+        context,
+        _sankey_batch(),
+    )
+    filtered = await analytics_resolver.resolve_analytics(
+        context,
+        _sankey_batch(FilterInput(what=WhatFilterInput(repos=[REPO_FULL_NAME]))),
+    )
+
+    assert captured_coverage_params[0].get("repo_filter_ids") is None
+    assert captured_coverage_params[1]["repo_filter_ids"] == [REPO_UUID]
+    assert org_wide.sankey is not None
+    assert org_wide.sankey.coverage is not None
+    assert filtered.sankey is not None
+    assert filtered.sankey.coverage is not None
+    assert org_wide.sankey.coverage.team_coverage == 1.0
+    assert filtered.sankey.coverage.team_coverage == 0.5

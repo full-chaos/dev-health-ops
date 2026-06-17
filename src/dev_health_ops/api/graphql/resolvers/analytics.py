@@ -55,6 +55,7 @@ from ..sql.compiler import (
     compile_sankey,
     compile_timeseries,
 )
+from ..sql.filter_translation import translate_filters
 
 logger = logging.getLogger(__name__)
 
@@ -643,10 +644,12 @@ async def resolve_analytics(
                         LEFT JOIN (
                             SELECT
                                 work_unit_id,
-                                argMax(team, cnt) AS team_label
+                                argMax(team, cnt) AS team_label,
+                                argMax(team_id, cnt) AS team_id
                             FROM (
                                 SELECT
                                     work_unit_investments.work_unit_id AS work_unit_id,
+                                    t.team_id AS team_id,
                                     ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
                                     countIf(ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) IS NOT NULL) AS cnt
                                 FROM latest_work_unit_investments AS work_unit_investments
@@ -663,7 +666,7 @@ async def resolve_analytics(
                                     WHERE org_id = %(org_id)s
                                     GROUP BY work_item_id
                                 ) AS t ON t.work_item_id = issue_id
-                                GROUP BY work_unit_id, team
+                                GROUP BY work_unit_id, team_id, team
                             )
                             GROUP BY work_unit_id
                         ) AS ut ON ut.work_unit_id = work_unit_investments.work_unit_id
@@ -692,6 +695,26 @@ async def resolve_analytics(
                     else "org_id = %(org_id)s"
                 )
 
+                coverage_filters = (
+                    FilterInput(
+                        scope=resolved_filters.scope,
+                        what=resolved_filters.what,
+                    )
+                    if resolved_filters is not None
+                    else None
+                )
+                coverage_filter_clause, coverage_filter_params = translate_filters(
+                    coverage_filters,
+                    use_investment=bool(request.use_investment),
+                    team_column=team_col,
+                    repo_column="work_unit_investments.repo_id"
+                    if request.use_investment
+                    else repo_col,
+                    author_column="work_unit_investments.author_id"
+                    if request.use_investment
+                    else "author_id",
+                )
+
                 coverage_sql = f"""
                     {with_clause}
                     SELECT
@@ -702,6 +725,7 @@ async def resolve_analytics(
                     {joins}
                     WHERE {date_filter}
                       AND {org_filter}
+                      {coverage_filter_clause}
                 """
 
                 cov_params = {
@@ -709,6 +733,7 @@ async def resolve_analytics(
                     "end_date": request.end_date,
                     "org_id": org_id,
                 }
+                cov_params.update(coverage_filter_params)
 
                 try:
                     c_rows = await query_dicts(client, coverage_sql, cov_params)

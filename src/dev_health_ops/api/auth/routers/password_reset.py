@@ -55,9 +55,28 @@ async def forgot_password(
         )
         user = result.scalar_one_or_none()
         if user is None:
+            # Deliberately emit no audit row for unknown emails: AuditLog.org_id
+            # is required and we will not leak account existence via a side
+            # channel. The enumeration-resistant generic response is preserved.
             return generic_response
 
         reset_token = await create_reset_token(db, user.id)
+
+        membership_result = await db.execute(
+            select(Membership.org_id).where(Membership.user_id == user.id).limit(1)
+        )
+        audit_org_id = membership_result.scalar_one_or_none()
+        if audit_org_id is not None:
+            emit_audit_log(
+                db,
+                org_id=audit_org_id,
+                action=AuditAction.PASSWORD_RESET_REQUESTED,
+                resource_type=AuditResourceType.USER,
+                resource_id=str(user.id),
+                user_id=uuid.UUID(str(user.id)),
+                description="Password reset requested",
+                request=request,
+            )
         await db.commit()
 
         try:

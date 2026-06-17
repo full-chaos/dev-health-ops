@@ -48,6 +48,7 @@ class AuditAction(str, Enum):
     LOGIN_FAILED = "login_failed"
     PASSWORD_CHANGED = "password_changed"
     PASSWORD_RESET = "password_reset"
+    PASSWORD_RESET_REQUESTED = "password_reset_requested"
 
     # SSO events
     SSO_LOGIN = "sso_login"

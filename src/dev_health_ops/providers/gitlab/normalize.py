@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import logging
 import re
 from collections.abc import Sequence
@@ -165,6 +166,7 @@ def gitlab_issue_to_work_item(
         work_item_id=work_item_id,
         provider="gitlab",
         repo_id=repo_id,
+        native_team_key=None,
         project_key=None,
         # For work tracking metrics, treat the GitLab project path as the "project" scope.
         project_id=str(project_full_path)
@@ -321,6 +323,7 @@ def gitlab_mr_to_work_item(
         work_item_id=work_item_id,
         provider="gitlab",
         repo_id=repo_id,
+        native_team_key=None,
         project_key=None,
         project_id=str(project_full_path) if project_full_path else None,
         title=str(title),
@@ -626,29 +629,8 @@ def enrich_work_item_with_priority(
     if priority_raw is None:
         return work_item
 
-    return WorkItem(
-        work_item_id=work_item.work_item_id,
-        provider=work_item.provider,
-        repo_id=work_item.repo_id,
-        project_key=work_item.project_key,
-        project_id=work_item.project_id,
-        title=work_item.title,
-        description=work_item.description,
-        type=work_item.type,
-        status=work_item.status,
-        status_raw=work_item.status_raw,
-        assignees=work_item.assignees,
-        reporter=work_item.reporter,
-        created_at=work_item.created_at,
-        updated_at=work_item.updated_at,
-        started_at=work_item.started_at,
-        completed_at=work_item.completed_at,
-        closed_at=work_item.closed_at,
-        labels=work_item.labels,
-        story_points=work_item.story_points,
-        sprint_id=work_item.sprint_id,
-        sprint_name=work_item.sprint_name,
-        url=work_item.url,
+    return dataclasses.replace(
+        work_item,
         priority_raw=priority_raw,
         service_class=service_class,
     )
@@ -757,6 +739,7 @@ def gitlab_epic_to_work_item(
         work_item_id=work_item_id,
         provider="gitlab",
         repo_id=None,
+        native_team_key=None,
         project_key=None,
         project_id=str(group_full_path),
         title=str(title),

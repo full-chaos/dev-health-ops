@@ -31,6 +31,7 @@ password_reset_module = importlib.import_module(
 
 KNOWN_PASSWORD = "OldPassword@123"
 # Pre-computed bcrypt hash of KNOWN_PASSWORD (cost=4) to avoid hashing at import time.
+# nosemgrep: generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash
 KNOWN_PASSWORD_HASH = "$2b$04$tgxalfE5Q58OGJE/0M0piOakqY90AzLsIFaz178yu6eMEkjMuYeJe"
 GENERIC_MSG = "If the account exists, a password reset email has been sent"
 
@@ -155,6 +156,41 @@ async def test_forgot_password_email_send_failure_does_not_expose_error(
     )
     assert response.status_code == 200
     assert response.json()["message"] == GENERIC_MSG
+
+
+@pytest.mark.asyncio
+async def test_forgot_password_known_email_emits_request_audit(
+    client, session_maker, seeded_user
+):
+    """CHAOS-2498: forgot-password for a known user emits PASSWORD_RESET_REQUESTED."""
+    async_client, _ = client
+    await async_client.post(
+        "/api/v1/auth/forgot-password",
+        json={"email": seeded_user.email},
+    )
+    async with session_maker() as session:
+        result = await session.execute(
+            select(AuditLog).where(
+                AuditLog.action == AuditAction.PASSWORD_RESET_REQUESTED.value
+            )
+        )
+        audit_log = result.scalar_one()
+    assert audit_log.resource_id == str(seeded_user.id)
+    assert audit_log.user_id == seeded_user.id
+
+
+@pytest.mark.asyncio
+async def test_forgot_password_unknown_email_emits_no_audit(client, session_maker):
+    """Unknown emails must not write an audit row (no enumeration side channel)."""
+    async_client, _ = client
+    await async_client.post(
+        "/api/v1/auth/forgot-password",
+        json={"email": "nobody@example.com"},
+    )
+    async with session_maker() as session:
+        result = await session.execute(select(AuditLog))
+        rows = result.scalars().all()
+    assert rows == []
 
 
 @pytest.mark.asyncio

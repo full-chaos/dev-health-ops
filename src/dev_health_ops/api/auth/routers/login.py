@@ -102,7 +102,14 @@ async def login(
                     status="failure",
                     error_message="Account temporarily locked due to failed login attempts",
                 )
-
+                # Persist the failure audit row before raising. get_postgres_session()
+                # rolls back on exception, so without an explicit commit the
+                # db.add()'d audit entry would be discarded on the raise below.
+                # Only commit when an audit row was actually emitted — on this
+                # already-locked path there is nothing else pending, so an
+                # unconditional commit would be a wasted round-trip that could
+                # turn the 429 into a 500 on a transient DB error.
+                await db.commit()
             raise HTTPException(
                 status_code=429,
                 detail=error_detail(
@@ -191,6 +198,11 @@ async def login(
                 logger.warning(
                     "Invalid password for user: %s", sanitize_for_log(payload.email)
                 )
+            # Commit before raising: get_postgres_session() rolls back on
+            # exception, which would otherwise discard BOTH the LOGIN_FAILED
+            # audit row and the record_failed_attempt() counter increment that
+            # drives account lockout. Both must survive the raise below.
+            await db.commit()
             raise HTTPException(
                 status_code=401,
                 detail=error_detail("Invalid credentials"),
@@ -256,6 +268,35 @@ async def login(
 
         if payload.org_id and not membership:
             if memberships:
+                # Credentials were valid (clear_attempts ran above) but the user
+                # picked an org they do not belong to. Audit the denied access
+                # and commit before raising so the cleared failed-attempt counter
+                # — and this audit row — survive get_postgres_session()'s
+                # rollback-on-exception, matching the other failure paths.
+                failure_org_id = await _resolve_login_audit_org_id(
+                    db, user, payload.org_id
+                )
+                if failure_org_id is not None:
+                    user_id = _require_uuid(user.id, "user.id")
+                    emit_audit_log(
+                        db,
+                        org_id=failure_org_id,
+                        action=AuditAction.LOGIN_FAILED,
+                        resource_type=AuditResourceType.SESSION,
+                        resource_id=str(user_id),
+                        user_id=user_id,
+                        description=(
+                            "Login failed: not a member of the selected organization"
+                        ),
+                        changes={
+                            "email": email_normalized,
+                            "requested_org_id": payload.org_id,
+                        },
+                        request=request,
+                        status="failure",
+                        error_message="User is not a member of the selected organization",
+                    )
+                await db.commit()
                 raise HTTPException(
                     status_code=401,
                     detail=error_detail(

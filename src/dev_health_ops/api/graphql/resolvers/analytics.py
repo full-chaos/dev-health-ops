@@ -55,6 +55,7 @@ from ..sql.compiler import (
     compile_sankey,
     compile_timeseries,
 )
+from ..sql.filter_translation import translate_filters
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +172,26 @@ def _analytics_quality_window(batch: AnalyticsRequestInput) -> tuple[date, date]
         date_range = batch.timeseries[0].date_range
         return date_range.start_date, date_range.end_date
     return None
+
+
+def _has_investment_author_filter(filters: FilterInput | None) -> bool:
+    if filters is None:
+        return False
+    if (
+        filters.scope is not None
+        and filters.scope.level.value == "developer"
+        and bool(filters.scope.ids)
+    ):
+        return True
+    return filters.who is not None and bool(filters.who.developers)
+
+
+def _has_work_category_filter(filters: FilterInput | None) -> bool:
+    return (
+        filters is not None
+        and filters.why is not None
+        and bool(filters.why.work_category)
+    )
 
 
 async def _resolve_evidence_quality_stats(
@@ -643,10 +664,12 @@ async def resolve_analytics(
                         LEFT JOIN (
                             SELECT
                                 work_unit_id,
-                                argMax(team, cnt) AS team_label
+                                argMax(team, cnt) AS team_label,
+                                argMax(team_id, cnt) AS team_id
                             FROM (
                                 SELECT
                                     work_unit_investments.work_unit_id AS work_unit_id,
+                                    t.team_id AS team_id,
                                     ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
                                     countIf(ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) IS NOT NULL) AS cnt
                                 FROM latest_work_unit_investments AS work_unit_investments
@@ -663,7 +686,7 @@ async def resolve_analytics(
                                     WHERE org_id = %(org_id)s
                                     GROUP BY work_item_id
                                 ) AS t ON t.work_item_id = issue_id
-                                GROUP BY work_unit_id, team
+                                GROUP BY work_unit_id, team_id, team
                             )
                             GROUP BY work_unit_id
                         ) AS ut ON ut.work_unit_id = work_unit_investments.work_unit_id
@@ -672,8 +695,20 @@ async def resolve_analytics(
 
                 assigned_team_expr = f"lower(ifNull(nullIf({team_col}, ''), 'unassigned')) != 'unassigned'"
                 assigned_repo_expr = f"{repo_col} IS NOT NULL"
+                total_expr = "count()"
+                assigned_team_count_expr = f"countIf({assigned_team_expr})"
+                assigned_repo_count_expr = f"countIf({assigned_repo_expr})"
                 if request.use_investment:
                     assigned_repo_expr = f"lower({repo_col}) != 'unassigned'"
+                    total_expr = "uniqExact(work_unit_investments.work_unit_id)"
+                    assigned_team_count_expr = (
+                        "uniqExactIf(work_unit_investments.work_unit_id, "
+                        f"{assigned_team_expr})"
+                    )
+                    assigned_repo_count_expr = (
+                        "uniqExactIf(work_unit_investments.work_unit_id, "
+                        f"{assigned_repo_expr})"
+                    )
 
                 with_clause = (
                     f"WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE}"
@@ -692,39 +727,65 @@ async def resolve_analytics(
                     else "org_id = %(org_id)s"
                 )
 
-                coverage_sql = f"""
-                    {with_clause}
-                    SELECT
-                        count() as total,
-                        countIf({assigned_team_expr}) as assigned_team,
-                        countIf({assigned_repo_expr}) as assigned_repo
-                    FROM {base_table}
-                    {joins}
-                    WHERE {date_filter}
-                      AND {org_filter}
-                """
+                if request.use_investment and _has_investment_author_filter(
+                    resolved_filters
+                ):
+                    logger.info(
+                        "Sankey coverage unavailable for investment author filters; "
+                        "work_unit_investments does not expose author_id"
+                    )
+                else:
+                    if request.use_investment and _has_work_category_filter(
+                        resolved_filters
+                    ):
+                        joins += """
+                        ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
+                        """
 
-                cov_params = {
-                    "start_date": request.start_date,
-                    "end_date": request.end_date,
-                    "org_id": org_id,
-                }
+                    coverage_filter_clause, coverage_filter_params = translate_filters(
+                        resolved_filters,
+                        use_investment=bool(request.use_investment),
+                        team_column=team_col,
+                        repo_column="work_unit_investments.repo_id"
+                        if request.use_investment
+                        else repo_col,
+                        author_column="author_id",
+                    )
 
-                try:
-                    c_rows = await query_dicts(client, coverage_sql, cov_params)
-                    if c_rows:
-                        total = float(c_rows[0].get("total", 0))
-                        assigned_team = float(c_rows[0].get("assigned_team", 0))
-                        assigned_repo = float(c_rows[0].get("assigned_repo", 0))
+                    coverage_sql = f"""
+                        {with_clause}
+                        SELECT
+                            {total_expr} as total,
+                            {assigned_team_count_expr} as assigned_team,
+                            {assigned_repo_count_expr} as assigned_repo
+                        FROM {base_table}
+                        {joins}
+                        WHERE {date_filter}
+                          AND {org_filter}
+                          {coverage_filter_clause}
+                    """
 
-                        coverage = SankeyCoverage(
-                            team_coverage=assigned_team / total if total > 0 else 0,
-                            repo_coverage=assigned_repo / total if total > 0 else 0,
-                        )
-                except Exception as e:
-                    logger.error("Coverage query failed: %s", e)
-                    # Don't fail the whole request for metrics
-                    coverage = SankeyCoverage(team_coverage=0, repo_coverage=0)
+                    cov_params = {
+                        "start_date": request.start_date,
+                        "end_date": request.end_date,
+                        "org_id": org_id,
+                    }
+                    cov_params.update(coverage_filter_params)
+
+                    try:
+                        c_rows = await query_dicts(client, coverage_sql, cov_params)
+                        if c_rows:
+                            total = float(c_rows[0].get("total", 0))
+                            assigned_team = float(c_rows[0].get("assigned_team", 0))
+                            assigned_repo = float(c_rows[0].get("assigned_repo", 0))
+
+                            coverage = SankeyCoverage(
+                                team_coverage=assigned_team / total if total > 0 else 0,
+                                repo_coverage=assigned_repo / total if total > 0 else 0,
+                            )
+                    except Exception as e:
+                        logger.error("Coverage query failed: %s", e)
+                        coverage = None
 
             sankey_result = SankeyResult(nodes=nodes, edges=edges, coverage=coverage)
 

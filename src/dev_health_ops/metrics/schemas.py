@@ -308,6 +308,94 @@ class TeamMetricsDailyRecord:
 
 
 @dataclass(frozen=True)
+class ProjectRecord:
+    id: str
+    provider: str
+    name: str
+    is_active: int
+    updated_at: datetime
+    last_synced: datetime
+    project_key: str | None = None
+    org_id: str = ""
+
+
+@dataclass(frozen=True)
+class MemberRecord:
+    member_id: str
+    name: str
+    provider_identities: str
+    is_active: int
+    updated_at: datetime
+    email: str | None = None
+    org_id: str = ""
+
+
+@dataclass(frozen=True)
+class TeamMembershipRecord:
+    provider: str
+    team_id: str
+    member_id: str
+    source: str
+    is_primary: int
+    specificity: int
+    priority: int
+    valid_from: datetime
+    updated_at: datetime
+    raw_provider_user_id: str | None = None
+    raw_email: str | None = None
+    valid_to: datetime | None = None
+    org_id: str = ""
+
+
+@dataclass(frozen=True)
+class TeamProjectOwnershipRecord:
+    provider: str
+    team_id: str
+    project_id: str
+    source: str
+    is_primary: int
+    specificity: int
+    priority: int
+    valid_from: datetime
+    updated_at: datetime
+    project_key: str | None = None
+    valid_to: datetime | None = None
+    org_id: str = ""
+
+
+@dataclass(frozen=True)
+class TeamRepoOwnershipRecord:
+    provider: str
+    team_id: str
+    repo_full_name: str
+    match_type: str
+    source: str
+    is_primary: int
+    specificity: int
+    priority: int
+    valid_from: datetime
+    updated_at: datetime
+    repo_id: UUID | None = None
+    valid_to: datetime | None = None
+    org_id: str = ""
+
+
+@dataclass(frozen=True)
+class WorkItemTeamAttributionRecord:
+    work_item_id: str
+    provider: str
+    source: str
+    is_primary: int
+    confidence: str
+    evidence: str
+    computed_at: datetime
+    repo_id: UUID | None = None
+    team_id: str | None = None
+    team_name: str | None = None
+    org_id: str = ""
+
+
+@dataclass(frozen=True)
 class WorkItemCycleTimeRecord:
     work_item_id: str
     provider: str

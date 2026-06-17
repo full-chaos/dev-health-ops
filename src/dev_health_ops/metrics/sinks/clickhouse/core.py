@@ -12,6 +12,7 @@ import asyncio
 import logging
 import os
 import uuid
+from collections.abc import Sequence
 from dataclasses import asdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -19,6 +20,14 @@ from typing import Any
 
 import clickhouse_connect
 
+from dev_health_ops.metrics.schemas import (
+    MemberRecord,
+    ProjectRecord,
+    TeamMembershipRecord,
+    TeamProjectOwnershipRecord,
+    TeamRepoOwnershipRecord,
+    WorkItemTeamAttributionRecord,
+)
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.metrics.sinks.clickhouse._insert import (
     DEFAULT_BATCH_SIZE,
@@ -123,6 +132,9 @@ class ClickHouseCore(BaseMetricsSink):
             "is_active",
             "updated_at",
             "org_id",
+            "provider",
+            "native_team_key",
+            "parent_team_id",
         ]
         matrix = []
         for team in teams:
@@ -143,6 +155,9 @@ class ClickHouseCore(BaseMetricsSink):
                             team.get("updated_at", datetime.now(timezone.utc))
                         ),
                         team["org_id"],
+                        str(team.get("provider") or ""),
+                        team.get("native_team_key"),
+                        team.get("parent_team_id"),
                     ]
                 )
             else:
@@ -162,11 +177,153 @@ class ClickHouseCore(BaseMetricsSink):
                             getattr(team, "updated_at", datetime.now(timezone.utc))
                         ),
                         team.org_id,
+                        str(getattr(team, "provider", "") or ""),
+                        getattr(team, "native_team_key", None),
+                        getattr(team, "parent_team_id", None),
                     ]
                 )
         await asyncio.to_thread(
             self.client.insert, "teams", matrix, column_names=column_names
         )
+
+    def write_projects(self, rows: Sequence[ProjectRecord]) -> None:
+        self._insert_rows(
+            "projects",
+            [
+                "id",
+                "org_id",
+                "provider",
+                "project_key",
+                "name",
+                "is_active",
+                "updated_at",
+                "last_synced",
+            ],
+            rows,
+        )
+
+    def write_members(self, rows: Sequence[MemberRecord]) -> None:
+        self._insert_rows(
+            "members",
+            [
+                "org_id",
+                "member_id",
+                "name",
+                "email",
+                "provider_identities",
+                "is_active",
+                "updated_at",
+            ],
+            rows,
+        )
+
+    def write_team_memberships(self, rows: Sequence[TeamMembershipRecord]) -> None:
+        self._insert_rows(
+            "team_memberships",
+            [
+                "org_id",
+                "provider",
+                "team_id",
+                "member_id",
+                "raw_provider_user_id",
+                "raw_email",
+                "source",
+                "is_primary",
+                "specificity",
+                "priority",
+                "valid_from",
+                "valid_to",
+                "updated_at",
+            ],
+            rows,
+        )
+
+    def write_team_project_ownership(
+        self, rows: Sequence[TeamProjectOwnershipRecord]
+    ) -> None:
+        self._insert_rows(
+            "team_project_ownership",
+            [
+                "org_id",
+                "provider",
+                "team_id",
+                "project_id",
+                "project_key",
+                "source",
+                "is_primary",
+                "specificity",
+                "priority",
+                "valid_from",
+                "valid_to",
+                "updated_at",
+            ],
+            rows,
+        )
+
+    def write_team_repo_ownership(
+        self, rows: Sequence[TeamRepoOwnershipRecord]
+    ) -> None:
+        self._insert_rows(
+            "team_repo_ownership",
+            [
+                "org_id",
+                "provider",
+                "team_id",
+                "repo_id",
+                "repo_full_name",
+                "match_type",
+                "source",
+                "is_primary",
+                "specificity",
+                "priority",
+                "valid_from",
+                "valid_to",
+                "updated_at",
+            ],
+            rows,
+        )
+
+    def write_work_item_team_attributions(
+        self, rows: Sequence[WorkItemTeamAttributionRecord]
+    ) -> None:
+        if not rows:
+            return
+        org_id = getattr(self, "org_id", None) or ""
+        column_names = [
+            "org_id",
+            "repo_id",
+            "work_item_id",
+            "provider",
+            "team_id",
+            "team_name",
+            "source",
+            "is_primary",
+            "confidence",
+            "evidence",
+            "computed_at",
+        ]
+        data = []
+        for row in rows:
+            data.append(
+                {
+                    "org_id": row.org_id or org_id,
+                    "repo_id": row.repo_id or uuid.UUID(int=0),
+                    "work_item_id": row.work_item_id,
+                    "provider": row.provider,
+                    "team_id": row.team_id,
+                    "team_name": row.team_name,
+                    "source": row.source,
+                    "is_primary": row.is_primary,
+                    "confidence": row.confidence,
+                    "evidence": row.evidence,
+                    "computed_at": _dt_to_clickhouse_datetime(row.computed_at),
+                }
+            )
+        for chunk in _chunked(data, DEFAULT_BATCH_SIZE):
+            matrix = [[row[col] for col in column_names] for row in chunk]
+            self.client.insert(
+                "work_item_team_attributions", matrix, column_names=column_names
+            )
 
     def _apply_sql_migrations(self) -> None:
         # NOTE: parents[3] because core.py is one level deeper than the old

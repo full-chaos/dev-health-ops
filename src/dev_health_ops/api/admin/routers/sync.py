@@ -32,6 +32,7 @@ from dev_health_ops.models.settings import (
     ScheduledJob,
     SyncConfiguration,
 )
+from dev_health_ops.sync.datasets import supported_legacy_targets
 from dev_health_ops.workers.queues import sync_queue_for_provider
 from dev_health_ops.workers.sync_batch import _is_batch_eligible
 
@@ -124,28 +125,8 @@ def _backfill_job_response(job: object):
 # Canonical mapping of provider → supported sync targets.
 # Jira/Linear only support work-items; Git/CI/CD come from code hosts.
 PROVIDER_SYNC_TARGETS: dict[str, list[str]] = {
-    "github": [
-        "git",
-        "prs",
-        "cicd",
-        "deployments",
-        "incidents",
-        "work-items",
-        "tests",
-    ],
-    "gitlab": [
-        "git",
-        "prs",
-        "cicd",
-        "deployments",
-        "incidents",
-        "work-items",
-        "feature-flags",
-        "tests",
-    ],
-    "jira": ["work-items"],
-    "linear": ["work-items"],
-    "launchdarkly": ["feature-flags"],
+    provider: supported_legacy_targets(provider)
+    for provider in ("github", "gitlab", "jira", "linear", "launchdarkly")
 }
 
 NON_REPO_SYNC_PROVIDERS = {"jira", "linear"}

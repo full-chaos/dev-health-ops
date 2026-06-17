@@ -185,6 +185,10 @@ def _process_github_event(
                 sync_git=True,
                 sync_prs=False,
                 sync_cicd=False,
+                sync_deployments=False,
+                sync_incidents=False,
+                sync_security=False,
+                sync_tests=False,
             )
         elif event_type == "pull_request":
             await process_github_repo(
@@ -195,6 +199,10 @@ def _process_github_event(
                 sync_git=False,
                 sync_prs=True,
                 sync_cicd=False,
+                sync_deployments=False,
+                sync_incidents=False,
+                sync_security=False,
+                sync_tests=False,
             )
         elif event_type in ("issue_created", "issue_updated", "issue_closed"):
             await process_github_repo(
@@ -204,7 +212,11 @@ def _process_github_event(
                 token=token,
                 sync_git=False,
                 sync_prs=False,
+                sync_cicd=False,
+                sync_deployments=False,
                 sync_incidents=True,
+                sync_security=False,
+                sync_tests=False,
             )
         elif event_type == "deployment":
             await process_github_repo(
@@ -214,7 +226,11 @@ def _process_github_event(
                 token=token,
                 sync_git=False,
                 sync_prs=False,
+                sync_cicd=False,
                 sync_deployments=True,
+                sync_incidents=False,
+                sync_security=False,
+                sync_tests=False,
             )
         elif event_type == "workflow_run":
             await process_github_repo(
@@ -225,6 +241,10 @@ def _process_github_event(
                 sync_git=False,
                 sync_prs=False,
                 sync_cicd=True,
+                sync_deployments=False,
+                sync_incidents=False,
+                sync_security=False,
+                sync_tests=False,
             )
 
     # Execute sync
@@ -352,6 +372,10 @@ def _process_gitlab_event(
                 sync_git=True,
                 sync_prs=False,
                 sync_cicd=False,
+                sync_deployments=False,
+                sync_incidents=False,
+                sync_security=False,
+                sync_tests=False,
             )
         elif event_type == "merge_request":
             await process_gitlab_project(
@@ -362,6 +386,10 @@ def _process_gitlab_event(
                 sync_git=False,
                 sync_prs=True,
                 sync_cicd=False,
+                sync_deployments=False,
+                sync_incidents=False,
+                sync_security=False,
+                sync_tests=False,
             )
         elif event_type in ("issue_created", "issue_updated", "issue_closed"):
             await process_gitlab_project(
@@ -371,7 +399,11 @@ def _process_gitlab_event(
                 gitlab_url=gitlab_url,
                 sync_git=False,
                 sync_prs=False,
+                sync_cicd=False,
+                sync_deployments=False,
                 sync_incidents=True,
+                sync_security=False,
+                sync_tests=False,
             )
         elif event_type == "pipeline":
             await process_gitlab_project(
@@ -382,6 +414,10 @@ def _process_gitlab_event(
                 sync_git=False,
                 sync_prs=False,
                 sync_cicd=True,
+                sync_deployments=False,
+                sync_incidents=False,
+                sync_security=False,
+                sync_tests=False,
             )
 
     try:

@@ -17,9 +17,13 @@ from dev_health_ops.metrics.compute_work_item_state_durations import (
     compute_work_item_state_durations_daily,
 )
 from dev_health_ops.metrics.compute_work_items import (
+    TeamAttributionCandidate,
+    TeamAttributionContext,
     build_linked_issue_team_resolver,
     compute_work_item_metrics_daily,
+    compute_work_item_team_attributions,
     resolve_base_team,
+    resolve_team_attribution,
 )
 from dev_health_ops.models.work_items import (
     WorkItem,
@@ -105,9 +109,8 @@ def test_same_provider_github_pr_to_issue_inheritance() -> None:
     assert resolver.resolve(pr.work_item_id) == ("team-a", "Team A")
 
 
-def test_inheritance_never_overrides_a_real_team() -> None:
-    # Source already resolves to its own team; the edge must not change it.
-    owned_pr = _wi("ghpr:x/y#1", "github", project_id="x/y", project_key="CHAOS")
+def test_inheritance_never_overrides_native_team() -> None:
+    owned_pr = _wi("ghpr:x/y#1", "github", project_id="x/y", native_team_key="CHAOS")
     other = _wi("linear:OTHER-1", "linear", project_key="OTHER")
     deps = [
         WorkItemDependency(
@@ -123,8 +126,6 @@ def test_inheritance_never_overrides_a_real_team() -> None:
     resolver = build_linked_issue_team_resolver(
         work_items=[owned_pr, other], dependencies=deps, project_key_resolver=pkr
     )
-    # resolve_base_team already returns CHAOS, so the source isn't in the
-    # inherited map at all.
     assert resolver.resolve(owned_pr.work_item_id) == (None, None)
     assert resolve_base_team(owned_pr, None, pkr) == ("CHAOS", "Chaos Team")
 
@@ -374,9 +375,7 @@ def test_compute_without_resolver_leaves_pr_unassigned() -> None:
     assert cycle_times[0].team_id == "unassigned"
 
 
-def test_membership_team_still_wins_over_inheritance() -> None:
-    # A PR whose author is a team member resolves via membership; inheritance
-    # is only a fallback and must not run.
+def test_linked_issue_wins_over_assignee_membership() -> None:
     day = date(2026, 6, 1)
     pr = _wi(
         "ghpr:full-chaos/ops#12",
@@ -406,7 +405,229 @@ def test_membership_team_still_wins_over_inheritance() -> None:
         project_key_resolver=pkr,
         linked_issue_resolver=resolver,
     )
-    assert cycle_times[0].team_id == "platform"
+    assert cycle_times[0].team_id == "other"
+
+
+def test_state_duration_linked_issue_wins_over_assignee_membership() -> None:
+    day = date(2026, 6, 1)
+    pr = _wi(
+        "ghpr:full-chaos/ops#12",
+        "github",
+        type="pr",
+        project_id="full-chaos/ops",
+        assignees=["bob@example.com"],
+    )
+    other = _wi("linear:OTHER-1", "linear", project_key="OTHER")
+    deps = [WorkItemDependency(pr.work_item_id, "extkey:OTHER-1", "relates_to", "k")]
+    transitions = [
+        WorkItemStatusTransition(
+            work_item_id=pr.work_item_id,
+            provider="github",
+            occurred_at=START + timedelta(hours=1),
+            from_status_raw=None,
+            to_status_raw="closed",
+            from_status="in_progress",
+            to_status="done",
+        )
+    ]
+    pkr = ProjectKeyTeamResolver(project_key_to_team={"OTHER": ("other", "Other")})
+    team_resolver = TeamResolver(
+        member_to_team={"bob@example.com": ("platform", "Platform")}
+    )
+    resolver = build_linked_issue_team_resolver(
+        work_items=[pr, other],
+        dependencies=deps,
+        team_resolver=team_resolver,
+        project_key_resolver=pkr,
+    )
+
+    state_rows = compute_work_item_state_durations_daily(
+        day=day,
+        work_items=[pr],
+        transitions=transitions,
+        computed_at=START + timedelta(hours=6),
+        team_resolver=team_resolver,
+        project_key_resolver=pkr,
+        linked_issue_resolver=resolver,
+    )
+
+    assert state_rows
+    assert {row.team_id for row in state_rows} == {"other"}
+
+
+def test_compute_emits_attribution_candidates_and_primary_cycle_team() -> None:
+    day = date(2026, 6, 1)
+    linear = _wi("linear:CHAOS-2400", "linear", project_key="CHAOS")
+    pr = _wi(
+        "ghpr:full-chaos/ops#12",
+        "github",
+        type="pr",
+        project_id="full-chaos/ops",
+        assignees=["bob@example.com"],
+    )
+    deps = [WorkItemDependency(pr.work_item_id, "extkey:CHAOS-2400", "relates_to", "k")]
+    pkr = _chaos_resolver()
+    team_resolver = TeamResolver(
+        member_to_team={"bob@example.com": ("platform", "Platform")}
+    )
+    resolver = build_linked_issue_team_resolver(
+        work_items=[linear, pr],
+        dependencies=deps,
+        team_resolver=team_resolver,
+        project_key_resolver=pkr,
+    )
+
+    _, _, cycle_times = compute_work_item_metrics_daily(
+        day=day,
+        work_items=[pr],
+        transitions=[],
+        computed_at=START,
+        team_resolver=team_resolver,
+        project_key_resolver=pkr,
+        linked_issue_resolver=resolver,
+    )
+    attributions = compute_work_item_team_attributions(
+        work_items=[pr],
+        computed_at=START,
+        team_resolver=team_resolver,
+        project_key_resolver=pkr,
+        linked_issue_resolver=resolver,
+    )
+
+    assert cycle_times[0].team_id == "CHAOS"
+    by_source = {row.source: row for row in attributions}
+    assert by_source["linked_issue"].is_primary == 1
+    assert by_source["linked_issue"].team_id == "CHAOS"
+    assert by_source["assignee_membership"].is_primary == 0
+    assert by_source["assignee_membership"].team_id == "platform"
+
+
+def test_context_project_repo_membership_tiebreak_and_unassigned() -> None:
+    project_item = _wi(
+        "linear:PROJ-1",
+        "linear",
+        project_id="project-1",
+        project_key="PROJ",
+        native_team_key=None,
+    )
+    repo_item = _wi(
+        "gh:full-chaos/dev-health#9",
+        "github",
+        project_id="full-chaos/dev-health",
+    )
+    member_item = _wi(
+        "jira:MEM-1",
+        "jira",
+        project_key="MEM",
+        assignees=["ada@example.com"],
+    )
+    orphan = _wi("gh:unknown/repo#1", "github", project_id="unknown/repo")
+    older = START - timedelta(days=1)
+    newer = START
+    context = TeamAttributionContext(
+        project_by_id={
+            ("linear", "project-1"): [
+                TeamAttributionCandidate(
+                    source="project_ownership",
+                    team_id="team-b",
+                    team_name="Team B",
+                    confidence="high",
+                    evidence="project_id=project-1",
+                    is_primary=0,
+                    specificity=10,
+                    priority=10,
+                    updated_at=newer,
+                ),
+                TeamAttributionCandidate(
+                    source="project_ownership",
+                    team_id="team-a",
+                    team_name="Team A",
+                    confidence="high",
+                    evidence="project_id=project-1",
+                    is_primary=1,
+                    specificity=10,
+                    priority=10,
+                    updated_at=older,
+                ),
+            ]
+        },
+        repo_by_name={
+            ("github", "full-chaos/dev-health"): [
+                TeamAttributionCandidate(
+                    source="repo_ownership",
+                    team_id="repo-team",
+                    team_name="Repo Team",
+                    confidence="high",
+                    evidence="repo_full_name=full-chaos/dev-health",
+                )
+            ]
+        },
+        member_by_identity={
+            ("jira", "ada@example.com"): [
+                TeamAttributionCandidate(
+                    source="assignee_membership",
+                    team_id="member-team",
+                    team_name="Member Team",
+                    confidence="high",
+                    evidence="raw_email=ada@example.com",
+                )
+            ]
+        },
+    )
+
+    project_team_id, _, project_candidates = resolve_team_attribution(
+        project_item, None, None, attribution_context=context
+    )
+    repo_team_id, _, _ = resolve_team_attribution(
+        repo_item, None, None, attribution_context=context
+    )
+    member_team_id, _, _ = resolve_team_attribution(
+        member_item, None, None, attribution_context=context
+    )
+    orphan_team_id, orphan_team_name, orphan_candidates = resolve_team_attribution(
+        orphan, None, None, attribution_context=context
+    )
+
+    assert project_team_id == "team-a"
+    assert [c.team_id for c in project_candidates[:2]] == ["team-a", "team-b"]
+    assert repo_team_id == "repo-team"
+    assert member_team_id == "member-team"
+    assert orphan_team_id is None
+    assert orphan_team_name is None
+    assert orphan_candidates[0].source == "unassigned"
+
+
+def test_context_repo_candidate_dedupes_id_and_name_match() -> None:
+    repo_item = _wi(
+        "gh:full-chaos/dev-health#9",
+        "github",
+        project_id="full-chaos/dev-health",
+        repo_id="repo-1",
+    )
+    candidate = TeamAttributionCandidate(
+        source="repo_ownership",
+        team_id="repo-team",
+        team_name="Repo Team",
+        confidence="high",
+        evidence="repo_ownership=repo-1",
+        is_primary=1,
+        specificity=100,
+        priority=1,
+        updated_at=START,
+    )
+    context = TeamAttributionContext(
+        repo_by_id={("github", "repo-1"): [candidate]},
+        repo_by_name={("github", "full-chaos/dev-health"): [candidate]},
+    )
+
+    team_id, _, candidates = resolve_team_attribution(
+        repo_item, None, None, attribution_context=context
+    )
+
+    assert team_id == "repo-team"
+    assert [(c.team_id, c.source, c.is_primary) for c in candidates] == [
+        ("repo-team", "repo_ownership", 1)
+    ]
 
 
 # --------------------------------------------------------------------------- #

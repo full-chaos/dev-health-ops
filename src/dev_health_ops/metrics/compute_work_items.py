@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from dev_health_ops.metrics.schemas import (
     WorkItemCycleTimeRecord,
     WorkItemMetricsDailyRecord,
+    WorkItemTeamAttributionRecord,
     WorkItemUserMetricsDailyRecord,
 )
 from dev_health_ops.models.work_items import (
@@ -56,6 +58,288 @@ def _resolve_team(
     return team_resolver.resolve(identity)
 
 
+TeamAttributionSource = Literal[
+    "native_team",
+    "linked_issue",
+    "project_ownership",
+    "repo_ownership",
+    "assignee_membership",
+    "unassigned",
+]
+
+
+@dataclass(frozen=True)
+class TeamAttributionCandidate:
+    source: TeamAttributionSource
+    team_id: str | None
+    team_name: str | None
+    confidence: str
+    evidence: str
+    is_primary: int = 0
+    specificity: int = 0
+    priority: int = 0
+    updated_at: datetime = field(
+        default_factory=lambda: datetime.min.replace(tzinfo=timezone.utc)
+    )
+
+
+@dataclass(frozen=True)
+class TeamAttributionContext:
+    project_by_id: dict[tuple[str, str], list[TeamAttributionCandidate]] = field(
+        default_factory=dict
+    )
+    project_by_key: dict[tuple[str, str], list[TeamAttributionCandidate]] = field(
+        default_factory=dict
+    )
+    repo_by_id: dict[tuple[str, str], list[TeamAttributionCandidate]] = field(
+        default_factory=dict
+    )
+    repo_by_name: dict[tuple[str, str], list[TeamAttributionCandidate]] = field(
+        default_factory=dict
+    )
+    member_by_identity: dict[tuple[str, str], list[TeamAttributionCandidate]] = field(
+        default_factory=dict
+    )
+
+
+_SOURCE_ORDER: dict[TeamAttributionSource, int] = {
+    "native_team": 0,
+    "linked_issue": 1,
+    "project_ownership": 2,
+    "repo_ownership": 3,
+    "assignee_membership": 4,
+    "unassigned": 5,
+}
+
+
+def _identity_key(value: str | None) -> str:
+    return " ".join((value or "").strip().lower().split())
+
+
+def _candidate_sort_key(
+    candidate: TeamAttributionCandidate,
+) -> tuple[int, int, int, float, str]:
+    updated_at = to_utc(candidate.updated_at)
+    return (
+        -int(candidate.is_primary),
+        -int(candidate.specificity),
+        int(candidate.priority),
+        -updated_at.timestamp(),
+        candidate.team_id or "",
+    )
+
+
+def _ranked(
+    candidates: Sequence[TeamAttributionCandidate],
+) -> list[TeamAttributionCandidate]:
+    return sorted(candidates, key=_candidate_sort_key)
+
+
+def _dedupe_candidates(
+    candidates: Sequence[TeamAttributionCandidate],
+) -> list[TeamAttributionCandidate]:
+    seen: set[tuple[object, ...]] = set()
+    deduped: list[TeamAttributionCandidate] = []
+    for candidate in candidates:
+        key = (
+            candidate.source,
+            candidate.team_id,
+            candidate.team_name,
+            candidate.confidence,
+            candidate.evidence,
+            candidate.is_primary,
+            candidate.specificity,
+            candidate.priority,
+            to_utc(candidate.updated_at),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(candidate)
+    return deduped
+
+
+def _context_candidates(
+    mapping: dict[tuple[str, str], list[TeamAttributionCandidate]],
+    provider: str,
+    key: object,
+) -> list[TeamAttributionCandidate]:
+    if key is None:
+        return []
+    return list(mapping.get((provider, str(key)), []))
+
+
+def _native_team_candidate(
+    item: WorkItem,
+    project_key_resolver: ProjectKeyTeamResolver | None,
+) -> TeamAttributionCandidate | None:
+    if project_key_resolver is None or not item.native_team_key:
+        return None
+    native_key = str(item.native_team_key)
+    team_id, team_name = project_key_resolver.resolve(native_key)
+    if team_id is None:
+        return None
+    return TeamAttributionCandidate(
+        source="native_team",
+        team_id=team_id,
+        team_name=team_name or team_id,
+        confidence="high",
+        evidence=f"native_team_key={native_key}",
+        is_primary=1,
+        specificity=100,
+    )
+
+
+def _legacy_project_candidate(
+    item: WorkItem,
+    project_key_resolver: ProjectKeyTeamResolver | None,
+) -> TeamAttributionCandidate | None:
+    if project_key_resolver is None:
+        return None
+    keys = [item.work_scope_id or ""]
+    if item.project_key:
+        project_key = str(item.project_key)
+        if project_key not in keys:
+            keys.append(project_key)
+    for key in keys:
+        team_id, team_name = project_key_resolver.resolve(key)
+        if team_id is not None:
+            return TeamAttributionCandidate(
+                source="project_ownership",
+                team_id=team_id,
+                team_name=team_name or team_id,
+                confidence="medium",
+                evidence=f"project_key={key}",
+                is_primary=1,
+                specificity=50,
+            )
+    return None
+
+
+def resolve_team_attribution(
+    item: WorkItem,
+    team_resolver: TeamResolver | None,
+    project_key_resolver: ProjectKeyTeamResolver | None,
+    linked_issue_resolver: LinkedIssueTeamResolver | None = None,
+    attribution_context: TeamAttributionContext | None = None,
+) -> tuple[str | None, str | None, list[TeamAttributionCandidate]]:
+    candidates_by_source: dict[
+        TeamAttributionSource, list[TeamAttributionCandidate]
+    ] = {
+        "native_team": [],
+        "linked_issue": [],
+        "project_ownership": [],
+        "repo_ownership": [],
+        "assignee_membership": [],
+        "unassigned": [],
+    }
+
+    native = _native_team_candidate(item, project_key_resolver)
+    if native is not None:
+        candidates_by_source["native_team"].append(native)
+
+    if linked_issue_resolver is not None:
+        linked_team_id, linked_team_name = linked_issue_resolver.resolve(
+            item.work_item_id
+        )
+        if linked_team_id is not None:
+            candidates_by_source["linked_issue"].append(
+                TeamAttributionCandidate(
+                    source="linked_issue",
+                    team_id=linked_team_id,
+                    team_name=linked_team_name or linked_team_id,
+                    confidence="medium",
+                    evidence=f"linked_issue={item.work_item_id}",
+                    is_primary=1,
+                    specificity=90,
+                )
+            )
+
+    legacy_project = _legacy_project_candidate(item, project_key_resolver)
+    if legacy_project is not None:
+        candidates_by_source["project_ownership"].append(legacy_project)
+
+    if attribution_context is not None:
+        candidates_by_source["project_ownership"].extend(
+            _context_candidates(
+                attribution_context.project_by_id, item.provider, item.project_id
+            )
+        )
+        candidates_by_source["project_ownership"].extend(
+            _context_candidates(
+                attribution_context.project_by_key, item.provider, item.project_key
+            )
+        )
+        candidates_by_source["repo_ownership"].extend(
+            _context_candidates(
+                attribution_context.repo_by_id, item.provider, item.repo_id
+            )
+        )
+        candidates_by_source["repo_ownership"].extend(
+            _context_candidates(
+                attribution_context.repo_by_name, item.provider, item.project_id
+            )
+        )
+        for assignee in item.assignees:
+            candidates_by_source["assignee_membership"].extend(
+                _context_candidates(
+                    attribution_context.member_by_identity,
+                    item.provider,
+                    _identity_key(assignee),
+                )
+            )
+
+    assignee = item.assignees[0] if item.assignees else None
+    team_id, team_name = _resolve_team(team_resolver, assignee)
+    if team_id is not None:
+        candidates_by_source["assignee_membership"].append(
+            TeamAttributionCandidate(
+                source="assignee_membership",
+                team_id=team_id,
+                team_name=team_name or team_id,
+                confidence="medium",
+                evidence=f"assignee={assignee}",
+                is_primary=1,
+                specificity=50,
+            )
+        )
+
+    primary: TeamAttributionCandidate | None = None
+    rows: list[TeamAttributionCandidate] = []
+    for source in sorted(candidates_by_source, key=lambda s: _SOURCE_ORDER[s]):
+        ranked = _ranked(_dedupe_candidates(candidates_by_source[source]))
+        if primary is None and ranked:
+            primary = ranked[0]
+        rows.extend(ranked)
+
+    if primary is None:
+        primary = TeamAttributionCandidate(
+            source="unassigned",
+            team_id=None,
+            team_name=None,
+            confidence="low",
+            evidence="no_candidate",
+            is_primary=1,
+        )
+        rows.append(primary)
+
+    marked_rows = [
+        TeamAttributionCandidate(
+            source=c.source,
+            team_id=c.team_id,
+            team_name=c.team_name,
+            confidence=c.confidence,
+            evidence=c.evidence,
+            is_primary=1 if c is primary else 0,
+            specificity=c.specificity,
+            priority=c.priority,
+            updated_at=c.updated_at,
+        )
+        for c in rows
+    ]
+    return primary.team_id, primary.team_name, marked_rows
+
+
 def resolve_base_team(
     item: WorkItem,
     team_resolver: TeamResolver | None,
@@ -70,21 +354,15 @@ def resolve_base_team(
     apply identical rules — an item only becomes an inheritance donor if it
     resolves to a real team here.
     """
-    work_scope_id = item.work_scope_id or ""
-    team_id: str | None = None
-    team_name: str | None = None
-    if project_key_resolver is not None:
-        team_id, team_name = project_key_resolver.resolve(work_scope_id)
-        # Linear: work_scope_id is the project name when the issue sits in a
-        # project, but team mappings carry the TEAM key (the item's
-        # project_key) — retry with it before the membership fallback.
-        if team_id is None and item.project_key:
-            project_key = str(item.project_key)
-            if project_key != work_scope_id:
-                team_id, team_name = project_key_resolver.resolve(project_key)
-    if team_id is None:
-        assignee = item.assignees[0] if item.assignees else None
-        team_id, team_name = _resolve_team(team_resolver, assignee)
+    team_id, team_name, _ = resolve_team_attribution(
+        item,
+        team_resolver,
+        project_key_resolver,
+        linked_issue_resolver=None,
+        attribution_context=None,
+    )
+    if team_id == "unassigned":
+        return None, None
     return team_id, team_name
 
 
@@ -105,6 +383,7 @@ def build_linked_issue_team_resolver(
     dependencies: Sequence[WorkItemDependency],
     team_resolver: TeamResolver | None = None,
     project_key_resolver: ProjectKeyTeamResolver | None = None,
+    attribution_context: TeamAttributionContext | None = None,
 ) -> LinkedIssueTeamResolver:
     """Build the cross-item team-inheritance fallback from dependency edges.
 
@@ -132,10 +411,15 @@ def build_linked_issue_team_resolver(
 
     for item in work_items:
         wid = item.work_item_id
-        team_id, team_name = resolve_base_team(
-            item, team_resolver, project_key_resolver
+        native = _native_team_candidate(item, project_key_resolver)
+        team_id, team_name, _ = resolve_team_attribution(
+            item,
+            team_resolver,
+            project_key_resolver,
+            linked_issue_resolver=None,
+            attribution_context=attribution_context,
         )
-        base_resolved[wid] = team_id
+        base_resolved[wid] = native.team_id if native is not None else None
         if team_id:
             donor_team[wid] = (team_id, team_name or team_id)
         if item.provider in ("linear", "jira") and ":" in wid:
@@ -331,6 +615,7 @@ def compute_work_item_metrics_daily(
     team_resolver: TeamResolver | None = None,
     project_key_resolver: ProjectKeyTeamResolver | None = None,
     linked_issue_resolver: LinkedIssueTeamResolver | None = None,
+    attribution_context: TeamAttributionContext | None = None,
 ) -> tuple[
     list[WorkItemMetricsDailyRecord],
     list[WorkItemUserMetricsDailyRecord],
@@ -372,14 +657,13 @@ def compute_work_item_metrics_daily(
             continue
 
         assignee = item.assignees[0] if item.assignees else None
-        team_id, team_name = resolve_base_team(
-            item, team_resolver, project_key_resolver
+        team_id, team_name, _ = resolve_team_attribution(
+            item,
+            team_resolver,
+            project_key_resolver,
+            linked_issue_resolver=linked_issue_resolver,
+            attribution_context=attribution_context,
         )
-        # Final fallback: inherit team from a linked issue (e.g. a PR that
-        # closes a Linear/Jira issue). Provider-agnostic; only fills items
-        # that resolved to no team of their own.
-        if team_id is None and linked_issue_resolver is not None:
-            team_id, team_name = linked_issue_resolver.resolve(item.work_item_id)
         team_id_norm = normalize_team_id(team_id)
         team_name_norm = normalize_team_name(team_name)
 
@@ -669,3 +953,41 @@ def compute_work_item_metrics_daily(
         )
 
     return group_records, user_records, cycle_time_records
+
+
+def compute_work_item_team_attributions(
+    *,
+    work_items: Sequence[WorkItem],
+    computed_at: datetime,
+    team_resolver: TeamResolver | None = None,
+    project_key_resolver: ProjectKeyTeamResolver | None = None,
+    linked_issue_resolver: LinkedIssueTeamResolver | None = None,
+    attribution_context: TeamAttributionContext | None = None,
+) -> list[WorkItemTeamAttributionRecord]:
+    computed_at_utc = to_utc(computed_at)
+    records: list[WorkItemTeamAttributionRecord] = []
+    for item in work_items:
+        _, _, candidates = resolve_team_attribution(
+            item,
+            team_resolver,
+            project_key_resolver,
+            linked_issue_resolver=linked_issue_resolver,
+            attribution_context=attribution_context,
+        )
+        for candidate in candidates:
+            records.append(
+                WorkItemTeamAttributionRecord(
+                    repo_id=item.repo_id,
+                    work_item_id=item.work_item_id,
+                    provider=item.provider,
+                    team_id=candidate.team_id,
+                    team_name=candidate.team_name,
+                    source=candidate.source,
+                    is_primary=candidate.is_primary,
+                    confidence=candidate.confidence,
+                    evidence=candidate.evidence,
+                    computed_at=computed_at_utc,
+                    org_id=item.org_id,
+                )
+            )
+    return records

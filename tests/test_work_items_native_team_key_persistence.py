@@ -8,6 +8,7 @@ reload round-trip no longer drops the Linear team key or the project name.
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -58,14 +59,16 @@ def test_work_graph_sink_persists_native_team_key_and_project_name() -> None:
 @pytest.mark.asyncio
 async def test_async_store_insert_persists_native_team_key_and_project_name() -> None:
     store = ClickHouseStore("clickhouse://localhost:8123/stats")
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
-    async def _capture(table, columns, rows):
+    async def _capture(
+        table: str, columns: list[str], rows: list[dict[str, Any]]
+    ) -> None:
         captured["table"] = table
         captured["columns"] = columns
         captured["rows"] = rows
 
-    store._insert_rows = AsyncMock(side_effect=_capture)
+    setattr(store, "_insert_rows", AsyncMock(side_effect=_capture))
 
     await store.insert_work_items([_linear_work_item()])
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
-from dev_health_ops.models.work_items import WorkItem
+from dev_health_ops.models.work_items import WorkItem, WorkItemProvider
 from dev_health_ops.providers.github.normalize import (
     enrich_work_item_with_priority as github_enrich,
 )
@@ -139,7 +139,7 @@ def test_gitlab_work_item_has_no_native_team() -> None:
     assert wi.project_name is None
 
 
-def _sentinel_work_item(provider: str) -> WorkItem:
+def _sentinel_work_item(provider: WorkItemProvider) -> WorkItem:
     """A work item with EVERY optional field set to a sentinel.
 
     Used to prove the priority-enrichment copy preserves all fields instead of

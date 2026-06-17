@@ -22,6 +22,12 @@ from dev_health_ops.api.graphql.cost import (
     validate_sub_request_count,
 )
 from dev_health_ops.api.graphql.errors import ValidationError
+from dev_health_ops.api.graphql.models.inputs import (
+    FilterInput,
+    ScopeFilterInput,
+    ScopeLevelInput,
+    WhatFilterInput,
+)
 from dev_health_ops.api.graphql.sql.compiler import (
     FlowMatrixRequest,
     compile_flow_matrix,
@@ -126,6 +132,47 @@ class TestCompileFlowMatrix:
         assert "'WORK_TYPE' AS source_dimension" in edges_sql
         assert "INNER JOIN work_items" in edges_sql
         assert "'WORK_TYPE' AS dimension" in nodes_sql
+
+    @pytest.mark.parametrize(
+        ("dim", "filters"),
+        [
+            ("repo", FilterInput(what=WhatFilterInput(repos=["repo-1"]))),
+            (
+                "repo",
+                FilterInput(
+                    scope=ScopeFilterInput(
+                        level=ScopeLevelInput.REPO,
+                        ids=["repo-1"],
+                    )
+                ),
+            ),
+            ("team", FilterInput(what=WhatFilterInput(repos=["repo-1"]))),
+            ("work_type", FilterInput(what=WhatFilterInput(repos=["repo-1"]))),
+        ],
+    )
+    def test_same_dimension_templates_reject_active_filters(
+        self,
+        dim: str,
+        filters: FilterInput,
+    ) -> None:
+        with pytest.raises(ValidationError, match="CHAOS-2487") as exc_info:
+            compile_flow_matrix(_req(dim), org_id="org-1", filters=filters)
+
+        assert exc_info.value.field == "filters"
+        assert exc_info.value.value == dim
+
+    def test_same_dimension_templates_allow_empty_filters(self) -> None:
+        filters = FilterInput(
+            scope=ScopeFilterInput(level=ScopeLevelInput.REPO, ids=[]),
+            what=WhatFilterInput(repos=[]),
+        )
+
+        nodes_queries, edges_queries = compile_flow_matrix(
+            _req("repo"), org_id="org-1", filters=filters
+        )
+
+        assert len(nodes_queries) == 1
+        assert len(edges_queries) == 1
 
 
 class TestRepoEdgesTemplate:

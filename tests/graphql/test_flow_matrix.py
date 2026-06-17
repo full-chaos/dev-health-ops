@@ -146,6 +146,15 @@ class TestCompileFlowMatrix:
                     )
                 ),
             ),
+            (
+                "repo",
+                FilterInput(
+                    scope=ScopeFilterInput(
+                        level=ScopeLevelInput.SERVICE,
+                        ids=["svc-1"],
+                    )
+                ),
+            ),
             ("team", FilterInput(what=WhatFilterInput(repos=["repo-1"]))),
             ("work_type", FilterInput(what=WhatFilterInput(repos=["repo-1"]))),
         ],

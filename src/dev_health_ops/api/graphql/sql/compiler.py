@@ -193,7 +193,12 @@ def _has_active_filters(filters: FilterInput | None) -> bool:
         return False
 
     if filters.scope and filters.scope.ids:
-        if filters.scope.level.value not in {"org", "service"}:
+        # Any non-org scope with ids would change the result set, but the
+        # same-dim TEAM/REPO/WORK_TYPE templates apply no scope predicate
+        # (incl. service, which translate_scope_filter no-ops). Treat all of
+        # them as active so we reject honestly instead of silently returning
+        # org-wide data (CHAOS-2487).
+        if filters.scope.level.value != "org":
             return True
 
     return any(

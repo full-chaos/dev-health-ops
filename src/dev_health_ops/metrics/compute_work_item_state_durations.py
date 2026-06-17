@@ -4,7 +4,10 @@ from collections import defaultdict
 from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta, timezone
 
-from dev_health_ops.metrics.compute_work_items import resolve_base_team
+from dev_health_ops.metrics.compute_work_items import (
+    TeamAttributionContext,
+    resolve_team_attribution,
+)
 from dev_health_ops.metrics.schemas import WorkItemStateDurationDailyRecord
 from dev_health_ops.models.work_items import (
     WorkItem,
@@ -32,17 +35,21 @@ def _resolve_team(
     team_resolver: TeamResolver | None,
     project_key_resolver: ProjectKeyTeamResolver | None,
     linked_issue_resolver: LinkedIssueTeamResolver | None,
+    attribution_context: TeamAttributionContext | None,
 ) -> tuple[str, str]:
     """Resolve an item's team using the same cascade as the cycle-time compute.
 
-    Shares ``resolve_base_team`` (scope key → project_key → assignee) and the
-    linked-issue inheritance fallback so a PR is attributed to the SAME team in
-    state-duration rows as in ``work_item_cycle_times`` — otherwise the same
-    item could read as a donor team in one table and ``unassigned`` in another.
+    Shares the attribution resolver used by cycle-time compute so a PR is
+    attributed to the same team in state-duration rows as in
+    ``work_item_cycle_times``.
     """
-    team_id, team_name = resolve_base_team(item, team_resolver, project_key_resolver)
-    if team_id is None and linked_issue_resolver is not None:
-        team_id, team_name = linked_issue_resolver.resolve(item.work_item_id)
+    team_id, team_name, _ = resolve_team_attribution(
+        item,
+        team_resolver,
+        project_key_resolver,
+        linked_issue_resolver=linked_issue_resolver,
+        attribution_context=attribution_context,
+    )
     return normalize_team_id(team_id), normalize_team_name(team_name)
 
 
@@ -107,6 +114,7 @@ def compute_work_item_state_durations_daily(
     team_resolver: TeamResolver | None = None,
     project_key_resolver: ProjectKeyTeamResolver | None = None,
     linked_issue_resolver: LinkedIssueTeamResolver | None = None,
+    attribution_context: TeamAttributionContext | None = None,
 ) -> list[WorkItemStateDurationDailyRecord]:
     """
     Compute per-day time-in-state totals from status transitions.
@@ -142,6 +150,7 @@ def compute_work_item_state_durations_daily(
             team_resolver,
             project_key_resolver,
             linked_issue_resolver,
+            attribution_context,
         )
         work_scope_id = item.work_scope_id or ""
         team_name_by_key[(item.provider, work_scope_id, team_id)] = team_name

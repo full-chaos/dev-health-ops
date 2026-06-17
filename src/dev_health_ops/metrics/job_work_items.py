@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import uuid
 from dataclasses import replace
@@ -15,7 +16,8 @@ from dev_health_ops.metrics.compute_work_item_state_durations import (
 from dev_health_ops.metrics.compute_work_items import (
     build_linked_issue_team_resolver,
     compute_work_item_metrics_daily,
-    resolve_base_team,
+    compute_work_item_team_attributions,
+    resolve_team_attribution,
 )
 from dev_health_ops.metrics.job_daily import (
     REPO_ROOT,
@@ -23,6 +25,7 @@ from dev_health_ops.metrics.job_daily import (
     _to_utc,
 )
 from dev_health_ops.metrics.loaders.base import to_dataclass
+from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader
 from dev_health_ops.metrics.schemas import (
     InvestmentClassificationRecord,
     InvestmentMetricsRecord,
@@ -641,11 +644,26 @@ def run_work_items_sync_job(
         for wi in work_items:
             donor_by_id[wi.work_item_id] = wi
 
+        team_attribution_context = None
+        if org_id:
+            try:
+                team_attribution_context = asyncio.run(
+                    ClickHouseDataLoader(
+                        primary_sink.client, org_id=org_id
+                    ).load_team_attribution_context(as_of=computed_at)
+                )
+            except Exception:
+                logger.warning(
+                    "Team attribution context load failed; using legacy resolvers only",
+                    exc_info=True,
+                )
+
         linked_issue_resolver = build_linked_issue_team_resolver(
             work_items=list(donor_by_id.values()),
             dependencies=list(merged_deps.values()),
             team_resolver=team_resolver,
             project_key_resolver=pk_resolver,
+            attribution_context=team_attribution_context,
         )
 
         for d in days:
@@ -658,7 +676,16 @@ def run_work_items_sync_job(
                     team_resolver=team_resolver,
                     project_key_resolver=pk_resolver,
                     linked_issue_resolver=linked_issue_resolver,
+                    attribution_context=team_attribution_context,
                 )
+            )
+            wi_team_attributions = compute_work_item_team_attributions(
+                work_items=work_items,
+                computed_at=computed_at,
+                team_resolver=team_resolver,
+                project_key_resolver=pk_resolver,
+                linked_issue_resolver=linked_issue_resolver,
+                attribution_context=team_attribution_context,
             )
             wi_state_durations = compute_work_item_state_durations_daily(
                 day=d,
@@ -668,6 +695,7 @@ def run_work_items_sync_job(
                 team_resolver=team_resolver,
                 project_key_resolver=pk_resolver,
                 linked_issue_resolver=linked_issue_resolver,
+                attribution_context=team_attribution_context,
             )
 
             # --- Issue Type Metrics ---
@@ -676,14 +704,13 @@ def run_work_items_sync_job(
             ] = {}
 
             def _get_team(wi: Any) -> str:
-                # Same cascade as cycle-time / state-duration compute, including
-                # the linked-issue inheritance fallback, so issue-type and
-                # investment tables never disagree with the others on a PR's team.
-                team_id, _ = resolve_base_team(wi, team_resolver, pk_resolver)
-                if team_id is None:
-                    team_id, _ = linked_issue_resolver.resolve(
-                        getattr(wi, "work_item_id", None)
-                    )
+                team_id, _, _ = resolve_team_attribution(
+                    wi,
+                    team_resolver,
+                    pk_resolver,
+                    linked_issue_resolver=linked_issue_resolver,
+                    attribution_context=team_attribution_context,
+                )
                 return normalize_team_id(team_id)
 
             def _normalize_investment_team_id(team_id: str | None) -> str | None:
@@ -847,6 +874,10 @@ def run_work_items_sync_job(
                     s.write_work_item_user_metrics(wi_user_metrics)
                 if wi_cycle_times:
                     s.write_work_item_cycle_times(wi_cycle_times)
+                if wi_team_attributions and hasattr(
+                    s, "write_work_item_team_attributions"
+                ):
+                    s.write_work_item_team_attributions(wi_team_attributions)
                 if wi_state_durations:
                     s.write_work_item_state_durations(wi_state_durations)
 

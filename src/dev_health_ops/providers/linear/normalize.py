@@ -282,6 +282,7 @@ def linear_issue_to_work_item(
     team_key = _get(team, "key")
 
     project = _get(issue, "project") or {}
+    project_id = _get(project, "id")
     project_name = _get(project, "name")
 
     cycle = _get(issue, "cycle") or {}
@@ -306,8 +307,10 @@ def linear_issue_to_work_item(
         work_item_id=work_item_id,
         provider="linear",
         repo_id=None,
-        project_key=team_key,
-        project_id=project_name,
+        native_team_key=team_key,
+        project_key=None,
+        project_id=project_id,
+        project_name=project_name,
         title=str(title),
         description=str(description) if description else None,
         type=normalized_type,

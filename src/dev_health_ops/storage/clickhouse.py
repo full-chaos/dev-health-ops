@@ -1540,6 +1540,9 @@ class ClickHouseStore:
                         "updated_at": self._normalize_datetime(item.get("updated_at")),
                         "last_synced": synced_at,
                         "org_id": item.get("org_id") or self.org_id or "",
+                        "provider": str(item.get("provider") or ""),
+                        "native_team_key": item.get("native_team_key"),
+                        "parent_team_id": item.get("parent_team_id"),
                     }
                 )
             else:
@@ -1556,6 +1559,9 @@ class ClickHouseStore:
                         "updated_at": self._normalize_datetime(item.updated_at),
                         "last_synced": synced_at,
                         "org_id": getattr(item, "org_id", None) or self.org_id or "",
+                        "provider": str(getattr(item, "provider", "") or ""),
+                        "native_team_key": getattr(item, "native_team_key", None),
+                        "parent_team_id": getattr(item, "parent_team_id", None),
                     }
                 )
 
@@ -1573,9 +1579,217 @@ class ClickHouseStore:
                 "updated_at",
                 "last_synced",
                 "org_id",
+                "provider",
+                "native_team_key",
+                "parent_team_id",
             ],
             rows,
         )
+
+    async def insert_projects(self, rows: list[Any]) -> None:
+        if not rows:
+            return
+        payload: list[dict[str, Any]] = []
+        for item in rows:
+            get = self._item_getter(item)
+            payload.append(
+                {
+                    "id": str(get("id") or ""),
+                    "org_id": get("org_id") or self.org_id or "",
+                    "provider": str(get("provider") or ""),
+                    "project_key": get("project_key"),
+                    "name": str(get("name") or ""),
+                    "is_active": int(get("is_active", 1) or 0),
+                    "updated_at": self._normalize_datetime(get("updated_at")),
+                    "last_synced": self._normalize_datetime(get("last_synced")),
+                }
+            )
+        await self._insert_rows(
+            "projects",
+            [
+                "id",
+                "org_id",
+                "provider",
+                "project_key",
+                "name",
+                "is_active",
+                "updated_at",
+                "last_synced",
+            ],
+            payload,
+        )
+
+    async def insert_members(self, rows: list[Any]) -> None:
+        if not rows:
+            return
+        payload: list[dict[str, Any]] = []
+        for item in rows:
+            get = self._item_getter(item)
+            payload.append(
+                {
+                    "org_id": get("org_id") or self.org_id or "",
+                    "member_id": str(get("member_id") or ""),
+                    "name": str(get("name") or ""),
+                    "email": get("email"),
+                    "provider_identities": str(get("provider_identities") or ""),
+                    "is_active": int(get("is_active", 1) or 0),
+                    "updated_at": self._normalize_datetime(get("updated_at")),
+                }
+            )
+        await self._insert_rows(
+            "members",
+            [
+                "org_id",
+                "member_id",
+                "name",
+                "email",
+                "provider_identities",
+                "is_active",
+                "updated_at",
+            ],
+            payload,
+        )
+
+    async def insert_team_memberships(self, rows: list[Any]) -> None:
+        await self._insert_team_edge_rows(
+            "team_memberships",
+            [
+                "org_id",
+                "provider",
+                "team_id",
+                "member_id",
+                "raw_provider_user_id",
+                "raw_email",
+                "source",
+                "is_primary",
+                "specificity",
+                "priority",
+                "valid_from",
+                "valid_to",
+                "updated_at",
+            ],
+            rows,
+        )
+
+    async def insert_team_project_ownership(self, rows: list[Any]) -> None:
+        await self._insert_team_edge_rows(
+            "team_project_ownership",
+            [
+                "org_id",
+                "provider",
+                "team_id",
+                "project_id",
+                "project_key",
+                "source",
+                "is_primary",
+                "specificity",
+                "priority",
+                "valid_from",
+                "valid_to",
+                "updated_at",
+            ],
+            rows,
+        )
+
+    async def insert_team_repo_ownership(self, rows: list[Any]) -> None:
+        await self._insert_team_edge_rows(
+            "team_repo_ownership",
+            [
+                "org_id",
+                "provider",
+                "team_id",
+                "repo_id",
+                "repo_full_name",
+                "match_type",
+                "source",
+                "is_primary",
+                "specificity",
+                "priority",
+                "valid_from",
+                "valid_to",
+                "updated_at",
+            ],
+            rows,
+        )
+
+    async def insert_work_item_team_attributions(self, rows: list[Any]) -> None:
+        if not rows:
+            return
+        payload: list[dict[str, Any]] = []
+        for item in rows:
+            get = self._item_getter(item)
+            repo_id = get("repo_id")
+            payload.append(
+                {
+                    "org_id": get("org_id") or self.org_id or "",
+                    "repo_id": self._normalize_uuid(repo_id)
+                    if repo_id
+                    else uuid.UUID(int=0),
+                    "work_item_id": str(get("work_item_id") or ""),
+                    "provider": str(get("provider") or ""),
+                    "team_id": get("team_id"),
+                    "team_name": get("team_name"),
+                    "source": str(get("source") or "unassigned"),
+                    "is_primary": int(get("is_primary", 0) or 0),
+                    "confidence": str(get("confidence") or "low"),
+                    "evidence": str(get("evidence") or ""),
+                    "computed_at": self._normalize_datetime(get("computed_at")),
+                }
+            )
+        await self._insert_rows(
+            "work_item_team_attributions",
+            [
+                "org_id",
+                "repo_id",
+                "work_item_id",
+                "provider",
+                "team_id",
+                "team_name",
+                "source",
+                "is_primary",
+                "confidence",
+                "evidence",
+                "computed_at",
+            ],
+            payload,
+        )
+
+    async def _insert_team_edge_rows(
+        self, table: str, columns: list[str], rows: list[Any]
+    ) -> None:
+        if not rows:
+            return
+        payload: list[dict[str, Any]] = []
+        for item in rows:
+            get = self._item_getter(item)
+            payload.append(
+                {
+                    column: self._normalize_team_edge_value(column, get(column))
+                    for column in columns
+                }
+            )
+            payload[-1]["org_id"] = payload[-1].get("org_id") or self.org_id or ""
+        await self._insert_rows(table, columns, payload)
+
+    def _normalize_team_edge_value(self, column: str, value: Any) -> Any:
+        if column == "repo_id" and value is not None:
+            return self._normalize_uuid(value)
+        if column in {"valid_from", "valid_to", "updated_at"}:
+            return self._normalize_datetime(value)
+        if column in {"is_primary", "specificity", "priority"}:
+            return int(value or 0)
+        if column in {
+            "org_id",
+            "provider",
+            "team_id",
+            "member_id",
+            "project_id",
+            "repo_full_name",
+            "match_type",
+            "source",
+        }:
+            return str(value or "")
+        return value
 
     async def insert_jira_project_ops_team_links(
         self, links: list[JiraProjectOpsTeamLink]

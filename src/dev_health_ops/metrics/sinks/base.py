@@ -30,11 +30,16 @@ from dev_health_ops.metrics.schemas import (
     InvestmentExplanationRecord,
     InvestmentMetricsRecord,
     IssueTypeMetricsRecord,
+    MemberRecord,
+    ProjectRecord,
     ReleaseImpactDailyRecord,
     RepoComplexityDaily,
     RepoMetricsDailyRecord,
     ReviewEdgeDailyRecord,
+    TeamMembershipRecord,
     TeamMetricsDailyRecord,
+    TeamProjectOwnershipRecord,
+    TeamRepoOwnershipRecord,
     TelemetrySignalBucketRecord,
     WorkGraphEdgeRecord,
     WorkGraphIssuePRRecord,
@@ -42,6 +47,7 @@ from dev_health_ops.metrics.schemas import (
     WorkItemCycleTimeRecord,
     WorkItemMetricsDailyRecord,
     WorkItemStateDurationDailyRecord,
+    WorkItemTeamAttributionRecord,
     WorkItemUserMetricsDailyRecord,
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
@@ -444,6 +450,30 @@ class BaseMetricsSink(ABC):
 
     async def insert_teams(self, teams: list[Any]) -> None:
         """Insert or update teams in the database."""
+        pass
+
+    def write_projects(self, rows: Sequence[ProjectRecord]) -> None:
+        pass
+
+    def write_members(self, rows: Sequence[MemberRecord]) -> None:
+        pass
+
+    def write_team_memberships(self, rows: Sequence[TeamMembershipRecord]) -> None:
+        pass
+
+    def write_team_project_ownership(
+        self, rows: Sequence[TeamProjectOwnershipRecord]
+    ) -> None:
+        pass
+
+    def write_team_repo_ownership(
+        self, rows: Sequence[TeamRepoOwnershipRecord]
+    ) -> None:
+        pass
+
+    def write_work_item_team_attributions(
+        self, rows: Sequence[WorkItemTeamAttributionRecord]
+    ) -> None:
         pass
 
     # -------------------------------------------------------------------------

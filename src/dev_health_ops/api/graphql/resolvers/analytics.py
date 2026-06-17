@@ -7,6 +7,7 @@ import logging
 from collections.abc import Coroutine
 from datetime import date, datetime, time, timezone
 from typing import Any, cast
+from uuid import UUID
 
 from dev_health_ops.api.queries.investment import (
     LATEST_WORK_UNIT_INVESTMENTS_CTE,
@@ -26,7 +27,10 @@ from ..cost import (
 from ..models.inputs import (
     AnalyticsRequestInput,
     BreakdownRequestInput,
+    FilterInput,
+    ScopeFilterInput,
     TimeseriesRequestInput,
+    WhatFilterInput,
 )
 from ..models.outputs import (
     AnalyticsResult,
@@ -54,6 +58,110 @@ from ..sql.compiler import (
 
 logger = logging.getLogger(__name__)
 
+_UNMATCHED_REPO_FILTER_ID = "00000000-0000-0000-0000-000000000000"
+
+
+def _as_uuid_string(value: str) -> str | None:
+    try:
+        return str(UUID(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _dedupe_preserving_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+async def _resolve_repo_filter_refs(
+    client: Any,
+    *,
+    org_id: str,
+    repo_refs: list[str],
+) -> list[str]:
+    from dev_health_ops.api.queries.client import query_dicts
+
+    cleaned_refs = [str(ref).strip() for ref in repo_refs if str(ref).strip()]
+    repo_names = [ref for ref in cleaned_refs if _as_uuid_string(ref) is None]
+
+    repo_ids_by_name: dict[str, str] = {}
+    if repo_names:
+        rows = await query_dicts(
+            client,
+            """
+            SELECT
+                toString(id) AS repo_id,
+                repo
+            FROM repos
+            WHERE org_id = %(org_id)s
+              AND lower(repo) IN %(repo_names)s
+            """,
+            {
+                "org_id": org_id,
+                "repo_names": _dedupe_preserving_order(
+                    [name.lower() for name in repo_names]
+                ),
+            },
+        )
+        for row in rows:
+            repo_name = str(row.get("repo") or "").lower()
+            repo_id = _as_uuid_string(str(row.get("repo_id") or ""))
+            if repo_name and repo_id:
+                repo_ids_by_name[repo_name] = repo_id
+
+    resolved: list[str] = []
+    for ref in cleaned_refs:
+        repo_id = _as_uuid_string(ref)
+        if repo_id is not None:
+            resolved.append(repo_id)
+            continue
+        resolved.append(repo_ids_by_name.get(ref.lower(), _UNMATCHED_REPO_FILTER_ID))
+
+    return _dedupe_preserving_order(resolved)
+
+
+async def _resolve_analytics_repo_filters(
+    client: Any,
+    *,
+    org_id: str,
+    filters: FilterInput | None,
+) -> FilterInput | None:
+    if filters is None:
+        return None
+
+    scope = filters.scope
+    what = filters.what
+
+    if scope is not None and scope.level.value == "repo" and scope.ids:
+        scope = ScopeFilterInput(
+            level=scope.level,
+            ids=await _resolve_repo_filter_refs(
+                client, org_id=org_id, repo_refs=scope.ids
+            ),
+        )
+
+    if what is not None and what.repos:
+        what = WhatFilterInput(
+            repos=await _resolve_repo_filter_refs(
+                client, org_id=org_id, repo_refs=what.repos
+            ),
+            services=what.services,
+        )
+
+    return FilterInput(
+        scope=scope,
+        who=filters.who,
+        what=what,
+        why=filters.why,
+        how=filters.how,
+    )
+
 
 def _analytics_quality_window(batch: AnalyticsRequestInput) -> tuple[date, date] | None:
     if batch.breakdowns:
@@ -69,6 +177,7 @@ async def _resolve_evidence_quality_stats(
     client: Any,
     batch: AnalyticsRequestInput,
     org_id: str,
+    filters: FilterInput | None,
 ) -> EvidenceQualityStats | None:
     if not bool(batch.use_investment):
         return None
@@ -77,7 +186,6 @@ async def _resolve_evidence_quality_stats(
         return None
 
     start_date, end_date = window
-    filters = batch.filters
     scope_filter = ""
     scope_params: dict[str, Any] = {}
     team_scope_ids: list[str] | None = None
@@ -400,6 +508,9 @@ async def resolve_analytics(
 
     # Build list of all query coroutines for parallel execution
     use_investment = bool(batch.use_investment)
+    resolved_filters = await _resolve_analytics_repo_filters(
+        client, org_id=org_id, filters=batch.filters
+    )
 
     timeseries_coros: list[Coroutine[Any, Any, list[TimeseriesResult]]] = [
         _execute_timeseries_query(
@@ -408,7 +519,7 @@ async def resolve_analytics(
             org_id,
             timeout,
             use_investment,
-            batch.filters,
+            resolved_filters,
         )
         for ts_req in batch.timeseries
     ]
@@ -420,7 +531,7 @@ async def resolve_analytics(
             org_id,
             timeout,
             use_investment,
-            batch.filters,
+            resolved_filters,
         )
         for bd_req in batch.breakdowns
     ]
@@ -443,6 +554,10 @@ async def resolve_analytics(
         if isinstance(result, Exception):
             logger.error("Timeseries query %d failed: %s", i, result)
             raise result
+        if not isinstance(result, list):
+            raise TypeError(
+                f"Unexpected timeseries result type: {type(result).__name__}"
+            )
         timeseries_results.extend(result)
 
     # Process breakdown results
@@ -451,6 +566,10 @@ async def resolve_analytics(
         if isinstance(result, Exception):
             logger.error("Breakdown query %d failed: %s", i, result)
             raise result
+        if not isinstance(result, BreakdownResult):
+            raise TypeError(
+                f"Unexpected breakdown result type: {type(result).__name__}"
+            )
         breakdown_results.append(result)
 
     sankey_result: SankeyResult | None = None
@@ -474,7 +593,7 @@ async def resolve_analytics(
         )
 
         nodes_queries, edges_queries = compile_sankey(
-            request, org_id, timeout, filters=batch.filters
+            request, org_id, timeout, filters=resolved_filters
         )
 
         nodes: list[SankeyNode] = []
@@ -631,7 +750,7 @@ async def resolve_analytics(
         )
 
         fm_nodes_queries, fm_edges_queries = compile_flow_matrix(
-            fm_request, org_id, timeout, filters=batch.filters
+            fm_request, org_id, timeout, filters=resolved_filters
         )
 
         try:
@@ -647,7 +766,7 @@ async def resolve_analytics(
         flow_matrix_result = FlowMatrixResult(nodes=fm_nodes, edges=fm_edges)
 
     evidence_quality_stats = await _resolve_evidence_quality_stats(
-        client, batch, org_id
+        client, batch, org_id, resolved_filters
     )
     evidence_quality_distribution = (
         evidence_quality_stats.band_counts

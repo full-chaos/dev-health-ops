@@ -135,3 +135,45 @@ def test_linear_item_in_project_attributes_team_via_project_key() -> None:
     assert group_rows[0].work_scope_id == "Q1 Platform Revamp"
     assert group_rows[0].team_id == "ENG"
     assert cycle_rows[0].team_id == "ENG"
+
+
+def test_linear_native_team_key_resolves_from_team_id_without_project_keys() -> None:
+    from dev_health_ops.providers.teams import build_project_key_resolver
+
+    day = date(2025, 2, 1)
+    start = datetime(2025, 2, 1, tzinfo=timezone.utc)
+    item = WorkItem(
+        work_item_id="linear:CHAOS-1",
+        provider="linear",
+        project_key=None,
+        project_id="Ops Board",
+        native_team_key="CHAOS",
+        title="Team-only issue",
+        type="task",
+        status="done",
+        status_raw="Done",
+        assignees=[],
+        reporter=None,
+        created_at=start - timedelta(days=2),
+        updated_at=start + timedelta(hours=2),
+        started_at=start,
+        completed_at=start + timedelta(hours=2),
+        closed_at=start + timedelta(hours=2),
+        labels=[],
+    )
+    resolver = build_project_key_resolver(
+        [{"id": "CHAOS", "name": "Fullchaos", "project_keys": []}]
+    )
+
+    group_rows, _, cycle_rows = compute_work_item_metrics_daily(
+        day=day,
+        work_items=[item],
+        transitions=[],
+        computed_at=start,
+        team_resolver=TeamResolver(member_to_team={}),
+        project_key_resolver=resolver,
+    )
+
+    assert group_rows[0].team_id == "CHAOS"
+    assert group_rows[0].team_name == "Fullchaos"
+    assert cycle_rows[0].team_id == "CHAOS"

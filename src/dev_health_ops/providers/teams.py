@@ -210,6 +210,7 @@ async def load_team_resolver_from_store(store: Any) -> TeamResolver:
 
 def build_project_key_resolver(teams_data: list) -> ProjectKeyTeamResolver:
     mapping: dict[str, tuple[str, str]] = {}
+    team_id_fallbacks: dict[str, tuple[str, str]] = {}
     for team in teams_data:
         team_id = str(
             team.get("id") if isinstance(team, dict) else getattr(team, "id", "")
@@ -223,13 +224,16 @@ def build_project_key_resolver(teams_data: list) -> ProjectKeyTeamResolver:
             team.get("project_keys")
             if isinstance(team, dict)
             else getattr(team, "project_keys", [])
-        )
-        if not team_id or not project_keys:
+        ) or []
+        if not team_id:
             continue
+        team_id_fallbacks.setdefault(team_id, (team_id, team_name))
         for pk in project_keys:
             key = str(pk).strip()
             if key and key not in mapping:
                 mapping[key] = (team_id, team_name)
+    for key, team in team_id_fallbacks.items():
+        mapping.setdefault(key, team)
     return ProjectKeyTeamResolver(project_key_to_team=mapping)
 
 

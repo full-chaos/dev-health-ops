@@ -307,6 +307,12 @@ def _dispatch_post_sync_tasks(
     provider: str,
     sync_targets: list[str],
     org_id: str,
+    metrics_day: str | None = None,
+    metrics_backfill_days: int | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    work_graph_from_date: str | None = None,
+    work_graph_to_date: str | None = None,
 ) -> None:
     target_set = set(sync_targets)
     has_git = bool(target_set & _GIT_TARGETS)
@@ -314,14 +320,25 @@ def _dispatch_post_sync_tasks(
     has_dora = bool(target_set & _DORA_TARGETS)
     dispatched: list[str] = []
 
-    if has_git:
+    daily_metrics_kwargs: dict[str, Any] = {"org_id": org_id}
+    if metrics_day is not None:
+        daily_metrics_kwargs["day"] = metrics_day
+    if metrics_backfill_days is not None:
+        daily_metrics_kwargs["backfill_days"] = metrics_backfill_days
+
+    if has_git and not has_work_items:
         celery_app.send_task(
             "dev_health_ops.workers.tasks.run_daily_metrics",
-            kwargs={"org_id": org_id},
+            kwargs=daily_metrics_kwargs,
             queue="metrics",
         )
         dispatched.append("run_daily_metrics")
 
+    if has_work_items:
+        dispatched.append("sync_teams_to_analytics")
+        dispatched.append("run_daily_metrics")
+
+    if has_git:
         celery_app.send_task(
             "dev_health_ops.workers.tasks.run_complexity_job",
             kwargs={"org_id": org_id},
@@ -336,6 +353,20 @@ def _dispatch_post_sync_tasks(
     # work-items-only providers (Jira/Linear) and separately scheduled code vs
     # work-item syncs with a permanently empty /investment view (CHAOS-2374).
     if has_git or has_work_items:
+        build_kwargs: dict[str, Any] = {"org_id": org_id}
+        graph_from_date = work_graph_from_date or from_date
+        if graph_from_date is not None:
+            build_kwargs["from_date"] = graph_from_date
+        graph_to_date = work_graph_to_date or to_date
+        if graph_to_date is not None:
+            build_kwargs["to_date"] = graph_to_date
+
+        materialize_kwargs: dict[str, Any] = {"org_id": org_id}
+        if from_date is not None:
+            materialize_kwargs["from_date"] = from_date
+        if to_date is not None:
+            materialize_kwargs["to_date"] = to_date
+
         # Investment distributions depend on the freshly rebuilt work graph.
         # Enqueueing two independent tasks on the same queue only preserves
         # publish order, not completion order: with multiple metrics workers
@@ -356,12 +387,13 @@ def _dispatch_post_sync_tasks(
         # the projection task (no-LLM, org-wide, full coverage).
         build_sig = celery_app.signature(
             "dev_health_ops.workers.tasks.run_work_graph_build",
-            kwargs={"org_id": org_id},
+            kwargs=build_kwargs,
             queue="metrics",
+            immutable=has_work_items,
         )
         materialize_sig = celery_app.signature(
             "dev_health_ops.workers.tasks.run_investment_materialize",
-            kwargs={"org_id": org_id},
+            kwargs=materialize_kwargs,
             queue="metrics",
             immutable=True,
         )
@@ -371,7 +403,27 @@ def _dispatch_post_sync_tasks(
             queue="metrics",
             immutable=True,
         )
-        chain(build_sig, materialize_sig, project_membership_sig).apply_async()
+        if has_work_items:
+            sync_teams_sig = celery_app.signature(
+                "dev_health_ops.workers.tasks.sync_teams_to_analytics",
+                kwargs={"org_id": org_id},
+                queue="metrics",
+            )
+            daily_metrics_sig = celery_app.signature(
+                "dev_health_ops.workers.tasks.run_daily_metrics",
+                kwargs=daily_metrics_kwargs,
+                queue="metrics",
+                immutable=True,
+            )
+            chain(
+                sync_teams_sig,
+                daily_metrics_sig,
+                build_sig,
+                materialize_sig,
+                project_membership_sig,
+            ).apply_async()
+        else:
+            chain(build_sig, materialize_sig, project_membership_sig).apply_async()
         dispatched.append("run_work_graph_build")
         dispatched.append("run_investment_materialize")
         dispatched.append("run_membership_backfill")

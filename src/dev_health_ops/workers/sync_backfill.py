@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 from dev_health_ops.workers.celery_app import celery_app
-from dev_health_ops.workers.task_utils import _credential_mapping, _get_db_url
+from dev_health_ops.workers.task_utils import (
+    _as_str_list,
+    _credential_mapping,
+    _get_db_url,
+    _normalize_sync_targets,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +38,8 @@ def run_backfill(
     started_at = datetime.now(timezone.utc)
 
     try:
+        provider = ""
+        sync_targets: list[str] = []
         with get_postgres_session_sync() as session:
             config = (
                 session.query(SyncConfiguration)
@@ -44,6 +51,12 @@ def run_backfill(
             )
             if config is None:
                 raise ValueError(f"Sync configuration not found: {sync_config_id}")
+
+            provider = str(config.provider or "").strip().lower()
+            sync_targets = _normalize_sync_targets(
+                provider,
+                _as_str_list(config.sync_targets),
+            )
 
             credentials: dict[str, Any] | None = None
             if config.credential_id:
@@ -136,6 +149,37 @@ def run_backfill(
                 logger.debug(
                     "Failed to mark backfill job completed: %s", backfill_job_id
                 )
+
+        try:
+            from dev_health_ops.workers.sync_runtime import _dispatch_post_sync_tasks
+
+            since_date = date.fromisoformat(since)
+            before_date = date.fromisoformat(before)
+            _dispatch_post_sync_tasks(
+                provider=provider,
+                sync_targets=sync_targets,
+                org_id=org_id,
+                metrics_day=before_date.isoformat(),
+                metrics_backfill_days=(before_date - since_date).days + 1,
+                from_date=since_date.isoformat(),
+                to_date=before_date.isoformat(),
+                work_graph_from_date=datetime.combine(
+                    since_date,
+                    time.min,
+                    tzinfo=timezone.utc,
+                ).isoformat(),
+                work_graph_to_date=datetime.combine(
+                    before_date + timedelta(days=1),
+                    time.min,
+                    tzinfo=timezone.utc,
+                ).isoformat(),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to dispatch post-backfill tasks: sync_config_id=%s org_id=%s",
+                sync_config_id,
+                org_id,
+            )
 
         return {
             "status": "success",

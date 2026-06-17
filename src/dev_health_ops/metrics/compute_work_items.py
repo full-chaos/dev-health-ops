@@ -280,16 +280,16 @@ def resolve_team_attribution(
                 attribution_context.repo_by_name, item.provider, item.project_id
             )
         )
-        for assignee in item.assignees:
+        for assignee_identity in item.assignees:
             candidates_by_source["assignee_membership"].extend(
                 _context_candidates(
                     attribution_context.member_by_identity,
                     item.provider,
-                    _identity_key(assignee),
+                    _identity_key(assignee_identity),
                 )
             )
 
-    assignee = item.assignees[0] if item.assignees else None
+    assignee: str | None = item.assignees[0] if item.assignees else None
     team_id, team_name = _resolve_team(team_resolver, assignee)
     if team_id is not None:
         candidates_by_source["assignee_membership"].append(

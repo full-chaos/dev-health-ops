@@ -7,6 +7,11 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, cast
 
+from dev_health_ops.metrics.compute_work_items import (
+    TeamAttributionCandidate,
+    TeamAttributionContext,
+    TeamAttributionSource,
+)
 from dev_health_ops.metrics.loaders.ai_impact import AIImpactClickHouseLoader
 from dev_health_ops.metrics.loaders.base import (
     DataLoader,
@@ -350,6 +355,141 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
             )
             return []
         return [to_dataclass(WorkItemDependency, d) for d in dep_dicts]
+
+    async def load_team_attribution_context(
+        self, *, as_of: datetime
+    ) -> TeamAttributionContext:
+        org_filter = self._org_filter(alias="o")
+        params = self._inject_org_id({"as_of": naive_utc(as_of)})
+
+        def _candidate(
+            row: dict[str, Any], source: str, evidence: str
+        ) -> TeamAttributionCandidate:
+            return TeamAttributionCandidate(
+                source=cast(TeamAttributionSource, source),
+                team_id=str(row.get("team_id") or ""),
+                team_name=str(row.get("team_name") or row.get("team_id") or ""),
+                confidence="high" if int(row.get("is_primary") or 0) else "medium",
+                evidence=evidence,
+                is_primary=int(row.get("is_primary") or 0),
+                specificity=int(row.get("specificity") or 0),
+                priority=int(row.get("priority") or 0),
+                updated_at=row.get("updated_at") or as_of,
+            )
+
+        project_rows = await _clickhouse_query_dicts(
+            self.client,
+            f"""
+            SELECT
+                o.provider,
+                o.team_id,
+                ifNull(nullIf(t.name, ''), o.team_id) AS team_name,
+                o.project_id,
+                o.project_key,
+                o.is_primary,
+                o.specificity,
+                o.priority,
+                o.updated_at
+            FROM team_project_ownership AS o
+            LEFT JOIN teams AS t ON t.org_id = o.org_id AND t.id = o.team_id
+            WHERE o.valid_from <= {{as_of:DateTime}}
+              AND (o.valid_to IS NULL OR o.valid_to > {{as_of:DateTime}})
+              {org_filter}
+            """,
+            params,
+        )
+        repo_rows = await _clickhouse_query_dicts(
+            self.client,
+            f"""
+            SELECT
+                o.provider,
+                o.team_id,
+                ifNull(nullIf(t.name, ''), o.team_id) AS team_name,
+                o.repo_id,
+                o.repo_full_name,
+                o.is_primary,
+                o.specificity,
+                o.priority,
+                o.updated_at
+            FROM team_repo_ownership AS o
+            LEFT JOIN teams AS t ON t.org_id = o.org_id AND t.id = o.team_id
+            WHERE o.valid_from <= {{as_of:DateTime}}
+              AND (o.valid_to IS NULL OR o.valid_to > {{as_of:DateTime}})
+              {org_filter}
+            """,
+            params,
+        )
+        member_rows = await _clickhouse_query_dicts(
+            self.client,
+            f"""
+            SELECT
+                o.provider,
+                o.team_id,
+                ifNull(nullIf(t.name, ''), o.team_id) AS team_name,
+                o.member_id,
+                o.raw_provider_user_id,
+                o.raw_email,
+                o.is_primary,
+                o.specificity,
+                o.priority,
+                o.updated_at
+            FROM team_memberships AS o
+            LEFT JOIN teams AS t ON t.org_id = o.org_id AND t.id = o.team_id
+            WHERE o.valid_from <= {{as_of:DateTime}}
+              AND (o.valid_to IS NULL OR o.valid_to > {{as_of:DateTime}})
+              {org_filter}
+            """,
+            params,
+        )
+
+        context = TeamAttributionContext()
+        for row in project_rows:
+            candidate = _candidate(
+                row,
+                "project_ownership",
+                f"project_ownership={row.get('project_id') or row.get('project_key')}",
+            )
+            if row.get("project_id"):
+                context.project_by_id.setdefault(
+                    (str(row.get("provider") or ""), str(row["project_id"])), []
+                ).append(candidate)
+            if row.get("project_key"):
+                context.project_by_key.setdefault(
+                    (str(row.get("provider") or ""), str(row["project_key"])), []
+                ).append(candidate)
+
+        for row in repo_rows:
+            candidate = _candidate(
+                row,
+                "repo_ownership",
+                f"repo_ownership={row.get('repo_id') or row.get('repo_full_name')}",
+            )
+            if row.get("repo_id"):
+                context.repo_by_id.setdefault(
+                    (str(row.get("provider") or ""), str(row["repo_id"])), []
+                ).append(candidate)
+            if row.get("repo_full_name"):
+                context.repo_by_name.setdefault(
+                    (str(row.get("provider") or ""), str(row["repo_full_name"])), []
+                ).append(candidate)
+
+        for row in member_rows:
+            candidate = _candidate(
+                row,
+                "assignee_membership",
+                f"assignee_membership={row.get('member_id') or row.get('raw_email')}",
+            )
+            for identity in (
+                row.get("member_id"),
+                row.get("raw_provider_user_id"),
+                row.get("raw_email"),
+            ):
+                key = " ".join(str(identity or "").strip().lower().split())
+                if key:
+                    context.member_by_identity.setdefault(
+                        (str(row.get("provider") or ""), key), []
+                    ).append(candidate)
+        return context
 
     async def load_cicd_data(
         self,

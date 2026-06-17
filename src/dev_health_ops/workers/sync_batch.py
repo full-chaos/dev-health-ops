@@ -568,7 +568,10 @@ def _run_sync_for_repo(
     from dev_health_ops.processors.github import process_github_repo
     from dev_health_ops.processors.gitlab import process_gitlab_project
     from dev_health_ops.storage import resolve_db_type, run_with_store
-    from dev_health_ops.sync.watermarks import get_watermark, set_watermark
+    from dev_health_ops.sync.watermarks import (
+        get_legacy_repo_watermark,
+        set_legacy_repo_watermark,
+    )
 
     db_url = _get_db_url()
     db_type = resolve_db_type(db_url, None)
@@ -619,7 +622,7 @@ def _run_sync_for_repo(
         if repo_id_for_watermark and not full_resync:
             with get_postgres_session_sync() as session:
                 watermarks = [
-                    get_watermark(session, org_id, repo_id_for_watermark, t)
+                    get_legacy_repo_watermark(session, org_id, repo_id_for_watermark, t)
                     for t in sync_targets
                 ]
                 valid = [w for w in watermarks if w is not None]
@@ -764,7 +767,9 @@ def _run_sync_for_repo(
         if repo_id_for_watermark:
             with get_postgres_session_sync() as session:
                 for t in sync_targets:
-                    set_watermark(session, org_id, repo_id_for_watermark, t, started_at)
+                    set_legacy_repo_watermark(
+                        session, org_id, repo_id_for_watermark, t, started_at
+                    )
                 session.flush()
 
         duration = int((datetime.now(timezone.utc) - started_at).total_seconds())

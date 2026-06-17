@@ -735,10 +735,10 @@ class TeamMapping(Base):
 
 
 class SyncWatermark(Base):
-    """Per-repo sync watermarks for incremental sync.
+    """Per-source/dataset sync watermarks for incremental sync.
 
-    Tracks the last successful sync timestamp for each (org, repo, target)
-    combination, enabling incremental data fetching on subsequent syncs.
+    Legacy repo_id/target remain populated during the transition from
+    repo-scoped to source/dataset-scoped sync state.
     """
 
     __tablename__ = "sync_watermarks"
@@ -750,10 +750,20 @@ class SyncWatermark(Base):
         nullable=False,
         comment="owner/repo for GitHub, project_id for GitLab",
     )
+    source_id: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="Integration source identifier for generalized sync state",
+    )
     target: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         comment="Sync target: git, prs, cicd, deployments, incidents, work-items",
+    )
+    dataset_key: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="Dataset key for generalized sync state",
     )
     last_synced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
@@ -771,6 +781,12 @@ class SyncWatermark(Base):
         UniqueConstraint(
             "org_id", "repo_id", "target", name="uq_sync_watermark_org_repo_target"
         ),
+        UniqueConstraint(
+            "org_id",
+            "source_id",
+            "dataset_key",
+            name="uq_sync_watermark_org_source_dataset",
+        ),
         Index("ix_sync_watermark_org_repo", "org_id", "repo_id"),
     )
 
@@ -779,11 +795,15 @@ class SyncWatermark(Base):
         repo_id: str,
         target: str,
         org_id: str | None = None,
+        source_id: str | None = None,
+        dataset_key: str | None = None,
         last_synced_at: datetime | None = None,
     ) -> None:
         self.id = uuid.uuid4()
         self.org_id = org_id or ""
         self.repo_id = repo_id
+        self.source_id = source_id or repo_id
         self.target = target
+        self.dataset_key = dataset_key or target
         self.last_synced_at = last_synced_at
         self.updated_at = datetime.now(timezone.utc)

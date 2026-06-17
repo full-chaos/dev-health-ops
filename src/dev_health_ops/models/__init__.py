@@ -15,6 +15,17 @@ from .billing_audit import BillingAuditLog
 from .checkpoints import CheckpointStatus, MetricCheckpoint
 from .git import Base, GitBlame, GitBlameMixin, GitCommit, GitCommitStat, GitFile, Repo
 from .impersonation import ImpersonationSession
+from .integrations import (
+    Integration,
+    IntegrationDataset,
+    IntegrationSource,
+    SyncRun,
+    SyncRunMode,
+    SyncRunPostDispatch,
+    SyncRunStatus,
+    SyncRunUnit,
+    SyncRunUnitStatus,
+)
 from .invoices import Invoice, InvoiceLineItem
 from .ip_allowlist import OrgIPAllowlist
 from .licensing import (
@@ -99,8 +110,11 @@ __all__ = [
     "GitFile",
     "GithubAppInstallation",
     "IdentityMapping",
+    "Integration",
     "IntegrationCredential",
+    "IntegrationDataset",
     "IntegrationProvider",
+    "IntegrationSource",
     "Invoice",
     "InvoiceLineItem",
     "JobRun",
@@ -135,6 +149,12 @@ __all__ = [
     "SSOProviderStatus",
     "STANDARD_FEATURES",
     "SyncConfiguration",
+    "SyncRun",
+    "SyncRunMode",
+    "SyncRunPostDispatch",
+    "SyncRunStatus",
+    "SyncRunUnit",
+    "SyncRunUnitStatus",
     "SyncWatermark",
     "TeamMapping",
     "TIER_LIMITS",

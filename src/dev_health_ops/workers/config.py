@@ -52,6 +52,17 @@ task_queues: dict[str, dict[str, Any]] = {
     "sync.linear": {},
     "sync.jira": {},
     "sync.launchdarkly": {},
+    # Cost-class sub-queues (CHAOS-2517). Gated by SYNC_COST_CLASS_QUEUES flag.
+    # Deploy these queue entries first (consumers), then flip the flag on
+    # producers. Routing lives in workers.queues / sync.dispatch_policy.
+    "sync.github.light": {},
+    "sync.github.medium": {},
+    "sync.github.heavy": {},
+    "sync.gitlab.light": {},
+    "sync.gitlab.medium": {},
+    "sync.gitlab.heavy": {},
+    "sync.jira.medium": {},
+    "sync.linear.medium": {},
     "backfill": {},
     "webhooks": {},
     "ingest": {},

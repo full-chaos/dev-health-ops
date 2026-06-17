@@ -274,9 +274,11 @@ def jira_issue_to_work_item(
     if isinstance(project, dict):
         project_key = project.get("key")
         project_id = project.get("id")
+        project_name = project.get("name")
     else:
         project_key = getattr(project, "key", None) if project else None
         project_id = getattr(project, "id", None) if project else None
+        project_name = getattr(project, "name", None) if project else None
 
     title = _get_field(issue, "summary") or ""
     description = _get_field(issue, "description")
@@ -501,6 +503,8 @@ def jira_issue_to_work_item(
         repo_id=repo_id,
         project_key=str(project_key) if project_key else None,
         project_id=str(project_id) if project_id else None,
+        project_name=str(project_name) if project_name else None,
+        native_team_key=None,
         title=str(title),
         description=str(description) if description else None,
         type=normalized_type,
@@ -581,6 +585,8 @@ def canonical_jira_issue_to_work_item(
         repo_id=repo_id,
         project_key=issue.project_key,
         project_id=None,
+        project_name=getattr(issue, "project_name", None),
+        native_team_key=None,
         title=issue.key,
         description=None,
         type=normalized_type,

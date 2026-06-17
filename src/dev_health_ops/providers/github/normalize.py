@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import logging
 import os
 import re
@@ -242,6 +243,7 @@ def github_issue_to_work_item(
         work_item_id=work_item_id,
         provider="github",
         repo_id=repo_id,
+        native_team_key=None,
         project_key=None,
         # For work tracking metrics, treat the repo as the "project" scope.
         project_id=str(repo_full_name) if repo_full_name else None,
@@ -437,6 +439,7 @@ def github_project_v2_item_to_work_item(
             work_item_id=work_item_id,
             provider="github",
             repo_id=None,
+            native_team_key=None,
             project_key=None,
             project_id=str(project_scope_id or repo_full_name)
             if (project_scope_id or repo_full_name)
@@ -486,6 +489,7 @@ def github_project_v2_item_to_work_item(
             work_item_id=work_item_id,
             provider="github",
             repo_id=None,
+            native_team_key=None,
             project_key=None,
             project_id=str(project_scope_id) if project_scope_id else None,
             title=_as_str(content.get("title")) or "",
@@ -683,6 +687,7 @@ def github_pr_to_work_item(
         work_item_id=work_item_id,
         provider="github",
         repo_id=repo_id,
+        native_team_key=None,
         project_key=None,
         project_id=str(repo_full_name) if repo_full_name else None,
         title=str(title),
@@ -1076,31 +1081,10 @@ def enrich_work_item_with_priority(
     if priority is None:
         return work_item
 
-    return WorkItem(
-        work_item_id=work_item.work_item_id,
-        provider=work_item.provider,
-        repo_id=work_item.repo_id,
-        project_key=work_item.project_key,
-        project_id=work_item.project_id,
-        title=work_item.title,
-        description=work_item.description,
-        type=work_item.type,
-        status=work_item.status,
-        status_raw=work_item.status_raw,
-        assignees=work_item.assignees,
-        reporter=work_item.reporter,
-        created_at=work_item.created_at,
-        updated_at=work_item.updated_at,
-        started_at=work_item.started_at,
-        completed_at=work_item.completed_at,
-        closed_at=work_item.closed_at,
-        labels=work_item.labels,
-        story_points=work_item.story_points,
-        sprint_id=work_item.sprint_id,
-        sprint_name=work_item.sprint_name,
+    return dataclasses.replace(
+        work_item,
         priority_raw=priority,
         service_class=service_class,
-        url=work_item.url,
     )
 
 

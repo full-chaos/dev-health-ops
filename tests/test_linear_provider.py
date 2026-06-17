@@ -62,6 +62,7 @@ def _mock_linear_issue(
     creator_email: str | None = "creator@example.com",
     creator_name: str | None = "Creator",
     team_key: str = "ENG",
+    project_id: str | None = None,
     project_name: str | None = None,
     cycle_id: str | None = None,
     cycle_name: str | None = None,
@@ -122,7 +123,7 @@ def _mock_linear_issue(
         issue["creator"] = None
 
     if project_name:
-        issue["project"] = {"id": "proj-1", "name": project_name}
+        issue["project"] = {"id": project_id or "proj-1", "name": project_name}
     else:
         issue["project"] = None
 
@@ -280,7 +281,29 @@ class TestLinearIssueToWorkItem:
         assert work_item.provider == "linear"
         assert work_item.title == "Test Issue"
         assert work_item.status == "in_progress"
-        assert work_item.project_key == "ENG"
+        assert work_item.native_team_key == "ENG"
+        assert work_item.project_key is None
+
+    def test_issue_with_project_fields(
+        self, mock_identity: IdentityResolver, mock_status_mapping: StatusMapping
+    ) -> None:
+        issue = _mock_linear_issue(
+            identifier="CHAOS-42",
+            team_key="CHAOS",
+            project_id="proj-42",
+            project_name="Platform Health",
+        )
+
+        work_item, _ = linear_issue_to_work_item(
+            issue=issue,
+            status_mapping=mock_status_mapping,
+            identity=mock_identity,
+        )
+
+        assert work_item.native_team_key == "CHAOS"
+        assert work_item.project_name == "Platform Health"
+        assert work_item.project_key is None
+        assert work_item.project_id == "proj-42"
 
     def test_issue_with_priority(
         self, mock_identity: IdentityResolver, mock_status_mapping: StatusMapping

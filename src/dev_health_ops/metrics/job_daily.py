@@ -43,6 +43,7 @@ from dev_health_ops.metrics.compute_work_item_state_durations import (
 from dev_health_ops.metrics.compute_work_items import (
     build_linked_issue_team_resolver,
     compute_work_item_metrics_daily,
+    compute_work_item_team_attributions,
 )
 from dev_health_ops.metrics.dependencies import get_metrics_dependencies
 from dev_health_ops.metrics.hotspots import (
@@ -755,6 +756,7 @@ async def run_daily_metrics_job(
     # table) simply skip inheritance instead of failing the daily job.
     work_item_dependencies: list[Any] = []
     linked_issue_resolver = None
+    team_attribution_context = None
     # Linked-issue inheritance reads org-wide (repo_id=None), so it is only
     # safe under an explicit tenant scope: without org_id the loader's filter
     # is empty and the donor/edge queries would span every tenant, letting a
@@ -768,6 +770,15 @@ async def run_daily_metrics_job(
         # aborting the daily job. A PR can reference a donor that completed
         # before any metrics day, or a repo-less Linear/Jira issue, so the
         # bounded lookup is org-wide and window-independent.
+        _load_attr_context = getattr(loader, "load_team_attribution_context", None)
+        if _load_attr_context is not None:
+            try:
+                team_attribution_context = await _load_attr_context(as_of=computed_at)
+            except Exception:
+                logger.warning(
+                    "Team attribution context load failed; using legacy resolvers only",
+                    exc_info=True,
+                )
         _load_deps = getattr(loader, "load_work_item_dependencies", None)
         _load_donors = getattr(loader, "load_work_item_dependencies_donors", None)
         if _load_deps is not None and _load_donors is not None:
@@ -799,6 +810,7 @@ async def run_daily_metrics_job(
                     dependencies=work_item_dependencies,
                     team_resolver=team_resolver,
                     project_key_resolver=project_key_resolver,
+                    attribution_context=team_attribution_context,
                 )
             except Exception:
                 logger.warning(
@@ -978,6 +990,7 @@ async def run_daily_metrics_job(
         wi_metrics: list[Any] = []
         wi_user_metrics: list[Any] = []
         wi_cycle_times: list[Any] = []
+        wi_team_attributions: list[Any] = []
         wi_state_durations: list[Any] = []
         if work_items:
             wi_metrics, wi_user_metrics, wi_cycle_times = (
@@ -989,7 +1002,16 @@ async def run_daily_metrics_job(
                     team_resolver=team_resolver,
                     project_key_resolver=project_key_resolver,
                     linked_issue_resolver=linked_issue_resolver,
+                    attribution_context=team_attribution_context,
                 )
+            )
+            wi_team_attributions = compute_work_item_team_attributions(
+                work_items=work_items,
+                computed_at=computed_at,
+                team_resolver=team_resolver,
+                project_key_resolver=project_key_resolver,
+                linked_issue_resolver=linked_issue_resolver,
+                attribution_context=team_attribution_context,
             )
             # CHAOS-2377: the state-duration rollup powers /metrics Flow Sankey +
             # Flame and the Operating Review state-duration panel. The compute
@@ -1005,6 +1027,7 @@ async def run_daily_metrics_job(
                 team_resolver=team_resolver,
                 project_key_resolver=project_key_resolver,
                 linked_issue_resolver=linked_issue_resolver,
+                attribution_context=team_attribution_context,
             )
 
         review_edges = compute_review_edges_daily(
@@ -1212,6 +1235,8 @@ async def run_daily_metrics_job(
                 s.write_work_item_user_metrics(wi_user_metrics)
             if wi_cycle_times:
                 s.write_work_item_cycle_times(wi_cycle_times)
+            if wi_team_attributions and hasattr(s, "write_work_item_team_attributions"):
+                s.write_work_item_team_attributions(wi_team_attributions)
             if wi_state_durations:
                 s.write_work_item_state_durations(wi_state_durations)
             s.write_review_edges(review_edges)

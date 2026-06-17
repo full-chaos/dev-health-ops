@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from dev_health_ops.api.queries.investment import LATEST_WORK_UNIT_INVESTMENTS_CTE
 
 from ..authz import enforce_org_scope
+from ..errors import ValidationError
 from .filter_translation import translate_filters
 from .templates import (
     breakdown_template,
@@ -185,6 +186,29 @@ def _needs_team_join(filters: FilterInput | None) -> bool:
     if not filters or not filters.scope or not filters.scope.ids:
         return False
     return filters.scope.level.value == "team"
+
+
+def _has_active_filters(filters: FilterInput | None) -> bool:
+    if filters is None:
+        return False
+
+    if filters.scope and filters.scope.ids:
+        # Any non-org scope with ids would change the result set, but the
+        # same-dim TEAM/REPO/WORK_TYPE templates apply no scope predicate
+        # (incl. service, which translate_scope_filter no-ops). Treat all of
+        # them as active so we reject honestly instead of silently returning
+        # org-wide data (CHAOS-2487).
+        if filters.scope.level.value != "org":
+            return True
+
+    return any(
+        (
+            filters.who and (filters.who.developers or filters.who.roles),
+            filters.what and (filters.what.repos or filters.what.services),
+            filters.why and (filters.why.work_category or filters.why.issue_type),
+            filters.how and filters.how.flow_stage,
+        )
+    )
 
 
 def compile_timeseries(
@@ -387,14 +411,8 @@ def compile_flow_matrix(
         "timeout": timeout,
     }
 
-    # The TEAM / REPO / WORK_TYPE branches intentionally do not thread
-    # `filter_clause`; those templates source from work_item_cycle_times +
-    # work_items where the filter column set (investment_area etc.) doesn't
-    # apply. Only the sankey fallback — which queries investment_metrics_daily —
-    # uses filters. Callers that need filtered flow matrices for same-dim TEAM /
-    # REPO / WORK_TYPE should open a follow-up to wire filter columns into the
-    # two underlying tables first.
     if dimension == Dimension.TEAM:
+        _reject_filtered_same_dimension_flow_matrix(dimension, filters)
         nodes_sql = flow_matrix_team_nodes_template()
         edge_sql = flow_matrix_team_edges_template()
         nodes_params = {**common_params, "limit_per_dim": request.max_nodes}
@@ -402,6 +420,7 @@ def compile_flow_matrix(
         edge_params = {**common_params, "max_edges": request.max_edges}
         edge_params = enforce_org_scope(org_id, edge_params)
     elif dimension == Dimension.REPO:
+        _reject_filtered_same_dimension_flow_matrix(dimension, filters)
         nodes_sql = flow_matrix_repo_nodes_template()
         edge_sql = flow_matrix_repo_edges_template()
         nodes_params = {**common_params, "limit_per_dim": request.max_nodes}
@@ -409,6 +428,7 @@ def compile_flow_matrix(
         edge_params = {**common_params, "max_edges": request.max_edges}
         edge_params = enforce_org_scope(org_id, edge_params)
     elif dimension == Dimension.WORK_TYPE:
+        _reject_filtered_same_dimension_flow_matrix(dimension, filters)
         nodes_sql = flow_matrix_work_type_nodes_template()
         edge_sql = flow_matrix_work_type_edges_template()
         nodes_params = {**common_params, "limit_per_dim": request.max_nodes}
@@ -431,6 +451,22 @@ def compile_flow_matrix(
         edge_params = enforce_org_scope(org_id, edge_params)
 
     return [(nodes_sql, nodes_params)], [(edge_sql, edge_params)]
+
+
+def _reject_filtered_same_dimension_flow_matrix(
+    dimension: Dimension,
+    filters: FilterInput | None,
+) -> None:
+    if not _has_active_filters(filters):
+        return
+
+    raise ValidationError(
+        "flowMatrix filters are not supported for same-dimension "
+        f"{dimension.value} queries yet (CHAOS-2487); remove filters or use "
+        "theme/subcategory.",
+        field="filters",
+        value=dimension.value,
+    )
 
 
 def compile_catalog_values(

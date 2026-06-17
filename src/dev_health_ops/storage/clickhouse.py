@@ -1589,6 +1589,7 @@ class ClickHouseStore:
     async def insert_projects(self, rows: list[Any]) -> None:
         if not rows:
             return
+        synced_at = self._normalize_datetime(datetime.now(timezone.utc))
         payload: list[dict[str, Any]] = []
         for item in rows:
             get = self._item_getter(item)
@@ -1600,8 +1601,10 @@ class ClickHouseStore:
                     "project_key": get("project_key"),
                     "name": str(get("name") or ""),
                     "is_active": int(get("is_active", 1) or 0),
-                    "updated_at": self._normalize_datetime(get("updated_at")),
-                    "last_synced": self._normalize_datetime(get("last_synced")),
+                    "updated_at": self._normalize_datetime(get("updated_at"))
+                    or synced_at,
+                    "last_synced": self._normalize_datetime(get("last_synced"))
+                    or synced_at,
                 }
             )
         await self._insert_rows(

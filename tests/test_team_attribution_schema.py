@@ -204,8 +204,6 @@ async def test_async_store_writes_team_attribution_tables() -> None:
                 "provider": "linear",
                 "project_key": "PLAT",
                 "name": "Platform",
-                "updated_at": now,
-                "last_synced": now,
             }
         ]
     )
@@ -258,6 +256,8 @@ async def test_async_store_writes_team_attribution_tables() -> None:
         "team_repo_ownership",
         "work_item_team_attributions",
     ]
+    assert captured[0][2][0]["updated_at"] is not None
+    assert captured[0][2][0]["last_synced"] is not None
     assert "repo_id" in captured[2][1]
     assert captured[2][2][0]["repo_id"] == repo_id
     assert captured[3][2][0]["source"] == "native_team"

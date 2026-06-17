@@ -341,6 +341,170 @@ def test_run_backfill_does_not_create_scheduled_job(
     engine.dispose()
 
 
+def test_run_backfill_dispatches_post_sync_tasks_once_after_completion(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=tables_of(SyncConfiguration, ScheduledJob, JobRun, BackfillJob),
+    )
+
+    org_id = str(uuid.uuid4())
+    sync_config_id = uuid.uuid4()
+
+    with Session(engine) as session:
+        config = SyncConfiguration(
+            org_id=org_id,
+            name="linear-backfill",
+            provider="linear",
+            sync_targets=[],
+            sync_options={},
+            is_active=True,
+        )
+        config.id = sync_config_id
+        session.add(config)
+        session.commit()
+
+    @contextmanager
+    def _session_ctx():
+        with Session(engine) as session:
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+
+    monkeypatch.setattr(
+        "dev_health_ops.db.get_postgres_session_sync",
+        lambda: _session_ctx(),
+    )
+
+    def _fake_run_backfill_for_config(**kwargs):
+        progress_cb = kwargs["progress_cb"]
+        progress_cb(1, 2, date(2026, 1, 1), date(2026, 1, 7))
+        progress_cb(2, 2, date(2026, 1, 8), date(2026, 1, 14))
+        return {"status": "success", "window_count": 2}
+
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner.run_backfill_for_config",
+        _fake_run_backfill_for_config,
+    )
+    dispatch = MagicMock()
+    monkeypatch.setattr(
+        "dev_health_ops.workers.sync_runtime._dispatch_post_sync_tasks",
+        dispatch,
+    )
+
+    from dev_health_ops.workers.sync_backfill import run_backfill
+
+    task: Any = run_backfill
+    task.push_request(id="backfill-post-sync-dispatch")
+    try:
+        result = task(
+            sync_config_id=str(sync_config_id),
+            since="2026-01-01",
+            before="2026-01-14",
+            org_id=org_id,
+        )
+    finally:
+        task.pop_request()
+
+    assert result["status"] == "success"
+    dispatch.assert_called_once_with(
+        provider="linear",
+        sync_targets=["work-items"],
+        org_id=org_id,
+        metrics_day="2026-01-14",
+        metrics_backfill_days=14,
+        from_date="2026-01-01",
+        to_date="2026-01-14",
+        work_graph_from_date="2026-01-01T00:00:00+00:00",
+        work_graph_to_date="2026-01-15T00:00:00+00:00",
+    )
+
+    engine.dispose()
+
+
+def test_run_backfill_dispatch_failure_does_not_retry_ingestion(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=tables_of(SyncConfiguration, ScheduledJob, JobRun, BackfillJob),
+    )
+
+    org_id = str(uuid.uuid4())
+    sync_config_id = uuid.uuid4()
+
+    with Session(engine) as session:
+        config = SyncConfiguration(
+            org_id=org_id,
+            name="linear-backfill",
+            provider="linear",
+            sync_targets=[],
+            sync_options={},
+            is_active=True,
+        )
+        config.id = sync_config_id
+        session.add(config)
+        session.commit()
+
+    @contextmanager
+    def _session_ctx():
+        with Session(engine) as session:
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+
+    monkeypatch.setattr(
+        "dev_health_ops.db.get_postgres_session_sync",
+        lambda: _session_ctx(),
+    )
+
+    backfill_call_count = 0
+
+    def _fake_run_backfill_for_config(**kwargs):
+        nonlocal backfill_call_count
+        backfill_call_count += 1
+        return {"status": "success", "window_count": 1}
+
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner.run_backfill_for_config",
+        _fake_run_backfill_for_config,
+    )
+    dispatch = MagicMock(side_effect=RuntimeError("broker unavailable"))
+    monkeypatch.setattr(
+        "dev_health_ops.workers.sync_runtime._dispatch_post_sync_tasks",
+        dispatch,
+    )
+
+    from dev_health_ops.workers.sync_backfill import run_backfill
+
+    task: Any = run_backfill
+    task.push_request(id="backfill-dispatch-failure")
+    try:
+        result = task(
+            sync_config_id=str(sync_config_id),
+            since="2026-01-01",
+            before="2026-01-14",
+            org_id=org_id,
+        )
+    finally:
+        task.pop_request()
+
+    assert result["status"] == "success"
+    assert backfill_call_count == 1
+    dispatch.assert_called_once()
+
+    engine.dispose()
+
+
 def test_dispatch_scheduled_syncs_ignores_backfill_jobs(
     monkeypatch: pytest.MonkeyPatch,
 ):

@@ -530,6 +530,41 @@ async def test_trigger_sync_org_scoped(client, seeded_state):
 
 
 @pytest.mark.asyncio
+async def test_trigger_sync_marks_run_failed_when_enqueue_fails(
+    client,
+    session_maker,
+):
+    ac, _ = client
+    created = await _create_integration(ac)
+    integration_id = created["id"]
+
+    mock_dispatch = MagicMock()
+    mock_dispatch.apply_async = MagicMock(side_effect=RuntimeError("broker down"))
+
+    with patch(
+        "dev_health_ops.api.admin.routers.integrations.dispatch_sync_run",
+        mock_dispatch,
+    ):
+        resp = await ac.post(
+            f"/api/v1/admin/integrations/{integration_id}/sync",
+            json={},
+        )
+
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == "Task queue unavailable: broker down"
+
+    async with session_maker() as session:
+        result = await session.execute(
+            select(SyncRun).where(SyncRun.integration_id == uuid.UUID(integration_id))
+        )
+        run = result.scalar_one()
+
+    assert run.status == "failed"
+    assert run.error == "Task queue unavailable: broker down"
+    assert run.completed_at is not None
+
+
+@pytest.mark.asyncio
 async def test_trigger_sync_not_found(client):
     ac, _ = client
     resp = await ac.post(
@@ -584,6 +619,45 @@ async def test_trigger_backfill_org_scoped(client, seeded_state):
     assert data["status"] == "accepted"
     assert captured_request["org_id"] == seeded_state["org_id"]
     assert captured_request["mode"] == "backfill"
+
+
+@pytest.mark.asyncio
+async def test_trigger_backfill_marks_run_failed_when_enqueue_fails(
+    client,
+    session_maker,
+):
+    ac, _ = client
+    created = await _create_integration(ac)
+    integration_id = created["id"]
+
+    mock_dispatch = MagicMock()
+    mock_dispatch.apply_async = MagicMock(side_effect=RuntimeError("broker down"))
+
+    with patch(
+        "dev_health_ops.api.admin.routers.integrations.dispatch_sync_run",
+        mock_dispatch,
+    ):
+        resp = await ac.post(
+            f"/api/v1/admin/integrations/{integration_id}/backfill",
+            json={
+                "since": "2024-01-01T00:00:00Z",
+                "before": "2024-02-01T00:00:00Z",
+            },
+        )
+
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == "Task queue unavailable: broker down"
+
+    async with session_maker() as session:
+        result = await session.execute(
+            select(SyncRun).where(SyncRun.integration_id == uuid.UUID(integration_id))
+        )
+        run = result.scalar_one()
+
+    assert run.status == "failed"
+    assert run.mode == "backfill"
+    assert run.error == "Task queue unavailable: broker down"
+    assert run.completed_at is not None
 
 
 @pytest.mark.asyncio

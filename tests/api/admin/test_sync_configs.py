@@ -946,6 +946,72 @@ async def test_trigger_passes_pending_run_id_to_task(client):
     assert call_kwargs.get("pending_run_id") == run_id
 
 
+@pytest.mark.asyncio
+async def test_trigger_commits_pending_job_run_before_enqueue(client, session_maker):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    ac, _ = client
+
+    create_resp = await _create_sync_config(
+        ac, name="pre-enqueue-commit-test", provider="github"
+    )
+    assert create_resp.status_code == 201
+    config_id = create_resp.json()["id"]
+    sync_url = str(session_maker.kw["bind"].url).replace("sqlite+aiosqlite", "sqlite")
+
+    def assert_pending_run_is_visible(**_kwargs):
+        engine = create_engine(sync_url)
+        try:
+            with Session(engine) as session:
+                assert session.query(JobRun).count() == 1
+        finally:
+            engine.dispose()
+        return MagicMock(id="visible-task-id")
+
+    mock_run = MagicMock()
+    mock_run.apply_async.side_effect = assert_pending_run_is_visible
+
+    with patch("dev_health_ops.workers.sync_tasks.run_sync_config", mock_run):
+        resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
+
+    assert resp.status_code == 202
+
+
+@pytest.mark.asyncio
+async def test_trigger_marks_pending_job_run_failed_when_enqueue_fails(
+    client, session_maker
+):
+    from dev_health_ops.models.settings import JobRunStatus
+
+    ac, _ = client
+
+    create_resp = await _create_sync_config(
+        ac, name="enqueue-failure-test", provider="github"
+    )
+    assert create_resp.status_code == 201
+    config_id = create_resp.json()["id"]
+
+    mock_run = MagicMock()
+    mock_run.apply_async.side_effect = RuntimeError("broker down")
+
+    with patch("dev_health_ops.workers.sync_tasks.run_sync_config", mock_run):
+        resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
+
+    assert resp.status_code == 503
+    assert "broker down" in resp.json()["detail"]
+
+    async with session_maker() as session:
+        result = await session.execute(select(JobRun))
+        runs = list(result.scalars().all())
+
+    assert len(runs) == 1
+    run = runs[0]
+    assert run.status == JobRunStatus.FAILED.value
+    assert run.completed_at is not None
+    assert run.error == "dispatch enqueue failed: broker down"
+
+
 def test_sync_tasks_accept_pending_run_id_kwarg():
     """The dispatched Celery tasks must accept every kwarg the trigger endpoint
     passes. Celery validates kwargs against the task signature at dispatch time,

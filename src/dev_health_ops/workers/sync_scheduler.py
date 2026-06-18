@@ -256,6 +256,67 @@ def _maybe_dispatch_config(
 
     session.commit()
 
+    # Migrated-trigger routing (CHAOS-2516): when the feature flag is enabled
+    # for this org AND the config was migrated, route through the fan-out
+    # planner instead of the legacy per-config tasks.
+    from dev_health_ops.sync.planner import plan_sync_run
+    from dev_health_ops.sync.trigger_routing import (
+        is_migrated_trigger_routing_enabled,
+        mark_sync_run_failed,
+        plan_request_for_config,
+    )
+    from dev_health_ops.workers.sync_units import dispatch_sync_run
+
+    use_planner = is_migrated_trigger_routing_enabled(session, org_id)
+    if use_planner:
+        request = plan_request_for_config(
+            config, triggered_by="schedule", mode="incremental"
+        )
+        if request is not None:
+            logger.info(
+                "Routing config %s through fan-out planner (migrated trigger routing)",
+                config.id,
+            )
+            try:
+                plan = plan_sync_run(session, request)
+                session.commit()
+            except Exception:
+                # Stale migrated link or a transient planner/DB error must not
+                # suppress this scheduled sync. next_run_at was already committed
+                # above, so roll back the failed plan attempt and fall through to
+                # the legacy per-config path -- this tick still dispatches exactly
+                # once instead of going dark until the next cron occurrence.
+                logger.exception(
+                    "Fan-out planner failed for config %s; "
+                    "falling back to legacy dispatch",
+                    config.id,
+                )
+                session.rollback()
+            else:
+                try:
+                    getattr(dispatch_sync_run, "apply_async")(
+                        args=(plan.sync_run_id,), queue="sync"
+                    )
+                except Exception:
+                    # The run + units are committed but the dispatch enqueue
+                    # failed. There is no periodic sweeper for stranded PLANNED
+                    # runs (the intra-dispatch reclaim only runs once
+                    # dispatch_sync_run executes), so mark this run FAILED rather
+                    # than leave it silently PLANNED with no queued dispatcher,
+                    # then fall through to the legacy path so this tick still
+                    # attempts a sync.
+                    logger.exception(
+                        "Fan-out dispatch enqueue failed for config %s "
+                        "(sync_run=%s); marking run failed and falling back",
+                        config.id,
+                        plan.sync_run_id,
+                    )
+                    mark_sync_run_failed(
+                        session, plan.sync_run_id, "dispatch enqueue failed"
+                    )
+                else:
+                    return True
+
     # Per-provider routing (CHAOS-2299): "is Linear stuck?" must be one LLEN.
     if is_batch:
         getattr(dispatch_batch_sync, "apply_async")(

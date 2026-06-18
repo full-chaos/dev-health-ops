@@ -15,7 +15,7 @@ import logging
 import re
 from functools import lru_cache
 
-from dev_health_ops.llm import get_provider, is_llm_available
+from dev_health_ops.llm import LLMProvider, get_provider, is_llm_available
 from dev_health_ops.llm.explainers.work_unit_explainer import (
     build_explanation_prompt,
     extract_allowed_inputs,
@@ -43,6 +43,8 @@ async def explain_work_unit(
     investment: WorkUnitInvestment,
     llm_provider: str = "auto",
     llm_model: str | None = None,
+    *,
+    provider: LLMProvider | None = None,
 ) -> WorkUnitExplanation:
     """
     Generate an LLM explanation for a work unit's precomputed investment view.
@@ -62,7 +64,7 @@ async def explain_work_unit(
     Returns:
         Structured WorkUnitExplanation with validated content
     """
-    if not is_llm_available(llm_provider):
+    if provider is None and not is_llm_available(llm_provider):
         return WorkUnitExplanation(
             work_unit_id=investment.work_unit_id,
             ai_generated=False,
@@ -101,8 +103,12 @@ async def explain_work_unit(
     )
 
     # 3. Call LLM provider
-    provider = get_provider(llm_provider, model=llm_model)
-    raw_response = await provider.complete(prompt)
+    resolved_provider = (
+        provider
+        if provider is not None
+        else get_provider(llm_provider, model=llm_model)
+    )
+    raw_response = await resolved_provider.complete(prompt)
     logger.debug(
         "Received LLM response for work_unit_id=%s, length=%d",
         investment.work_unit_id,

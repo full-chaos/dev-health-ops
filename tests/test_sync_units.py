@@ -493,7 +493,7 @@ def test_dispatch_sync_run_marks_run_failed_when_chord_enqueue_fails(
     monkeypatch.setattr(
         sync_units.finalize_sync_run, "si", lambda run_id: FakeSig(run_id)
     )
-    monkeypatch.setattr(sync_units, "group", lambda signatures: list(signatures))
+    monkeypatch.setattr(sync_units, "group", list)
     monkeypatch.setattr(
         sync_units, "chord", lambda header, callback: FailingChord(header, callback)
     )

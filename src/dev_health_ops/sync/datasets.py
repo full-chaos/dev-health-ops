@@ -81,10 +81,10 @@ _HEAVY_DATASETS = frozenset(
 )
 
 _PROCESSOR_FLAGS_BY_DATASET: dict[str, dict[str, bool]] = {
-    DatasetKey.COMMITS.value: {"sync_git": True},
-    DatasetKey.COMMIT_STATS.value: {"sync_git": True},
-    DatasetKey.FILES.value: {"sync_git": True},
-    DatasetKey.BLAME.value: {"blame_only": True},
+    DatasetKey.COMMITS.value: {"sync_git": True, "sync_commits": True},
+    DatasetKey.COMMIT_STATS.value: {"sync_git": True, "sync_commit_stats": True},
+    DatasetKey.FILES.value: {"sync_git": True, "sync_files": True},
+    DatasetKey.BLAME.value: {"blame_only": True, "sync_blame": True},
     DatasetKey.PRS.value: {"sync_prs": True},
     DatasetKey.PR_REVIEWS.value: {"sync_prs": True},
     DatasetKey.PR_COMMENTS.value: {"sync_prs": True},

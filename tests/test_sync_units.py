@@ -365,3 +365,73 @@ def test_dispatch_sync_run_redispatches_stale_dispatching_units(
     result = sync_units.dispatch_sync_run(str(run.id))
     assert result["queued_units"] == 1
     assert queued[0][0] == str(unit.id)
+
+
+def test_dispatch_sync_run_reclaims_stale_running_units(db_session, monkeypatch):
+    # Regression (Codex Wave 2): a worker that died after marking a unit
+    # RUNNING must not strand the run forever. Stale running units are
+    # reclaimed on redispatch.
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(db_session)
+    unit.status = SyncRunUnitStatus.RUNNING.value
+    unit.updated_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    queued = []
+
+    class FakeSig:
+        def __init__(self, unit_id):
+            self.unit_id = unit_id
+
+        def set(self, *, queue):
+            queued.append((self.unit_id, queue))
+            return self
+
+    monkeypatch.setattr(sync_units.run_sync_unit, "s", lambda unit_id: FakeSig(unit_id))
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run, "si", lambda run_id: FakeSig(run_id)
+    )
+    monkeypatch.setattr(sync_units, "group", lambda signatures: list(signatures))
+    monkeypatch.setattr(
+        sync_units,
+        "chord",
+        lambda header, callback: type("C", (), {"apply_async": lambda self: None})(),
+    )
+
+    result = sync_units.dispatch_sync_run(str(run.id))
+    assert result["queued_units"] == 1
+    assert queued[0][0] == str(unit.id)
+    db_session.refresh(unit)
+    assert unit.status == SyncRunUnitStatus.DISPATCHING.value
+
+
+def test_dispatch_sync_run_does_not_reclaim_fresh_running_units(
+    db_session, monkeypatch
+):
+    # A unit that is legitimately still running (fresh updated_at) must NOT be
+    # reclaimed, or we would double-execute it.
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(db_session)
+    unit.status = SyncRunUnitStatus.RUNNING.value
+    unit.updated_at = datetime.now(timezone.utc)
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+
+    monkeypatch.setattr(sync_units.run_sync_unit, "s", lambda unit_id: None)
+    monkeypatch.setattr(sync_units.finalize_sync_run, "si", lambda run_id: None)
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run, "apply_async", lambda *a, **k: None
+    )
+    monkeypatch.setattr(sync_units, "group", lambda signatures: list(signatures))
+    monkeypatch.setattr(
+        sync_units,
+        "chord",
+        lambda header, callback: type("C", (), {"apply_async": lambda self: None})(),
+    )
+
+    result = sync_units.dispatch_sync_run(str(run.id))
+    assert result["queued_units"] == 0
+    db_session.refresh(unit)
+    assert unit.status == SyncRunUnitStatus.RUNNING.value

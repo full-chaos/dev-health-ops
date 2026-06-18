@@ -295,3 +295,37 @@ def test_unsupported_provider_dataset_pair_raises_value_error() -> None:
 
     with pytest.raises(ValueError, match="Unsupported provider dataset unit"):
         run_dataset_unit(ctx, _runtime())
+
+
+@pytest.mark.parametrize(
+    ("dataset_key", "own_flag"),
+    [
+        ("commits", "sync_commits"),
+        ("commit-stats", "sync_commit_stats"),
+        ("files", "sync_files"),
+        ("blame", "sync_blame"),
+    ],
+)
+def test_registry_flags_make_split_git_datasets_actually_sync(
+    dataset_key: str, own_flag: str
+) -> None:
+    # Regression (Codex Wave 2 critical): the planner persists the registry's
+    # processor_flags verbatim. If the registry omits a split flag, the adapter
+    # passes it as explicit False and the split processor SKIPS the dataset while
+    # the unit still marks success -> silent incremental data loss. This test
+    # uses the REAL registry flags (not hand-built) to lock the contract.
+    from dev_health_ops.sync.datasets import get_dataset_spec
+
+    spec = get_dataset_spec("github", dataset_key)
+    assert spec is not None
+    ctx = _context(dataset_key=dataset_key, processor_flags=dict(spec.processor_flags))
+    processor = AsyncMock()
+
+    with patch("dev_health_ops.processors.github.process_github_repo", processor):
+        run_dataset_unit(ctx, _runtime())
+
+    kwargs = processor.await_args.kwargs
+    assert kwargs[own_flag] is True
+    split_flags = {"sync_commits", "sync_commit_stats", "sync_files", "sync_blame"}
+    for other in split_flags - {own_flag}:
+        assert kwargs[other] is False

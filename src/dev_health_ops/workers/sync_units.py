@@ -35,6 +35,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from celery import chord, group
+from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 
 from dev_health_ops.models import (
@@ -86,7 +87,7 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
             session.flush()
             return {"status": "denied", "reason": run.error}
 
-        units = _dispatchable_units(session, run_uuid)
+        units = _claim_units(session, run_uuid)
         signatures = []
         for unit in units:
             dispatch_route = route(
@@ -95,7 +96,6 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                 cost_class=str(unit.cost_class),
                 cost_class_queues_enabled=_cost_class_queues_enabled(),
             )
-            unit.status = SyncRunUnitStatus.DISPATCHING.value
             signatures.append(
                 getattr(run_sync_unit, "s")(str(unit.id)).set(
                     queue=dispatch_route.queue
@@ -267,13 +267,19 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
             )
 
         provider_for_dispatch = next(iter(successful_by_provider), "unknown")
-        if legacy_targets:
-            _dispatch_post_sync_tasks(
-                provider=provider_for_dispatch,
-                sync_targets=sorted(legacy_targets),
-                org_id=str(run.org_id),
-            )
+        run_org_id = str(run.org_id)
         session.flush()
+
+    # The outbox claim is now durably committed (the session block exited and
+    # committed). Dispatch post-sync metrics AFTER that commit so a crash
+    # between claim and dispatch cannot roll back the claim and let a later
+    # finalize re-dispatch (at-most-once, not duplicate-on-retry).
+    if legacy_targets:
+        _dispatch_post_sync_tasks(
+            provider=provider_for_dispatch,
+            sync_targets=sorted(legacy_targets),
+            org_id=run_org_id,
+        )
 
     return {
         "status": "finalized",
@@ -284,29 +290,68 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
     }
 
 
-def _dispatchable_units(session, run_uuid: uuid.UUID) -> list[SyncRunUnit]:
+def _claim_units(session, run_uuid: uuid.UUID) -> list[SyncRunUnit]:
+    """Atomically claim dispatchable units for a run.
+
+    Fresh ``planned`` units are claimed with an atomic ``UPDATE ... RETURNING``
+    so two concurrent ``dispatch_sync_run`` calls cannot both enqueue the same
+    unit (no double-queue / duplicate provider writes). Stale ``dispatching``
+    or ``running`` units (a worker died mid-flight) are reclaimed by age so a
+    crash cannot leave the run unfinishable.
+    """
     now = datetime.now(timezone.utc)
-    stale_before = now - timedelta(seconds=_stale_dispatch_seconds())
-    units = (
+    claimed_ids: set[uuid.UUID] = set(
+        session.execute(
+            update(SyncRunUnit)
+            .where(
+                SyncRunUnit.sync_run_id == run_uuid,
+                SyncRunUnit.status == SyncRunUnitStatus.PLANNED.value,
+            )
+            .values(status=SyncRunUnitStatus.DISPATCHING.value, updated_at=now)
+            .returning(SyncRunUnit.id)
+            .execution_options(synchronize_session=False)
+        )
+        .scalars()
+        .all()
+    )
+
+    stale_dispatch = now - timedelta(seconds=_stale_dispatch_seconds())
+    stale_running = now - timedelta(seconds=_stale_running_seconds())
+    reclaim_candidates = (
         session.query(SyncRunUnit)
         .filter(
             SyncRunUnit.sync_run_id == run_uuid,
             SyncRunUnit.status.in_(
                 {
-                    SyncRunUnitStatus.PLANNED.value,
                     SyncRunUnitStatus.DISPATCHING.value,
+                    SyncRunUnitStatus.RUNNING.value,
                 }
             ),
         )
+        .all()
+    )
+    for unit in reclaim_candidates:
+        if unit.id in claimed_ids:
+            continue
+        threshold = (
+            stale_dispatch
+            if unit.status == SyncRunUnitStatus.DISPATCHING.value
+            else stale_running
+        )
+        if _as_aware(unit.updated_at) <= threshold:
+            unit.status = SyncRunUnitStatus.DISPATCHING.value
+            unit.updated_at = now
+            claimed_ids.add(unit.id)
+
+    session.flush()
+    if not claimed_ids:
+        return []
+    return (
+        session.query(SyncRunUnit)
+        .filter(SyncRunUnit.id.in_(claimed_ids))
         .order_by(SyncRunUnit.id)
         .all()
     )
-    return [
-        unit
-        for unit in units
-        if unit.status == SyncRunUnitStatus.PLANNED.value
-        or _as_aware(unit.updated_at) <= stale_before
-    ]
 
 
 def _load_unit(session, unit_id: str) -> SyncRunUnit:
@@ -332,6 +377,16 @@ def _stale_dispatch_seconds() -> int:
         )
     except ValueError:
         return 900
+
+
+def _stale_running_seconds() -> int:
+    try:
+        return max(
+            1,
+            int(__import__("os").getenv("SYNC_UNIT_RUNNING_STALE_SECONDS", "3600")),
+        )
+    except ValueError:
+        return 3600
 
 
 def _as_aware(value: datetime) -> datetime:

@@ -40,6 +40,7 @@ def _merge_sync_flags(sync_targets: list[str]) -> dict[str, bool]:
         "sync_cicd",
         "sync_deployments",
         "sync_incidents",
+        "sync_security",
         "sync_tests",
         "blame_only",
     ):

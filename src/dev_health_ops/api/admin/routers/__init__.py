@@ -12,6 +12,7 @@ from .features import router as features_router
 from .github_app import router as github_app_router
 from .governance import router as governance_router
 from .identities import router as identities_router
+from .integrations import router as integrations_router
 from .orgs import router as orgs_router
 from .platform import router as platform_router
 from .settings import router as settings_router
@@ -27,6 +28,7 @@ __all__ = [
     "github_app_router",
     "governance_router",
     "identities_router",
+    "integrations_router",
     "orgs_router",
     "platform_router",
     "settings_router",

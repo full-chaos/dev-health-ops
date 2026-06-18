@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from typing import Any, Protocol, cast
 
@@ -25,6 +26,7 @@ from dev_health_ops.api.services.configuration import (
     SyncConfigurationService,
 )
 from dev_health_ops.api.services.licensing import TierLimitService
+from dev_health_ops.models import SyncRun
 from dev_health_ops.models.settings import (
     JobRun,
     JobRunStatus,
@@ -32,6 +34,7 @@ from dev_health_ops.models.settings import (
     ScheduledJob,
     SyncConfiguration,
 )
+from dev_health_ops.sync.datasets import supported_legacy_targets
 from dev_health_ops.workers.queues import sync_queue_for_provider
 from dev_health_ops.workers.sync_batch import _is_batch_eligible
 
@@ -40,6 +43,39 @@ from .common import get_session
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+async def _is_planner_active(session: AsyncSession, org_id: str) -> bool:
+    """Return True when the integration planner is active for this org.
+
+    Reads the ``sync.migrated_trigger_routing_enabled`` Setting row written
+    by the CHAOS-2516 migration helper.
+    """
+    from dev_health_ops.models.settings import Setting, SettingCategory
+    from dev_health_ops.sync.config_migration import (
+        MIGRATED_TRIGGER_ROUTING_SETTING_KEY,
+    )
+
+    def _check(sync_session) -> bool:
+        row = (
+            sync_session.query(Setting)
+            .filter(
+                Setting.org_id == org_id,
+                Setting.category == SettingCategory.SYNC.value,
+                Setting.key == MIGRATED_TRIGGER_ROUTING_SETTING_KEY,
+            )
+            .one_or_none()
+        )
+        if row is None:
+            return False
+        return str(getattr(row, "value", "") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+
+    return await session.run_sync(_check)
 
 
 class _MutableSyncConfiguration(Protocol):
@@ -98,54 +134,75 @@ def _job_run_response(run: object) -> JobRunResponse:
     )
 
 
-def _backfill_job_response(job: object):
+def _backfill_job_response(job: object, run_counts: dict[str, Any] | None = None):
     from dev_health_ops.api.schemas.backfill import BackfillJobResponse
 
-    total_chunks = int(getattr(job, "total_chunks"))
-    completed_chunks = int(getattr(job, "completed_chunks"))
+    run_counts = run_counts or {}
+    total_chunks = int(run_counts.get("total_chunks", getattr(job, "total_chunks")))
+    completed_chunks = int(
+        run_counts.get("completed_chunks", getattr(job, "completed_chunks"))
+    )
     progress_pct = (completed_chunks / total_chunks * 100) if total_chunks > 0 else 0.0
     return BackfillJobResponse(
         id=str(getattr(job, "id")),
         sync_config_id=str(getattr(job, "sync_config_id")),
-        status=str(getattr(job, "status")),
+        status=str(run_counts.get("status", getattr(job, "status"))),
         since_date=getattr(job, "since_date"),
         before_date=getattr(job, "before_date"),
         total_chunks=total_chunks,
         completed_chunks=completed_chunks,
-        failed_chunks=int(getattr(job, "failed_chunks")),
+        failed_chunks=int(
+            run_counts.get("failed_chunks", getattr(job, "failed_chunks"))
+        ),
         progress_pct=progress_pct,
-        error_message=getattr(job, "error_message"),
+        error_message=run_counts.get("error_message", getattr(job, "error_message")),
         started_at=getattr(job, "started_at"),
-        completed_at=getattr(job, "completed_at"),
+        completed_at=run_counts.get("completed_at", getattr(job, "completed_at")),
         created_at=getattr(job, "created_at"),
     )
+
+
+def _backfill_job_sync_run_id(job: object) -> str | None:
+    task_id = str(getattr(job, "celery_task_id") or "")
+    marker = "sync_run:"
+    if marker not in task_id:
+        return None
+    return task_id.rsplit(marker, 1)[-1] or None
+
+
+async def _backfill_job_run_counts(
+    session: AsyncSession, job: object
+) -> dict[str, Any] | None:
+    sync_run_id = _backfill_job_sync_run_id(job)
+    if sync_run_id is None:
+        return None
+    try:
+        run_uuid = uuid.UUID(sync_run_id)
+    except ValueError:
+        return None
+    stmt = select(SyncRun).where(
+        SyncRun.id == run_uuid,
+        SyncRun.org_id == str(getattr(job, "org_id")),
+    )
+    result = await session.execute(stmt)
+    run = result.scalar_one_or_none()
+    if run is None:
+        return None
+    return {
+        "status": getattr(run, "status"),
+        "total_chunks": int(getattr(run, "total_units")),
+        "completed_chunks": int(getattr(run, "completed_units")),
+        "failed_chunks": int(getattr(run, "failed_units")),
+        "completed_at": getattr(run, "completed_at"),
+        "error_message": getattr(run, "error"),
+    }
 
 
 # Canonical mapping of provider → supported sync targets.
 # Jira/Linear only support work-items; Git/CI/CD come from code hosts.
 PROVIDER_SYNC_TARGETS: dict[str, list[str]] = {
-    "github": [
-        "git",
-        "prs",
-        "cicd",
-        "deployments",
-        "incidents",
-        "work-items",
-        "tests",
-    ],
-    "gitlab": [
-        "git",
-        "prs",
-        "cicd",
-        "deployments",
-        "incidents",
-        "work-items",
-        "feature-flags",
-        "tests",
-    ],
-    "jira": ["work-items"],
-    "linear": ["work-items"],
-    "launchdarkly": ["feature-flags"],
+    provider: supported_legacy_targets(provider)
+    for provider in ("github", "gitlab", "jira", "linear", "launchdarkly")
 }
 
 NON_REPO_SYNC_PROVIDERS = {"jira", "linear"}
@@ -235,10 +292,29 @@ async def get_provider_sync_targets() -> dict[str, list[str]]:
     return PROVIDER_SYNC_TARGETS
 
 
-@router.get("/sync-configs", response_model=list[SyncConfigResponse])
+@router.get(
+    "/sync-configs",
+    response_model=list[SyncConfigResponse],
+    description=(
+        "List sync configurations. "
+        "Child sync configs (rows with a non-null ``parent_id`` or linked to a "
+        "migrated integration via ``migrated_integration_id``/``migrated_source_id``) "
+        "are **deprecated** and hidden by default when the "
+        "``HIDE_MIGRATED_CHILD_CONFIGS`` feature flag is enabled. "
+        "Pass ``?include_migrated=true`` to include them (support/rollback)."
+    ),
+)
 async def list_sync_configs(
     active_only: bool = False,
     parent_only: bool = False,
+    include_migrated: bool = Query(
+        default=False,
+        description=(
+            "Include deprecated child/migrated sync configs in the response. "
+            "Defaults to False when HIDE_MIGRATED_CHILD_CONFIGS is enabled. "
+            "Set to true for support or rollback access."
+        ),
+    ),
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> list[SyncConfigResponse]:
@@ -246,6 +322,31 @@ async def list_sync_configs(
     configs = await svc.list_all(active_only=active_only)
     if parent_only:
         configs = [c for c in configs if c.parent_id is None]
+
+    # HIDE_MIGRATED_CHILD_CONFIGS: when enabled, filter out deprecated child
+    # configs from the default list response. A config is considered a
+    # "migrated child" when any of the following are true:
+    #   - parent_id is set (legacy child config), OR
+    #   - migrated_source_id is set (linked to an integration-era source).
+    # The parent SyncConfiguration gets migrated_integration_id set by the
+    # migration and is the rollback anchor, so it is NOT hidden.
+    # Callers may pass ?include_migrated=true to bypass this filter for
+    # support or rollback access.
+    _hide_migrated = os.getenv("HIDE_MIGRATED_CHILD_CONFIGS", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if _hide_migrated and not include_migrated:
+        configs = [
+            c
+            for c in configs
+            if (
+                getattr(c, "parent_id", None) is None
+                and getattr(c, "migrated_source_id", None) is None
+            )
+        ]
 
     # Build children count map without lazy-loading relationships
     from sqlalchemy import func, select
@@ -425,7 +526,18 @@ async def _resolve_gitlab_batch_projects(
 
 
 @router.post(
-    "/sync-configs/batch", response_model=SyncConfigBatchResponse, status_code=201
+    "/sync-configs/batch",
+    response_model=SyncConfigBatchResponse,
+    status_code=201,
+    description=(
+        "Create a parent sync config + one child per repo. "
+        "**Deprecated (CHAOS-2520):** Child sync configs are deprecated in favour of "
+        "the integration/source/dataset model introduced in CHAOS-2507. "
+        "When the integration planner is active (``sync.migrated_trigger_routing_enabled`` "
+        "setting is enabled for the org), this endpoint creates the parent config only "
+        "and returns zero children. Legacy behaviour is preserved when the planner is "
+        "inactive (rollback path)."
+    ),
 )
 async def batch_create_sync_configs(
     payload: SyncConfigBatchCreate,
@@ -457,6 +569,13 @@ async def batch_create_sync_configs(
       it is not the public default, so self-hosted children sync against the
       same instance used for resolution. Child name is the project's
       ``path_with_namespace`` when known.
+
+    .. deprecated:: CHAOS-2520
+        Child sync configs are deprecated. When the integration planner is
+        active (``sync.migrated_trigger_routing_enabled`` setting), new
+        integrations must use the integration/source/dataset model instead.
+        This endpoint will create the parent config only (zero children) when
+        the planner flag is enabled.
     """
     svc = SyncConfigurationService(session, org_id)
 
@@ -478,6 +597,20 @@ async def batch_create_sync_configs(
 
     provider = payload.provider.lower()
     parent_is_active = provider in NON_REPO_SYNC_PROVIDERS
+
+    # Child sync configs are deprecated. When the integration planner is active
+    # for this org, reject batch child creation BEFORE writing an inert legacy
+    # parent (which would return 201 with zero syncable repos and block the
+    # name on retry) and direct the caller to the integration admin API.
+    if await _is_planner_active(session, org_id):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Child sync configs are deprecated for this organization. "
+                "Use the integration admin API: POST /admin/integrations, then "
+                "POST /admin/integrations/{id}/discover and /sync."
+            ),
+        )
 
     parent_options = dict(payload.sync_options)
     parent_options.pop("repo", None)  # parent has no single repo
@@ -514,61 +647,69 @@ async def batch_create_sync_configs(
     session.add(parent)
     await session.flush()  # need parent.id for children
 
-    # Create child configs (one per repo)
+    # Child-config creation is the legacy (rollback) path. Planner-active
+    # requests were already rejected with 409 above, so children are always
+    # created here.
+    _planner_active = False
+
+    # Create child configs (one per repo) — skipped when planner is active.
     children = []
-    for repo_name in payload.repos:
-        child_options = dict(parent_options)
-        if provider == "gitlab":
-            project_id, child_name = gitlab_projects[repo_name]
-            # GitLab children are keyed by integer project_id (what the sync
-            # runtime dispatches on), not by GitHub-shaped owner/repo keys.
-            child_options.pop("owner", None)
-            child_options.pop("repo", None)
-            child_options.pop("search", None)
-            child_options["project_id"] = project_id
-            group = _gitlab_group_from_options(payload.sync_options)
-            if group:
-                child_options["group"] = group
-            # gitlab_url passes through via the dict(parent_options) copy
-            # above — including the credential-derived URL persisted into
-            # parent_options before parent creation.
-        else:
-            child_options["repo"] = repo_name
-            owner = (
-                payload.sync_options.get("owner")
-                or payload.sync_options.get("group")
-                or payload.name
+    if not _planner_active:
+        for repo_name in payload.repos:
+            child_options = dict(parent_options)
+            if provider == "gitlab":
+                project_id, child_name = gitlab_projects[repo_name]
+                # GitLab children are keyed by integer project_id (what the sync
+                # runtime dispatches on), not by GitHub-shaped owner/repo keys.
+                child_options.pop("owner", None)
+                child_options.pop("repo", None)
+                child_options.pop("search", None)
+                child_options["project_id"] = project_id
+                group = _gitlab_group_from_options(payload.sync_options)
+                if group:
+                    child_options["group"] = group
+                # gitlab_url passes through via the dict(parent_options) copy
+                # above — including the credential-derived URL persisted into
+                # parent_options before parent creation.
+            else:
+                child_options["repo"] = repo_name
+                owner = (
+                    payload.sync_options.get("owner")
+                    or payload.sync_options.get("group")
+                    or payload.name
+                )
+                child_name = f"{owner}/{repo_name}"
+            if payload.initial_sync_depth is not None:
+                child_options["initial_sync_depth"] = payload.initial_sync_depth
+            if payload.schedule_cron is not None:
+                child_options["schedule_cron"] = payload.schedule_cron
+            if payload.timezone is not None:
+                child_options["timezone"] = payload.timezone
+
+            child = SyncConfiguration(
+                name=child_name,
+                provider=payload.provider,
+                org_id=org_id,
+                credential_id=uuid.UUID(payload.credential_id)
+                if payload.credential_id
+                else None,
+                sync_targets=payload.sync_targets,
+                sync_options=child_options,
+                is_active=True,
+                parent_id=getattr(parent, "id"),
             )
-            child_name = f"{owner}/{repo_name}"
-        if payload.initial_sync_depth is not None:
-            child_options["initial_sync_depth"] = payload.initial_sync_depth
-        if payload.schedule_cron is not None:
-            child_options["schedule_cron"] = payload.schedule_cron
-        if payload.timezone is not None:
-            child_options["timezone"] = payload.timezone
+            children.append(child)
 
-        child = SyncConfiguration(
-            name=child_name,
-            provider=payload.provider,
-            org_id=org_id,
-            credential_id=uuid.UUID(payload.credential_id)
-            if payload.credential_id
-            else None,
-            sync_targets=payload.sync_targets,
-            sync_options=child_options,
-            is_active=True,
-            parent_id=getattr(parent, "id"),
-        )
-        children.append(child)
-
-    session.add_all(children)
-    await session.flush()
+    if children:
+        session.add_all(children)
+        await session.flush()
 
     if parent_is_active:
         await _upsert_scheduled_job(session, parent, org_id)
     for child in children:
         await _upsert_scheduled_job(session, child, org_id)
-    await session.flush()
+    if children or parent_is_active:
+        await session.flush()
 
     return SyncConfigBatchResponse(
         parent=_sync_config_to_response(parent, children_count=len(children)),
@@ -1009,13 +1150,19 @@ async def trigger_sync_config_backfill(
     from dev_health_ops.models.backfill import BackfillJob as BackfillJobModel
 
     windows = chunk_date_range(since=payload.since, before=payload.before, chunk_days=7)
+    fanout_backfill = os.getenv("SYNC_FANOUT_BACKFILL", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     backfill_job = BackfillJobModel(
         org_id=org_id,
         sync_config_id=uuid.UUID(config_id),
         status="pending",
         since_date=payload.since,
         before_date=payload.before,
-        total_chunks=len(windows),
+        total_chunks=0 if fanout_backfill else len(windows),
     )
     session.add(backfill_job)
     await session.flush()
@@ -1038,6 +1185,7 @@ async def trigger_sync_config_backfill(
             "config_id": str(config.id),
             "task_id": result.id,
             "backfill_job_id": backfill_job_id,
+            "mode": "fanout" if fanout_backfill else "legacy",
             "since": payload.since.isoformat(),
             "before": payload.before.isoformat(),
         }
@@ -1097,8 +1245,12 @@ async def list_backfill_jobs(
 
     svc = BackfillJobService(session, org_id)
     jobs, total = await svc.list_jobs(limit=limit, offset=offset)
+    items = []
+    for job in jobs:
+        run_counts = await _backfill_job_run_counts(session, job)
+        items.append(_backfill_job_response(job, run_counts))
     return BackfillJobListResponse(
-        items=[_backfill_job_response(job) for job in jobs],
+        items=items,
         total=total,
         limit=limit,
         offset=offset,
@@ -1117,4 +1269,5 @@ async def get_backfill_job(
     job = await svc.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Backfill job not found")
-    return _backfill_job_response(job)
+    run_counts = await _backfill_job_run_counts(session, job)
+    return _backfill_job_response(job, run_counts)

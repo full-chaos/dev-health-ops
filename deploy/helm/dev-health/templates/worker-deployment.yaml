@@ -23,10 +23,17 @@ spec:
     spec:
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
       serviceAccountName: {{ include "dev-health.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
       containers:
         - name: worker
           image: {{ include "dev-health.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
           command:
             - celery
             - -A

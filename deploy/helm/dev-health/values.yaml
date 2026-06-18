@@ -93,7 +93,9 @@ billingEdge:
 worker:
   enabled: true
   replicas: 2
-  queues: "default,metrics,sync,webhooks,monitoring"
+  # Default fleet (CHAOS-2278): latency-sensitive queues + light/medium cost-class
+  # sub-queues (CHAOS-2517). metrics/backfill/ingest/heavy live on the pools below.
+  queues: "default,sync,sync.github,sync.gitlab,sync.linear,sync.jira,sync.launchdarkly,sync.github.light,sync.github.medium,sync.gitlab.light,sync.gitlab.medium,sync.jira.medium,sync.linear.medium,webhooks,reports,monitoring"
   concurrency: 4
   logLevel: info
   resources:
@@ -125,6 +127,44 @@ worker:
   tolerations: []
   affinity: {}
   extraEnv: []
+
+# Ingest pool (CHAOS-2278): isolated single slot for blocking stream consumers
+# so they never starve the default fleet. Fixed-replica (no autoscaling).
+workerIngest:
+  enabled: true
+  replicas: 1
+  queues: "ingest"
+  concurrency: 1
+  logLevel: info
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Heavy pool (CHAOS-2278 / CHAOS-2517): batch compute (metrics, backfill) +
+# heavy cost-class sync sub-queues, isolated from latency-sensitive work.
+workerHeavy:
+  enabled: true
+  replicas: 2
+  queues: "metrics,backfill,monitoring,sync.github.heavy,sync.gitlab.heavy"
+  concurrency: 2
+  logLevel: info
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "3Gi"
+      cpu: "1500m"
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
 
 # =============================================================================
 # Celery Beat (scheduler)

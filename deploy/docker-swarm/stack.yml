@@ -180,7 +180,9 @@ services:
       - dev-health-internal
       - dev-health-public
 
-  worker:
+  # Worker topology split by latency class (CHAOS-2278); cost-class sub-queues
+  # (CHAOS-2517) ride along: light/medium on `worker`, heavy on `worker-heavy`.
+  worker: &worker-base
     image: ghcr.io/your-org/dev-health-ops:latest
     command:
       - celery
@@ -189,7 +191,7 @@ services:
       - worker
       - --loglevel=info
       - -Q
-      - default,metrics,sync,monitoring
+      - default,sync,sync.github,sync.gitlab,sync.linear,sync.jira,sync.launchdarkly,sync.github.light,sync.github.medium,sync.gitlab.light,sync.gitlab.medium,sync.jira.medium,sync.linear.medium,webhooks,reports,monitoring
       - --concurrency=4
     environment:
       DATABASE_URI: clickhouse://ch:ch@clickhouse:8123/default
@@ -223,6 +225,30 @@ services:
         max_attempts: 3
     networks:
       - dev-health-internal
+
+  worker-ingest:
+    <<: *worker-base
+    command:
+      - celery
+      - -A
+      - workers.celery_app
+      - worker
+      - --loglevel=info
+      - -Q
+      - ingest
+      - --concurrency=1
+
+  worker-heavy:
+    <<: *worker-base
+    command:
+      - celery
+      - -A
+      - workers.celery_app
+      - worker
+      - --loglevel=info
+      - -Q
+      - metrics,backfill,monitoring,sync.github.heavy,sync.gitlab.heavy
+      - --concurrency=2
 
 volumes:
   clickhouse_data:

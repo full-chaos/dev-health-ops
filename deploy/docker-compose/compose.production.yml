@@ -190,7 +190,10 @@ services:
           memory: 128M
           cpus: "0.1"
 
-  worker:
+  # Worker topology split by latency class (CHAOS-2278) so long-running batch
+  # work never starves user-facing tasks. Cost-class sub-queues (CHAOS-2517)
+  # ride along: light/medium on `worker`, heavy on `worker-heavy`.
+  worker: &worker-base
     image: ${DEV_HEALTH_IMAGE:-ghcr.io/your-org/dev-health-ops:latest}
     container_name: dev-health-worker
     restart: unless-stopped
@@ -201,7 +204,7 @@ services:
       - worker
       - --loglevel=info
       - -Q
-      - default,metrics,sync,monitoring
+      - default,sync,sync.github,sync.gitlab,sync.linear,sync.jira,sync.launchdarkly,sync.github.light,sync.github.medium,sync.gitlab.light,sync.gitlab.medium,sync.jira.medium,sync.linear.medium,webhooks,reports,monitoring
       - --concurrency=${WORKER_CONCURRENCY:-4}
     environment:
       DATABASE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:8123/${CLICKHOUSE_DB:-default}
@@ -234,6 +237,32 @@ services:
         reservations:
           memory: 256M
           cpus: "0.1"
+
+  worker-ingest:
+    <<: *worker-base
+    container_name: dev-health-worker-ingest
+    command:
+      - celery
+      - -A
+      - workers.celery_app
+      - worker
+      - --loglevel=info
+      - -Q
+      - ingest
+      - --concurrency=1
+
+  worker-heavy:
+    <<: *worker-base
+    container_name: dev-health-worker-heavy
+    command:
+      - celery
+      - -A
+      - workers.celery_app
+      - worker
+      - --loglevel=info
+      - -Q
+      - metrics,backfill,monitoring,sync.github.heavy,sync.gitlab.heavy
+      - --concurrency=${WORKER_HEAVY_CONCURRENCY:-2}
 
   pgbouncer:
     # CHAOS-2065: optional transaction-mode pooler in front of a managed

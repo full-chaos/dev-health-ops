@@ -405,3 +405,66 @@ def test_production_stacks_consume_monitoring_queue() -> None:
         assert any("monitoring" in q for q in queue_lists), (
             f"{stack.name}: no worker queue list includes 'monitoring'"
         )
+
+
+def _compose_worker_queues(path: Path) -> set[str]:
+    """Union of -Q lists across every celery worker service in a compose file."""
+    data = _load_yaml(path)
+    consumed: set[str] = set()
+    for _name, service in (data.get("services") or {}).items():
+        cmd = _command_string(service)
+        toks = cmd.split()
+        if "celery" not in toks or "worker" not in toks:
+            continue
+        consumed |= _parse_queues(cmd)
+    return consumed
+
+
+def _k8s_worker_queues(path: Path) -> set[str]:
+    """Union of -Q lists across every worker Deployment in a k8s manifest."""
+    consumed: set[str] = set()
+    for doc in yaml.safe_load_all(path.read_text(encoding="utf-8")):
+        if not doc or doc.get("kind") != "Deployment":
+            continue
+        pod = doc["spec"]["template"]["spec"]
+        for container in pod.get("containers") or []:
+            cmd = container.get("command") or []
+            for i, tok in enumerate(cmd):
+                if tok == "-Q" and i + 1 < len(cmd):
+                    consumed |= {q for q in str(cmd[i + 1]).split(",") if q}
+    return consumed
+
+
+def _helm_worker_queues(values_path: Path) -> set[str]:
+    """Union of queue lists across every enabled worker pool in helm values."""
+    values = _load_yaml(values_path)
+    consumed: set[str] = set()
+    for pool in ("worker", "workerIngest", "workerHeavy"):
+        cfg = values.get(pool) or {}
+        if cfg.get("enabled") is False:
+            continue
+        queues = cfg.get("queues")
+        if queues:
+            consumed |= {q for q in str(queues).split(",") if q}
+    return consumed
+
+
+def test_production_stacks_cover_every_celery_queue() -> None:
+    """CHAOS-2308: every production deploy stack must consume every queue in
+    workers.config.task_queues across the union of its worker pools. A queue
+    declared in task_queues but consumed by no prod worker silently accumulates
+    forever (backfill jobs, webhook events, ingest, reports, cost-class sync).
+    Mirrors test_compose_workers_cover_every_celery_queue for the prod stacks."""
+    all_queues = set(task_queues)
+    coverage = {
+        "compose.production.yml": _compose_worker_queues(_PROD_COMPOSE),
+        "docker-swarm/stack.yml": _compose_worker_queues(_SWARM_STACK),
+        "kubernetes/worker.yaml": _k8s_worker_queues(_K8S_DIR / "worker.yaml"),
+        "helm values.yaml": _helm_worker_queues(_HELM_DIR / "values.yaml"),
+    }
+    for name, consumed in coverage.items():
+        missing = all_queues - consumed
+        assert not missing, (
+            f"{name}: production worker pools miss queues {sorted(missing)} "
+            f"declared in workers.config.task_queues (consumed: {sorted(consumed)})"
+        )

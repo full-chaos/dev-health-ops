@@ -1229,6 +1229,7 @@ async def _backfill_gitlab_missing_data(
     default_branch: str,
     max_commits: int | None,
     blame_only: bool = False,
+    include_files: bool = True,
     include_blame: bool = True,
     include_commit_stats: bool = True,
 ) -> None:
@@ -1241,8 +1242,12 @@ async def _backfill_gitlab_missing_data(
     # (contents NULL), which has_any_git_files treats as "done". Upgrade
     # them by re-running the files backfill when no contents exist yet;
     # ReplacingMergeTree(last_synced) supersedes the stale rows.
-    needs_files = needs.files
-    if not needs_files and hasattr(store, "has_any_git_file_contents"):
+    needs_files = needs.files if include_files else False
+    if (
+        include_files
+        and not needs_files
+        and hasattr(store, "has_any_git_file_contents")
+    ):
         needs_files = not await store.has_any_git_file_contents(db_repo.id)
 
     # Blame backfill is coverage-aware (CHAOS-2376 round-3). The crawl is capped
@@ -1256,7 +1261,8 @@ async def _backfill_gitlab_missing_data(
         include_blame=include_blame,
         any_row_needs_blame=needs.blame,
     )
-    if not (needs_files or needs_blame or needs.commit_stats):
+    needs_commit_stats = needs.commit_stats and include_commit_stats
+    if not (needs_files or needs_blame or needs_commit_stats):
         return
 
     try:
@@ -1302,7 +1308,7 @@ async def _backfill_gitlab_missing_data(
                 contents_by_path=contents_by_path,
             )
 
-    if needs.commit_stats:
+    if needs_commit_stats:
         try:
             commits = project.commits.list(
                 ref_name=default_branch, per_page=100, get_all=True
@@ -1403,6 +1409,68 @@ async def _backfill_gitlab_missing_data(
                         )
                         line_no += 1
                         await blame_collector.maybe_flush()
+
+
+async def _sync_gitlab_commits(
+    *,
+    gl_project: Any,
+    db_repo: Repo,
+    ingestion_sink: IngestionSink,
+    loop: asyncio.AbstractEventLoop,
+    max_commits: int | None,
+    since: datetime | None,
+) -> tuple[list[str], int]:
+    if max_commits is None:
+        logging.info("Fetching all commits from GitLab...")
+    else:
+        logging.info("Fetching up to %d commits from GitLab...", max_commits)
+    commit_hashes, commit_objects = await loop.run_in_executor(
+        None,
+        _fetch_gitlab_commits_sync,
+        gl_project,
+        max_commits,
+        db_repo.id,
+        since,
+    )
+    if commit_objects:
+        await ingestion_sink.insert_git_commit_data(commit_objects)
+        logging.info("Stored %d commits from GitLab", len(commit_objects))
+    return commit_hashes, len(commit_objects)
+
+
+async def _sync_gitlab_commit_stats(
+    *,
+    gl_project: Any,
+    db_repo: Repo,
+    ingestion_sink: IngestionSink,
+    loop: asyncio.AbstractEventLoop,
+    max_commits: int | None,
+    since: datetime | None,
+    commit_hashes: list[str] | None = None,
+) -> int:
+    if commit_hashes is None:
+        commit_hashes, _ = await loop.run_in_executor(
+            None,
+            _fetch_gitlab_commits_sync,
+            gl_project,
+            max_commits,
+            db_repo.id,
+            since,
+        )
+    logging.info("Fetching commit stats from GitLab...")
+    stats_limit = resolve_commit_stats_limit(len(commit_hashes), max_commits, since)
+    stats_objects = await loop.run_in_executor(
+        None,
+        _fetch_gitlab_commit_stats_sync,
+        gl_project,
+        commit_hashes,
+        db_repo.id,
+        stats_limit,
+    )
+    if stats_objects:
+        await ingestion_sink.insert_git_commit_stats(stats_objects)
+        logging.info("Stored %d commit stats from GitLab", len(stats_objects))
+    return len(stats_objects)
 
 
 def _is_report_name(name: str) -> bool:
@@ -1640,6 +1708,10 @@ async def process_gitlab_project(
     sync_tests: bool = False,
     backfill_missing: bool = True,
     since: datetime | None = None,
+    sync_commits: bool | None = None,
+    sync_commit_stats: bool | None = None,
+    sync_files: bool | None = None,
+    sync_blame: bool | None = None,
 ) -> None:
     """
     Process a GitLab project using the GitLab connector.
@@ -1652,6 +1724,10 @@ async def process_gitlab_project(
     logging.info(f"Processing GitLab project: {project_id}")
     loop = asyncio.get_running_loop()
     ingestion_sink = IngestionSink(store)
+    run_commits = sync_git if sync_commits is None else sync_commits
+    run_commit_stats = sync_git if sync_commit_stats is None else sync_commit_stats
+    run_files = (backfill_missing and sync_git) if sync_files is None else sync_files
+    run_blame = (backfill_missing and sync_git) if sync_blame is None else sync_blame
 
     connector_cls = cast(Any, GitLabConnector)
     connector = connector_cls(url=gitlab_url, private_token=token)
@@ -1705,42 +1781,27 @@ async def process_gitlab_project(
             logging.info("Completed blame-only sync for GitLab project: %s", project_id)
             return
 
-        if sync_git:
-            # 2. Fetch Commits
-            if max_commits is None:
-                logging.info("Fetching all commits from GitLab...")
-            else:
-                logging.info(f"Fetching up to {max_commits} commits from GitLab...")
-            commit_hashes, commit_objects = await loop.run_in_executor(
-                None,
-                _fetch_gitlab_commits_sync,
-                gl_project,
-                max_commits,
-                db_repo.id,
-                since,
+        commit_hashes: list[str] | None = None
+        if run_commits:
+            commit_hashes, _ = await _sync_gitlab_commits(
+                gl_project=gl_project,
+                db_repo=db_repo,
+                ingestion_sink=ingestion_sink,
+                loop=loop,
+                max_commits=max_commits,
+                since=since,
             )
 
-            if commit_objects:
-                await ingestion_sink.insert_git_commit_data(commit_objects)
-                logging.info(f"Stored {len(commit_objects)} commits from GitLab")
-
-            # 3. Fetch Stats
-            logging.info("Fetching commit stats from GitLab...")
-            stats_limit = resolve_commit_stats_limit(
-                len(commit_hashes), max_commits, since
+        if run_commit_stats:
+            await _sync_gitlab_commit_stats(
+                gl_project=gl_project,
+                db_repo=db_repo,
+                ingestion_sink=ingestion_sink,
+                loop=loop,
+                max_commits=max_commits,
+                since=since,
+                commit_hashes=commit_hashes,
             )
-            stats_objects = await loop.run_in_executor(
-                None,
-                _fetch_gitlab_commit_stats_sync,
-                gl_project,
-                commit_hashes,
-                db_repo.id,
-                stats_limit,
-            )
-
-            if stats_objects:
-                await ingestion_sink.insert_git_commit_stats(stats_objects)
-                logging.info(f"Stored {len(stats_objects)} commit stats from GitLab")
 
         if sync_prs:
             # 4. Fetch Merge Requests
@@ -1863,7 +1924,7 @@ async def process_gitlab_project(
         # (skipped once any blame exists) and capped at BLAME_BACKFILL_MAX_FILES
         # files per sync so a large project cannot turn onboarding into an
         # unbounded REST crawl (CHAOS-2376).
-        if backfill_missing and sync_git:
+        if run_files or run_blame:
             try:
                 await _backfill_gitlab_missing_data(
                     store=store,
@@ -1873,7 +1934,8 @@ async def process_gitlab_project(
                     project_full_name=full_name,
                     default_branch=db_repo.settings.get("default_branch", "main"),
                     max_commits=max_commits,
-                    include_blame=True,
+                    include_files=run_files,
+                    include_blame=run_blame,
                     include_commit_stats=False,
                 )
             except Exception as e:

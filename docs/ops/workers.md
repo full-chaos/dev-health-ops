@@ -219,6 +219,43 @@ celery -A dev_health_ops.workers.celery_app inspect ping
 
 The `health_check` task can also be invoked to verify worker responsiveness.
 
+## Deploying with Active Workers
+
+Worker deploys must assume a rollout can overlap with active sync, metrics,
+report, ingest, or webhook tasks. The production Compose stack and Kubernetes
+manifests give workers a 3700 second graceful termination window, which exceeds
+the current 3600 second Celery hard task time limit. Keep that budget intact in
+environment-specific overlays unless task limits are reduced first.
+Kubernetes worker Deployments also set a 7600 second progress deadline. Helm,
+Argo CD, Flux, and other rollout controllers must use timeouts above the same
+window or they can mark a healthy drain as failed before old workers finish.
+
+### Safe rollout sequence
+
+1. Confirm the migration job has completed before restarting workers.
+2. Inspect active and reserved work without printing task args or kwargs:
+
+   ```bash
+   dev-hops workers inspect --state active --output json
+   dev-hops workers inspect --state reserved --output json
+   dev-hops workers inspect --state scheduled --output json
+   ```
+
+3. If active tasks are present, start the rollout but keep the worker graceful
+   shutdown budget above the hard task time limit so Celery can finish in-flight
+   work after receiving `SIGTERM`.
+4. Watch the same sanitized inspect commands until old workers report no active
+   tasks, then allow the deployment to complete.
+5. Do not enable global `task_acks_late` or `task_reject_on_worker_lost` during
+   rollout. Dispatchers, heartbeat, billing email, and stream-consumer tasks are
+   explicitly annotated as late-ack excluded until their child replay-safety
+   issues are complete.
+
+The inspect command intentionally omits task args, kwargs, headers, and request
+properties. It returns only task identity, worker metadata, timing, and routing
+keys so operators can drain workers without exposing provider tokens or other
+credentials.
+
 ## Queue Cleanup and Stale Jobs
 
 Celery uses Valkey as both broker and result backend on database 0 by default:

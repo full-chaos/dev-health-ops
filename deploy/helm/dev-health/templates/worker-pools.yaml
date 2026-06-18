@@ -13,6 +13,7 @@ metadata:
   labels:
     {{- include "dev-health.componentLabels" (dict "component" "worker-ingest" "context" $) | nindent 4 }}
 spec:
+  progressDeadlineSeconds: {{ .Values.workerIngest.progressDeadlineSeconds }}
   replicas: {{ .Values.workerIngest.replicas }}
   selector:
     matchLabels:
@@ -25,6 +26,7 @@ spec:
       labels:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "worker-ingest" "context" $) | nindent 8 }}
     spec:
+      terminationGracePeriodSeconds: {{ .Values.workerIngest.terminationGracePeriodSeconds }}
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
       serviceAccountName: {{ include "dev-health.serviceAccountName" . }}
       securityContext:
@@ -81,6 +83,7 @@ metadata:
   labels:
     {{- include "dev-health.componentLabels" (dict "component" "worker-heavy" "context" $) | nindent 4 }}
 spec:
+  progressDeadlineSeconds: {{ .Values.workerHeavy.progressDeadlineSeconds }}
   replicas: {{ .Values.workerHeavy.replicas }}
   selector:
     matchLabels:
@@ -93,6 +96,7 @@ spec:
       labels:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "worker-heavy" "context" $) | nindent 8 }}
     spec:
+      terminationGracePeriodSeconds: {{ .Values.workerHeavy.terminationGracePeriodSeconds }}
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
       serviceAccountName: {{ include "dev-health.serviceAccountName" . }}
       securityContext:

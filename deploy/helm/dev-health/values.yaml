@@ -98,6 +98,8 @@ worker:
   queues: "default,sync,sync.github,sync.gitlab,sync.linear,sync.jira,sync.launchdarkly,sync.github.light,sync.github.medium,sync.gitlab.light,sync.gitlab.medium,sync.jira.medium,sync.linear.medium,webhooks,reports,monitoring"
   concurrency: 4
   logLevel: info
+  terminationGracePeriodSeconds: 3700
+  progressDeadlineSeconds: 7600
   resources:
     requests:
       memory: "256Mi"
@@ -136,6 +138,8 @@ workerIngest:
   queues: "ingest"
   concurrency: 1
   logLevel: info
+  terminationGracePeriodSeconds: 3700
+  progressDeadlineSeconds: 7600
   resources:
     requests:
       memory: "256Mi"
@@ -155,6 +159,8 @@ workerHeavy:
   queues: "metrics,backfill,monitoring,sync.github.heavy,sync.gitlab.heavy"
   concurrency: 2
   logLevel: info
+  terminationGracePeriodSeconds: 3700
+  progressDeadlineSeconds: 7600
   resources:
     requests:
       memory: "512Mi"

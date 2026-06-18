@@ -89,7 +89,7 @@ Requires: ClickHouse (--analytics-db / CLICKHOUSE_URI), organization (--org / OR
 |-------------|----------|
 | ClickHouse (`--analytics-db` / `CLICKHOUSE_URI`) | `sync git`, `sync prs`, `sync blame`, `sync cicd`, `sync deployments`, `sync incidents`, `sync security`, `sync tests`, `sync work-items`, `sync teams`; `metrics daily`, `metrics dora`, `metrics complexity`, `metrics release-impact`, `metrics validate-flags`, `metrics rebuild`, `metrics compounding-risk` (+org); `audit perf`, `audit schema`; `recommendations compute`; `ai allowlist list/set` (+org); `migrate clickhouse` (bare + `upgrade`/`status`/`repair`) |
 | ClickHouse via `--db` (`CLICKHOUSE_URI`) | `investment materialize` |
-| PostgreSQL (`--db` / `POSTGRES_URI`) | `billing reconcile`; `migrate postgres` (bare + `upgrade`/`downgrade`/`current`); legacy `migrate upgrade`/`downgrade`/`current` |
+| PostgreSQL (`--db` / `POSTGRES_URI`) | `billing reconcile`; `migrate postgres` (bare + `upgrade`/`downgrade`/`current`); `migrate configs-to-integrations` (one-time child-config -> integration data migration; `--dry-run` to preview); legacy `migrate upgrade`/`downgrade`/`current` |
 | Organization (`--org` / `ORG_ID`) | `metrics compounding-risk`, `backfill run`, `ai allowlist list/set` |
 
 > The org id auto-resolves from the first organization in PostgreSQL when `--org`/`ORG_ID` are omitted; the preflight only fails when no org can be resolved.

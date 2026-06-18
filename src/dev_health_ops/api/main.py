@@ -25,6 +25,7 @@ init_tracing()
 from dev_health_ops.api.middleware.rate_limit import limiter
 from dev_health_ops.api.product_telemetry import router as product_telemetry_router
 from dev_health_ops.api.telemetry.router import router as telemetry_router
+from dev_health_ops.llm import get_provider
 
 from ._errors import (
     _generic_exception_handler as _generic_exception_handler,
@@ -572,7 +573,9 @@ async def work_units(
     "/api/v1/work-units/{work_unit_id}/explain",
     response_model=WorkUnitExplanation,
 )
+@limiter.limit("20/minute")
 async def work_unit_explain_endpoint(
+    request: Request,
     work_unit_id: str,
     scope_type: str = "org",
     scope_id: str = "",
@@ -606,6 +609,15 @@ async def work_unit_explain_endpoint(
         WorkUnitExplanation with summary, rationale, and uncertainty disclosure
     """
     try:
+        # Validate provider credentials before opening the stream so that a
+        # missing API key returns a 4xx JSON response instead of HTTP 200 +
+        # broken stream (the error would otherwise surface inside
+        # keep_alive_wrapper after headers are already sent).
+        try:
+            resolved_provider = get_provider(llm_provider, model=llm_model)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
         filters = _filters_from_query(
             scope_type, scope_id, range_days, range_days, start_date, end_date
         )
@@ -630,13 +642,16 @@ async def work_unit_explain_endpoint(
             sanitize_for_log(work_unit_id),
         )
 
-        # Return streaming response with keep-alive pings
+        # Return streaming response with keep-alive pings.
+        # Provider is pre-resolved above; pass it in to avoid a second
+        # get_provider() call (and a second credential check) inside the stream.
         return StreamingResponse(
             keep_alive_wrapper(
                 explain_work_unit(
                     investment=target_investment,
                     llm_provider=llm_provider,
                     llm_model=llm_model,
+                    provider=resolved_provider,
                 )
             ),
             media_type="application/json",

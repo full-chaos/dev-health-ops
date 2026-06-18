@@ -22,6 +22,7 @@ from dev_health_ops.llm import (
     classify_provider_error,
     get_provider,
 )
+from dev_health_ops.llm.providers.none import NoneProvider
 from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
@@ -440,6 +441,13 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
             api_key=config.llm_api_key or None,
             base_url=config.llm_base_url or None,
         )
+        if isinstance(provider_instance, NoneProvider):
+            raise LLMAuthError(
+                "LLM provider 'none' cannot materialize investment categorizations; "
+                "configure a real LLM provider or use --llm-provider mock for tests.",
+                provider=config.llm_provider,
+                model="none",
+            )
 
         repo_ids = _resolve_repo_ids(
             sink, config.repo_ids, config.team_ids, config_org_id=config.org_id or ""

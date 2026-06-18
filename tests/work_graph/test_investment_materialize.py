@@ -411,6 +411,39 @@ async def test_materialize_fatal_llm_error_cancels_and_writes_no_rows(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_materialize_none_provider_fails_closed_before_writes(monkeypatch):
+    sink = FakeSink()
+
+    def _fetch_edges_should_not_run(*args, **kwargs):
+        raise AssertionError("none provider must fail before graph categorization")
+
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.fetch_work_graph_edges",
+        _fetch_edges_should_not_run,
+    )
+
+    now = datetime.now(timezone.utc)
+    config = MaterializeConfig(
+        dsn="clickhouse://localhost:8123/default",
+        from_ts=now - timedelta(days=5),
+        to_ts=now,
+        repo_ids=None,
+        llm_provider="none",
+        persist_evidence_snippets=False,
+        llm_model=None,
+    )
+
+    with pytest.raises(LLMAuthError, match="cannot materialize"):
+        await materialize_investments(config)
+
+    assert sink.investment_rows == []
+    assert sink.quote_rows == []
+
+
+@pytest.mark.asyncio
 async def test_materialize_passes_configured_llm_credentials(monkeypatch):
     sink = FakeSink()
     captured = {}

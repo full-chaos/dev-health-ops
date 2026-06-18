@@ -67,6 +67,11 @@ from dev_health_ops.workers.sync_runtime import _dispatch_post_sync_tasks
 
 logger = logging.getLogger(__name__)
 _runtime_cache = ProviderRuntimeCache()
+_TERMINAL_RUN_STATUSES = {
+    SyncRunStatus.SUCCESS.value,
+    SyncRunStatus.PARTIAL_FAILED.value,
+    SyncRunStatus.FAILED.value,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -179,14 +184,18 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         )
         callback = getattr(finalize_sync_run, "si")(sync_run_id)
         callback.set(queue="sync")
-        chord(group(signatures), callback).apply_async()
+        try:
+            chord(group(signatures), callback).apply_async()
+        except Exception as exc:
+            _mark_dispatch_enqueue_failed(sync_run_id, str(exc))
+            raise
         return {"status": "dispatched", "queued_units": len(signatures)}
 
     logger.info(
         "dispatch_sync_run.noop",
         extra={"sync_run_id": sync_run_id, "queued_units": 0},
     )
-    getattr(finalize_sync_run, "apply_async")(args=(sync_run_id,), queue="sync")
+    finalize_sync_run(sync_run_id)
     return {"status": "noop", "queued_units": 0}
 
 
@@ -209,6 +218,7 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
     from dev_health_ops.processors.dataset_adapters import run_dataset_unit
 
     sync_run_id: str | None = None
+    should_finalize = False
     started_at = datetime.now(timezone.utc)
     # Unit context fields for structured logging — populated once ctx is loaded.
     _log_ctx: dict[str, Any] = {"unit_id": unit_id}
@@ -217,10 +227,25 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
             ctx = SyncTaskBootstrap.load(session, unit_id)
             sync_run_id = ctx.sync_run_id
             unit = _load_unit(session, unit_id)
+            run = (
+                session.query(SyncRun)
+                .filter(SyncRun.id == unit.sync_run_id)
+                .one_or_none()
+            )
+            if unit.status in {
+                SyncRunUnitStatus.SUCCESS.value,
+                SyncRunUnitStatus.FAILED.value,
+            } or (run is not None and run.status in _TERMINAL_RUN_STATUSES):
+                return {
+                    "status": "skipped",
+                    "unit_id": unit_id,
+                    "reason": "terminal",
+                }
             unit.status = SyncRunUnitStatus.RUNNING.value
             unit.attempts = int(unit.attempts or 0) + 1
             unit.error = None
             session.flush()
+            should_finalize = True
             _log_ctx = {
                 "sync_run_id": ctx.sync_run_id,
                 "unit_id": unit_id,
@@ -239,6 +264,20 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
         duration_seconds = max(0, int((completed_at - started_at).total_seconds()))
         with get_postgres_session_sync() as session:
             unit = _load_unit(session, unit_id)
+            run = (
+                session.query(SyncRun)
+                .filter(SyncRun.id == unit.sync_run_id)
+                .one_or_none()
+            )
+            if unit.status in {
+                SyncRunUnitStatus.SUCCESS.value,
+                SyncRunUnitStatus.FAILED.value,
+            } or (run is not None and run.status in _TERMINAL_RUN_STATUSES):
+                return {
+                    "status": "skipped",
+                    "unit_id": unit_id,
+                    "reason": "terminal",
+                }
             unit.status = SyncRunUnitStatus.SUCCESS.value
             unit.duration_seconds = duration_seconds
             unit.result = dict(result or {})
@@ -268,6 +307,20 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
         with get_postgres_session_sync() as session:
             unit = _load_unit(session, unit_id)
             sync_run_id = str(unit.sync_run_id)
+            run = (
+                session.query(SyncRun)
+                .filter(SyncRun.id == unit.sync_run_id)
+                .one_or_none()
+            )
+            if unit.status in {
+                SyncRunUnitStatus.SUCCESS.value,
+                SyncRunUnitStatus.FAILED.value,
+            } or (run is not None and run.status in _TERMINAL_RUN_STATUSES):
+                return {
+                    "status": "skipped",
+                    "unit_id": unit_id,
+                    "reason": "terminal",
+                }
             unit.status = SyncRunUnitStatus.FAILED.value
             unit.duration_seconds = duration_seconds
             unit.error = str(exc)
@@ -288,8 +341,16 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
             "error_category": error_category,
         }
     finally:
-        if sync_run_id is not None:
-            getattr(finalize_sync_run, "apply_async")(args=(sync_run_id,), queue="sync")
+        if should_finalize and sync_run_id is not None:
+            try:
+                getattr(finalize_sync_run, "apply_async")(
+                    args=(sync_run_id,), queue="sync"
+                )
+            except Exception:
+                logger.exception(
+                    "run_sync_unit.finalize_enqueue_failed",
+                    extra={"sync_run_id": sync_run_id, "unit_id": unit_id},
+                )
 
 
 @celery_app.task(queue="sync", name="dev_health_ops.workers.tasks.finalize_sync_run")
@@ -337,12 +398,20 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
         failed_count = sum(
             1 for unit in units if unit.status == SyncRunUnitStatus.FAILED.value
         )
+        total_count = len(units)
         completed_at = datetime.now(timezone.utc)
         run.completed_units = success_count
         run.failed_units = failed_count
         run.completed_at = run.completed_at or completed_at
-        run.status = _aggregate_run_status(success_count, failed_count)
-        run.result = {"completed_units": success_count, "failed_units": failed_count}
+        run.status = _aggregate_run_status(total_count, success_count, failed_count)
+        result_payload: dict[str, Any] = {
+            "completed_units": success_count,
+            "failed_units": failed_count,
+        }
+        if total_count == 0:
+            run.error = "No sync units planned"
+            result_payload["reason"] = "no_sync_units_planned"
+        run.result = result_payload
         session.flush()
 
         nested = session.begin_nested()
@@ -377,7 +446,7 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
         run_org_id = str(run.org_id)
         session.flush()
 
-    run_status = _aggregate_run_status(success_count, failed_count)
+    run_status = _aggregate_run_status(len(units), success_count, failed_count)
     logger.info(
         "finalize_sync_run.finalized",
         extra={
@@ -472,6 +541,39 @@ def _claim_units(session, run_uuid: uuid.UUID) -> list[SyncRunUnit]:
     )
 
 
+def _mark_dispatch_enqueue_failed(sync_run_id: str, error: str) -> None:
+    from dev_health_ops.db import get_postgres_session_sync
+
+    completed_at = datetime.now(timezone.utc)
+    run_uuid = uuid.UUID(str(sync_run_id))
+    with get_postgres_session_sync() as session:
+        run = session.query(SyncRun).filter(SyncRun.id == run_uuid).one_or_none()
+        if run is None:
+            return
+        run.status = SyncRunStatus.FAILED.value
+        run.completed_at = completed_at
+        run.error = error
+        run.result = {"error": error, "phase": "dispatch_enqueue"}
+        units = (
+            session.query(SyncRunUnit).filter(SyncRunUnit.sync_run_id == run_uuid).all()
+        )
+        for unit in units:
+            if unit.status not in {
+                SyncRunUnitStatus.SUCCESS.value,
+                SyncRunUnitStatus.FAILED.value,
+            }:
+                unit.status = SyncRunUnitStatus.FAILED.value
+                unit.error = error
+                unit.updated_at = completed_at
+        run.completed_units = sum(
+            1 for unit in units if unit.status == SyncRunUnitStatus.SUCCESS.value
+        )
+        run.failed_units = sum(
+            1 for unit in units if unit.status == SyncRunUnitStatus.FAILED.value
+        )
+        session.flush()
+
+
 def _load_unit(session, unit_id: str) -> SyncRunUnit:
     unit_uuid = uuid.UUID(str(unit_id))
     unit = session.query(SyncRunUnit).filter(SyncRunUnit.id == unit_uuid).one_or_none()
@@ -480,7 +582,11 @@ def _load_unit(session, unit_id: str) -> SyncRunUnit:
     return unit
 
 
-def _aggregate_run_status(success_count: int, failed_count: int) -> str:
+def _aggregate_run_status(
+    total_count: int, success_count: int, failed_count: int
+) -> str:
+    if total_count == 0:
+        return SyncRunStatus.FAILED.value
     if failed_count == 0:
         return SyncRunStatus.SUCCESS.value
     if success_count == 0:

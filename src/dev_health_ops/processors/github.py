@@ -862,6 +862,7 @@ async def _backfill_github_missing_data(
     default_branch: str,
     max_commits: int | None,
     blame_only: bool = False,
+    include_files: bool = True,
     include_blame: bool = True,
     include_commit_stats: bool = True,
 ) -> None:
@@ -881,8 +882,12 @@ async def _backfill_github_missing_data(
     # (contents NULL), which has_any_git_files treats as "done". Upgrade
     # them by re-running the files backfill when no contents exist yet;
     # ReplacingMergeTree(last_synced) supersedes the stale rows.
-    needs_files = needs.files
-    if not needs_files and hasattr(store, "has_any_git_file_contents"):
+    needs_files = needs.files if include_files else False
+    if (
+        include_files
+        and not needs_files
+        and hasattr(store, "has_any_git_file_contents")
+    ):
         needs_files = not await store.has_any_git_file_contents(db_repo.id)
 
     # Blame backfill is coverage-aware (CHAOS-2376 round-3). The crawl is capped
@@ -896,7 +901,8 @@ async def _backfill_github_missing_data(
         include_blame=include_blame,
         any_row_needs_blame=needs.blame,
     )
-    if not (needs_files or needs_blame or needs.commit_stats):
+    needs_commit_stats = needs.commit_stats and include_commit_stats
+    if not (needs_files or needs_blame or needs_commit_stats):
         return
 
     gh_repo = connector.github.get_repo(f"{owner}/{repo_name}")
@@ -939,7 +945,7 @@ async def _backfill_github_missing_data(
                 f"Failed to backfill GitHub files for {repo_full_name}: {e}"
             )
 
-    if needs.commit_stats:
+    if needs_commit_stats:
         commit_count = 0
         try:
             logging.info(
@@ -1055,6 +1061,69 @@ async def _backfill_github_missing_data(
             logging.warning(
                 f"Failed to backfill GitHub blame for {repo_full_name}: {e}"
             )
+
+
+async def _sync_github_commits(
+    *,
+    gh_repo: Any,
+    db_repo: Repo,
+    ingestion_sink: IngestionSink,
+    loop: asyncio.AbstractEventLoop,
+    max_commits: int | None,
+    since: datetime | None,
+) -> tuple[list[Any], int]:
+    if max_commits is None:
+        logging.info("Fetching all commits from GitHub...")
+    else:
+        logging.info("Fetching up to %d commits from GitHub...", max_commits)
+    raw_commits, commit_objects = await loop.run_in_executor(
+        None,
+        _fetch_github_commits_sync,
+        gh_repo,
+        max_commits,
+        db_repo.id,
+        since,
+    )
+    if commit_objects:
+        await ingestion_sink.insert_git_commit_data(commit_objects)
+        logging.info("Stored %d commits from GitHub", len(commit_objects))
+    return raw_commits, len(commit_objects)
+
+
+async def _sync_github_commit_stats(
+    *,
+    gh_repo: Any,
+    db_repo: Repo,
+    ingestion_sink: IngestionSink,
+    loop: asyncio.AbstractEventLoop,
+    max_commits: int | None,
+    since: datetime | None,
+    raw_commits: list[Any] | None = None,
+) -> int:
+    if raw_commits is None:
+        raw_commits, _ = await loop.run_in_executor(
+            None,
+            _fetch_github_commits_sync,
+            gh_repo,
+            max_commits,
+            db_repo.id,
+            since,
+        )
+    logging.info("Fetching commit stats from GitHub...")
+    stats_limit = resolve_commit_stats_limit(len(raw_commits), max_commits, since)
+    stats_objects = await loop.run_in_executor(
+        None,
+        _fetch_github_commit_stats_sync,
+        raw_commits,
+        db_repo.id,
+        stats_limit,
+        since,
+        BaseGitProcessor.make_default_gate(),
+    )
+    if stats_objects:
+        await ingestion_sink.insert_git_commit_stats(stats_objects)
+        logging.info("Stored %d commit stats from GitHub", len(stats_objects))
+    return len(stats_objects)
 
 
 def _is_report_name(name: str) -> bool:
@@ -1270,6 +1339,10 @@ async def process_github_repo(
     sync_tests: bool = False,
     backfill_missing: bool = True,
     since: datetime | None = None,
+    sync_commits: bool | None = None,
+    sync_commit_stats: bool | None = None,
+    sync_files: bool | None = None,
+    sync_blame: bool | None = None,
 ) -> None:
     """
     Process a GitHub repository using the GitHub connector.
@@ -1280,6 +1353,10 @@ async def process_github_repo(
     logging.info(f"Processing GitHub repository: {owner}/{repo_name}")
     loop = asyncio.get_running_loop()
     ingestion_sink = IngestionSink(store)
+    run_commits = sync_git if sync_commits is None else sync_commits
+    run_commit_stats = sync_git if sync_commit_stats is None else sync_commit_stats
+    run_files = (backfill_missing and sync_git) if sync_files is None else sync_files
+    run_blame = (backfill_missing and sync_git) if sync_blame is None else sync_blame
 
     connector = (
         GitHubConnector(credentials=token)
@@ -1348,46 +1425,27 @@ async def process_github_repo(
                 )
                 return
 
-            if sync_git:
-                # 2. Fetch Commits
-                if max_commits is None:
-                    logging.info("Fetching all commits from GitHub...")
-                else:
-                    logging.info(f"Fetching up to {max_commits} commits from GitHub...")
-                raw_commits, commit_objects = await loop.run_in_executor(
-                    None,
-                    _fetch_github_commits_sync,
-                    gh_repo,
-                    max_commits,
-                    db_repo.id,
-                    since,
+            raw_commits: list[Any] | None = None
+            if run_commits:
+                raw_commits, _ = await _sync_github_commits(
+                    gh_repo=gh_repo,
+                    db_repo=db_repo,
+                    ingestion_sink=ingestion_sink,
+                    loop=loop,
+                    max_commits=max_commits,
+                    since=since,
                 )
 
-                if commit_objects:
-                    await ingestion_sink.insert_git_commit_data(commit_objects)
-                    logging.info(f"Stored {len(commit_objects)} commits from GitHub")
-
-                # 3. Fetch Stats
-                logging.info("Fetching commit stats from GitHub...")
-                stats_limit = resolve_commit_stats_limit(
-                    len(raw_commits), max_commits, since
+            if run_commit_stats:
+                await _sync_github_commit_stats(
+                    gh_repo=gh_repo,
+                    db_repo=db_repo,
+                    ingestion_sink=ingestion_sink,
+                    loop=loop,
+                    max_commits=max_commits,
+                    since=since,
+                    raw_commits=raw_commits,
                 )
-                stats_objects = await loop.run_in_executor(
-                    None,
-                    _fetch_github_commit_stats_sync,
-                    raw_commits,
-                    db_repo.id,
-                    stats_limit,
-                    since,
-                    BaseGitProcessor.make_default_gate(),
-                )
-
-                if stats_objects:
-                    await ingestion_sink.insert_git_commit_stats(stats_objects)
-                    logging.info(
-                        "Stored %d commit stats from GitHub",
-                        len(stats_objects),
-                    )
 
             if sync_prs:
                 # 4. Fetch PRs
@@ -1499,7 +1557,7 @@ async def process_github_repo(
             # capped at BLAME_BACKFILL_MAX_FILES files per sync so a large repo
             # cannot turn onboarding into an unbounded GraphQL crawl
             # (CHAOS-2376).
-            if backfill_missing and sync_git:
+            if run_files or run_blame:
                 try:
                     await _backfill_github_missing_data(
                         store=store,
@@ -1509,7 +1567,8 @@ async def process_github_repo(
                         repo_full_name=repo_info.full_name,
                         default_branch=repo_info.default_branch,
                         max_commits=max_commits,
-                        include_blame=True,
+                        include_files=run_files,
+                        include_blame=run_blame,
                         include_commit_stats=False,
                     )
                 except Exception as e:

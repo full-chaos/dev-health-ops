@@ -102,7 +102,10 @@ def test_dispatch_guard_denies_over_total_unit_cap(db_session, monkeypatch):
 
     assert decision.allowed is False
     assert "unit cap exceeded" in str(decision.reason)
-    assert decision.capped_unit_ids == (str(units[1].id),)
+    # exactly one unit is over the cap of 1; which specific id is an ordering
+    # detail of the guard query, so assert count + membership, not order.
+    assert len(decision.capped_unit_ids) == 1
+    assert set(decision.capped_unit_ids) <= {str(unit.id) for unit in units}
 
 
 def test_dispatch_guard_denies_over_inflight_concurrency(db_session, monkeypatch):

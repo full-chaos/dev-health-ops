@@ -486,3 +486,46 @@ class TestGlobalFlagsPropagateToSubparsers:
         # Leaf parser uses default=SUPPRESS, so omitting --org on the leaf must
         # NOT clobber the value supplied before the subcommand.
         assert args.org == "from-root"
+
+
+class TestCLIPlumbing:
+    def test_investment_materialize_preserves_root_llm_arguments(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "-l",
+                "openai",
+                "-m",
+                "gpt-4o-mini",
+                "investment",
+                "materialize",
+            ]
+        )
+
+        assert args.llm_provider == "openai"
+        assert args.model == "gpt-4o-mini"
+
+    def test_investment_materialize_preserves_root_db_arguments(self):
+        parser = build_parser()
+        postgres_dsn = "postgresql+asyncpg://pg:pg@localhost:5432/devhealth"
+        clickhouse_dsn = "clickhouse://ch:ch@localhost:8123/default"
+        args = parser.parse_args(
+            [
+                "--db",
+                postgres_dsn,
+                "--analytics-db",
+                clickhouse_dsn,
+                "investment",
+                "materialize",
+            ]
+        )
+
+        assert args.db == postgres_dsn
+        assert args.analytics_db == clickhouse_dsn
+
+    def test_investment_materialize_accepts_deprecated_db_alias(self):
+        parser = build_parser()
+        clickhouse_dsn = "clickhouse://ch:ch@localhost:8123/default"
+        args = parser.parse_args(["investment", "materialize", "--db", clickhouse_dsn])
+
+        assert args.analytics_db == clickhouse_dsn

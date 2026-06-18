@@ -356,9 +356,6 @@ def _should_resolve_org(ns: argparse.Namespace) -> bool:
 _REQ_CLICKHOUSE = "clickhouse"
 _REQ_POSTGRES = "postgres"
 _REQ_ORG = "org"
-# ClickHouse supplied via a command's own ``--db`` flag (not the global
-# ``--analytics-db``). Used by commands like ``investment materialize`` whose
-# ``--db`` carries the ClickHouse DSN (default: CLICKHOUSE_URI).
 _REQ_SINK_DB = "sink_db"
 
 # Stable display order for messages/epilogs.
@@ -396,7 +393,7 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     ("audit", "schema"): frozenset({_REQ_CLICKHOUSE}),
     # --- other ClickHouse-backed commands ---
     ("recommendations", "compute"): frozenset({_REQ_CLICKHOUSE}),
-    ("investment", "materialize"): frozenset({_REQ_SINK_DB}),
+    ("investment", "materialize"): frozenset({_REQ_CLICKHOUSE}),
     ("ai", "allowlist", "list"): frozenset({_REQ_CLICKHOUSE, _REQ_ORG}),
     ("ai", "allowlist", "set"): frozenset({_REQ_CLICKHOUSE, _REQ_ORG}),
     # --- PostgreSQL semantic store ---

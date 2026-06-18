@@ -187,7 +187,7 @@ services:
     command:
       - celery
       - -A
-      - workers.celery_app
+      - dev_health_ops.workers.celery_app
       - worker
       - --loglevel=info
       - -Q
@@ -231,7 +231,7 @@ services:
     command:
       - celery
       - -A
-      - workers.celery_app
+      - dev_health_ops.workers.celery_app
       - worker
       - --loglevel=info
       - -Q
@@ -243,7 +243,7 @@ services:
     command:
       - celery
       - -A
-      - workers.celery_app
+      - dev_health_ops.workers.celery_app
       - worker
       - --loglevel=info
       - -Q

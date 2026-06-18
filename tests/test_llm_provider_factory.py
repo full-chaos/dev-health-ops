@@ -28,6 +28,38 @@ def test_explicit_openai_without_key_is_unavailable():
             get_provider("openai")
 
 
+def test_openai_accepts_inline_credentials_over_env():
+    with patch.dict(
+        os.environ,
+        {"OPENAI_API_KEY": "sk-env", "OPENAI_BASE_URL": "https://env.invalid/v1"},
+        clear=True,
+    ):
+        provider = get_provider(
+            "openai",
+            model="gpt-4o-mini",
+            api_key="sk-inline",
+            base_url="https://inline.invalid/v1",
+        )
+
+    assert isinstance(provider, OpenAIProvider)
+    assert provider._impl.cfg.api_key == "sk-inline"
+    assert provider._impl.cfg.base_url == "https://inline.invalid/v1"
+
+
+def test_generic_llm_env_credentials_are_available_for_explicit_provider():
+    with patch.dict(
+        os.environ,
+        {"LLM_API_KEY": "sk-generic", "LLM_BASE_URL": "https://generic.invalid/v1"},
+        clear=True,
+    ):
+        assert is_llm_available("openai") is True
+        provider = get_provider("openai")
+
+    assert isinstance(provider, OpenAIProvider)
+    assert provider._impl.cfg.api_key == "sk-generic"
+    assert provider._impl.cfg.base_url == "https://generic.invalid/v1"
+
+
 def test_provider_specific_model_env_overrides_global_model():
     with patch.dict(
         os.environ,

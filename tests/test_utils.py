@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from dev_health_ops.cli import build_parser
+from dev_health_ops.cli import _load_dotenv, build_parser
 from dev_health_ops.utils import SKIP_EXTENSIONS, is_skippable
 
 
@@ -529,3 +529,31 @@ class TestCLIPlumbing:
         args = parser.parse_args(["investment", "materialize", "--db", clickhouse_dsn])
 
         assert args.analytics_db == clickhouse_dsn
+
+    def test_load_dotenv_expands_compose_interpolation(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+        monkeypatch.delenv("CLICKHOUSE_USER", raising=False)
+        monkeypatch.setenv("CLICKHOUSE_PASSWORD", "secret")
+        dotenv_path = tmp_path / ".env"
+        dotenv_path.write_text(
+            "CLICKHOUSE_URI=clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@localhost:8123/default\n",
+            encoding="utf-8",
+        )
+
+        assert _load_dotenv(dotenv_path) == 1
+        assert (
+            os.environ["CLICKHOUSE_URI"]
+            == "clickhouse://ch:secret@localhost:8123/default"
+        )
+
+    def test_load_dotenv_rejects_unresolved_interpolation(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+        monkeypatch.delenv("MISSING_DOTENV_VAR", raising=False)
+        dotenv_path = tmp_path / ".env"
+        dotenv_path.write_text(
+            "CLICKHOUSE_URI=clickhouse://${MISSING_DOTENV_VAR}@localhost:8123/default\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="MISSING_DOTENV_VAR"):
+            _load_dotenv(dotenv_path)

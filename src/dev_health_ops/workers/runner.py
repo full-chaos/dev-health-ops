@@ -28,11 +28,11 @@ def _sanitize_task(task: object) -> dict[str, object]:
 
     request = task.get("request")
     if isinstance(request, dict):
-        sanitized = _sanitize_task(request)
+        scheduled_task = _sanitize_task(request)
         for key in ("eta", "priority"):
             if key in task:
-                sanitized[key] = task[key]
-        return sanitized
+                scheduled_task[key] = task[key]
+        return scheduled_task
 
     sanitized: dict[str, object] = {}
     for key in ("id", "name", "hostname", "time_start", "acknowledged", "worker_pid"):

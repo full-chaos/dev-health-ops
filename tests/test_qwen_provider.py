@@ -14,7 +14,8 @@ from dev_health_ops.llm.providers.qwen import (
 
 def test_qwen_provider_registration():
     # Test explicit names
-    assert isinstance(get_provider("qwen"), QwenProvider)
+    with patch.dict(os.environ, {"QWEN_API_KEY": "test-key"}, clear=True):
+        assert isinstance(get_provider("qwen"), QwenProvider)
     assert isinstance(get_provider("qwen-local"), QwenLocalProvider)
     assert isinstance(get_provider("qwen-lmstudio"), QwenLMStudioProvider)
 
@@ -80,12 +81,18 @@ async def test_qwen_provider_completion():
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = "Qwen response"
+        mock_response.usage = type(
+            "Usage", (), {"prompt_tokens": 8, "completion_tokens": 4}
+        )()
         mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
         p = QwenProvider(api_key="sk-123")
         response = await p.complete("Hello")
 
-        assert response == "Qwen response"
+        assert response.text == "Qwen response"
+        assert response.model == "qwen-plus"
+        assert response.input_tokens == 8
+        assert response.output_tokens == 4
         # Verify client was initialized with correct base_url
         mock_openai_class.assert_called_once_with(
             api_key="sk-123", base_url=DEFAULT_DASHSCOPE_BASE_URL

@@ -20,6 +20,13 @@ from typing import Any
 
 from dev_health_ops.llm.json_utils import validate_json_or_empty
 
+from .base import (
+    DEFAULT_MODEL_BY_PROVIDER,
+    CompletionResult,
+    LLMProviderBase,
+    usage_token_count,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -122,7 +129,7 @@ class OpenAIProviderConfig:
     temperature: float
 
 
-class OpenAIProvider:
+class OpenAIProvider(LLMProviderBase):
     """Public provider facade.
 
     Delegates to a model-specific implementation:
@@ -134,14 +141,14 @@ class OpenAIProvider:
         self,
         api_key: str,
         base_url: str | None = None,
-        model: str = "gpt-5-mini",
+        model: str | None = None,
         max_completion_tokens: int = 4096,
         temperature: float = 0.3,
     ) -> None:
         cfg = OpenAIProviderConfig(
             api_key=api_key,
             base_url=base_url,
-            model=model,
+            model=model or DEFAULT_MODEL_BY_PROVIDER["openai"],
             # keep param name stable at the facade; impl maps to correct API param
             max_output_tokens=max(4096, int(max_completion_tokens)),
             temperature=float(temperature),
@@ -149,7 +156,7 @@ class OpenAIProvider:
 
         self._impl = openai_provider_class_for(cfg.model)(cfg)
 
-    async def complete(self, prompt: str) -> str:
+    async def complete(self, prompt: str) -> CompletionResult:
         return await self._impl.complete(prompt)
 
     async def aclose(self) -> None:
@@ -170,7 +177,7 @@ def openai_provider_class_for(model: str) -> type[_OpenAIProviderBase]:
 # -----------------------------------------------------------------------------
 
 
-class _OpenAIProviderBase:
+class _OpenAIProviderBase(LLMProviderBase):
     def __init__(self, cfg: OpenAIProviderConfig) -> None:
         self.cfg = cfg
         self._client: Any | None = None
@@ -189,8 +196,20 @@ class _OpenAIProviderBase:
         m = (self.cfg.model or "").strip()
         return not m.startswith(("gpt-5", "o1", "o3"))
 
-    async def complete(self, prompt: str) -> str:
+    async def complete(self, prompt: str) -> CompletionResult:
         raise NotImplementedError
+
+    def _completion_result(
+        self, text: str, usage: object | None = None
+    ) -> CompletionResult:
+        return CompletionResult(
+            text=text,
+            input_tokens=usage_token_count(usage, "input_tokens", "prompt_tokens"),
+            output_tokens=usage_token_count(
+                usage, "output_tokens", "completion_tokens"
+            ),
+            model=self.cfg.model,
+        )
 
     async def aclose(self) -> None:
         if self._client:
@@ -204,7 +223,7 @@ class _OpenAIProviderBase:
 class OpenAIGPT5Provider(_OpenAIProviderBase):
     """GPT-5+ via Responses API."""
 
-    async def complete(self, prompt: str) -> str:
+    async def complete(self, prompt: str) -> CompletionResult:
         client = self._get_client()
 
         # Retry once on truncation / invalid JSON.
@@ -250,6 +269,7 @@ class OpenAIGPT5Provider(_OpenAIProviderBase):
                     kwargs["temperature"] = self.cfg.temperature
 
                 response = await client.responses.create(**kwargs)
+                usage = getattr(response, "usage", None)
 
                 # Best-effort extraction
                 content = getattr(response, "output_text", "") or ""
@@ -277,7 +297,7 @@ class OpenAIGPT5Provider(_OpenAIProviderBase):
                 )
 
                 if cleaned:
-                    return cleaned
+                    return self._completion_result(cleaned, usage)
 
                 # If invalid/empty, retry once with more tokens if it looks truncated.
                 should_retry = (finish_reason == "max_output_tokens") or (
@@ -304,7 +324,7 @@ class OpenAIGPT5Provider(_OpenAIProviderBase):
                     token_budget,
                     (content.strip()[:200] + "...") if content else "<empty>",
                 )
-                return ""
+                return self._completion_result("", usage)
 
             except Exception as e:
                 logger.error("OpenAI Responses API error: %s", e)
@@ -315,7 +335,7 @@ class OpenAIGPT5Provider(_OpenAIProviderBase):
                     continue
                 raise
 
-        return ""
+        return self._completion_result("")
 
 
 # -----------------------------------------------------------------------------
@@ -326,7 +346,7 @@ class OpenAIGPT5Provider(_OpenAIProviderBase):
 class OpenAIGPTLegacyProvider(_OpenAIProviderBase):
     """<= GPT-4 via Chat Completions."""
 
-    async def complete(self, prompt: str) -> str:
+    async def complete(self, prompt: str) -> CompletionResult:
         client = self._get_client()
 
         retry_count = 0
@@ -351,6 +371,7 @@ class OpenAIGPTLegacyProvider(_OpenAIProviderBase):
                     kwargs["temperature"] = self.cfg.temperature
 
                 response = await client.chat.completions.create(**kwargs)
+                usage = getattr(response, "usage", None)
 
                 choice = response.choices[0]
                 content = choice.message.content or ""
@@ -367,7 +388,7 @@ class OpenAIGPTLegacyProvider(_OpenAIProviderBase):
                 )
 
                 if cleaned:
-                    return cleaned
+                    return self._completion_result(cleaned, usage)
 
                 should_retry = (finish_reason in ("length", "max_tokens")) or (
                     not content.strip()
@@ -393,7 +414,7 @@ class OpenAIGPTLegacyProvider(_OpenAIProviderBase):
                     max_tokens,
                     (content.strip()[:200] + "...") if content else "<empty>",
                 )
-                return ""
+                return self._completion_result("", usage)
 
             except Exception as e:
                 logger.error("OpenAI Chat Completions error: %s", e)
@@ -404,4 +425,4 @@ class OpenAIGPTLegacyProvider(_OpenAIProviderBase):
                     continue
                 raise
 
-        return ""
+        return self._completion_result("")

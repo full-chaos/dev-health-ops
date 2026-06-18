@@ -12,7 +12,7 @@ class StubProvider:
         self.calls = 0
         self.prompts = []
 
-    async def complete(self, prompt: str) -> str:
+    async def complete_text(self, prompt: str) -> str:
         self.calls += 1
         self.prompts.append(prompt)
         return self.responses[self.calls - 1]

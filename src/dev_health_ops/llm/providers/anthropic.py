@@ -8,10 +8,17 @@ import logging
 
 from dev_health_ops.llm.errors import call_with_retry, classify_provider_error
 
+from .base import (
+    DEFAULT_MODEL_BY_PROVIDER,
+    CompletionResult,
+    LLMProviderBase,
+    usage_token_count,
+)
+
 logger = logging.getLogger(__name__)
 
 
-class AnthropicProvider:
+class AnthropicProvider(LLMProviderBase):
     """
     Anthropic LLM provider using the messages API.
     """
@@ -19,7 +26,7 @@ class AnthropicProvider:
     def __init__(
         self,
         api_key: str,
-        model: str = "claude-3-haiku-20240307",
+        model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.3,
     ) -> None:
@@ -33,7 +40,7 @@ class AnthropicProvider:
             temperature: Sampling temperature (lower = more deterministic)
         """
         self.api_key = api_key
-        self.model = model
+        self.model = model or DEFAULT_MODEL_BY_PROVIDER["anthropic"]
         self.max_tokens = max_tokens
         self.temperature = temperature
         self._client: object | None = None
@@ -51,7 +58,7 @@ class AnthropicProvider:
                 )
         return self._client
 
-    async def _call(self, prompt: str) -> str:
+    async def _call(self, prompt: str) -> CompletionResult:
         """Single attempt — called via call_with_retry."""
         client = self._get_client()
 
@@ -79,15 +86,24 @@ class AnthropicProvider:
                 messages=[{"role": "user", "content": prompt}],
             )
 
+            text = ""
             if response.content and len(response.content) > 0:
-                return response.content[0].text
-            return ""
+                text = response.content[0].text
+            usage = getattr(response, "usage", None)
+            return CompletionResult(
+                text=text,
+                input_tokens=usage_token_count(usage, "input_tokens", "prompt_tokens"),
+                output_tokens=usage_token_count(
+                    usage, "output_tokens", "completion_tokens"
+                ),
+                model=self.model,
+            )
         except Exception as exc:
             raise classify_provider_error(
                 exc, provider="anthropic", model=self.model
             ) from exc
 
-    async def complete(self, prompt: str) -> str:
+    async def complete(self, prompt: str) -> CompletionResult:
         """
         Generate a completion using Anthropic's API.
 

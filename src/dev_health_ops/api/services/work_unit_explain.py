@@ -102,7 +102,7 @@ async def explain_work_unit(
 
     # 3. Call LLM provider
     provider = get_provider(llm_provider, model=llm_model)
-    raw_response = await provider.complete(prompt)
+    raw_response = await provider.complete_text(prompt)
     logger.debug(
         "Received LLM response for work_unit_id=%s, length=%d",
         investment.work_unit_id,

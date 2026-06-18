@@ -36,7 +36,7 @@ async def test_openai_retry_on_empty_content():
 
     result = await provider.complete("test prompt")
 
-    assert result == '{"summary": "test"}'
+    assert result.text == '{"summary": "test"}'
     assert mock_client.chat.completions.create.call_count == 2
 
     # Check that tokens were doubled on retry
@@ -72,7 +72,7 @@ async def test_gpt5_retry_on_finish_reason_truncation():
 
     result = await provider.complete("test prompt")
 
-    assert result == '{"summary": "complete"}'
+    assert result.text == '{"summary": "complete"}'
     assert mock_client.responses.create.call_count == 2
 
     # Verify token doubling in second call

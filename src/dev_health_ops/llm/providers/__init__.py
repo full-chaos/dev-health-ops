@@ -1,198 +1,244 @@
-"""
-LLM Provider abstraction layer.
-
-Provides a unified interface for LLM completion, supporting multiple backends.
-"""
-
 from __future__ import annotations
 
+import logging
 import os
-from typing import Optional, Protocol, runtime_checkable
+
+from dev_health_ops.llm.errors import LLMAuthError
+
+from .base import (
+    DEFAULT_MODEL_BY_PROVIDER,
+    CompletionResult,
+    LLMProvider,
+    LLMProviderBase,
+)
+
+logger = logging.getLogger(__name__)
+
+_LOGGED_PROVIDER_MODELS: set[tuple[str, str | None]] = set()
+
+_MODEL_ENV_BY_PROVIDER: dict[str, tuple[str, ...]] = {
+    "openai": ("LLM_MODEL_OPENAI",),
+    "anthropic": ("LLM_MODEL_ANTHROPIC",),
+    "gemini": ("LLM_MODEL_GEMINI", "GEMINI_MODEL"),
+    "local": ("LLM_MODEL_LOCAL", "LOCAL_LLM_MODEL"),
+    "ollama": ("LLM_MODEL_OLLAMA", "OLLAMA_MODEL"),
+    "lmstudio": ("LLM_MODEL_LMSTUDIO", "LMSTUDIO_MODEL"),
+    "qwen": ("LLM_MODEL_QWEN", "QWEN_MODEL"),
+    "qwen-local": ("LLM_MODEL_QWEN_LOCAL", "QWEN_LOCAL_MODEL"),
+    "qwen-lmstudio": ("LLM_MODEL_QWEN_LMSTUDIO", "LMSTUDIO_MODEL"),
+}
 
 
-@runtime_checkable
-class LLMProvider(Protocol):
-    """Protocol for LLM providers."""
+def _normalize_provider_name(name: str) -> str:
+    return (name or "auto").strip().lower()
 
-    async def complete(self, prompt: str) -> str:
-        """
-        Generate a completion for the given prompt.
 
-        Args:
-            prompt: The prompt text to complete
+def _configured_provider() -> str | None:
+    if os.getenv("OPENAI_API_KEY"):
+        return "openai"
+    if os.getenv("ANTHROPIC_API_KEY"):
+        return "anthropic"
+    if os.getenv("GEMINI_API_KEY"):
+        return "gemini"
+    if os.getenv("LOCAL_LLM_BASE_URL"):
+        return "local"
+    if os.getenv("DASHSCOPE_API_KEY") or os.getenv("QWEN_API_KEY"):
+        return "qwen"
+    if os.getenv("OLLAMA_MODEL") or os.getenv("OLLAMA_BASE_URL"):
+        return "ollama"
+    if os.getenv("LMSTUDIO_MODEL") or os.getenv("LMSTUDIO_BASE_URL"):
+        return "lmstudio"
+    return None
 
-        Returns:
-            The generated completion text
-        """
-        raise NotImplementedError()
 
-    async def aclose(self) -> None:
-        """Close the underlying client and release resources."""
-        raise NotImplementedError()
+def _provider_has_required_config(name: str) -> bool:
+    if name == "mock":
+        return True
+    if name == "none":
+        return False
+    if name == "openai":
+        return bool(os.getenv("OPENAI_API_KEY"))
+    if name == "anthropic":
+        return bool(os.getenv("ANTHROPIC_API_KEY"))
+    if name == "gemini":
+        return bool(os.getenv("GEMINI_API_KEY"))
+    if name == "qwen":
+        return bool(os.getenv("QWEN_API_KEY") or os.getenv("DASHSCOPE_API_KEY"))
+    if name in {"local", "ollama", "lmstudio", "qwen-local", "qwen-lmstudio"}:
+        return True
+    return False
+
+
+def _missing_provider_error(name: str) -> LLMAuthError:
+    if name == "auto":
+        return LLMAuthError(
+            "No LLM provider is configured for auto. Set --llm-provider mock for "
+            "fixtures/testing, or configure LLM_PROVIDER plus provider credentials "
+            "such as OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, "
+            "QWEN_API_KEY/DASHSCOPE_API_KEY, LOCAL_LLM_BASE_URL, OLLAMA_BASE_URL, "
+            "or OLLAMA_MODEL.",
+            provider="auto",
+            model="none",
+        )
+    if name == "openai":
+        env_hint = "OPENAI_API_KEY"
+    elif name == "anthropic":
+        env_hint = "ANTHROPIC_API_KEY"
+    elif name == "gemini":
+        env_hint = "GEMINI_API_KEY"
+    elif name == "qwen":
+        env_hint = "QWEN_API_KEY or DASHSCOPE_API_KEY"
+    else:
+        env_hint = "LLM_PROVIDER"
+    return LLMAuthError(
+        f"LLM provider '{name}' is not configured. Set {env_hint} or choose "
+        "--llm-provider mock for fixtures/testing.",
+        provider=name,
+        model="none",
+    )
+
+
+def resolve_provider_name(name: str = "auto") -> str:
+    requested = _normalize_provider_name(name)
+    if requested != "auto":
+        return requested
+
+    env_name = _normalize_provider_name(os.getenv("LLM_PROVIDER", "auto"))
+    if env_name != "auto":
+        return env_name
+
+    detected = _configured_provider()
+    if detected:
+        return detected
+    raise _missing_provider_error("auto")
+
+
+def resolve_model_name(provider: str, model: str | None = None) -> str | None:
+    provider = _normalize_provider_name(provider)
+    if provider == "mock":
+        return "mock"
+    if provider == "none":
+        return None
+    if model:
+        return model
+    for env_name in _MODEL_ENV_BY_PROVIDER.get(provider, ()):
+        if os.getenv(env_name):
+            return os.getenv(env_name)
+    if os.getenv("LLM_MODEL"):
+        return os.getenv("LLM_MODEL")
+    return DEFAULT_MODEL_BY_PROVIDER.get(provider)
+
+
+def _log_resolved_provider_model(provider: str, model: str | None) -> None:
+    key = (provider, model)
+    if key in _LOGGED_PROVIDER_MODELS:
+        return
+    _LOGGED_PROVIDER_MODELS.add(key)
+    logger.info(
+        "Resolved LLM provider: provider=%s model=%s", provider, model or "none"
+    )
 
 
 def is_llm_available(name: str = "auto") -> bool:
-    """
-    Check whether a real (non-mock) LLM provider is configured.
-
-    Returns True if a real provider (openai, anthropic, local, ollama, etc.)
-    would be resolved. Returns False if the resolved provider is "mock" or "none".
-    """
-    if name == "none":
+    try:
+        resolved = resolve_provider_name(name)
+    except LLMAuthError:
         return False
-    resolved = name
-    if resolved == "auto":
-        env_name = os.getenv("LLM_PROVIDER")
-        if env_name and env_name != "auto":
-            resolved = env_name
-        else:
-            if os.getenv("OPENAI_API_KEY"):
-                resolved = "openai"
-            elif os.getenv("ANTHROPIC_API_KEY"):
-                resolved = "anthropic"
-            elif os.getenv("GEMINI_API_KEY"):
-                resolved = "gemini"
-            elif os.getenv("LOCAL_LLM_BASE_URL"):
-                resolved = "local"
-            elif os.getenv("DASHSCOPE_API_KEY") or os.getenv("QWEN_API_KEY"):
-                resolved = "qwen"
-            elif os.getenv("OLLAMA_MODEL") or os.getenv("OLLAMA_BASE_URL"):
-                resolved = "ollama"
-            else:
-                resolved = "mock"
-    if resolved == "none":
-        return False
-    if resolved == "mock":
-        # mock is explicitly requested — treat as available for dev/testing
-        return name == "mock"
-    return True
+    return _provider_has_required_config(resolved)
 
 
 def get_provider(name: str = "auto", model: str | None = None) -> LLMProvider:
-    """
-    Get an LLM provider by name.
+    provider_name = resolve_provider_name(name)
+    model_name = resolve_model_name(provider_name, model)
 
-    Args:
-        name: Provider name:
-              - "auto": Detect from environment (OPENAI_API_KEY, ANTHROPIC_API_KEY,
-                        GEMINI_API_KEY, LOCAL_LLM_BASE_URL, DASHSCOPE_API_KEY/QWEN_API_KEY,
-                        OLLAMA_* or fall back to mock)
-              - "openai": OpenAI API
-              - "anthropic": Anthropic API
-              - "gemini": Google Gemini 3 API (OpenAI-compatible)
-              - "local": Generic OpenAI-compatible local server
-              - "ollama": Ollama server (localhost:11434)
-              - "lmstudio": LMStudio server (localhost:1234)
-              - "qwen": Official Qwen / DashScope API
-              - "qwen-local": Local Qwen (Ollama)
-              - "qwen-lmstudio": LM Studio Qwen
-              - "mock": Deterministic mock for testing
-        model: Optional model name to override provider default.
+    if provider_name == "none":
+        from .none import NoneProvider
 
-    Returns:
-        An LLMProvider instance
+        _log_resolved_provider_model(provider_name, model_name)
+        return NoneProvider()
 
-    Raises:
-        ValueError: If the specified provider is not available
-    """
-    if name == "auto":
-        # Check LLM_PROVIDER env var first
-        env_name = os.getenv("LLM_PROVIDER")
-        if env_name and env_name != "auto":
-            name = env_name
-        else:
-            # Auto-detect based on other environment variables
-            if os.getenv("OPENAI_API_KEY"):
-                name = "openai"
-            elif os.getenv("ANTHROPIC_API_KEY"):
-                name = "anthropic"
-            elif os.getenv("GEMINI_API_KEY"):
-                name = "gemini"
-            elif os.getenv("LOCAL_LLM_BASE_URL"):
-                name = "local"
-            elif os.getenv("DASHSCOPE_API_KEY") or os.getenv("QWEN_API_KEY"):
-                name = "qwen"
-            elif os.getenv("OLLAMA_MODEL") or os.getenv("OLLAMA_BASE_URL"):
-                name = "ollama"
-            else:
-                # Fall back to mock for development/testing
-                name = "mock"
+    if not _provider_has_required_config(provider_name):
+        raise _missing_provider_error(provider_name)
 
-    if model is None:
-        model = os.getenv("LLM_MODEL")
+    _log_resolved_provider_model(provider_name, model_name)
 
-    if name == "none":
+    if provider_name == "mock":
         from .mock import MockProvider
 
         return MockProvider()
 
-    if name == "mock":
-        from .mock import MockProvider
-
-        return MockProvider()
-
-    if name == "openai":
+    if provider_name == "openai":
         from .openai import OpenAIProvider
 
         api_key = os.getenv("OPENAI_API_KEY")
         base_url = os.getenv("OPENAI_BASE_URL")
         if not api_key:
-            raise ValueError("OPENAI_API_KEY environment variable not set")
-        return OpenAIProvider(
-            api_key=api_key, base_url=base_url, model=model or "gpt-5-mini"
-        )
+            raise _missing_provider_error(provider_name)
+        return OpenAIProvider(api_key=api_key, base_url=base_url, model=model_name)
 
-    if name == "anthropic":
+    if provider_name == "anthropic":
         from .anthropic import AnthropicProvider
 
         api_key = os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY environment variable not set")
-        return AnthropicProvider(
-            api_key=api_key, model=model or "claude-3-haiku-20240307"
-        )
+            raise _missing_provider_error(provider_name)
+        return AnthropicProvider(api_key=api_key, model=model_name)
 
-    if name == "gemini":
+    if provider_name == "gemini":
         from .gemini import GeminiProvider
 
-        return GeminiProvider(model=model)
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise _missing_provider_error(provider_name)
+        return GeminiProvider(api_key=api_key, model=model_name)
 
-    if name == "local":
+    if provider_name == "local":
         from .local import LocalProvider
 
-        return LocalProvider(model=model)
+        return LocalProvider(model=model_name)
 
-    if name == "ollama":
+    if provider_name == "ollama":
         from .local import OllamaProvider
 
-        return OllamaProvider(model=model)
+        return OllamaProvider(model=model_name)
 
-    if name == "lmstudio":
-        if model and model.startswith("openai/gpt-oss"):
+    if provider_name == "lmstudio":
+        if model_name and model_name.startswith("openai/gpt-oss"):
             from .local import LMStudioGPT5Provider
 
-            return LMStudioGPT5Provider(model=model)
+            return LMStudioGPT5Provider(model=model_name)
 
         from .local import LMStudioProvider
 
-        return LMStudioProvider(model=model)
+        return LMStudioProvider(model=model_name)
 
-    if name == "qwen":
+    if provider_name == "qwen":
         from .qwen import QwenProvider
 
-        return QwenProvider(model=model)
+        api_key = os.getenv("QWEN_API_KEY") or os.getenv("DASHSCOPE_API_KEY")
+        if not api_key:
+            raise _missing_provider_error(provider_name)
+        return QwenProvider(api_key=api_key, model=model_name)
 
-    if name == "qwen-local":
+    if provider_name == "qwen-local":
         from .qwen import QwenLocalProvider
 
-        return QwenLocalProvider(model=model)
+        return QwenLocalProvider(model=model_name)
 
-    if name == "qwen-lmstudio":
+    if provider_name == "qwen-lmstudio":
         from .qwen import QwenLMStudioProvider
 
-        return QwenLMStudioProvider(model=model)
+        return QwenLMStudioProvider(model=model_name)
 
-    raise ValueError(f"Unknown LLM provider: {name}")
+    raise ValueError(f"Unknown LLM provider: {provider_name}")
 
 
-__all__ = ["LLMProvider", "get_provider", "is_llm_available"]
+__all__ = [
+    "CompletionResult",
+    "LLMProvider",
+    "LLMProviderBase",
+    "get_provider",
+    "is_llm_available",
+    "resolve_model_name",
+    "resolve_provider_name",
+]

@@ -23,8 +23,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
+from typing import TypeVar
 
 logger = logging.getLogger(__name__)
+T = TypeVar("T")
 
 # ---------------------------------------------------------------------------
 # Error hierarchy
@@ -54,7 +57,7 @@ class LLMError(Exception):
         if self.model:
             parts.append(f"model={self.model}")
         if self.original:
-            parts.append(f"cause={self.original!r}")
+            parts.append(f"cause_type={type(self.original).__name__}")
         return " | ".join(parts)
 
 
@@ -194,9 +197,9 @@ def retry_delay(attempt: int) -> float:
 async def call_with_retry(
     provider_name: str,
     model: str,
-    call,
+    call: Callable[[], Awaitable[T]],
     max_retries: int = 1,
-) -> str:
+) -> T:
     """Execute an async LLM call with uniform retry / error handling.
 
     Args:
@@ -277,4 +280,4 @@ async def call_with_retry(
     # Should not be reached
     if last_exc:
         raise last_exc
-    return ""
+    raise RuntimeError("LLM retry loop exited without a result or exception")

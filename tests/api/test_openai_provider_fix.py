@@ -91,7 +91,7 @@ async def test_openai_provider_handles_empty_content_with_retry():
     assert "text" in captured["kwargs"]
 
     # Verify we got an empty result (as expected from our retry logic)
-    assert result == ""
+    assert result.text == ""
 
 
 @pytest.mark.asyncio

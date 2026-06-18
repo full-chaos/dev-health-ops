@@ -105,9 +105,9 @@ async def _complete(
     provider: LLMProvider | None = None,
 ) -> str:
     if provider:
-        return await provider.complete(prompt)
+        return await provider.complete_text(prompt)
     provider_instance = get_provider(provider_name, model=model)
-    return await provider_instance.complete(prompt)
+    return await provider_instance.complete_text(prompt)
 
 
 def _build_prompt(source_block: str) -> str:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 
+from .base import DEFAULT_MODEL_BY_PROVIDER
 from .local import LocalProvider
 
 DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
@@ -33,6 +34,7 @@ class GeminiProvider(LocalProvider):
         super().__init__(
             api_key=api_key or os.getenv("GEMINI_API_KEY"),
             base_url=base_url or os.getenv("GEMINI_BASE_URL", DEFAULT_GEMINI_BASE_URL),
-            model=model or os.getenv("GEMINI_MODEL", "gemini-3"),
+            model=model
+            or os.getenv("GEMINI_MODEL", DEFAULT_MODEL_BY_PROVIDER["gemini"]),
             **kwargs,
         )

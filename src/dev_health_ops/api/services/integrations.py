@@ -264,27 +264,77 @@ class SyncRunService:
     @staticmethod
     def build_unit_rollups(
         units: list[SyncRunUnit],
+        slowest_limit: int = 5,
     ) -> dict[str, Any]:
-        """Build rollup dicts for the run-status UI."""
+        """Build rollup dicts for the run-status UI (CHAOS-2519).
+
+        Returns:
+            by_status       – {status: count}
+            by_source       – {source_id: {status: count}}
+            by_dataset      – {dataset_key: {status: count}}
+            by_cost_class   – {cost_class: count}
+            slowest_units   – up to ``slowest_limit`` unit IDs sorted by
+                              duration_seconds descending (terminal only)
+            failed_unit_ids – IDs of all failed units
+            partial_failure_summary – None when all succeeded/all failed;
+                              dict with failed_sources/failed_datasets/
+                              error_categories when the run is partial.
+        """
         by_status: dict[str, int] = defaultdict(int)
         by_source: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
         by_dataset: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
         by_cost_class: dict[str, int] = defaultdict(int)
+
+        failed_unit_ids: list[str] = []
+        timed_units: list[tuple[int, str]] = []  # (duration_seconds, unit_id)
+        failed_sources: set[str] = set()
+        failed_datasets: set[str] = set()
+        error_categories: dict[str, int] = defaultdict(int)
 
         for unit in units:
             status = str(unit.status)
             source = str(unit.source_id)
             dataset = str(unit.dataset_key)
             cost = str(unit.cost_class)
+            unit_id = str(unit.id)
 
             by_status[status] += 1
             by_source[source][status] += 1
             by_dataset[dataset][status] += 1
             by_cost_class[cost] += 1
 
+            if status == "failed":
+                failed_unit_ids.append(unit_id)
+                failed_sources.add(source)
+                failed_datasets.add(dataset)
+                # Extract error_category from result JSON if present
+                result_data = unit.result or {}
+                cat = result_data.get("error_category", "unknown")
+                error_categories[str(cat)] += 1
+
+            if unit.duration_seconds is not None:
+                timed_units.append((int(unit.duration_seconds), unit_id))
+
+        timed_units.sort(key=lambda x: x[0], reverse=True)
+        slowest_unit_ids = [uid for _, uid in timed_units[:slowest_limit]]
+
+        success_count = by_status.get("success", 0)
+        failed_count = by_status.get("failed", 0)
+        is_partial = success_count > 0 and failed_count > 0
+        partial_failure_summary: dict[str, Any] | None = None
+        if is_partial:
+            partial_failure_summary = {
+                "failed_sources": sorted(failed_sources),
+                "failed_datasets": sorted(failed_datasets),
+                "error_categories": dict(error_categories),
+            }
+
         return {
             "by_status": dict(by_status),
             "by_source": {k: dict(v) for k, v in by_source.items()},
             "by_dataset": {k: dict(v) for k, v in by_dataset.items()},
             "by_cost_class": dict(by_cost_class),
+            "slowest_unit_ids": slowest_unit_ids,
+            "failed_unit_ids": failed_unit_ids,
+            "partial_failure_summary": partial_failure_summary,
         }

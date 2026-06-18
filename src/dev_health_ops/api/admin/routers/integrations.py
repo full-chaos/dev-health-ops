@@ -522,5 +522,8 @@ async def get_sync_run_units(
         by_source=rollups["by_source"],
         by_dataset=rollups["by_dataset"],
         by_cost_class=rollups["by_cost_class"],
+        slowest_unit_ids=rollups["slowest_unit_ids"],
+        failed_unit_ids=rollups["failed_unit_ids"],
+        partial_failure_summary=rollups["partial_failure_summary"],
         units=[_unit_to_response(u) for u in units],
     )

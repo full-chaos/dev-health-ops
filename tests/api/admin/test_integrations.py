@@ -759,3 +759,218 @@ async def test_create_integration_rejects_foreign_credential(client):
         },
     )
     assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-2519: new rollup fields (slowest_unit_ids, failed_unit_ids,
+# partial_failure_summary)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_sync_run_units_new_rollup_fields_present_empty(
+    client, session_maker, seeded_state
+):
+    """New rollup fields are present even when there are no units."""
+    ac, _ = client
+    created = await _create_integration(ac)
+    integration_id = created["id"]
+    run_id = await _seed_sync_run(session_maker, seeded_state["org_id"], integration_id)
+
+    resp = await ac.get(f"/api/v1/admin/sync-runs/{run_id}/units")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "slowest_unit_ids" in data
+    assert "failed_unit_ids" in data
+    assert "partial_failure_summary" in data
+    assert data["slowest_unit_ids"] == []
+    assert data["failed_unit_ids"] == []
+    assert data["partial_failure_summary"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_sync_run_units_failed_unit_ids(client, session_maker, seeded_state):
+    """failed_unit_ids lists IDs of all failed units."""
+    ac, _ = client
+    created = await _create_integration(ac)
+    integration_id = created["id"]
+    source_id = await _seed_source(
+        session_maker, seeded_state["org_id"], integration_id
+    )
+    run_id = await _seed_sync_run(session_maker, seeded_state["org_id"], integration_id)
+
+    failed_id = uuid.uuid4()
+    async with session_maker() as session:
+        session.add(
+            SyncRunUnit(
+                id=failed_id,
+                org_id=seeded_state["org_id"],
+                sync_run_id=uuid.UUID(run_id),
+                integration_id=uuid.UUID(integration_id),
+                source_id=uuid.UUID(source_id),
+                provider="github",
+                dataset_key="git",
+                cost_class="standard",
+                mode="incremental",
+                status="failed",
+                attempts=1,
+                result={"error_category": "timeout"},
+            )
+        )
+        await session.commit()
+
+    resp = await ac.get(f"/api/v1/admin/sync-runs/{run_id}/units")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert str(failed_id) in data["failed_unit_ids"]
+
+
+@pytest.mark.asyncio
+async def test_get_sync_run_units_slowest_unit_ids(client, session_maker, seeded_state):
+    """slowest_unit_ids lists up to 5 unit IDs sorted by duration desc."""
+    ac, _ = client
+    created = await _create_integration(ac)
+    integration_id = created["id"]
+    source_id = await _seed_source(
+        session_maker, seeded_state["org_id"], integration_id
+    )
+    run_id = await _seed_sync_run(session_maker, seeded_state["org_id"], integration_id)
+
+    slow_id = uuid.uuid4()
+    fast_id = uuid.uuid4()
+    async with session_maker() as session:
+        session.add(
+            SyncRunUnit(
+                id=slow_id,
+                org_id=seeded_state["org_id"],
+                sync_run_id=uuid.UUID(run_id),
+                integration_id=uuid.UUID(integration_id),
+                source_id=uuid.UUID(source_id),
+                provider="github",
+                dataset_key="git",
+                cost_class="standard",
+                mode="incremental",
+                status="success",
+                attempts=1,
+                duration_seconds=120,
+            )
+        )
+        session.add(
+            SyncRunUnit(
+                id=fast_id,
+                org_id=seeded_state["org_id"],
+                sync_run_id=uuid.UUID(run_id),
+                integration_id=uuid.UUID(integration_id),
+                source_id=uuid.UUID(source_id),
+                provider="github",
+                dataset_key="prs",
+                cost_class="standard",
+                mode="incremental",
+                status="success",
+                attempts=1,
+                duration_seconds=5,
+            )
+        )
+        await session.commit()
+
+    resp = await ac.get(f"/api/v1/admin/sync-runs/{run_id}/units")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["slowest_unit_ids"]) == 2
+    # Slowest first
+    assert data["slowest_unit_ids"][0] == str(slow_id)
+    assert data["slowest_unit_ids"][1] == str(fast_id)
+
+
+@pytest.mark.asyncio
+async def test_get_sync_run_units_partial_failure_summary(
+    client, session_maker, seeded_state
+):
+    """partial_failure_summary is populated when run is partial (some success, some failed)."""
+    ac, _ = client
+    created = await _create_integration(ac)
+    integration_id = created["id"]
+    source_id = await _seed_source(
+        session_maker, seeded_state["org_id"], integration_id
+    )
+    run_id = await _seed_sync_run(session_maker, seeded_state["org_id"], integration_id)
+
+    async with session_maker() as session:
+        session.add(
+            SyncRunUnit(
+                org_id=seeded_state["org_id"],
+                sync_run_id=uuid.UUID(run_id),
+                integration_id=uuid.UUID(integration_id),
+                source_id=uuid.UUID(source_id),
+                provider="github",
+                dataset_key="git",
+                cost_class="standard",
+                mode="incremental",
+                status="success",
+                attempts=1,
+            )
+        )
+        session.add(
+            SyncRunUnit(
+                org_id=seeded_state["org_id"],
+                sync_run_id=uuid.UUID(run_id),
+                integration_id=uuid.UUID(integration_id),
+                source_id=uuid.UUID(source_id),
+                provider="github",
+                dataset_key="prs",
+                cost_class="standard",
+                mode="incremental",
+                status="failed",
+                attempts=1,
+                result={"error_category": "rate_limit"},
+            )
+        )
+        await session.commit()
+
+    resp = await ac.get(f"/api/v1/admin/sync-runs/{run_id}/units")
+    assert resp.status_code == 200
+    data = resp.json()
+    summary = data["partial_failure_summary"]
+    assert summary is not None
+    assert "failed_sources" in summary
+    assert "failed_datasets" in summary
+    assert "error_categories" in summary
+    assert "prs" in summary["failed_datasets"]
+    assert summary["error_categories"].get("rate_limit") == 1
+
+
+@pytest.mark.asyncio
+async def test_get_sync_run_units_all_success_no_partial_summary(
+    client, session_maker, seeded_state
+):
+    """partial_failure_summary is None when all units succeed."""
+    ac, _ = client
+    created = await _create_integration(ac)
+    integration_id = created["id"]
+    source_id = await _seed_source(
+        session_maker, seeded_state["org_id"], integration_id
+    )
+    run_id = await _seed_sync_run(session_maker, seeded_state["org_id"], integration_id)
+
+    async with session_maker() as session:
+        session.add(
+            SyncRunUnit(
+                org_id=seeded_state["org_id"],
+                sync_run_id=uuid.UUID(run_id),
+                integration_id=uuid.UUID(integration_id),
+                source_id=uuid.UUID(source_id),
+                provider="github",
+                dataset_key="git",
+                cost_class="standard",
+                mode="incremental",
+                status="success",
+                attempts=1,
+            )
+        )
+        await session.commit()
+
+    resp = await ac.get(f"/api/v1/admin/sync-runs/{run_id}/units")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["partial_failure_summary"] is None
+    assert data["failed_unit_ids"] == []

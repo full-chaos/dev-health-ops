@@ -68,6 +68,7 @@ spec:
             - dev_health_ops.workers.celery_app
             - worker
             - --loglevel=info
+            - --disable-prefetch
             - -Q
             - default,sync,sync.github,sync.gitlab,sync.linear,sync.jira,sync.launchdarkly,sync.github.light,sync.github.medium,sync.gitlab.light,sync.gitlab.medium,sync.jira.medium,sync.linear.medium,webhooks,reports,monitoring
           envFrom:
@@ -178,6 +179,7 @@ spec:
             - dev_health_ops.workers.celery_app
             - worker
             - --loglevel=info
+            - --disable-prefetch
             - -Q
             - ingest
             - --concurrency
@@ -268,6 +270,7 @@ spec:
             - dev_health_ops.workers.celery_app
             - worker
             - --loglevel=info
+            - --disable-prefetch
             - -Q
             - metrics,backfill,monitoring,sync.github.heavy,sync.gitlab.heavy
           envFrom:

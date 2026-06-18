@@ -175,12 +175,14 @@ def test_run_backfill_via_planner_creates_backfill_units_per_source_dataset_wind
         _create_dataset(db_session, integration, dataset_key)
     _patch_db_session(monkeypatch, db_session)
     dispatched = []
+
+    def _fake_dispatch(sync_run_id):
+        dispatched.append(sync_run_id)
+        return {"status": "dispatched", "queued_units": 8}
+
     monkeypatch.setattr(
         "dev_health_ops.workers.sync_units.dispatch_sync_run",
-        lambda sync_run_id: (
-            dispatched.append(sync_run_id)
-            or {"status": "dispatched", "queued_units": 8}
-        ),
+        _fake_dispatch,
     )
 
     result = runner.run_backfill_via_planner(
@@ -341,10 +343,15 @@ def test_run_backfill_uses_legacy_path_when_feature_flag_off(db_session, monkeyp
         sync_runtime, "_dispatch_post_sync_tasks", lambda **kwargs: None
     )
     legacy_calls = []
+
+    def _fake_legacy(**kwargs):
+        legacy_calls.append(kwargs)
+        return {"status": "success"}
+
     monkeypatch.setattr(
         runner,
         "run_backfill_for_config",
-        lambda **kwargs: legacy_calls.append(kwargs) or {"status": "success"},
+        _fake_legacy,
     )
     monkeypatch.setattr(
         runner,

@@ -7,6 +7,16 @@ from typing import Any
 from dev_health_ops.processors import github, gitlab
 
 
+def _counting(counter: dict[str, Any], key: str, value: Any):
+    """Return a fake provider call that bumps ``counter[key]`` and returns value."""
+
+    def _inner(*args: Any, **kwargs: Any) -> Any:
+        counter[key] = counter.get(key, 0) + 1
+        return value
+
+    return _inner
+
+
 class _SimpleRepository:
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
@@ -96,7 +106,7 @@ def _disable_non_git_flags() -> dict[str, Any]:
 
 
 def test_github_commits_run_does_not_fetch_stats_files_or_blame(monkeypatch):
-    calls = {"commits": 0, "stats": 0, "backfill": []}
+    calls: dict[str, Any] = {"commits": 0, "stats": 0, "backfill": []}
 
     monkeypatch.setattr(github, "CONNECTORS_AVAILABLE", True)
     monkeypatch.setattr(github, "GitHubConnector", _FakeGitHubConnector)
@@ -105,15 +115,12 @@ def test_github_commits_run_does_not_fetch_stats_files_or_blame(monkeypatch):
     monkeypatch.setattr(
         github,
         "_fetch_github_commits_sync",
-        lambda *args: (
-            calls.__setitem__("commits", calls["commits"] + 1)
-            or (["raw-sha"], ["commit-row"])
-        ),
+        _counting(calls, "commits", (["raw-sha"], ["commit-row"])),
     )
     monkeypatch.setattr(
         github,
         "_fetch_github_commit_stats_sync",
-        lambda *args: calls.__setitem__("stats", calls["stats"] + 1) or ["stat-row"],
+        _counting(calls, "stats", ["stat-row"]),
     )
 
     async def fake_backfill(**kwargs):
@@ -143,7 +150,7 @@ def test_github_commits_run_does_not_fetch_stats_files_or_blame(monkeypatch):
 
 
 def test_github_granular_stats_files_blame_and_legacy_bundle(monkeypatch):
-    calls = {"commits": 0, "stats": 0, "backfill": []}
+    calls: dict[str, Any] = {"commits": 0, "stats": 0, "backfill": []}
 
     monkeypatch.setattr(github, "CONNECTORS_AVAILABLE", True)
     monkeypatch.setattr(github, "GitHubConnector", _FakeGitHubConnector)
@@ -152,15 +159,12 @@ def test_github_granular_stats_files_blame_and_legacy_bundle(monkeypatch):
     monkeypatch.setattr(
         github,
         "_fetch_github_commits_sync",
-        lambda *args: (
-            calls.__setitem__("commits", calls["commits"] + 1)
-            or (["raw-sha"], ["commit-row"])
-        ),
+        _counting(calls, "commits", (["raw-sha"], ["commit-row"])),
     )
     monkeypatch.setattr(
         github,
         "_fetch_github_commit_stats_sync",
-        lambda *args: calls.__setitem__("stats", calls["stats"] + 1) or ["stat-row"],
+        _counting(calls, "stats", ["stat-row"]),
     )
 
     async def fake_backfill(**kwargs):
@@ -242,7 +246,7 @@ def test_github_granular_stats_files_blame_and_legacy_bundle(monkeypatch):
 
 
 def test_gitlab_commits_run_does_not_fetch_stats_files_or_blame(monkeypatch):
-    calls = {"commits": 0, "stats": 0, "backfill": []}
+    calls: dict[str, Any] = {"commits": 0, "stats": 0, "backfill": []}
 
     monkeypatch.setattr(gitlab, "CONNECTORS_AVAILABLE", True)
     monkeypatch.setattr(gitlab, "GitLabConnector", _FakeGitLabConnector)
@@ -250,15 +254,12 @@ def test_gitlab_commits_run_does_not_fetch_stats_files_or_blame(monkeypatch):
     monkeypatch.setattr(
         gitlab,
         "_fetch_gitlab_commits_sync",
-        lambda *args: (
-            calls.__setitem__("commits", calls["commits"] + 1)
-            or (["sha"], ["commit-row"])
-        ),
+        _counting(calls, "commits", (["sha"], ["commit-row"])),
     )
     monkeypatch.setattr(
         gitlab,
         "_fetch_gitlab_commit_stats_sync",
-        lambda *args: calls.__setitem__("stats", calls["stats"] + 1) or ["stat-row"],
+        _counting(calls, "stats", ["stat-row"]),
     )
 
     async def fake_backfill(**kwargs):
@@ -288,7 +289,7 @@ def test_gitlab_commits_run_does_not_fetch_stats_files_or_blame(monkeypatch):
 
 
 def test_gitlab_granular_stats_files_blame_and_legacy_bundle(monkeypatch):
-    calls = {"commits": 0, "stats": 0, "backfill": []}
+    calls: dict[str, Any] = {"commits": 0, "stats": 0, "backfill": []}
 
     monkeypatch.setattr(gitlab, "CONNECTORS_AVAILABLE", True)
     monkeypatch.setattr(gitlab, "GitLabConnector", _FakeGitLabConnector)
@@ -296,15 +297,12 @@ def test_gitlab_granular_stats_files_blame_and_legacy_bundle(monkeypatch):
     monkeypatch.setattr(
         gitlab,
         "_fetch_gitlab_commits_sync",
-        lambda *args: (
-            calls.__setitem__("commits", calls["commits"] + 1)
-            or (["sha"], ["commit-row"])
-        ),
+        _counting(calls, "commits", (["sha"], ["commit-row"])),
     )
     monkeypatch.setattr(
         gitlab,
         "_fetch_gitlab_commit_stats_sync",
-        lambda *args: calls.__setitem__("stats", calls["stats"] + 1) or ["stat-row"],
+        _counting(calls, "stats", ["stat-row"]),
     )
 
     async def fake_backfill(**kwargs):

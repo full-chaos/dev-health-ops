@@ -112,19 +112,19 @@ class IntegrationService:
         timezone: str | None = None,
     ) -> Integration:
         if name is not None:
-            integration.name = name  # type: ignore[assignment]
+            integration.name = name
         if credential_id is not None:
             integration.credential_id = await self._resolve_credential_id(
                 credential_id, str(integration.provider)
             )
         if config is not None:
-            integration.config = config  # type: ignore[assignment]
+            integration.config = config
         if is_active is not None:
-            integration.is_active = is_active  # type: ignore[assignment]
+            integration.is_active = is_active
         if schedule_cron is not None:
-            integration.schedule_cron = schedule_cron  # type: ignore[assignment]
+            integration.schedule_cron = schedule_cron
         if timezone is not None:
-            integration.timezone = timezone  # type: ignore[assignment]
+            integration.timezone = timezone
         await self._session.flush()
         return integration
 
@@ -173,7 +173,7 @@ class IntegrationSourceService:
     async def set_enabled(
         self, source: IntegrationSource, enabled: bool
     ) -> IntegrationSource:
-        source.is_enabled = enabled  # type: ignore[assignment]
+        source.is_enabled = enabled
         await self._session.flush()
         return source
 
@@ -205,7 +205,7 @@ class IntegrationDatasetService:
     async def set_enabled(
         self, dataset: IntegrationDataset, enabled: bool
     ) -> IntegrationDataset:
-        dataset.is_enabled = enabled  # type: ignore[assignment]
+        dataset.is_enabled = enabled
         await self._session.flush()
         return dataset
 

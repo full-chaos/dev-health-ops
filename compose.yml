@@ -252,7 +252,7 @@ services:
       args:
         SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
     container_name: worker
-    command: celery -A workers.celery_app worker --loglevel=info -Q default,sync,sync.github,sync.gitlab,sync.linear,sync.jira,sync.launchdarkly,webhooks,reports,monitoring --concurrency=${WORKER_CONCURRENCY:-4}
+    command: celery -A workers.celery_app worker --loglevel=info -Q default,sync,sync.github,sync.gitlab,sync.linear,sync.jira,sync.launchdarkly,sync.github.light,sync.github.medium,sync.gitlab.light,sync.gitlab.medium,sync.jira.medium,sync.linear.medium,webhooks,reports,monitoring --concurrency=${WORKER_CONCURRENCY:-4}
     environment:
       <<: *env
       CELERY_BROKER_URL: redis://valkey:6379/0
@@ -285,7 +285,7 @@ services:
     container_name: worker-heavy
     # `monitoring` is consumed here AND by `worker` above: queue telemetry
     # survives either pool being saturated or down.
-    command: celery -A workers.celery_app worker --loglevel=info -Q metrics,backfill,monitoring --concurrency=${WORKER_HEAVY_CONCURRENCY:-2}
+    command: celery -A workers.celery_app worker --loglevel=info -Q metrics,backfill,monitoring,sync.github.heavy,sync.gitlab.heavy --concurrency=${WORKER_HEAVY_CONCURRENCY:-2}
 
   # ---------------------------------------------------------------------------
   # Observability — SigNoz (distributed tracing + metrics)

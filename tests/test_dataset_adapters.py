@@ -324,6 +324,7 @@ def test_registry_flags_make_split_git_datasets_actually_sync(
     with patch("dev_health_ops.processors.github.process_github_repo", processor):
         run_dataset_unit(ctx, _runtime())
 
+    assert processor.await_args is not None
     kwargs = processor.await_args.kwargs
     assert kwargs[own_flag] is True
     split_flags = {"sync_commits", "sync_commit_stats", "sync_files", "sync_blame"}

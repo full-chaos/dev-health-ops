@@ -8,6 +8,7 @@ real provider network calls.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -45,7 +46,7 @@ def engine(tmp_path: Path):
 
 
 @pytest.fixture()
-def session(engine) -> Session:
+def session(engine) -> Iterator[Session]:
     maker = sessionmaker(engine, expire_on_commit=False)
     with maker() as s:
         yield s

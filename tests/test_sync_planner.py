@@ -115,6 +115,7 @@ def test_enabled_sources_and_enabled_datasets_fan_out_to_units(db_session):
         db_session,
         SyncPlanRequest(
             integration_id=str(integration.id),
+            org_id=ORG_ID,
             mode=SyncRunMode.INCREMENTAL.value,
             triggered_by="manual",
             before=datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc),
@@ -147,6 +148,7 @@ def test_unsupported_provider_dataset_pairs_are_skipped(db_session):
         db_session,
         SyncPlanRequest(
             integration_id=str(integration.id),
+            org_id=ORG_ID,
             mode=SyncRunMode.INCREMENTAL.value,
             triggered_by="manual",
         ),
@@ -171,6 +173,7 @@ def test_backfill_creates_one_unit_per_source_dataset_window(db_session):
         db_session,
         SyncPlanRequest(
             integration_id=str(integration.id),
+            org_id=ORG_ID,
             mode=SyncRunMode.BACKFILL.value,
             triggered_by="manual",
             since=datetime(2026, 6, 1, tzinfo=timezone.utc),
@@ -213,6 +216,7 @@ def test_disabled_source_produces_zero_units(db_session):
         db_session,
         SyncPlanRequest(
             integration_id=str(integration.id),
+            org_id=ORG_ID,
             mode=SyncRunMode.INCREMENTAL.value,
             triggered_by="manual",
         ),
@@ -234,6 +238,7 @@ def test_disabled_dataset_produces_zero_units(db_session):
         db_session,
         SyncPlanRequest(
             integration_id=str(integration.id),
+            org_id=ORG_ID,
             mode=SyncRunMode.INCREMENTAL.value,
             triggered_by="manual",
         ),
@@ -253,12 +258,13 @@ def test_incremental_window_starts_at_dataset_watermark(db_session):
     )
     _create_dataset(db_session, integration, "prs")
     watermark = datetime(2026, 6, 10, 9, 30, tzinfo=timezone.utc)
-    set_watermark(db_session, ORG_ID, str(source.id), "prs", watermark)
+    set_watermark(db_session, ORG_ID, source.external_id, "prs", watermark)
 
     plan = plan_sync_run(
         db_session,
         SyncPlanRequest(
             integration_id=str(integration.id),
+            org_id=ORG_ID,
             mode=SyncRunMode.INCREMENTAL.value,
             triggered_by="manual",
             before=datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc),
@@ -268,3 +274,40 @@ def test_incremental_window_starts_at_dataset_watermark(db_session):
     unit = _planned_units(db_session, plan.sync_run_id)[0]
     assert unit.since_at is not None
     assert unit.since_at.replace(tzinfo=timezone.utc) == watermark
+
+
+def test_planner_rejects_cross_org_integration(db_session):
+    integration = _create_integration(db_session)
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, "commits")
+    with pytest.raises(ValueError):
+        plan_sync_run(
+            db_session,
+            SyncPlanRequest(
+                integration_id=str(integration.id),
+                org_id="someone-elses-org",
+                mode=SyncRunMode.INCREMENTAL.value,
+                triggered_by="manual",
+            ),
+        )
+
+
+def test_planned_units_persist_isolated_processor_flags(db_session):
+    integration = _create_integration(db_session)
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, "prs")
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+    unit = _planned_units(db_session, plan.sync_run_id)[0]
+    # prs unit must persist explicit flags and must NOT over-fetch unrelated datasets
+    assert unit.processor_flags
+    assert unit.processor_flags.get("sync_security", False) is False
+    assert unit.processor_flags.get("sync_deployments", False) is False
+    assert unit.processor_flags.get("sync_incidents", False) is False

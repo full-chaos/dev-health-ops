@@ -39,6 +39,7 @@ class SyncTaskContext:
     org_id: str
     integration_id: str
     source_id: str
+    source_external_id: str  # watermark identity (stable across migration/rediscovery)
     provider: str
     dataset_key: str
     cost_class: str

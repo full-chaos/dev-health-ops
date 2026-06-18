@@ -158,6 +158,7 @@ def upgrade() -> None:
         sa.Column("duration_seconds", sa.Integer(), nullable=True),
         sa.Column("error", sa.Text(), nullable=True),
         sa.Column("result", sa.JSON(), nullable=True),
+        sa.Column("processor_flags", sa.JSON(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["source_id"], ["integration_sources.id"]),

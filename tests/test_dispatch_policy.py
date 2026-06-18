@@ -180,9 +180,10 @@ class TestFlagOn:
             cost_class="heavy",
             cost_class_queues_enabled=True,
         )
-        # Tier 1: cost-class queue IS defined for (github, heavy) → routes there
-        # regardless of PROVIDER_SYNC_QUEUES_ENABLED (tier-1 doesn't need it).
-        assert r.queue == "sync.github.heavy"
+        # Tier 1 now ALSO requires PROVIDER_SYNC_QUEUES_ENABLED: cost-class
+        # queues must never be produced while only the shared `sync` queue is
+        # consumed (that would strand units). Provider flag off -> shared sync.
+        assert r.queue == DEFAULT_SYNC_QUEUE
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +349,7 @@ class TestFeatureFlagReaders:
     def test_cost_class_flag_truthy(
         self, val: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
         monkeypatch.setenv("SYNC_COST_CLASS_QUEUES", val)
         assert _cost_class_queues_enabled() is True
 
@@ -355,5 +357,16 @@ class TestFeatureFlagReaders:
     def test_cost_class_flag_falsy(
         self, val: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.setenv("SYNC_COST_CLASS_QUEUES", val)
+        assert _cost_class_queues_enabled() is False
+
+    @pytest.mark.parametrize("val", ["true", "1", "yes"])
+    def test_cost_class_flag_requires_provider_flag(
+        self, val: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Cost-class queues are a sub-tier of provider queues: with the
+        # provider flag off, the cost-class flag alone must NOT enable them
+        # (otherwise units route to queues no worker consumes).
+        monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "false")
         monkeypatch.setenv("SYNC_COST_CLASS_QUEUES", val)
         assert _cost_class_queues_enabled() is False

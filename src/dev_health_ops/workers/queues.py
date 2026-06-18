@@ -86,6 +86,8 @@ def _cost_class_queues_enabled() -> bool:
     Requires ``PROVIDER_SYNC_QUEUES_ENABLED`` to also be on; cost-class queues
     are a sub-tier of provider queues.
     """
+    if not _provider_sync_queues_enabled():
+        return False
     return os.getenv("SYNC_COST_CLASS_QUEUES", "false").strip().lower() in {
         "1",
         "true",

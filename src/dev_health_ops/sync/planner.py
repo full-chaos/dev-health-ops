@@ -64,6 +64,7 @@ class SyncPlanRequest:
     """
 
     integration_id: str
+    org_id: str
     mode: str  # one of models.integrations.SyncRunMode
     triggered_by: str
     source_ids: tuple[str, ...] | None = None
@@ -109,7 +110,7 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
     via :func:`dev_health_ops.workers.sync_units.dispatch_sync_run`.
     """
 
-    integration = _load_integration(session, request.integration_id)
+    integration = _load_integration(session, request.integration_id, request.org_id)
     mode = _validate_mode(request.mode)
     sources = _load_enabled_sources(session, integration, request.source_ids)
     datasets = _load_enabled_datasets(session, integration, request.dataset_keys)
@@ -152,6 +153,7 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
             before_at=unit.window_end,
             status=SyncRunUnitStatus.PLANNED.value,
             attempts=0,
+            processor_flags=dict(unit.processor_flags),
         )
         for unit in planned_units
     ]
@@ -165,11 +167,17 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
     )
 
 
-def _load_integration(session: Session, integration_id: str) -> Integration:
+def _load_integration(
+    session: Session, integration_id: str, org_id: str
+) -> Integration:
     integration_uuid = _coerce_uuid(integration_id, "integration_id")
-    integration = session.get(Integration, integration_uuid)
+    integration = (
+        session.query(Integration)
+        .filter(Integration.id == integration_uuid, Integration.org_id == org_id)
+        .one_or_none()
+    )
     if integration is None:
-        raise ValueError(f"Integration not found: {integration_id}")
+        raise ValueError(f"Integration not found for org {org_id}: {integration_id}")
     return integration
 
 
@@ -233,7 +241,7 @@ def _build_planned_units(
                 request=request,
                 mode=mode,
                 org_id=integration.org_id,
-                source_id=str(source.id),
+                watermark_source_key=source.external_id,
                 dataset_key=dataset.dataset_key,
                 watermark_behavior=spec.watermark_behavior,
                 now=now,
@@ -262,7 +270,7 @@ def _resolve_windows(
     request: SyncPlanRequest,
     mode: str,
     org_id: str,
-    source_id: str,
+    watermark_source_key: str,
     dataset_key: str,
     watermark_behavior: WatermarkBehavior,
     now: datetime,
@@ -270,7 +278,9 @@ def _resolve_windows(
     if mode == SyncRunMode.INCREMENTAL.value:
         window_start = None
         if watermark_behavior == WatermarkBehavior.INCREMENTAL:
-            window_start = get_watermark(session, org_id, source_id, dataset_key)
+            window_start = get_watermark(
+                session, org_id, watermark_source_key, dataset_key
+            )
         return ((window_start, _request_before_or_now(request, now)),)
 
     if mode == SyncRunMode.BACKFILL.value:

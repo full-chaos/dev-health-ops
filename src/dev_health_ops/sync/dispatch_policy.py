@@ -56,7 +56,7 @@ def route(
     concurrency_key = f"{org_id}:{normalized_provider}:{cost_class}"
 
     # Tier 1: cost-class queue (most specific)
-    if cost_class_queues_enabled:
+    if cost_class_queues_enabled and _provider_sync_queues_enabled():
         cost_class_key = (normalized_provider, cost_class)
         if cost_class_key in SYNC_COST_CLASS_QUEUES:
             return DispatchRoute(

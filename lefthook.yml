@@ -1,4 +1,4 @@
-# Pre-commit + pre-push hooks for ruff format + lint.
+# Pre-commit + pre-push hooks for ruff format + lint, plus a mypy type-check gate.
 #
 # Design rationale:
 #   - pre-commit hook auto-fixes formatting + lint on staged files and
@@ -10,6 +10,11 @@
 #     cannot modify the commits being pushed (git's model), so auto-fix would
 #     leave uncommitted changes in the working tree and block the push without
 #     resolving anything. Final-gate-without-auto-fix is the correct shape here.
+#   - mypy runs as a non-fixable gate in BOTH pre-commit and pre-push. It type-
+#     checks the whole project (the `files` set in [tool.mypy], not just staged
+#     files) because per-file mypy is unreliable — it needs full module context.
+#     The glob "*.py" means it only fires when Python files are involved, and the
+#     incremental cache (.mypy_cache/) keeps warm runs well under a second.
 #   - Either hook can be skipped with `--no-verify` for WIP or emergency pushes.
 #
 # Install: `make install` (wires `lefthook install` into the bootstrap).
@@ -34,6 +39,10 @@ pre-commit:
       glob: "*.py"
       run: ruff check --fix {staged_files}
       stage_fixed: true
+    mypy:
+      glob: "*.py"
+      run: mypy
+      fail_text: "mypy found type errors. Fix them, or `git commit --no-verify` to bypass (discouraged)."
 
 pre-push:
   parallel: true
@@ -46,3 +55,7 @@ pre-push:
       glob: "*.py"
       run: ruff check {push_files}
       fail_text: "Run `ruff check --fix .` locally, commit the result, push again. Or `git push --no-verify` to bypass."
+    mypy:
+      glob: "*.py"
+      run: mypy
+      fail_text: "mypy found type errors. Run `mypy` locally, fix them, commit, push again. Or `git push --no-verify` to bypass."

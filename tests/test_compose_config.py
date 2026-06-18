@@ -23,6 +23,23 @@ def _parse_queues(command_str: str) -> set[str]:
     return queues
 
 
+def _stringify_command(value: object) -> str:
+    return (
+        " ".join(str(part) for part in value) if isinstance(value, list) else str(value)
+    )
+
+
+def _container_command_string(service: dict) -> str:
+    parts = []
+    entrypoint = service.get("entrypoint")
+    command = service.get("command")
+    if entrypoint:
+        parts.append(_stringify_command(entrypoint))
+    if command:
+        parts.append(_stringify_command(command))
+    return " ".join(parts)
+
+
 def test_compose_workers_cover_every_celery_queue() -> None:
     """CHAOS-2278: the union of -Q lists across all compose celery worker
     services must cover every queue declared in workers.config.task_queues.
@@ -41,11 +58,7 @@ def test_compose_workers_cover_every_celery_queue() -> None:
         command = service.get("command")
         if command is None:
             continue
-        command_str = (
-            " ".join(str(part) for part in command)
-            if isinstance(command, list)
-            else str(command)
-        )
+        command_str = _container_command_string(service)
         tokens = command_str.split()
         if "celery" not in tokens or "worker" not in tokens:
             continue
@@ -102,11 +115,7 @@ def test_monitoring_queue_declared_and_consumed_redundantly() -> None:
         command = service.get("command")
         if command is None:
             continue
-        command_str = (
-            " ".join(str(part) for part in command)
-            if isinstance(command, list)
-            else str(command)
-        )
+        command_str = _container_command_string(service)
         tokens = command_str.split()
         if "celery" not in tokens or "worker" not in tokens:
             continue
@@ -137,12 +146,7 @@ def _load_yaml(path: Path) -> dict:
 
 
 def _command_string(service: dict) -> str:
-    command = service.get("command") or service.get("entrypoint") or ""
-    return (
-        " ".join(str(part) for part in command)
-        if isinstance(command, list)
-        else str(command)
-    )
+    return _container_command_string(service)
 
 
 def _is_beat_service(name: str, service: dict) -> bool:
@@ -385,6 +389,110 @@ def test_celery_worker_prefetch_multiplier_is_one() -> None:
     from dev_health_ops.workers.config import worker_prefetch_multiplier
 
     assert worker_prefetch_multiplier == 1
+
+
+def test_celery_worker_prefetch_is_disabled_for_redis() -> None:
+    from dev_health_ops.workers.config import worker_disable_prefetch
+
+    assert worker_disable_prefetch is True
+
+
+def test_stream_consumer_beat_ticks_do_not_outlive_cadence() -> None:
+    from dev_health_ops.api.ingest.consumer import BLOCK_MS as INGEST_BLOCK_MS
+    from dev_health_ops.api.product_telemetry.consumer import (
+        BLOCK_MS as PRODUCT_TELEMETRY_BLOCK_MS,
+    )
+    from dev_health_ops.workers.config import beat_schedule
+
+    cases = {
+        "process-ingest-streams": INGEST_BLOCK_MS,
+        "process-product-telemetry-streams": PRODUCT_TELEMETRY_BLOCK_MS,
+    }
+
+    for entry_name, block_ms in cases.items():
+        entry = beat_schedule[entry_name]
+        schedule_seconds = float(entry["schedule"])
+        max_iterations = int(entry["kwargs"]["max_iterations"])
+
+        assert (max_iterations * block_ms) / 1000 < schedule_seconds
+        assert entry["options"] == {"queue": "ingest", "expires": 30}
+
+
+def test_worker_commands_disable_prefetch_for_redis() -> None:
+    for path in (_REPO_ROOT / "compose.yml", _PROD_COMPOSE, _SWARM_STACK):
+        services = _load_yaml(path).get("services") or {}
+        worker_commands = [
+            _command_string(service).split()
+            for service in services.values()
+            if "worker" in _command_string(service).split()
+        ]
+
+        assert worker_commands
+        for command in worker_commands:
+            assert "--disable-prefetch" in command
+
+    k8s_commands: list[list[str]] = []
+    for doc in yaml.safe_load_all((_K8S_DIR / "worker.yaml").read_text()):
+        if not doc or doc.get("kind") != "Deployment":
+            continue
+        for container in doc["spec"]["template"]["spec"].get("containers") or []:
+            command = container.get("command") or []
+            if "worker" in command:
+                k8s_commands.append(command)
+
+    assert k8s_commands
+    for command in k8s_commands:
+        assert "--disable-prefetch" in command
+
+    helm_templates = [
+        _HELM_DIR / "templates" / "worker-deployment.yaml",
+        _HELM_DIR / "templates" / "worker-pools.yaml",
+    ]
+    for template in helm_templates:
+        text = template.read_text(encoding="utf-8")
+        assert "--disable-prefetch" in text
+
+
+def test_local_compose_workers_import_mounted_source() -> None:
+    services = _load_yaml(_REPO_ROOT / "compose.yml").get("services") or {}
+
+    for service_name in ("worker", "worker-ingest", "worker-heavy"):
+        service = services[service_name]
+        command = _command_string(service).split()
+        assert "worker" in command
+        assert service["environment"]["PYTHONPATH"] == "/app/src"
+        assert "./:/app" in service["volumes"]
+
+
+def test_platform_compose_workers_and_beat_import_mounted_source() -> None:
+    compose_path = _REPO_ROOT.parent / "compose.yml"
+    services = _load_yaml(compose_path).get("services") or {}
+
+    for service_name in ("worker", "worker-ingest", "worker-heavy", "beat"):
+        service = services[service_name]
+        assert service["environment"]["PYTHONPATH"] == "/app/src"
+        assert "./ops:/app" in service["volumes"]
+
+
+def test_compose_workers_override_runner_entrypoint() -> None:
+    for path in (_LEGACY_COMPOSE, _PROD_COMPOSE, _SWARM_STACK):
+        services = _load_yaml(path).get("services") or {}
+        for service_name in ("worker", "worker-ingest", "worker-heavy"):
+            service = services[service_name]
+            assert service["entrypoint"] == ["celery"]
+            command = _stringify_command(service["command"])
+            assert command.split()[0] != "celery"
+            assert "dev_health_ops.workers.celery_app" in command
+
+
+def test_production_workers_use_semantic_postgres_uri() -> None:
+    for path in (_PROD_COMPOSE, _SWARM_STACK):
+        services = _load_yaml(path).get("services") or {}
+        for service_name in ("api", "worker", "worker-ingest", "worker-heavy"):
+            environment = services[service_name]["environment"]
+            assert environment["POSTGRES_URI"].startswith("postgresql+asyncpg://")
+            assert environment["DATABASE_URI"].startswith("postgresql+asyncpg://")
+            assert environment["CLICKHOUSE_URI"].startswith("clickhouse://")
 
 
 def test_production_stacks_consume_monitoring_queue() -> None:

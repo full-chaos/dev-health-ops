@@ -103,7 +103,9 @@ services:
       - "--port"
       - "8000"
     environment:
-      DATABASE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:8123/${CLICKHOUSE_DB:-default}
+      POSTGRES_URI: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:5432/${POSTGRES_DB}
+      DATABASE_URI: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:5432/${POSTGRES_DB}
+      CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:8123/${CLICKHOUSE_DB:-default}
       REDIS_URL: redis://valkey:6379/1
       CELERY_BROKER_URL: redis://valkey:6379/0
       CELERY_RESULT_BACKEND: redis://valkey:6379/0
@@ -199,17 +201,21 @@ services:
     restart: unless-stopped
     stop_signal: SIGTERM
     stop_grace_period: ${WORKER_STOP_GRACE_PERIOD:-3700s}
-    command:
+    entrypoint:
       - celery
+    command:
       - -A
       - dev_health_ops.workers.celery_app
       - worker
       - --loglevel=info
+      - --disable-prefetch
       - -Q
       - default,sync,sync.github,sync.gitlab,sync.linear,sync.jira,sync.launchdarkly,sync.github.light,sync.github.medium,sync.gitlab.light,sync.gitlab.medium,sync.jira.medium,sync.linear.medium,webhooks,reports,monitoring
       - --concurrency=${WORKER_CONCURRENCY:-4}
     environment:
-      DATABASE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:8123/${CLICKHOUSE_DB:-default}
+      POSTGRES_URI: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:5432/${POSTGRES_DB}
+      DATABASE_URI: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:5432/${POSTGRES_DB}
+      CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:8123/${CLICKHOUSE_DB:-default}
       CELERY_BROKER_URL: redis://valkey:6379/0
       CELERY_RESULT_BACKEND: redis://valkey:6379/0
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -244,11 +250,11 @@ services:
     <<: *worker-base
     container_name: dev-health-worker-ingest
     command:
-      - celery
       - -A
       - dev_health_ops.workers.celery_app
       - worker
       - --loglevel=info
+      - --disable-prefetch
       - -Q
       - ingest
       - --concurrency=1
@@ -257,11 +263,11 @@ services:
     <<: *worker-base
     container_name: dev-health-worker-heavy
     command:
-      - celery
       - -A
       - dev_health_ops.workers.celery_app
       - worker
       - --loglevel=info
+      - --disable-prefetch
       - -Q
       - metrics,backfill,monitoring,sync.github.heavy,sync.gitlab.heavy
       - --concurrency=${WORKER_HEAVY_CONCURRENCY:-2}

@@ -99,12 +99,19 @@ def _header_value(exc: BaseException, name: str) -> str | None:
     return None
 
 
+# Upper bound on any provider-supplied Retry-After. A hostile or buggy provider
+# can send `Retry-After: 86400`; honoring it verbatim would pin a Celery worker
+# (or the materialize coroutine) for a day. Clamp so long backoffs surface as a
+# bounded retry instead of capacity starvation.
+_MAX_RETRY_AFTER_SECONDS = 60.0
+
+
 def _retry_after_seconds(exc: BaseException) -> float | None:
     raw = getattr(exc, "retry_after", None) or _header_value(exc, "Retry-After")
     if raw is None:
         return None
     try:
-        return max(0.0, float(raw))
+        return min(_MAX_RETRY_AFTER_SECONDS, max(0.0, float(raw)))
     except (TypeError, ValueError):
         pass
     try:
@@ -113,7 +120,10 @@ def _retry_after_seconds(exc: BaseException) -> float | None:
         return None
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
-    return max(0.0, (parsed - datetime.now(timezone.utc)).total_seconds())
+    return min(
+        _MAX_RETRY_AFTER_SECONDS,
+        max(0.0, (parsed - datetime.now(timezone.utc)).total_seconds()),
+    )
 
 
 def _default_model_for_provider(provider: str) -> str | None:

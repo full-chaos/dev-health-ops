@@ -72,3 +72,36 @@ def test_model_not_found_names_provider_default() -> None:
     assert not is_retryable(err)
     assert "bogus-model" in str(err)
     assert "gpt-5-mini" in str(err)
+
+
+class HugeNumericRetryAfterError(Exception):
+    status_code = 429
+    headers = {"Retry-After": "86400"}
+
+
+class FarFutureDateRetryAfterError(Exception):
+    status_code = 429
+    headers = {"Retry-After": "Wed, 21 Oct 2099 07:28:00 GMT"}
+
+
+def test_huge_numeric_retry_after_is_clamped() -> None:
+    err = classify_provider_error(
+        HugeNumericRetryAfterError("rate_limit_exceeded"),
+        provider="openai",
+        model="gpt-5-mini",
+    )
+
+    assert isinstance(err, LLMRateLimitError)
+    # A day-long Retry-After must be clamped, not honored verbatim.
+    assert err.retry_after == 60.0
+
+
+def test_far_future_http_date_retry_after_is_clamped() -> None:
+    err = classify_provider_error(
+        FarFutureDateRetryAfterError("rate_limit_exceeded"),
+        provider="openai",
+        model="gpt-5-mini",
+    )
+
+    assert isinstance(err, LLMRateLimitError)
+    assert err.retry_after == 60.0

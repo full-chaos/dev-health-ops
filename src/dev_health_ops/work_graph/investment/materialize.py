@@ -21,6 +21,8 @@ from dev_health_ops.llm import (
     LLMServerError,
     classify_provider_error,
     get_provider,
+    resolve_model_name,
+    resolve_provider_name,
 )
 from dev_health_ops.llm.providers.none import NoneProvider
 from dev_health_ops.metrics.schemas import (
@@ -31,6 +33,8 @@ from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.metrics.sinks.factory import create_sink
 from dev_health_ops.work_graph.ids import parse_commit_from_id, parse_pr_from_id
 from dev_health_ops.work_graph.investment.categorize import (
+    PROMPT_VERSION,
+    TAXONOMY_VERSION,
     categorize_text_bundle,
     fallback_outcome,
 )
@@ -120,6 +124,62 @@ def _format_llm_summary(ok: int, failure_counts: Counter[str]) -> str:
     return "llm: " + ", ".join(parts)
 
 
+def _effective_model_version(provider: str, model: str | None) -> str:
+    resolved_model = resolve_model_name(provider, model) or model or provider
+    return (
+        f"provider={provider};model={resolved_model};"
+        f"taxonomy={TAXONOMY_VERSION};prompt={PROMPT_VERSION}"
+    )
+
+
+def _fetch_existing_investment_keys(
+    sink: BaseMetricsSink,
+    *,
+    org_id: str,
+    keys: Iterable[tuple[str, str]],
+    model_version: str,
+) -> set[tuple[str, str]]:
+    key_list = list(dict.fromkeys(keys))
+    if not key_list or not hasattr(sink, "query_dicts"):
+        return set()
+    work_unit_ids = sorted({work_unit_id for work_unit_id, _ in key_list})
+    input_hashes = sorted({input_hash for _, input_hash in key_list})
+    query = """
+        SELECT work_unit_id, categorization_input_hash
+        FROM (
+            SELECT
+                work_unit_id,
+                categorization_input_hash,
+                argMax(categorization_status, computed_at) AS latest_status
+            FROM work_unit_investments
+            WHERE org_id = %(org_id)s
+              AND work_unit_id IN %(work_unit_ids)s
+              AND categorization_input_hash IN %(input_hashes)s
+              AND categorization_model_version = %(model_version)s
+            GROUP BY work_unit_id, categorization_input_hash
+        )
+        WHERE latest_status IN %(valid_statuses)s
+    """
+    rows = sink.query_dicts(
+        query,
+        {
+            "org_id": org_id,
+            "work_unit_ids": work_unit_ids,
+            "input_hashes": input_hashes,
+            "model_version": model_version,
+            "valid_statuses": ["ok", "repaired"],
+        },
+    )
+    return {
+        (
+            str(row.get("work_unit_id") or ""),
+            str(row.get("categorization_input_hash") or ""),
+        )
+        for row in rows
+        if row.get("work_unit_id") and row.get("categorization_input_hash")
+    }
+
+
 @dataclass(frozen=True)
 class PreprocessedComponent:
     unit_id: str
@@ -203,6 +263,9 @@ class MaterializeConfig:
     team_ids: list[str] | None = None
     llm_concurrency: int = 5
     org_id: str | None = None
+    run_id: str | None = None
+    computed_at: datetime | None = None
+    component_indexes: list[int] | None = None
 
 
 def _build_components(
@@ -435,8 +498,9 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
         sink.ensure_schema()
 
         # Initialize LLM provider once (reusing connection pool)
+        resolved_llm_provider = resolve_provider_name(config.llm_provider)
         provider_instance = get_provider(
-            config.llm_provider,
+            resolved_llm_provider,
             model=config.llm_model,
             api_key=config.llm_api_key or None,
             base_url=config.llm_base_url or None,
@@ -445,7 +509,7 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
             raise LLMAuthError(
                 "LLM provider 'none' cannot materialize investment categorizations; "
                 "configure a real LLM provider or use --llm-provider mock for tests.",
-                provider=config.llm_provider,
+                provider=resolved_llm_provider,
                 model="none",
             )
 
@@ -456,11 +520,19 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
             sink, repo_ids=repo_ids, org_id=config.org_id or ""
         )
         components = _build_components(edges)
+        total_components = len(components)
         if not components:
             logger.info(
                 "No work graph components found for investment materialization."
             )
             return {"components": 0, "records": 0, "quotes": 0}
+        if config.component_indexes is not None:
+            wanted_indexes = set(config.component_indexes)
+            components = [
+                component
+                for component_index, component in enumerate(components)
+                if component_index in wanted_indexes
+            ]
 
         issue_ids = {
             node_id
@@ -518,9 +590,11 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
 
         records: list[WorkUnitInvestmentRecord] = []
         quote_records: list[WorkUnitInvestmentEvidenceQuoteRecord] = []
-        run_id = uuid.uuid4().hex
-        computed_at = datetime.now(timezone.utc)
-        model_version = config.llm_model or config.llm_provider
+        run_id = config.run_id or uuid.uuid4().hex
+        computed_at = config.computed_at or datetime.now(timezone.utc)
+        model_version = _effective_model_version(
+            resolved_llm_provider, config.llm_model
+        )
 
         logger.info(
             "Materializing investments for %d components (run_id=%s)",
@@ -592,6 +666,33 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
             len(fallback_results),
         )
 
+        skipped_existing: set[int] = set()
+        if pending_llm and not config.force:
+            pending_keys = {
+                idx: (preprocessed[idx].unit_id, bundle.input_hash)
+                for idx, bundle in pending_llm
+            }
+            existing_keys = await asyncio.to_thread(
+                _fetch_existing_investment_keys,
+                sink,
+                org_id=config.org_id or "",
+                keys=pending_keys.values(),
+                model_version=model_version,
+            )
+            skipped_existing = {
+                idx for idx, key in pending_keys.items() if key in existing_keys
+            }
+            if skipped_existing:
+                pending_llm = [
+                    (idx, bundle)
+                    for idx, bundle in pending_llm
+                    if idx not in skipped_existing
+                ]
+                logger.info(
+                    "Skipping %d unchanged investment bundle(s) with fresh categorization",
+                    len(skipped_existing),
+                )
+
         # Parallel LLM categorization with concurrency limit
         semaphore = asyncio.Semaphore(config.llm_concurrency)
         llm_results: dict[int, Any] = {}
@@ -601,7 +702,7 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
             async with semaphore:
                 outcome = await categorize_text_bundle(
                     bundle,
-                    llm_provider=config.llm_provider,
+                    llm_provider=resolved_llm_provider,
                     llm_model=config.llm_model,
                     provider=provider_instance,
                 )
@@ -682,6 +783,8 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
 
         # Post-process: create records from outcomes
         for idx, data in preprocessed.items():
+            if idx in skipped_existing:
+                continue
             outcome = llm_results.get(idx)
             if outcome is None:
                 outcome = fallback_outcome("llm_task_failed")
@@ -815,8 +918,10 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
 
         return {
             "components": len(components),
+            "total_components": total_components,
             "records": len(records),
             "quotes": len(quote_records),
+            "skipped_existing": len(skipped_existing),
             "llm_calls": llm_calls,
             "llm_input_tokens": llm_input_tokens,
             "llm_output_tokens": llm_output_tokens,

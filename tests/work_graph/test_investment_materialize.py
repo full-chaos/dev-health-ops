@@ -4,6 +4,7 @@ import asyncio
 import builtins
 import json
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -31,6 +32,8 @@ class FakeSink:
         self.quote_rows: list[WorkUnitInvestmentEvidenceQuoteRecord] = []
         self.membership_rows: list = []
         self.membership_run_records: list = []
+        self.query_calls: list[tuple[str, dict]] = []
+        self.query_result_factory: Callable[[str, dict], list[dict]] | None = None
 
     def ensure_schema(self) -> None:
         return None
@@ -46,6 +49,12 @@ class FakeSink:
 
     def write_membership_run(self, record) -> None:
         self.membership_run_records.append(record)
+
+    def query_dicts(self, query: str, parameters: dict) -> list[dict]:
+        self.query_calls.append((query, parameters))
+        if self.query_result_factory is not None:
+            return self.query_result_factory(query, parameters)
+        return []
 
     def close(self) -> None:
         return None
@@ -599,6 +608,110 @@ async def test_materialize_records_default_org_id_empty(monkeypatch):
     await materialize_investments(config)
     assert sink.investment_rows
     assert all(r.org_id == "" for r in sink.investment_rows)
+
+
+@pytest.mark.asyncio
+async def test_materialize_skips_fresh_existing_input_hash_by_default(monkeypatch):
+    repo_id, edges, work_items, commits = _sample_data()
+    work_items[0]["description"] = "Resolve authentication failures. " * 20
+    sink = FakeSink()
+
+    def _existing_key(_query: str, parameters: dict) -> list[dict]:
+        return [
+            {
+                "work_unit_id": parameters["work_unit_ids"][0],
+                "categorization_input_hash": parameters["input_hashes"][0],
+            }
+        ]
+
+    async def _categorize_should_not_run(*args, **kwargs):
+        raise AssertionError("unchanged bundle should not call LLM")
+
+    sink.query_result_factory = _existing_key
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
+    )
+    _patch_queries(monkeypatch, edges, work_items, commits)
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.categorize_text_bundle",
+        _categorize_should_not_run,
+    )
+
+    now = datetime.now(timezone.utc)
+    stats = await materialize_investments(
+        MaterializeConfig(
+            dsn="clickhouse://localhost:8123/default",
+            from_ts=now - timedelta(days=5),
+            to_ts=now,
+            repo_ids=[repo_id],
+            llm_provider="mock",
+            persist_evidence_snippets=False,
+            llm_model="test-model",
+            org_id="org-123",
+        )
+    )
+
+    assert stats["records"] == 0
+    assert stats["skipped_existing"] == 1
+    assert sink.investment_rows == []
+    assert sink.query_calls
+
+
+@pytest.mark.asyncio
+async def test_materialize_force_recomputes_existing_input_hash(monkeypatch):
+    repo_id, edges, work_items, commits = _sample_data()
+    work_items[0]["description"] = "Resolve authentication failures. " * 20
+    sink = FakeSink()
+    categorize_calls = 0
+
+    def _existing_key(_query: str, parameters: dict) -> list[dict]:
+        return [
+            {
+                "work_unit_id": parameters["work_unit_ids"][0],
+                "categorization_input_hash": parameters["input_hashes"][0],
+            }
+        ]
+
+    async def _fake_categorize(bundle, llm_provider, llm_model=None, provider=None):
+        nonlocal categorize_calls
+        categorize_calls += 1
+        return CategorizationOutcome(
+            subcategories={"feature_delivery.roadmap": 1.0},
+            evidence_quotes=[],
+            uncertainty="Limited evidence.",
+            status="ok",
+            errors=[],
+        )
+
+    sink.query_result_factory = _existing_key
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
+    )
+    _patch_queries(monkeypatch, edges, work_items, commits)
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.categorize_text_bundle",
+        _fake_categorize,
+    )
+
+    now = datetime.now(timezone.utc)
+    stats = await materialize_investments(
+        MaterializeConfig(
+            dsn="clickhouse://localhost:8123/default",
+            from_ts=now - timedelta(days=5),
+            to_ts=now,
+            repo_ids=[repo_id],
+            llm_provider="mock",
+            persist_evidence_snippets=False,
+            llm_model="test-model",
+            org_id="org-123",
+            force=True,
+        )
+    )
+
+    assert categorize_calls == 1
+    assert stats["records"] == 1
+    assert stats["skipped_existing"] == 0
+    assert len(sink.investment_rows) == 1
 
 
 @pytest.mark.asyncio

@@ -21,6 +21,9 @@ from dev_health_ops.work_graph.investment.utils import ensure_full_subcategory_v
 
 logger = logging.getLogger(__name__)
 
+TAXONOMY_VERSION = "investment-taxonomy-v1"
+PROMPT_VERSION = "investment-categorization-v1"
+
 CANONICAL_PROMPT = """You are categorizing work unit evidence into canonical investment subcategories.
 
 Rules:

@@ -176,8 +176,7 @@ def test_run_backfill_via_planner_creates_backfill_units_per_source_dataset_wind
     _patch_db_session(monkeypatch, db_session)
     dispatched = []
     monkeypatch.setattr(
-        runner,
-        "dispatch_sync_run",
+        "dev_health_ops.workers.sync_units.dispatch_sync_run",
         lambda sync_run_id: (
             dispatched.append(sync_run_id)
             or {"status": "dispatched", "queued_units": 8}

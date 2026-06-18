@@ -8,8 +8,6 @@ from typing import Any
 from dev_health_ops.db import get_postgres_session_sync
 from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
 from dev_health_ops.models.settings import SyncConfiguration
-from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
-from dev_health_ops.workers.sync_units import dispatch_sync_run
 from dev_health_ops.workers.task_utils import _jira_query_options
 
 from .chunker import chunk_date_range
@@ -27,6 +25,12 @@ def run_backfill_via_planner(
     dataset_keys: tuple[str, ...] | None = None,
     triggered_by: str,
 ) -> dict[str, Any]:
+    # Lazy imports: backfill is imported during sync.planner init via
+    # backfill.chunker, so importing planner/sync_units at module top creates a
+    # circular import. Import them at call time instead.
+    from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
+    from dev_health_ops.workers.sync_units import dispatch_sync_run
+
     with get_postgres_session_sync() as session:
         plan = plan_sync_run(
             session,

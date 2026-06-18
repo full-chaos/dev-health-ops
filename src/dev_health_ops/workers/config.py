@@ -22,6 +22,25 @@ enable_utc = True
 task_track_started = True
 task_time_limit = 3600  # 1 hour max per task
 task_soft_time_limit = 3300  # Soft limit at 55 minutes
+task_acks_late = False
+task_reject_on_worker_lost = False
+
+late_ack_excluded_tasks = (
+    "dev_health_ops.workers.tasks.dispatch_scheduled_syncs",
+    "dev_health_ops.workers.tasks.dispatch_scheduled_metrics",
+    "dev_health_ops.workers.tasks.dispatch_daily_metrics_partitioned",
+    "dev_health_ops.workers.tasks.dispatch_release_impact",
+    "dev_health_ops.workers.tasks.dispatch_membership_backfill",
+    "dev_health_ops.workers.tasks.dispatch_scheduled_reports",
+    "dev_health_ops.workers.tasks.phone_home_heartbeat",
+    "dev_health_ops.workers.system_ops.send_billing_notification",
+    "dev_health_ops.workers.tasks.run_ingest_consumer",
+    "dev_health_ops.workers.tasks.run_product_telemetry_consumer",
+)
+task_annotations = {
+    task_name: {"acks_late": False, "reject_on_worker_lost": False}
+    for task_name in late_ack_excluded_tasks
+}
 
 # Worker settings
 # Long-running tasks (sync, stream consumers) make prefetching dangerous:

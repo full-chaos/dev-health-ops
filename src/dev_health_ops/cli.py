@@ -302,6 +302,18 @@ def _is_help_invocation(argv: list[str] | None) -> bool:
     return any(arg in {"-h", "--help"} for arg in args)
 
 
+def _is_workers_inspect_json_invocation(argv: list[str] | None) -> bool:
+    args = sys.argv[1:] if argv is None else argv
+    if "workers" not in args or "inspect" not in args:
+        return False
+    if "--output=json" in args:
+        return True
+    return any(
+        arg == "--output" and index + 1 < len(args) and args[index + 1] == "json"
+        for index, arg in enumerate(args)
+    )
+
+
 @contextlib.contextmanager
 def _suppress_parser_construction_noise():
     previous_disable_level = logging.root.manager.disable
@@ -700,35 +712,54 @@ def main(argv: list[str] | None = None) -> int:
     }:
         _load_dotenv(REPO_ROOT / ".env")
 
-    if _is_help_invocation(argv):
-        with _suppress_parser_construction_noise():
+    quiet_json_inspect = _is_workers_inspect_json_invocation(argv)
+    previous_otel_enabled = os.environ.get("OTEL_ENABLED")
+    if quiet_json_inspect:
+        os.environ["OTEL_ENABLED"] = "false"
+
+    try:
+        if _is_help_invocation(argv) or quiet_json_inspect:
+            with _suppress_parser_construction_noise():
+                parser = build_parser()
+        else:
             parser = build_parser()
-    else:
-        parser = build_parser()
-    ns = parser.parse_args(argv)
+        ns = parser.parse_args(argv)
 
-    if _should_resolve_org(ns):
-        ns.org = _resolve_first_org_id(getattr(ns, "db", None))
+        if _should_resolve_org(ns):
+            ns.org = _resolve_first_org_id(getattr(ns, "db", None))
 
-    run_preflight_checks(parser, ns)
+        run_preflight_checks(parser, ns)
 
-    level_name = str(getattr(ns, "log_level", "") or "INFO").upper()
-    level = getattr(logging, level_name, logging.INFO)
-    logging.basicConfig(
-        level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-    )
+        level_name = str(getattr(ns, "log_level", "") or "INFO").upper()
+        level = getattr(logging, level_name, logging.INFO)
+        logging.basicConfig(
+            level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+        )
 
-    from dev_health_ops.api.middleware.rate_limit import log_rate_limit_configuration
+        from dev_health_ops.api.middleware.rate_limit import (
+            log_rate_limit_configuration,
+        )
 
-    log_rate_limit_configuration()
+        if not (
+            getattr(ns, "command", None) == "workers"
+            and getattr(ns, "workers_command", None) == "inspect"
+            and getattr(ns, "output", None) == "json"
+        ):
+            log_rate_limit_configuration()
 
-    func = getattr(ns, "func", None)
-    if func is None:
-        parser.print_help()
-        return 2
-    if inspect.iscoroutinefunction(func):
-        return asyncio.run(func(ns))
-    return int(func(ns))
+        func = getattr(ns, "func", None)
+        if func is None:
+            parser.print_help()
+            return 2
+        if inspect.iscoroutinefunction(func):
+            return asyncio.run(func(ns))
+        return int(func(ns))
+    finally:
+        if quiet_json_inspect:
+            if previous_otel_enabled is None:
+                os.environ.pop("OTEL_ENABLED", None)
+            else:
+                os.environ["OTEL_ENABLED"] = previous_otel_enabled
 
 
 if __name__ == "__main__":

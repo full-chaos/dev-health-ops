@@ -37,6 +37,7 @@ def _run_cli_help(*args: str) -> subprocess.CompletedProcess[str]:
         ("migrate", "--help"),
         ("migrate", "clickhouse", "repair", "--help"),
         ("workers", "--help"),
+        ("workers", "inspect", "--help"),
         ("maintenance", "--help"),
     ],
 )

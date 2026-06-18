@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
+from typing import Any
 
-from dev_health_ops.llm import LLMProvider, get_provider
+from dev_health_ops.llm import CompletionResult, LLMProvider, get_provider
 from dev_health_ops.work_graph.investment.llm_schema import (
     EvidenceQuote,
     LLMValidationResult,
@@ -82,6 +84,26 @@ class CategorizationOutcome:
     status: str
     errors: list[str]
     warnings: list[str] = field(default_factory=list)
+    llm_calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    llm_model: str | None = None
+
+
+def _token_count(value: int | None) -> int:
+    return int(value or 0)
+
+
+def _llm_call_span(
+    *, provider_name: str, model: str | None
+) -> AbstractContextManager[Any]:
+    try:
+        from opentelemetry import trace
+    except ImportError:
+        return nullcontext(None)
+    tracer = trace.get_tracer(__name__)
+    span = tracer.start_as_current_span("llm.complete")
+    return span
 
 
 def _fallback_distribution() -> dict[str, float]:
@@ -103,11 +125,36 @@ async def _complete(
     provider_name: str,
     model: str | None = None,
     provider: LLMProvider | None = None,
-) -> str:
-    if provider:
-        return await provider.complete_text(prompt)
-    provider_instance = get_provider(provider_name, model=model)
-    return await provider_instance.complete_text(prompt)
+) -> CompletionResult:
+    with _llm_call_span(provider_name=provider_name, model=model) as span:
+        try:
+            if provider:
+                result = await provider.complete(prompt)
+            else:
+                provider_instance = get_provider(provider_name, model=model)
+                result = await provider_instance.complete(prompt)
+        except Exception as exc:
+            if span is not None:
+                span.set_attribute("llm.provider", provider_name)
+                if model:
+                    span.set_attribute("llm.model", model)
+                span.set_attribute("llm.status", "error")
+                span.record_exception(exc)
+                try:
+                    from opentelemetry.trace import Status, StatusCode
+
+                    span.set_status(Status(StatusCode.ERROR, str(exc)[:200]))
+                except ImportError:
+                    pass
+            raise
+
+        if span is not None:
+            span.set_attribute("llm.provider", provider_name)
+            span.set_attribute("llm.model", result.model or model or "")
+            span.set_attribute("llm.input_tokens", _token_count(result.input_tokens))
+            span.set_attribute("llm.output_tokens", _token_count(result.output_tokens))
+            span.set_attribute("llm.status", "ok")
+        return result
 
 
 def _build_prompt(source_block: str) -> str:
@@ -133,10 +180,14 @@ async def categorize_text_bundle(
 ) -> CategorizationOutcome:
     prompt = _build_prompt(bundle.source_block)
 
-    raw_response = await _complete(
+    raw_completion = await _complete(
         prompt, llm_provider, model=llm_model, provider=provider
     )
-    payload, parse_errors = parse_llm_json(raw_response)
+    input_tokens = _token_count(raw_completion.input_tokens)
+    output_tokens = _token_count(raw_completion.output_tokens)
+    llm_calls = 1
+    resolved_model = raw_completion.model
+    payload, parse_errors = parse_llm_json(raw_completion.text)
     if parse_errors:
         validation = LLMValidationResult(
             ok=False,
@@ -158,13 +209,21 @@ async def categorize_text_bundle(
             status="ok",
             errors=[],
             warnings=validation.warnings,
+            llm_calls=llm_calls,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            llm_model=resolved_model,
         )
 
     repair_prompt = _build_repair_prompt(validation.errors, bundle.source_block)
-    repaired_response = await _complete(
+    repaired_completion = await _complete(
         repair_prompt, llm_provider, model=llm_model, provider=provider
     )
-    payload, parse_errors = parse_llm_json(repaired_response)
+    input_tokens += _token_count(repaired_completion.input_tokens)
+    output_tokens += _token_count(repaired_completion.output_tokens)
+    llm_calls += 1
+    resolved_model = repaired_completion.model or resolved_model
+    payload, parse_errors = parse_llm_json(repaired_completion.text)
     if parse_errors:
         validation = LLMValidationResult(
             ok=False,
@@ -186,6 +245,10 @@ async def categorize_text_bundle(
             status="repaired",
             errors=[],
             warnings=validation.warnings,
+            llm_calls=llm_calls,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            llm_model=resolved_model,
         )
 
     logger.warning(
@@ -200,4 +263,8 @@ async def categorize_text_bundle(
         status="invalid_llm_output",
         errors=validation.errors,
         warnings=validation.warnings,
+        llm_calls=llm_calls,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        llm_model=resolved_model,
     )

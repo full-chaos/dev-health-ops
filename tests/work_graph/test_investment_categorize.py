@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
+from dev_health_ops.llm import CompletionResult
 from dev_health_ops.work_graph.investment.categorize import categorize_text_bundle
 from dev_health_ops.work_graph.investment.types import TextBundle
 
@@ -12,10 +13,18 @@ class StubProvider:
         self.calls = 0
         self.prompts = []
 
-    async def complete_text(self, prompt: str) -> str:
+    async def complete(self, prompt: str) -> CompletionResult:
         self.calls += 1
         self.prompts.append(prompt)
-        return self.responses[self.calls - 1]
+        return CompletionResult(
+            text=self.responses[self.calls - 1],
+            input_tokens=10 * self.calls,
+            output_tokens=5 * self.calls,
+            model="stub-model",
+        )
+
+    async def complete_text(self, prompt: str) -> str:
+        return (await self.complete(prompt)).text
 
 
 def _bundle() -> TextBundle:
@@ -44,6 +53,10 @@ def test_retry_limit_and_fallback(monkeypatch):
     assert provider.calls == 2
     assert outcome.status == "invalid_llm_output"
     assert outcome.subcategories.get("feature_delivery.roadmap") == 0.2
+    assert outcome.llm_calls == 2
+    assert outcome.input_tokens == 30
+    assert outcome.output_tokens == 15
+    assert outcome.llm_model == "stub-model"
 
 
 def test_repaired_status(monkeypatch):
@@ -71,3 +84,6 @@ def test_repaired_status(monkeypatch):
     assert "Output schema" in provider.prompts[1]
     assert outcome.status == "repaired"
     assert outcome.warnings == ["probability_sum_renormalized:0.9500"]
+    assert outcome.llm_calls == 2
+    assert outcome.input_tokens == 30
+    assert outcome.output_tokens == 15

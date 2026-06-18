@@ -51,6 +51,12 @@ task_annotations = {
 # One-at-a-time fetching keeps cross-queue round-robin fair (CHAOS-2277).
 worker_prefetch_multiplier = 1
 
+worker_disable_prefetch = True
+
+stream_consumer_schedule_seconds = 30.0
+stream_consumer_max_iterations = 5
+stream_consumer_expires_seconds = 30
+
 # Retry settings
 task_default_retry_delay = 60  # 1 minute between retries
 task_max_retries = 3
@@ -151,15 +157,15 @@ beat_schedule = {
     },
     "process-ingest-streams": {
         "task": "dev_health_ops.workers.tasks.run_ingest_consumer",
-        "schedule": 30.0,
-        "kwargs": {"max_iterations": 50},
-        "options": {"queue": "ingest"},
+        "schedule": stream_consumer_schedule_seconds,
+        "kwargs": {"max_iterations": stream_consumer_max_iterations},
+        "options": {"queue": "ingest", "expires": stream_consumer_expires_seconds},
     },
     "process-product-telemetry-streams": {
         "task": "dev_health_ops.workers.tasks.run_product_telemetry_consumer",
-        "schedule": 30.0,
-        "kwargs": {"max_iterations": 50},
-        "options": {"queue": "ingest"},
+        "schedule": stream_consumer_schedule_seconds,
+        "kwargs": {"max_iterations": stream_consumer_max_iterations},
+        "options": {"queue": "ingest", "expires": stream_consumer_expires_seconds},
     },
     "phone-home-heartbeat": {
         "task": "dev_health_ops.workers.tasks.phone_home_heartbeat",

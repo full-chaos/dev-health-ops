@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from typing import Any
 
 from dev_health_ops.llm.errors import LLMAuthError
 
@@ -37,6 +38,11 @@ _BASE_URL_ENV_BY_PROVIDER: dict[str, tuple[str, ...]] = {
 }
 
 _API_KEY_REQUIRED_PROVIDERS = {"openai", "anthropic", "gemini", "qwen"}
+_LLM_SETTINGS_CATEGORY = "llm"
+_LLM_PROVIDER_KEY = "provider"
+_LLM_MODEL_KEY = "model"
+_LLM_API_KEY_KEY = "api_key"
+_LLM_BASE_URL_KEY = "base_url"
 
 
 def _first_env(names: tuple[str, ...]) -> str:
@@ -51,10 +57,69 @@ def _normalize_provider(provider: str) -> str:
     return (provider or "auto").strip().lower()
 
 
+def _load_org_llm_settings(org_id: str | None) -> dict[str, str]:
+    if not org_id:
+        return {}
+
+    try:
+        from sqlalchemy import select
+
+        from dev_health_ops.core.encryption import decrypt_value
+        from dev_health_ops.db import get_postgres_session_sync
+        from dev_health_ops.models.settings import Setting, SettingCategory
+    except Exception:
+        return {}
+
+    try:
+        with get_postgres_session_sync() as session:
+            result = session.execute(
+                select(Setting).where(
+                    Setting.org_id == org_id,
+                    Setting.category == SettingCategory.LLM.value,
+                )
+            )
+            rows: list[Any] = list(result.scalars().all())
+    except Exception:
+        return {}
+
+    settings: dict[str, str] = {}
+    for row in rows:
+        value = row.value or ""
+        if row.is_encrypted and value:
+            try:
+                value = decrypt_value(value)
+            except ValueError:
+                continue
+        if value:
+            settings[str(row.key)] = str(value)
+    return settings
+
+
+def resolve_llm_org_settings_provider(*, org_id: str | None = None) -> str:
+    return _load_org_llm_settings(org_id).get(_LLM_PROVIDER_KEY, "")
+
+
+def resolve_llm_org_settings_model(provider: str, *, org_id: str | None = None) -> str:
+    settings = _load_org_llm_settings(org_id)
+    configured_provider = _normalize_provider(settings.get(_LLM_PROVIDER_KEY, ""))
+    requested_provider = _normalize_provider(provider)
+    if configured_provider and requested_provider not in {"auto", configured_provider}:
+        return ""
+    return settings.get(_LLM_MODEL_KEY, "")
+
+
 def resolve_llm_org_settings_credentials(
     provider: str, *, org_id: str | None = None
 ) -> LLMCredentials:
-    return LLMCredentials()
+    settings = _load_org_llm_settings(org_id)
+    configured_provider = _normalize_provider(settings.get(_LLM_PROVIDER_KEY, ""))
+    requested_provider = _normalize_provider(provider)
+    if configured_provider and requested_provider not in {"auto", configured_provider}:
+        return LLMCredentials()
+    return LLMCredentials(
+        api_key=settings.get(_LLM_API_KEY_KEY, ""),
+        base_url=settings.get(_LLM_BASE_URL_KEY, ""),
+    )
 
 
 def resolve_llm_credentials(

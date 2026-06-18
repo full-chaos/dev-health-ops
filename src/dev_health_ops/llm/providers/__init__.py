@@ -3,7 +3,11 @@ from __future__ import annotations
 import logging
 import os
 
-from dev_health_ops.llm.credentials import resolve_llm_credentials
+from dev_health_ops.llm.credentials import (
+    resolve_llm_credentials,
+    resolve_llm_org_settings_model,
+    resolve_llm_org_settings_provider,
+)
 from dev_health_ops.llm.errors import LLMAuthError
 
 from .base import (
@@ -48,7 +52,7 @@ def _normalize_provider_name(name: str) -> str:
     return (name or "auto").strip().lower()
 
 
-def _configured_provider() -> str | None:
+def _configured_provider(*, org_id: str | None = None) -> str | None:
     if os.getenv("OPENAI_API_KEY"):
         return "openai"
     if os.getenv("ANTHROPIC_API_KEY"):
@@ -63,11 +67,18 @@ def _configured_provider() -> str | None:
         return "ollama"
     if os.getenv("LMSTUDIO_MODEL") or os.getenv("LMSTUDIO_BASE_URL"):
         return "lmstudio"
+    org_provider = resolve_llm_org_settings_provider(org_id=org_id)
+    if org_provider:
+        return _normalize_provider_name(org_provider)
     return None
 
 
 def _provider_has_required_config(
-    name: str, *, api_key: str | None = None, base_url: str | None = None
+    name: str,
+    *,
+    org_id: str | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
 ) -> bool:
     if name == "mock":
         return True
@@ -76,7 +87,7 @@ def _provider_has_required_config(
     if name not in _KNOWN_PROVIDERS:
         return False
     try:
-        resolve_llm_credentials(name, api_key=api_key, base_url=base_url)
+        resolve_llm_credentials(name, org_id=org_id, api_key=api_key, base_url=base_url)
         return True
     except LLMAuthError:
         return False
@@ -111,7 +122,7 @@ def _missing_provider_error(name: str) -> LLMAuthError:
     )
 
 
-def resolve_provider_name(name: str = "auto") -> str:
+def resolve_provider_name(name: str = "auto", *, org_id: str | None = None) -> str:
     requested = _normalize_provider_name(name)
     if requested != "auto":
         return requested
@@ -120,13 +131,15 @@ def resolve_provider_name(name: str = "auto") -> str:
     if env_name != "auto":
         return env_name
 
-    detected = _configured_provider()
+    detected = _configured_provider(org_id=org_id)
     if detected:
         return detected
     raise _missing_provider_error("auto")
 
 
-def resolve_model_name(provider: str, model: str | None = None) -> str | None:
+def resolve_model_name(
+    provider: str, model: str | None = None, *, org_id: str | None = None
+) -> str | None:
     provider = _normalize_provider_name(provider)
     if provider == "mock":
         return "mock"
@@ -139,6 +152,9 @@ def resolve_model_name(provider: str, model: str | None = None) -> str | None:
             return os.getenv(env_name)
     if os.getenv("LLM_MODEL"):
         return os.getenv("LLM_MODEL")
+    org_model = resolve_llm_org_settings_model(provider, org_id=org_id)
+    if org_model:
+        return org_model
     return DEFAULT_MODEL_BY_PROVIDER.get(provider)
 
 
@@ -152,23 +168,24 @@ def _log_resolved_provider_model(provider: str, model: str | None) -> None:
     )
 
 
-def is_llm_available(name: str = "auto") -> bool:
+def is_llm_available(name: str = "auto", *, org_id: str | None = None) -> bool:
     try:
-        resolved = resolve_provider_name(name)
+        resolved = resolve_provider_name(name, org_id=org_id)
     except LLMAuthError:
         return False
-    return _provider_has_required_config(resolved)
+    return _provider_has_required_config(resolved, org_id=org_id)
 
 
 def get_provider(
     name: str = "auto",
     model: str | None = None,
     *,
+    org_id: str | None = None,
     api_key: str | None = None,
     base_url: str | None = None,
 ) -> LLMProvider:
-    provider_name = resolve_provider_name(name)
-    model_name = resolve_model_name(provider_name, model)
+    provider_name = resolve_provider_name(name, org_id=org_id)
+    model_name = resolve_model_name(provider_name, model, org_id=org_id)
 
     if provider_name == "none":
         from .none import NoneProvider
@@ -177,13 +194,13 @@ def get_provider(
         return NoneProvider()
 
     if not _provider_has_required_config(
-        provider_name, api_key=api_key, base_url=base_url
+        provider_name, org_id=org_id, api_key=api_key, base_url=base_url
     ):
         raise _missing_provider_error(provider_name)
 
     _log_resolved_provider_model(provider_name, model_name)
     credentials = resolve_llm_credentials(
-        provider_name, api_key=api_key, base_url=base_url
+        provider_name, org_id=org_id, api_key=api_key, base_url=base_url
     )
 
     if provider_name == "mock":

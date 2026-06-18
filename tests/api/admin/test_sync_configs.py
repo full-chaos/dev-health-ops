@@ -20,6 +20,7 @@ from dev_health_ops.models.settings import (
     JobRun,
     JobStatus,
     ScheduledJob,
+    Setting,
     SyncConfiguration,
 )
 from dev_health_ops.models.users import Organization, User
@@ -37,6 +38,7 @@ _TABLES = tables_of(
     SyncConfiguration,
     ScheduledJob,
     JobRun,
+    Setting,
 )
 
 

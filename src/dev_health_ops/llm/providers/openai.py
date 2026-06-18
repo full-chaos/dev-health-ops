@@ -18,6 +18,12 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from dev_health_ops.llm.errors import (
+    LLMRateLimitError,
+    classify_provider_error,
+    is_retryable,
+    retry_delay,
+)
 from dev_health_ops.llm.json_utils import validate_json_or_empty
 
 from .base import (
@@ -187,7 +193,9 @@ class _OpenAIProviderBase(LLMProviderBase):
             from openai import AsyncOpenAI
 
             self._client = AsyncOpenAI(
-                api_key=self.cfg.api_key, base_url=self.cfg.base_url
+                api_key=self.cfg.api_key,
+                base_url=self.cfg.base_url,
+                max_retries=0,
             )
         return self._client
 
@@ -198,6 +206,32 @@ class _OpenAIProviderBase(LLMProviderBase):
 
     async def complete(self, prompt: str) -> CompletionResult:
         raise NotImplementedError
+
+    async def _retry_transient_error(
+        self,
+        exc: Exception,
+        *,
+        retry_count: int,
+        max_retries: int,
+        api_name: str,
+    ) -> bool:
+        llm_exc = classify_provider_error(exc, provider="openai", model=self.cfg.model)
+        if is_retryable(llm_exc) and retry_count < max_retries:
+            delay = retry_delay(retry_count)
+            if isinstance(llm_exc, LLMRateLimitError) and llm_exc.retry_after:
+                delay = llm_exc.retry_after
+            logger.warning(
+                "%s transient error on attempt %d/%d; retrying in %.1fs: %s",
+                api_name,
+                retry_count + 1,
+                max_retries + 1,
+                delay,
+                llm_exc,
+            )
+            await asyncio.sleep(delay)
+            return True
+        logger.error("%s error: %s", api_name, llm_exc)
+        raise llm_exc from exc
 
     def _completion_result(
         self, text: str, usage: object | None = None
@@ -299,10 +333,7 @@ class OpenAIGPT5Provider(_OpenAIProviderBase):
                 if cleaned:
                     return self._completion_result(cleaned, usage)
 
-                # If invalid/empty, retry once with more tokens if it looks truncated.
-                should_retry = (finish_reason == "max_output_tokens") or (
-                    not content.strip()
-                )
+                should_retry = finish_reason == "max_output_tokens"
 
                 if retry_count < max_retries and should_retry:
                     retry_count += 1
@@ -327,13 +358,14 @@ class OpenAIGPT5Provider(_OpenAIProviderBase):
                 return self._completion_result("", usage)
 
             except Exception as e:
-                logger.error("OpenAI Responses API error: %s", e)
-                if retry_count < max_retries:
+                if await self._retry_transient_error(
+                    e,
+                    retry_count=retry_count,
+                    max_retries=max_retries,
+                    api_name="OpenAI Responses API",
+                ):
                     retry_count += 1
-                    max_tokens = min(8192, max_tokens * 2)
-                    await asyncio.sleep(0.5)
                     continue
-                raise
 
         return self._completion_result("")
 
@@ -390,8 +422,10 @@ class OpenAIGPTLegacyProvider(_OpenAIProviderBase):
                 if cleaned:
                     return self._completion_result(cleaned, usage)
 
-                should_retry = (finish_reason in ("length", "max_tokens")) or (
-                    not content.strip()
+                should_retry = finish_reason in (
+                    "length",
+                    "max_tokens",
+                    "max_output_tokens",
                 )
 
                 if retry_count < max_retries and should_retry:
@@ -417,12 +451,13 @@ class OpenAIGPTLegacyProvider(_OpenAIProviderBase):
                 return self._completion_result("", usage)
 
             except Exception as e:
-                logger.error("OpenAI Chat Completions error: %s", e)
-                if retry_count < max_retries:
+                if await self._retry_transient_error(
+                    e,
+                    retry_count=retry_count,
+                    max_retries=max_retries,
+                    api_name="OpenAI Chat Completions",
+                ):
                     retry_count += 1
-                    max_tokens = min(8192, max_tokens * 2)
-                    await asyncio.sleep(0.5)
                     continue
-                raise
 
         return self._completion_result("")

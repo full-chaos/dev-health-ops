@@ -18,6 +18,11 @@ credentials evict the old runtime.
 
 from __future__ import annotations
 
+import hashlib
+import inspect
+import json
+import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -75,7 +80,15 @@ class ProviderRuntime:
     def close(self) -> None:
         """Close the connector and store. Implemented in CHAOS-2512/2513."""
 
-        raise NotImplementedError("CHAOS-2512: implement ProviderRuntime.close")
+        for resource in (self.connector, self.store):
+            close = getattr(resource, "close", None)
+            if close is None:
+                continue
+            result = close()
+            if inspect.iscoroutine(result):
+                from dev_health_ops.workers.async_runner import run_async
+
+                run_async(result)
 
 
 class SyncTaskBootstrap:
@@ -85,13 +98,134 @@ class SyncTaskBootstrap:
     def load(session: Session, unit_id: str) -> SyncTaskContext:
         """Load + decrypt everything a unit needs. Implemented in CHAOS-2512."""
 
-        raise NotImplementedError("CHAOS-2512: implement SyncTaskBootstrap.load")
+        from dev_health_ops.models import (
+            Integration,
+            IntegrationCredential,
+            IntegrationSource,
+            SyncRunUnit,
+        )
+        from dev_health_ops.workers.task_utils import (
+            _credential_mapping,
+            _get_db_url,
+            _resolve_env_credentials,
+        )
+
+        unit_uuid = uuid.UUID(str(unit_id))
+        unit = (
+            session.query(SyncRunUnit).filter(SyncRunUnit.id == unit_uuid).one_or_none()
+        )
+        if unit is None:
+            raise ValueError(f"Sync run unit not found: {unit_id}")
+
+        integration = (
+            session.query(Integration)
+            .filter(
+                Integration.id == unit.integration_id,
+                Integration.org_id == unit.org_id,
+            )
+            .one_or_none()
+        )
+        if integration is None:
+            raise ValueError(f"Integration not found for unit: {unit_id}")
+
+        source = (
+            session.query(IntegrationSource)
+            .filter(
+                IntegrationSource.id == unit.source_id,
+                IntegrationSource.org_id == unit.org_id,
+                IntegrationSource.integration_id == integration.id,
+            )
+            .one_or_none()
+        )
+        if source is None:
+            raise ValueError(f"Integration source not found for unit: {unit_id}")
+
+        credential_id = integration.credential_id
+        if credential_id is None:
+            decrypted_credentials = _resolve_env_credentials(str(unit.provider))
+        else:
+            credential = (
+                session.query(IntegrationCredential)
+                .filter(
+                    IntegrationCredential.id == credential_id,
+                    IntegrationCredential.org_id == unit.org_id,
+                )
+                .one_or_none()
+            )
+            if credential is None:
+                raise ValueError(f"Credential not found for unit: {unit_id}")
+            decrypted_credentials = _credential_mapping(credential)
+
+        processor_flags = {
+            str(key): bool(value)
+            for key, value in dict(unit.processor_flags or {}).items()
+        }
+        return SyncTaskContext(
+            unit_id=str(unit.id),
+            sync_run_id=str(unit.sync_run_id),
+            org_id=str(unit.org_id),
+            integration_id=str(integration.id),
+            source_id=str(source.id),
+            source_external_id=str(source.external_id),
+            provider=str(unit.provider),
+            dataset_key=str(unit.dataset_key),
+            cost_class=str(unit.cost_class),
+            mode=str(unit.mode),
+            window_start=unit.since_at,
+            window_end=unit.before_at,
+            processor_flags=processor_flags,
+            credential_id=str(credential_id) if credential_id is not None else None,
+            decrypted_credentials=decrypted_credentials,
+            db_url=_get_db_url(),
+        )
 
 
 class ProviderRuntimeCache:
     """Process-local, strictly-scoped runtime cache (TTL/LRU, closes on evict)."""
 
+    def __init__(self, max_size: int = 32) -> None:
+        self.max_size = max_size
+        self._runtimes: OrderedDict[RuntimeCacheKey, ProviderRuntime] = OrderedDict()
+
     def get(self, context: SyncTaskContext) -> ProviderRuntime:
         """Return a reusable runtime for the context's scope. CHAOS-2512."""
 
-        raise NotImplementedError("CHAOS-2512: implement ProviderRuntimeCache.get")
+        key = RuntimeCacheKey(
+            org_id=context.org_id,
+            integration_id=context.integration_id,
+            credential_id=context.credential_id,
+            credential_fingerprint=_credential_fingerprint(
+                context.decrypted_credentials
+            ),
+            provider=context.provider,
+            db_url=context.db_url,
+        )
+        runtime = self._runtimes.get(key)
+        if runtime is not None:
+            self._runtimes.move_to_end(key)
+            return runtime
+
+        runtime = ProviderRuntime(store=_create_store(context))
+        self._runtimes[key] = runtime
+        self._runtimes.move_to_end(key)
+        while len(self._runtimes) > self.max_size:
+            _, evicted = self._runtimes.popitem(last=False)
+            evicted.close()
+        return runtime
+
+
+def _credential_fingerprint(credentials: Any) -> str:
+    payload = json.dumps(
+        credentials or {}, sort_keys=True, default=str, separators=(",", ":")
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _create_store(context: SyncTaskContext) -> Any:
+    if not context.db_url:
+        return None
+    from dev_health_ops.storage import create_store
+
+    store = create_store(context.db_url)
+    setattr(store, "org_id", context.org_id)
+    return store

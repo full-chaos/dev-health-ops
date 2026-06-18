@@ -26,6 +26,7 @@ from dev_health_ops.api.middleware.rate_limit import limiter
 from dev_health_ops.api.product_telemetry import router as product_telemetry_router
 from dev_health_ops.api.telemetry.router import router as telemetry_router
 from dev_health_ops.llm import get_provider
+from dev_health_ops.llm.errors import LLMError
 
 from ._errors import (
     _generic_exception_handler as _generic_exception_handler,
@@ -615,7 +616,7 @@ async def work_unit_explain_endpoint(
         # keep_alive_wrapper after headers are already sent).
         try:
             resolved_provider = get_provider(llm_provider, model=llm_model)
-        except ValueError as exc:
+        except (ValueError, LLMError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         filters = _filters_from_query(

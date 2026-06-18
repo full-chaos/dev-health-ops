@@ -265,6 +265,7 @@ class SyncRunService:
     def build_unit_rollups(
         units: list[SyncRunUnit],
         slowest_limit: int = 5,
+        failed_id_cap: int = 100,
     ) -> dict[str, Any]:
         """Build rollup dicts for the run-status UI (CHAOS-2519).
 
@@ -286,6 +287,7 @@ class SyncRunService:
         by_cost_class: dict[str, int] = defaultdict(int)
 
         failed_unit_ids: list[str] = []
+        failed_unit_count = 0
         timed_units: list[tuple[int, str]] = []  # (duration_seconds, unit_id)
         failed_sources: set[str] = set()
         failed_datasets: set[str] = set()
@@ -304,7 +306,9 @@ class SyncRunService:
             by_cost_class[cost] += 1
 
             if status == "failed":
-                failed_unit_ids.append(unit_id)
+                failed_unit_count += 1
+                if len(failed_unit_ids) < failed_id_cap:
+                    failed_unit_ids.append(unit_id)
                 failed_sources.add(source)
                 failed_datasets.add(dataset)
                 # Extract error_category from result JSON if present
@@ -336,5 +340,6 @@ class SyncRunService:
             "by_cost_class": dict(by_cost_class),
             "slowest_unit_ids": slowest_unit_ids,
             "failed_unit_ids": failed_unit_ids,
+            "failed_unit_count": failed_unit_count,
             "partial_failure_summary": partial_failure_summary,
         }

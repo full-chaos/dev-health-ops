@@ -508,6 +508,7 @@ async def get_sync_run_units(
     run_id: str,
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
+    limit: int = 200,
 ) -> SyncRunUnitSummary:
     svc = SyncRunService(session, org_id)
     run = await svc.get_run(run_id)
@@ -516,6 +517,7 @@ async def get_sync_run_units(
 
     units = await svc.list_units(run_id)
     rollups = SyncRunService.build_unit_rollups(units)
+    total_units = len(units)
 
     return SyncRunUnitSummary(
         by_status=rollups["by_status"],
@@ -525,5 +527,7 @@ async def get_sync_run_units(
         slowest_unit_ids=rollups["slowest_unit_ids"],
         failed_unit_ids=rollups["failed_unit_ids"],
         partial_failure_summary=rollups["partial_failure_summary"],
-        units=[_unit_to_response(u) for u in units],
+        failed_unit_count=rollups["failed_unit_count"],
+        unit_count=total_units,
+        units=[_unit_to_response(u) for u in units[:limit]],
     )

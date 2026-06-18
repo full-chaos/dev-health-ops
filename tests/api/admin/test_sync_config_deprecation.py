@@ -145,7 +145,7 @@ async def _seed_configs(session_maker, org_id: str):
             parent_id=parent.id,
         )
         child_migrated_integration = SyncConfiguration(
-            name="child-migrated-integration",
+            name="migrated-parent-anchor",
             provider="github",
             org_id=org_id,
             sync_targets=["git"],
@@ -203,7 +203,8 @@ async def test_list_hides_migrated_children_when_flag_on(client, session_maker):
     names = {c["name"] for c in resp.json()}
     assert "parent-config" in names
     assert "child-legacy" not in names
-    assert "child-migrated-integration" not in names
+    # migrated_integration_id marks the PARENT (rollback anchor) -> stays visible
+    assert "migrated-parent-anchor" in names
     assert "child-migrated-source" not in names
 
 
@@ -223,7 +224,7 @@ async def test_list_returns_migrated_children_with_include_migrated(
     names = {c["name"] for c in resp.json()}
     assert "parent-config" in names
     assert "child-legacy" in names
-    assert "child-migrated-integration" in names
+    assert "migrated-parent-anchor" in names
     assert "child-migrated-source" in names
 
 
@@ -245,7 +246,7 @@ async def test_list_unchanged_when_flag_off(client, session_maker):
     names = {c["name"] for c in resp.json()}
     assert "parent-config" in names
     assert "child-legacy" in names
-    assert "child-migrated-integration" in names
+    assert "migrated-parent-anchor" in names
     assert "child-migrated-source" in names
 
 
@@ -274,8 +275,8 @@ async def test_list_include_migrated_false_with_flag_off_returns_all(
 
 
 @pytest.mark.asyncio
-async def test_batch_creates_zero_children_when_planner_active(client, session_maker):
-    """When planner flag is ON, batch endpoint creates parent only (zero children)."""
+async def test_batch_rejects_with_409_when_planner_active(client, session_maker):
+    """When planner flag is ON, batch rejects with 409 (no inert legacy parent)."""
     ac, seeded_state = client
     org_id = seeded_state["org_id"]
     await _seed_planner_flag(session_maker, org_id, value="true")
@@ -291,22 +292,18 @@ async def test_batch_creates_zero_children_when_planner_active(client, session_m
         },
     )
 
-    assert resp.status_code == 201
-    data = resp.json()
-    assert data["total_created"] == 0
-    assert data["children"] == []
-    assert data["parent"]["name"] == "planner-active-batch"
-
-    # Verify no child rows in DB
+    assert resp.status_code == 409
+    # planner-active rejects the deprecated child-config batch BEFORE writing
+    # an inert legacy parent; nothing is created.
     async with session_maker() as session:
         result = await session.execute(
             select(SyncConfiguration).where(
                 SyncConfiguration.org_id == org_id,
-                SyncConfiguration.parent_id.isnot(None),
+                SyncConfiguration.name == "planner-active-batch",
             )
         )
-        children = result.scalars().all()
-    assert len(children) == 0
+        created = result.scalars().all()
+    assert created == []
 
 
 @pytest.mark.asyncio

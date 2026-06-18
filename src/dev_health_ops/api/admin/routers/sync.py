@@ -326,9 +326,10 @@ async def list_sync_configs(
     # HIDE_MIGRATED_CHILD_CONFIGS: when enabled, filter out deprecated child
     # configs from the default list response. A config is considered a
     # "migrated child" when any of the following are true:
-    #   - parent_id is set (legacy child config)
-    #   - migrated_integration_id is set (linked to integration-era planner)
-    #   - migrated_source_id is set (linked to integration-era source)
+    #   - parent_id is set (legacy child config), OR
+    #   - migrated_source_id is set (linked to an integration-era source).
+    # The parent SyncConfiguration gets migrated_integration_id set by the
+    # migration and is the rollback anchor, so it is NOT hidden.
     # Callers may pass ?include_migrated=true to bypass this filter for
     # support or rollback access.
     _hide_migrated = os.getenv("HIDE_MIGRATED_CHILD_CONFIGS", "").strip().lower() in {
@@ -343,7 +344,6 @@ async def list_sync_configs(
             for c in configs
             if (
                 getattr(c, "parent_id", None) is None
-                and getattr(c, "migrated_integration_id", None) is None
                 and getattr(c, "migrated_source_id", None) is None
             )
         ]
@@ -598,6 +598,20 @@ async def batch_create_sync_configs(
     provider = payload.provider.lower()
     parent_is_active = provider in NON_REPO_SYNC_PROVIDERS
 
+    # Child sync configs are deprecated. When the integration planner is active
+    # for this org, reject batch child creation BEFORE writing an inert legacy
+    # parent (which would return 201 with zero syncable repos and block the
+    # name on retry) and direct the caller to the integration admin API.
+    if await _is_planner_active(session, org_id):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Child sync configs are deprecated for this organization. "
+                "Use the integration admin API: POST /admin/integrations, then "
+                "POST /admin/integrations/{id}/discover and /sync."
+            ),
+        )
+
     parent_options = dict(payload.sync_options)
     parent_options.pop("repo", None)  # parent has no single repo
     if payload.schedule_cron is not None:
@@ -633,12 +647,10 @@ async def batch_create_sync_configs(
     session.add(parent)
     await session.flush()  # need parent.id for children
 
-    # Gate child-config creation behind the integration planner flag.
-    # When the planner is active (sync.migrated_trigger_routing_enabled is
-    # set for this org), new integrations must use the integration/source/
-    # dataset model — writing child SyncConfiguration rows is suppressed.
-    # Legacy behaviour (planner inactive) is preserved for rollback.
-    _planner_active = await _is_planner_active(session, org_id)
+    # Child-config creation is the legacy (rollback) path. Planner-active
+    # requests were already rejected with 409 above, so children are always
+    # created here.
+    _planner_active = False
 
     # Create child configs (one per repo) — skipped when planner is active.
     children = []

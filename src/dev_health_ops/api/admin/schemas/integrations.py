@@ -169,6 +169,8 @@ class SyncRunUnitSummary(BaseModel):
     by_cost_class: dict[str, int]
     slowest_unit_ids: list[str] = Field(default_factory=list)
     failed_unit_ids: list[str] = Field(default_factory=list)
+    failed_unit_count: int = 0
+    unit_count: int = 0
     partial_failure_summary: dict[str, Any] | None = None
     units: list[SyncRunUnitResponse]
 

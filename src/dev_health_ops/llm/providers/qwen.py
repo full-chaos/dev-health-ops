@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 
+from .base import DEFAULT_MODEL_BY_PROVIDER
 from .local import DEFAULT_ENDPOINTS, LocalProvider
 
 # Default DashScope (China) OpenAI-compatible endpoint.
@@ -43,7 +44,7 @@ class QwenProvider(LocalProvider):
             or os.getenv("DASHSCOPE_API_KEY"),
             base_url=base_url
             or os.getenv("DASHSCOPE_BASE_URL", DEFAULT_DASHSCOPE_BASE_URL),
-            model=model or os.getenv("QWEN_MODEL", "qwen-plus"),
+            model=model or os.getenv("QWEN_MODEL", DEFAULT_MODEL_BY_PROVIDER["qwen"]),
             **kwargs,
         )
 
@@ -62,7 +63,8 @@ class QwenLocalProvider(LocalProvider):
         super().__init__(
             base_url=base_url
             or os.getenv("OLLAMA_BASE_URL", DEFAULT_ENDPOINTS["ollama"]),
-            model=model or os.getenv("QWEN_LOCAL_MODEL", "qwen2.5:7b"),
+            model=model
+            or os.getenv("QWEN_LOCAL_MODEL", DEFAULT_MODEL_BY_PROVIDER["qwen-local"]),
             **kwargs,
         )
 
@@ -81,6 +83,7 @@ class QwenLMStudioProvider(LocalProvider):
         super().__init__(
             base_url=base_url
             or os.getenv("LMSTUDIO_BASE_URL", DEFAULT_ENDPOINTS["lmstudio"]),
-            model=model or os.getenv("LMSTUDIO_MODEL", "local-model"),
+            model=model
+            or os.getenv("LMSTUDIO_MODEL", DEFAULT_MODEL_BY_PROVIDER["qwen-lmstudio"]),
             **kwargs,
         )

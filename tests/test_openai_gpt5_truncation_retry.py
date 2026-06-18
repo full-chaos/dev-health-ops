@@ -32,7 +32,8 @@ async def test_gpt5_truncation_retry_logic():
     # Inject mock client into implementation
     provider._impl._client = mock_client
 
-    result_json = await provider.complete("explain something")
+    result = await provider.complete("explain something")
+    result_json = result.text
 
     # Verify parsing
     result = json.loads(result_json)

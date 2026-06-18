@@ -215,7 +215,7 @@ async def test_explain_investment_mix_mock_provider_skips_cache():
         mock_units.return_value = []
 
         mock_provider = MagicMock()
-        mock_provider.complete = AsyncMock(
+        mock_provider.complete_text = AsyncMock(
             return_value='{"summary": "Test summary", "top_findings": [], "confidence": {"level": "moderate"}, "what_to_check_next": [], "anti_claims": []}'
         )
         mock_get_provider.return_value = mock_provider
@@ -270,7 +270,7 @@ async def test_explain_forwards_org_id_to_work_unit_evidence():
         mock_units.return_value = []
 
         mock_provider = MagicMock()
-        mock_provider.complete = AsyncMock(
+        mock_provider.complete_text = AsyncMock(
             return_value='{"summary": "Test summary", "top_findings": [], "confidence": {"level": "moderate"}, "what_to_check_next": [], "anti_claims": []}'
         )
         mock_get_provider.return_value = mock_provider

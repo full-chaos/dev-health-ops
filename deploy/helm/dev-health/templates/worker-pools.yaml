@@ -1,0 +1,127 @@
+{{- /*
+Latency-class worker pools (CHAOS-2278) + cost-class sub-queues (CHAOS-2517).
+The default `worker` (worker-deployment.yaml) handles latency-sensitive queues
+and light/medium cost-class sub-queues; these pools isolate blocking ingest and
+heavy batch/heavy-sync work so they never starve user-facing tasks.
+*/ -}}
+{{- if .Values.workerIngest.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dev-health.fullname" . }}-worker-ingest
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "worker-ingest" "context" $) | nindent 4 }}
+spec:
+  replicas: {{ .Values.workerIngest.replicas }}
+  selector:
+    matchLabels:
+      {{- include "dev-health.componentSelectorLabels" (dict "component" "worker-ingest" "context" $) | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "dev-health.componentSelectorLabels" (dict "component" "worker-ingest" "context" $) | nindent 8 }}
+    spec:
+      {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "dev-health.serviceAccountName" . }}
+      containers:
+        - name: worker-ingest
+          image: {{ include "dev-health.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - celery
+            - -A
+            - dev_health_ops.workers.celery_app
+            - worker
+            - --loglevel={{ .Values.workerIngest.logLevel }}
+            - -Q
+            - {{ .Values.workerIngest.queues }}
+            - --concurrency={{ .Values.workerIngest.concurrency }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "dev-health.configMapName" . }}
+            - secretRef:
+                name: {{ include "dev-health.secretName" . }}
+          {{- with .Values.worker.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.workerIngest.resources | nindent 12 }}
+      {{- with .Values.workerIngest.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.workerIngest.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.workerIngest.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- if .Values.workerHeavy.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dev-health.fullname" . }}-worker-heavy
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "worker-heavy" "context" $) | nindent 4 }}
+spec:
+  replicas: {{ .Values.workerHeavy.replicas }}
+  selector:
+    matchLabels:
+      {{- include "dev-health.componentSelectorLabels" (dict "component" "worker-heavy" "context" $) | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "dev-health.componentSelectorLabels" (dict "component" "worker-heavy" "context" $) | nindent 8 }}
+    spec:
+      {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "dev-health.serviceAccountName" . }}
+      containers:
+        - name: worker-heavy
+          image: {{ include "dev-health.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - celery
+            - -A
+            - dev_health_ops.workers.celery_app
+            - worker
+            - --loglevel={{ .Values.workerHeavy.logLevel }}
+            - -Q
+            - {{ .Values.workerHeavy.queues }}
+            - --concurrency={{ .Values.workerHeavy.concurrency }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "dev-health.configMapName" . }}
+            - secretRef:
+                name: {{ include "dev-health.secretName" . }}
+          {{- with .Values.worker.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.workerHeavy.resources | nindent 12 }}
+      {{- with .Values.workerHeavy.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.workerHeavy.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.workerHeavy.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

@@ -67,7 +67,7 @@ spec:
             - worker
             - --loglevel=info
             - -Q
-            - default,metrics,sync,monitoring
+            - default,sync,sync.github,sync.gitlab,sync.linear,sync.jira,sync.launchdarkly,sync.github.light,sync.github.medium,sync.gitlab.light,sync.gitlab.medium,sync.jira.medium,sync.linear.medium,webhooks,reports,monitoring
           envFrom:
             - configMapRef:
                 name: dev-health-config
@@ -115,3 +115,177 @@ spec:
         target:
           type: Utilization
           averageUtilization: 70
+---
+# Ingest worker (CHAOS-2278): isolated single slot for blocking stream
+# consumers so they never starve the default fleet. Fixed-replica (no HPA).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dev-health-worker-ingest
+  namespace: dev-health
+  labels:
+    app.kubernetes.io/name: dev-health-worker-ingest
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: dev-health-ops
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dev-health-worker-ingest
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dev-health-worker-ingest
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      initContainers:
+        - name: wait-for-migrations
+          image: ghcr.io/your-org/dev-health-ops:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+          command:
+            - sh
+            - -c
+            - |
+              attempts=0
+              until dev-hops migrate clickhouse status --check; do
+                attempts=$((attempts + 1))
+                if [ "$attempts" -ge 60 ]; then
+                  echo "ClickHouse migrations still pending after $attempts checks; exiting for restart backoff" >&2
+                  exit 1
+                fi
+                echo "ClickHouse migrations pending; re-checking in 5s (attempt $attempts/60)"
+                sleep 5
+              done
+          envFrom:
+            - configMapRef:
+                name: dev-health-config
+            - secretRef:
+                name: dev-health-secrets
+      containers:
+        - name: worker-ingest
+          image: ghcr.io/your-org/dev-health-ops:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+          command:
+            - celery
+            - -A
+            - workers.celery_app
+            - worker
+            - --loglevel=info
+            - -Q
+            - ingest
+            - --concurrency
+            - "1"
+          envFrom:
+            - configMapRef:
+                name: dev-health-config
+            - secretRef:
+                name: dev-health-secrets
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          livenessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - workers.celery_app
+                - inspect
+                - ping
+                - --timeout
+                - "10"
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 15
+---
+# Heavy worker (CHAOS-2278): batch compute (metrics, backfill) + heavy
+# cost-class sync sub-queues (CHAOS-2517) isolated from latency-sensitive work.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dev-health-worker-heavy
+  namespace: dev-health
+  labels:
+    app.kubernetes.io/name: dev-health-worker-heavy
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: dev-health-ops
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dev-health-worker-heavy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dev-health-worker-heavy
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      initContainers:
+        - name: wait-for-migrations
+          image: ghcr.io/your-org/dev-health-ops:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+          command:
+            - sh
+            - -c
+            - |
+              attempts=0
+              until dev-hops migrate clickhouse status --check; do
+                attempts=$((attempts + 1))
+                if [ "$attempts" -ge 60 ]; then
+                  echo "ClickHouse migrations still pending after $attempts checks; exiting for restart backoff" >&2
+                  exit 1
+                fi
+                echo "ClickHouse migrations pending; re-checking in 5s (attempt $attempts/60)"
+                sleep 5
+              done
+          envFrom:
+            - configMapRef:
+                name: dev-health-config
+            - secretRef:
+                name: dev-health-secrets
+      containers:
+        - name: worker-heavy
+          image: ghcr.io/your-org/dev-health-ops:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+          command:
+            - celery
+            - -A
+            - workers.celery_app
+            - worker
+            - --loglevel=info
+            - -Q
+            - metrics,backfill,monitoring,sync.github.heavy,sync.gitlab.heavy
+          envFrom:
+            - configMapRef:
+                name: dev-health-config
+            - secretRef:
+                name: dev-health-secrets
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "3Gi"
+              cpu: "1500m"
+          livenessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - workers.celery_app
+                - inspect
+                - ping
+                - --timeout
+                - "10"
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 15

@@ -146,6 +146,10 @@ async def test_materialize_invokes_sink(monkeypatch):
             status="ok",
             errors=[],
             warnings=["probability_sum_renormalized:0.9500"],
+            llm_calls=1,
+            input_tokens=123,
+            output_tokens=45,
+            llm_model="test-model",
         )
 
     monkeypatch.setattr(
@@ -170,6 +174,10 @@ async def test_materialize_invokes_sink(monkeypatch):
 
     stats = await materialize_investments(config)
     assert stats["records"] == 1
+    assert stats["llm_calls"] == 1
+    assert stats["llm_input_tokens"] == 123
+    assert stats["llm_output_tokens"] == 45
+    assert stats["llm_failure_counts"] == {}
     assert len(sink.investment_rows) == 1
     record = sink.investment_rows[0]
     assert record.work_unit_type == "incident"

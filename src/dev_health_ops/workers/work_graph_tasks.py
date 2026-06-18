@@ -140,7 +140,7 @@ def run_investment_materialize(
         dict with materialization status and stats
     """
 
-    from dev_health_ops.llm import LLMAuthError, resolve_provider_name
+    from dev_health_ops.llm import LLMAuthError, LLMError, resolve_provider_name
     from dev_health_ops.llm.credentials import resolve_llm_credentials
     from dev_health_ops.work_graph.investment.materialize import (
         MaterializeConfig,
@@ -202,6 +202,11 @@ def run_investment_materialize(
         return {"status": "success", "stats": stats}
     except LLMAuthError as exc:
         logger.error("Investment materialize task failed with LLM auth error: %s", exc)
+        raise
+    except LLMError as exc:
+        logger.error(
+            "Investment materialize task failed with classified LLM error: %s", exc
+        )
         raise
     except Exception as exc:
         logger.exception("Investment materialize task failed: %s", exc)

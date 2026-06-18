@@ -659,6 +659,27 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
         for idx, outcome in fallback_results:
             llm_results[idx] = outcome
 
+        llm_calls = sum(
+            int(getattr(outcome, "llm_calls", 0)) for outcome in llm_results.values()
+        )
+        llm_input_tokens = sum(
+            int(getattr(outcome, "input_tokens", 0)) for outcome in llm_results.values()
+        )
+        llm_output_tokens = sum(
+            int(getattr(outcome, "output_tokens", 0))
+            for outcome in llm_results.values()
+        )
+        if llm_calls or llm_failure_counts:
+            logger.info(
+                "LLM usage summary: calls=%d input_tokens=%d output_tokens=%d %s",
+                llm_calls,
+                llm_input_tokens,
+                llm_output_tokens,
+                _format_llm_summary(
+                    len(llm_results) - len(fallback_results), llm_failure_counts
+                ),
+            )
+
         # Post-process: create records from outcomes
         for idx, data in preprocessed.items():
             outcome = llm_results.get(idx)
@@ -796,6 +817,9 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
             "components": len(components),
             "records": len(records),
             "quotes": len(quote_records),
+            "llm_calls": llm_calls,
+            "llm_input_tokens": llm_input_tokens,
+            "llm_output_tokens": llm_output_tokens,
             "llm_failures": sum(llm_failure_counts.values()),
             "llm_failure_counts": dict(llm_failure_counts),
         }

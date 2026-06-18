@@ -328,6 +328,18 @@ class SyncConfiguration(Base):
         foreign_keys="SyncConfiguration.parent_id",
         lazy="raise",
     )
+    migrated_integration_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID,
+        ForeignKey("integrations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    migrated_source_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID,
+        ForeignKey("integration_sources.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     __table_args__ = (
         UniqueConstraint(
@@ -346,6 +358,8 @@ class SyncConfiguration(Base):
         sync_options: dict[str, Any] | None = None,
         is_active: bool = True,
         parent_id: uuid.UUID | None = None,
+        migrated_integration_id: uuid.UUID | None = None,
+        migrated_source_id: uuid.UUID | None = None,
     ) -> None:
         self.id = uuid.uuid4()
         self.org_id = org_id or ""
@@ -356,6 +370,8 @@ class SyncConfiguration(Base):
         self.sync_options = sync_options or {}
         self.is_active = is_active
         self.parent_id = parent_id
+        self.migrated_integration_id = migrated_integration_id
+        self.migrated_source_id = migrated_source_id
         self.created_at = datetime.now(timezone.utc)
         self.updated_at = datetime.now(timezone.utc)
 

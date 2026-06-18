@@ -12,6 +12,7 @@ from .routers import (
     github_app_router,
     governance_router,
     identities_router,
+    integrations_router,
     orgs_router,
     platform_router,
     settings_router,
@@ -44,6 +45,7 @@ router.include_router(platform_router)
 router.include_router(features_router)
 router.include_router(github_app_router)
 router.include_router(governance_router)
+router.include_router(integrations_router)
 
 __all__ = [
     "router",

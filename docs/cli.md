@@ -54,6 +54,11 @@ dev-hops migrate postgres upgrade          # same as above
 dev-hops migrate postgres current          # show current revision
 dev-hops migrate postgres history          # show migration history
 
+# One-time data migration: legacy parent/child sync configs -> integration/
+# source/dataset model (CHAOS-2516). Idempotent; safe to re-run.
+dev-hops migrate configs-to-integrations --dry-run   # preview, no writes
+dev-hops migrate configs-to-integrations             # apply + commit
+
 # ClickHouse — analytics tables (commits, PRs, metrics, etc.)
 dev-hops migrate clickhouse
 dev-hops migrate clickhouse upgrade        # same as above

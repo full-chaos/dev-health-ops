@@ -263,6 +263,49 @@ def _run_clickhouse_repair(ns: argparse.Namespace) -> int:
     return 0
 
 
+# -- configs-to-integrations data migration --
+
+
+def _run_configs_to_integrations(ns: argparse.Namespace) -> int:
+    """Migrate SyncConfiguration rows to Integration/Source/Dataset records."""
+    from dev_health_ops.db import get_postgres_session_sync_for_uri
+    from dev_health_ops.sync.config_migration import migrate_configs_to_integrations
+
+    dry_run: bool = bool(getattr(ns, "dry_run", False))
+    db_uri: str | None = getattr(ns, "db", None) or get_postgres_uri()
+    if not db_uri:
+        logger.error("PostgreSQL URI is required (--db or POSTGRES_URI).")
+        return 1
+
+    with get_postgres_session_sync_for_uri(db_uri) as session:
+        report = migrate_configs_to_integrations(session, dry_run=dry_run)
+        if dry_run:
+            session.rollback()
+
+    mode = "DRY RUN" if report.dry_run else "APPLIED"
+    print(f"configs-to-integrations migration [{mode}]")
+    print(f"  integrations_created : {report.integrations_created}")
+    print(f"  sources_created      : {report.sources_created}")
+    print(f"  datasets_created     : {report.datasets_created}")
+    print(f"  configs_linked       : {report.configs_linked}")
+    print(f"  sources_linked       : {report.sources_linked}")
+    if report.issues:
+        print(f"  issues ({len(report.issues)}):")
+        for issue in report.issues:
+            tag = " [repaired]" if issue.repaired else ""
+            print(
+                f"    config={issue.config_id} provider={issue.provider}"
+                f": {issue.reason}{tag}"
+            )
+    else:
+        print("  issues               : none")
+    if report.dry_run:
+        print("  (no changes committed -- re-run without --dry-run to apply)")
+
+    unrepaired = [i for i in report.issues if not i.repaired]
+    return 1 if unrepaired else 0
+
+
 # ── CLI registration ───────────────────────────────────────────────
 
 
@@ -361,3 +404,21 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     # -- backward-compat aliases (flat: `migrate upgrade`, etc.) --
 
     _register_postgres_subcommands(migrate_sub)
+
+    # -- `migrate configs-to-integrations [--dry-run]` --
+
+    c2i_parser = migrate_sub.add_parser(
+        "configs-to-integrations",
+        help=(
+            "Migrate SyncConfiguration rows to Integration/Source/Dataset records. "
+            "Idempotent. Use --dry-run for a safe preview."
+        ),
+    )
+    c2i_parser.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        default=False,
+        help="Preview the migration without committing any changes.",
+    )
+    c2i_parser.set_defaults(func=_run_configs_to_integrations)

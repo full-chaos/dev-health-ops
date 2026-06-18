@@ -418,6 +418,7 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     # Bare ``migrate postgres`` / ``migrate clickhouse`` default to upgrade.
     ("migrate", "postgres"): frozenset({_REQ_POSTGRES}),
     ("migrate", "clickhouse"): frozenset({_REQ_CLICKHOUSE}),
+    ("migrate", "configs-to-integrations"): frozenset({_REQ_POSTGRES}),
 }
 
 _REQUIREMENT_MESSAGES: dict[str, str] = {

@@ -326,6 +326,7 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
             unit.error = str(exc)
             unit.result = {"error_category": error_category}
             session.flush()
+            should_finalize = True
         logger.exception(
             "run_sync_unit.failed",
             extra={

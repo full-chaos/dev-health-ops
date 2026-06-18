@@ -267,6 +267,28 @@ def test_run_sync_unit_failure_persists_failed_and_error(db_session, monkeypatch
     assert finalize_calls == [((str(run.id),), "sync")]
 
 
+def test_run_sync_unit_bootstrap_failure_enqueues_finalize(db_session, monkeypatch):
+    from dev_health_ops.workers.sync_bootstrap import SyncTaskBootstrap
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(db_session)
+    _patch_db_session(monkeypatch, db_session)
+    finalize_calls = _patch_finalize_apply(monkeypatch)
+
+    def fail_bootstrap(session, unit_id):
+        raise ValueError("missing source")
+
+    monkeypatch.setattr(SyncTaskBootstrap, "load", fail_bootstrap)
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    db_session.refresh(unit)
+    assert result["status"] == "failed"
+    assert unit.status == SyncRunUnitStatus.FAILED.value
+    assert unit.error == "missing source"
+    assert finalize_calls == [((str(run.id),), "sync")]
+
+
 def test_run_sync_unit_skips_terminal_run_without_overwriting_unit(
     db_session, monkeypatch
 ):

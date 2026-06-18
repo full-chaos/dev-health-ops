@@ -7,7 +7,7 @@ import json
 import logging
 import uuid
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
@@ -131,6 +131,8 @@ class MaterializeConfig:
     llm_provider: str
     persist_evidence_snippets: bool
     llm_model: str | None
+    llm_api_key: str = field(default="", repr=False)
+    llm_base_url: str = ""
     force: bool = False
     team_ids: list[str] | None = None
     llm_concurrency: int = 5
@@ -367,7 +369,12 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
         sink.ensure_schema()
 
         # Initialize LLM provider once (reusing connection pool)
-        provider_instance = get_provider(config.llm_provider, model=config.llm_model)
+        provider_instance = get_provider(
+            config.llm_provider,
+            model=config.llm_model,
+            api_key=config.llm_api_key or None,
+            base_url=config.llm_base_url or None,
+        )
 
         repo_ids = _resolve_repo_ids(
             sink, config.repo_ids, config.team_ids, config_org_id=config.org_id or ""

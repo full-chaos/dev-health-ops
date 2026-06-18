@@ -129,6 +129,9 @@ def _materialize_ns(**overrides) -> argparse.Namespace:
         llm_provider="auto",
         persist_evidence_snippets=True,
         model=None,
+        llm_api_key=None,
+        llm_base_url=None,
+        llm_concurrency=None,
         force=False,
     )
     base.update(overrides)
@@ -231,6 +234,40 @@ def test_cli_team_scoped_materialize_skips_org_marker():
         rc = run_investment_materialization(_materialize_ns(team_id=["team-1"]))
 
     assert rc == 0
+    backfill_mock.assert_not_called()
+
+
+def test_cli_materialize_threads_inline_llm_credentials_and_concurrency():
+    fake_materialize, materialize_mock, backfill_mock = (
+        _patch_materialize_and_projection()
+    )
+
+    with (
+        patch(
+            "dev_health_ops.work_graph.runner.materialize_investments",
+            fake_materialize,
+        ),
+        patch(
+            "dev_health_ops.work_graph.investment.backfill.backfill_memberships",
+            backfill_mock,
+        ),
+    ):
+        rc = run_investment_materialization(
+            _materialize_ns(
+                repo_id=["repo-uuid-1"],
+                llm_api_key="sk-inline-secret",
+                llm_base_url="https://inline.invalid/v1",
+                llm_concurrency=1,
+            )
+        )
+
+    assert rc == 0
+    materialize_mock.assert_called_once()
+    config = materialize_mock.call_args.args[0]
+    assert config.llm_api_key == "sk-inline-secret"
+    assert config.llm_base_url == "https://inline.invalid/v1"
+    assert config.llm_concurrency == 1
+    assert "sk-inline-secret" not in repr(config)
     backfill_mock.assert_not_called()
 
 

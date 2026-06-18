@@ -372,3 +372,189 @@ def test_run_backfill_uses_legacy_path_when_feature_flag_off(db_session, monkeyp
     assert legacy_calls[0]["sync_config_id"] == str(config.id)
     assert legacy_calls[0]["since"] == date(2026, 6, 1)
     assert legacy_calls[0]["before"] == date(2026, 6, 7)
+
+
+def test_run_backfill_task_fanout_resolves_migrated_integration_id(
+    db_session, monkeypatch
+):
+    """Fan-out backfill must plan against the migrated Integration id, not the
+    SyncConfiguration id (regression: the worker used to fall back to
+    sync_config_id and crash with 'Integration not found')."""
+    from dev_health_ops.backfill import runner
+    from dev_health_ops.workers import sync_backfill
+
+    integration = _create_integration(db_session)
+    _create_source(db_session, integration, "full-chaos/dev-health")
+    _create_dataset(db_session, integration, "commits")
+    config = SyncConfiguration(
+        name="migrated parent backfill",
+        provider="github",
+        org_id=ORG_ID,
+        sync_targets=["git"],
+        sync_options={},
+        is_active=True,
+        migrated_integration_id=integration.id,
+    )
+    db_session.add(config)
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setenv("SYNC_FANOUT_BACKFILL", "1")
+
+    captured: dict = {}
+
+    def _fake_planner(
+        integration_id,
+        since,
+        before,
+        *,
+        org_id,
+        source_ids=None,
+        dataset_keys=None,
+        triggered_by,
+    ):
+        captured.update(
+            integration_id=integration_id,
+            since=since,
+            before=before,
+            org_id=org_id,
+            source_ids=source_ids,
+            dataset_keys=dataset_keys,
+            triggered_by=triggered_by,
+        )
+        return {
+            "status": "success",
+            "sync_run_id": str(uuid.uuid4()),
+            "unit_count": 0,
+        }
+
+    monkeypatch.setattr(runner, "run_backfill_via_planner", _fake_planner)
+    monkeypatch.setattr(
+        runner,
+        "run_backfill_for_config",
+        lambda **kwargs: pytest.fail(
+            "legacy path should not run for a migrated config"
+        ),
+    )
+
+    run_backfill_task = getattr(sync_backfill.run_backfill, "run")
+    result = run_backfill_task(
+        sync_config_id=str(config.id),
+        since="2026-06-01",
+        before="2026-06-07",
+        org_id=ORG_ID,
+    )
+
+    assert result["status"] == "success"
+    assert captured["integration_id"] == str(integration.id)
+    assert captured["integration_id"] != str(config.id)
+    assert captured["source_ids"] is None  # parent => whole integration
+    assert captured["since"] == date(2026, 6, 1)
+    assert captured["before"] == date(2026, 6, 7)
+    assert captured["triggered_by"] == "backfill"
+
+
+def test_run_backfill_task_fanout_child_config_scopes_source(db_session, monkeypatch):
+    """A migrated child config must scope the planned run to its own source
+    (and the datasets derived from its legacy targets), mirroring
+    trigger_routing.plan_request_for_config."""
+    from dev_health_ops.backfill import runner
+    from dev_health_ops.sync.trigger_routing import _dataset_keys_for_config
+    from dev_health_ops.workers import sync_backfill
+
+    integration = _create_integration(db_session)
+    source = _create_source(db_session, integration, "full-chaos/dev-health")
+    _create_dataset(db_session, integration, "commits")
+    config = SyncConfiguration(
+        name="migrated child backfill",
+        provider="github",
+        org_id=ORG_ID,
+        sync_targets=["git"],
+        sync_options={},
+        is_active=True,
+        migrated_integration_id=integration.id,
+        migrated_source_id=source.id,
+    )
+    db_session.add(config)
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setenv("SYNC_FANOUT_BACKFILL", "1")
+
+    expected_dataset_keys = _dataset_keys_for_config(config) or None
+    captured: dict = {}
+
+    def _fake_planner(integration_id, since, before, **kwargs):
+        captured.update(integration_id=integration_id, **kwargs)
+        return {
+            "status": "success",
+            "sync_run_id": str(uuid.uuid4()),
+            "unit_count": 0,
+        }
+
+    monkeypatch.setattr(runner, "run_backfill_via_planner", _fake_planner)
+
+    run_backfill_task = getattr(sync_backfill.run_backfill, "run")
+    result = run_backfill_task(
+        sync_config_id=str(config.id),
+        since="2026-06-01",
+        before="2026-06-07",
+        org_id=ORG_ID,
+    )
+
+    assert result["status"] == "success"
+    assert captured["integration_id"] == str(integration.id)
+    assert captured["source_ids"] == (str(source.id),)
+    assert captured["dataset_keys"] == expected_dataset_keys
+
+
+def test_run_backfill_task_unmigrated_config_falls_back_to_legacy(
+    db_session, monkeypatch
+):
+    """Even with the global fan-out flag on, an un-migrated config (no
+    migrated_integration_id) must use the legacy per-config path instead of
+    crashing in the planner. This is the exact regression scenario."""
+    from dev_health_ops.backfill import runner
+    from dev_health_ops.workers import sync_backfill, sync_runtime
+
+    config = SyncConfiguration(
+        name="unmigrated backfill",
+        provider="github",
+        org_id=ORG_ID,
+        sync_targets=["git"],
+        sync_options={},
+        is_active=True,
+    )
+    db_session.add(config)
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setenv("SYNC_FANOUT_BACKFILL", "1")  # fan-out requested...
+    monkeypatch.setattr(sync_backfill, "_get_db_url", lambda: "clickhouse://test")
+    monkeypatch.setattr(
+        sync_runtime, "_dispatch_post_sync_tasks", lambda **kwargs: None
+    )
+
+    legacy_calls: list = []
+
+    def _fake_legacy(**kwargs):
+        legacy_calls.append(kwargs)
+        return {"status": "success"}
+
+    monkeypatch.setattr(runner, "run_backfill_for_config", _fake_legacy)
+    monkeypatch.setattr(
+        runner,
+        "run_backfill_via_planner",
+        lambda *args, **kwargs: pytest.fail(
+            "planner must not run for an un-migrated config"
+        ),
+    )
+
+    run_backfill_task = getattr(sync_backfill.run_backfill, "run")
+    result = run_backfill_task(
+        sync_config_id=str(config.id),
+        since="2026-06-01",
+        before="2026-06-07",
+        org_id=ORG_ID,
+    )
+
+    assert result["status"] == "success"
+    assert len(legacy_calls) == 1
+    assert legacy_calls[0]["sync_config_id"] == str(config.id)

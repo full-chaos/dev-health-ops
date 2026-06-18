@@ -107,6 +107,10 @@ def run_backfill(
     )
     from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.models.settings import IntegrationCredential, SyncConfiguration
+    from dev_health_ops.sync.trigger_routing import (
+        is_migrated_trigger_routing_enabled,
+        plan_request_for_config,
+    )
 
     sync_config_uuid = uuid.UUID(sync_config_id)
     started_at = datetime.now(timezone.utc)
@@ -114,7 +118,10 @@ def run_backfill(
     try:
         provider = ""
         sync_targets: list[str] = []
-        integration_id = sync_config_id
+        use_fanout = False
+        planner_integration_id = ""
+        planner_source_ids: tuple[str, ...] | None = None
+        planner_dataset_keys: tuple[str, ...] | None = None
         with get_postgres_session_sync() as session:
             config = (
                 session.query(SyncConfiguration)
@@ -128,8 +135,6 @@ def run_backfill(
                 raise ValueError(f"Sync configuration not found: {sync_config_id}")
 
             provider = str(config.provider or "").strip().lower()
-            sync_options = dict(config.sync_options or {})
-            integration_id = str(sync_options.get("integration_id") or sync_config_id)
             sync_targets = _normalize_sync_targets(
                 provider,
                 _as_str_list(config.sync_targets),
@@ -151,18 +156,33 @@ def run_backfill(
                     )
                 credentials = _credential_mapping(credential)
 
+            plan_req = plan_request_for_config(
+                config, triggered_by="backfill", mode="backfill"
+            )
+            fanout_requested = (
+                _sync_fanout_backfill_enabled()
+                or is_migrated_trigger_routing_enabled(session, org_id)
+            )
+            if plan_req is not None and fanout_requested:
+                use_fanout = True
+                planner_integration_id = plan_req.integration_id
+                planner_source_ids = plan_req.source_ids
+                planner_dataset_keys = plan_req.dataset_keys
+
         if backfill_job_id:
             _mark_backfill_job_running(backfill_job_id, started_at)
 
         since_date = date.fromisoformat(since)
         before_date = date.fromisoformat(before)
 
-        if _sync_fanout_backfill_enabled():
+        if use_fanout:
             result_payload = run_backfill_via_planner(
-                integration_id,
+                planner_integration_id,
                 since_date,
                 before_date,
                 org_id=org_id,
+                source_ids=planner_source_ids,
+                dataset_keys=planner_dataset_keys,
                 triggered_by="backfill",
             )
             if backfill_job_id:

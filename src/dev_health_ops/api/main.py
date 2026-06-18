@@ -26,7 +26,12 @@ from dev_health_ops.api.middleware.rate_limit import limiter
 from dev_health_ops.api.product_telemetry import router as product_telemetry_router
 from dev_health_ops.api.telemetry.router import router as telemetry_router
 from dev_health_ops.llm import get_provider
-from dev_health_ops.llm.errors import LLMError
+from dev_health_ops.llm.errors import (
+    LLMAuthError,
+    LLMError,
+    LLMRateLimitError,
+    LLMServerError,
+)
 
 from ._errors import (
     _generic_exception_handler as _generic_exception_handler,
@@ -310,6 +315,16 @@ async def keep_alive_wrapper(coro):
                 "detail": "An internal streaming error occurred.",
             }
         )
+
+
+def _http_exception_from_llm_error(exc: LLMError) -> HTTPException:
+    if isinstance(exc, LLMAuthError):
+        return HTTPException(status_code=422, detail=str(exc))
+    if isinstance(exc, LLMRateLimitError):
+        return HTTPException(status_code=429, detail=str(exc))
+    if isinstance(exc, LLMServerError):
+        return HTTPException(status_code=503, detail=str(exc))
+    return HTTPException(status_code=422, detail=str(exc))
 
 
 @app.get("/api/v1/meta", response_model=MetaResponse)
@@ -641,25 +656,20 @@ async def work_unit_explain_endpoint(
 
         target_investment = investments[0]
         logger.info(
-            "Generating streaming explanation for work_unit_id=%s",
+            "Generating explanation for work_unit_id=%s",
             sanitize_for_log(work_unit_id),
         )
 
-        # Return streaming response with keep-alive pings.
-        # Provider is pre-resolved above; pass it in to avoid a second
-        # get_provider() call (and a second credential check) inside the stream.
-        return StreamingResponse(
-            keep_alive_wrapper(
-                explain_work_unit(
-                    investment=target_investment,
-                    llm_provider=llm_provider,
-                    llm_model=llm_model,
-                    provider=resolved_provider,
-                    org_id=current_user.org_id,
-                )
-            ),
-            media_type="application/json",
-        )
+        try:
+            return await explain_work_unit(
+                investment=target_investment,
+                llm_provider=llm_provider,
+                llm_model=llm_model,
+                provider=resolved_provider,
+                org_id=current_user.org_id,
+            )
+        except LLMError as exc:
+            raise _http_exception_from_llm_error(exc) from exc
 
     except HTTPException:
         raise

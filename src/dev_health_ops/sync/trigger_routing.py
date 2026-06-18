@@ -74,8 +74,11 @@ def is_migrated_trigger_routing_enabled(session: Session, org_id: str) -> bool:
         # (PENDING JobRun create, dispatch bookkeeping) runs on a clean session.
         try:
             session.rollback()
-        except Exception:
-            pass
+        except Exception as rollback_err:
+            logger.debug(
+                "Rollback failed after OperationalError while reading migrated trigger routing flag; proceeding with legacy-path fallback.",
+                exc_info=rollback_err,
+            )
         return False
     if row is None:
         return False

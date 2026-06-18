@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import builtins
 import json
 import uuid
@@ -46,6 +47,11 @@ class FakeSink:
         self.membership_run_records.append(record)
 
     def close(self) -> None:
+        return None
+
+
+class FakeProvider:
+    async def aclose(self) -> None:
         return None
 
 
@@ -112,7 +118,7 @@ def _patch_queries(monkeypatch, edges, work_items, commits):
     monkeypatch.setattr(
         "dev_health_ops.work_graph.investment.materialize.fetch_commit_churn",
         lambda client, repo_commits, **kwargs: {
-            f"{commits[0]['repo_id']}@abc123": 10.0
+            f"{commit['repo_id']}@{commit['hash']}": 10.0 for commit in commits
         },
     )
     monkeypatch.setattr(
@@ -170,6 +176,170 @@ async def test_materialize_invokes_sink(monkeypatch):
     assert json.loads(record.categorization_errors_json) == [
         "probability_sum_renormalized:0.9500"
     ]
+
+
+@pytest.mark.asyncio
+async def test_materialize_llm_concurrency_one_serializes(monkeypatch):
+    repo_one = str(uuid.uuid4())
+    repo_two = str(uuid.uuid4())
+    edges = [
+        {
+            "edge_id": "edge-1",
+            "source_type": "issue",
+            "source_id": "jira:ABC-1",
+            "target_type": "commit",
+            "target_id": f"{repo_one}@abc123",
+            "repo_id": repo_one,
+            "confidence": 0.9,
+        },
+        {
+            "edge_id": "edge-2",
+            "source_type": "issue",
+            "source_id": "jira:ABC-2",
+            "target_type": "commit",
+            "target_id": f"{repo_two}@def456",
+            "repo_id": repo_two,
+            "confidence": 0.9,
+        },
+    ]
+    now = datetime.now(timezone.utc)
+    work_items = [
+        {
+            "work_item_id": "jira:ABC-1",
+            "provider": "jira",
+            "repo_id": repo_one,
+            "title": "Fix login outage",
+            "description": "Resolve authentication failures. " * 20,
+            "type": "incident",
+            "labels": ["outage"],
+            "parent_id": "",
+            "epic_id": "",
+            "created_at": now - timedelta(days=2),
+            "updated_at": now - timedelta(days=1),
+            "completed_at": now - timedelta(days=1),
+        },
+        {
+            "work_item_id": "jira:ABC-2",
+            "provider": "jira",
+            "repo_id": repo_two,
+            "title": "Add checkout flow",
+            "description": "Ship checkout workflow improvements. " * 20,
+            "type": "task",
+            "labels": ["feature"],
+            "parent_id": "",
+            "epic_id": "",
+            "created_at": now - timedelta(days=2),
+            "updated_at": now - timedelta(days=1),
+            "completed_at": now - timedelta(days=1),
+        },
+    ]
+    commits = [
+        {
+            "repo_id": repo_one,
+            "hash": "abc123",
+            "message": "Fix login outage",
+            "author_when": now - timedelta(days=1),
+            "committer_when": now - timedelta(days=1),
+        },
+        {
+            "repo_id": repo_two,
+            "hash": "def456",
+            "message": "Add checkout flow",
+            "author_when": now - timedelta(days=1),
+            "committer_when": now - timedelta(days=1),
+        },
+    ]
+    sink = FakeSink()
+    active = 0
+    max_active = 0
+
+    async def _fake_categorize(bundle, llm_provider, llm_model=None, provider=None):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        try:
+            await asyncio.sleep(0)
+            return CategorizationOutcome(
+                subcategories={"feature_delivery.roadmap": 1.0},
+                evidence_quotes=[],
+                uncertainty="Limited evidence.",
+                status="ok",
+                errors=[],
+            )
+        finally:
+            active -= 1
+
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
+    )
+    _patch_queries(monkeypatch, edges, work_items, commits)
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.categorize_text_bundle",
+        _fake_categorize,
+    )
+
+    config = MaterializeConfig(
+        dsn="clickhouse://localhost:8123/default",
+        from_ts=now - timedelta(days=5),
+        to_ts=now,
+        repo_ids=None,
+        llm_provider="mock",
+        persist_evidence_snippets=False,
+        llm_model="test-model",
+        llm_concurrency=1,
+    )
+
+    stats = await materialize_investments(config)
+    assert stats["records"] == 2
+    assert max_active == 1
+
+
+@pytest.mark.asyncio
+async def test_materialize_passes_configured_llm_credentials(monkeypatch):
+    sink = FakeSink()
+    captured = {}
+
+    def _fake_get_provider(name, model=None, *, api_key=None, base_url=None):
+        captured.update(
+            {"name": name, "model": model, "api_key": api_key, "base_url": base_url}
+        )
+        return FakeProvider()
+
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.get_provider",
+        _fake_get_provider,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.fetch_work_graph_edges",
+        lambda client, repo_ids=None, **kwargs: [],
+    )
+
+    now = datetime.now(timezone.utc)
+    config = MaterializeConfig(
+        dsn="clickhouse://localhost:8123/default",
+        from_ts=now - timedelta(days=5),
+        to_ts=now,
+        repo_ids=None,
+        llm_provider="openai",
+        persist_evidence_snippets=False,
+        llm_model="gpt-4o-mini",
+        llm_api_key="sk-inline-secret",
+        llm_base_url="https://inline.invalid/v1",
+    )
+
+    stats = await materialize_investments(config)
+
+    assert stats == {"components": 0, "records": 0, "quotes": 0}
+    assert captured == {
+        "name": "openai",
+        "model": "gpt-4o-mini",
+        "api_key": "sk-inline-secret",
+        "base_url": "https://inline.invalid/v1",
+    }
+    assert "sk-inline-secret" not in repr(config)
 
 
 @pytest.mark.asyncio

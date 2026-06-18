@@ -26,6 +26,7 @@ class AnthropicProvider(LLMProviderBase):
     def __init__(
         self,
         api_key: str,
+        base_url: str | None = None,
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.3,
@@ -40,6 +41,7 @@ class AnthropicProvider(LLMProviderBase):
             temperature: Sampling temperature (lower = more deterministic)
         """
         self.api_key = api_key
+        self.base_url = base_url
         self.model = model or DEFAULT_MODEL_BY_PROVIDER["anthropic"]
         self.max_tokens = max_tokens
         self.temperature = temperature
@@ -51,7 +53,9 @@ class AnthropicProvider(LLMProviderBase):
             try:
                 from anthropic import AsyncAnthropic
 
-                self._client = AsyncAnthropic(api_key=self.api_key)
+                self._client = AsyncAnthropic(
+                    api_key=self.api_key, base_url=self.base_url
+                )
             except ImportError:
                 raise ImportError(
                     "Anthropic package not installed. Install with: pip install anthropic"

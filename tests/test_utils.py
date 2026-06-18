@@ -497,6 +497,12 @@ class TestCLIPlumbing:
                 "openai",
                 "-m",
                 "gpt-4o-mini",
+                "--llm-api-key",
+                "sk-inline",
+                "--llm-base-url",
+                "https://llm.invalid/v1",
+                "--llm-concurrency",
+                "1",
                 "investment",
                 "materialize",
             ]
@@ -504,6 +510,28 @@ class TestCLIPlumbing:
 
         assert args.llm_provider == "openai"
         assert args.model == "gpt-4o-mini"
+        assert args.llm_api_key == "sk-inline"
+        assert args.llm_base_url == "https://llm.invalid/v1"
+        assert args.llm_concurrency == 1
+
+    def test_investment_materialize_accepts_leaf_llm_arguments(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "investment",
+                "materialize",
+                "--llm-api-key",
+                "sk-leaf",
+                "--llm-base-url",
+                "https://leaf.invalid/v1",
+                "--llm-concurrency",
+                "1",
+            ]
+        )
+
+        assert args.llm_api_key == "sk-leaf"
+        assert args.llm_base_url == "https://leaf.invalid/v1"
+        assert args.llm_concurrency == 1
 
     def test_investment_materialize_preserves_root_db_arguments(self):
         parser = build_parser()

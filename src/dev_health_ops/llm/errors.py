@@ -23,11 +23,106 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Awaitable, Callable
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import TypeVar
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
+
+_SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"sk-[A-Za-z0-9_-]{8,}"),
+    re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{8,}"),
+    re.compile(
+        r"(?i)((?:api[_-]?key|authorization|x-api-key|token)\s*[:=]\s*)"
+        r"['\"]?[^'\"\s,;}]+"
+    ),
+)
+
+
+def _sanitize_message(message: str) -> str:
+    text = str(message or "LLM provider error")
+    text = text.replace("\n", " ").replace("\r", " ").strip()
+    for pattern in _SECRET_PATTERNS:
+        text = pattern.sub(
+            lambda m: f"{m.group(1)}<redacted>" if m.groups() else "<redacted>", text
+        )
+    return text[:500]
+
+
+def _exception_text(exc: BaseException) -> str:
+    fragments: list[str] = [str(exc)]
+    for attr_name in ("code", "type", "status_code", "message"):
+        value = getattr(exc, attr_name, None)
+        if value is not None:
+            fragments.append(str(value))
+    body = getattr(exc, "body", None)
+    if body is not None:
+        fragments.append(str(body))
+    response = getattr(exc, "response", None)
+    if response is not None:
+        status_code = getattr(response, "status_code", None)
+        if status_code is not None:
+            fragments.append(str(status_code))
+    return " ".join(fragments)
+
+
+def _status_code(exc: BaseException) -> int | None:
+    for source in (exc, getattr(exc, "response", None)):
+        if source is None:
+            continue
+        raw = getattr(source, "status_code", None)
+        if raw is None:
+            continue
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _header_value(exc: BaseException, name: str) -> str | None:
+    headers = getattr(exc, "headers", None)
+    if headers is None and getattr(exc, "response", None) is not None:
+        headers = getattr(getattr(exc, "response"), "headers", None)
+    if not headers:
+        return None
+    for key in (name, name.lower(), name.title()):
+        try:
+            value = headers.get(key)
+        except AttributeError:
+            value = None
+        if value:
+            return str(value)
+    return None
+
+
+def _retry_after_seconds(exc: BaseException) -> float | None:
+    raw = getattr(exc, "retry_after", None) or _header_value(exc, "Retry-After")
+    if raw is None:
+        return None
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        pass
+    try:
+        parsed = parsedate_to_datetime(str(raw))
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return max(0.0, (parsed - datetime.now(timezone.utc)).total_seconds())
+
+
+def _default_model_for_provider(provider: str) -> str | None:
+    try:
+        from dev_health_ops.llm.providers.base import DEFAULT_MODEL_BY_PROVIDER
+    except Exception:
+        return None
+    return DEFAULT_MODEL_BY_PROVIDER.get(provider)
+
 
 # ---------------------------------------------------------------------------
 # Error hierarchy
@@ -45,7 +140,7 @@ class LLMError(Exception):
         model: str = "",
         original: BaseException | None = None,
     ) -> None:
-        super().__init__(message)
+        super().__init__(_sanitize_message(message))
         self.provider = provider
         self.model = model
         self.original = original
@@ -126,30 +221,59 @@ def classify_provider_error(
     Returns:
         An appropriate LLMError subclass wrapping *exc*.
     """
-    msg = str(exc)
+    msg = _exception_text(exc)
     msg_lower = msg.lower()
+    status_code = _status_code(exc)
+
+    if any(k in msg_lower for k in ("insufficient_quota", "current quota")):
+        return LLMAuthError(
+            "LLM quota exhausted. Check provider billing/quota or use a different API key.",
+            provider=provider,
+            model=model,
+            original=exc,
+        )
+
+    if any(k in msg_lower for k in ("model_not_found", "model not found")):
+        default_model = _default_model_for_provider(provider)
+        hint = f" Provider default is '{default_model}'." if default_model else ""
+        configured = f" configured model '{model}'" if model else " configured model"
+        return LLMError(
+            f"LLM model not found for provider '{provider}' using{configured}.{hint} Check --model or provider defaults.",
+            provider=provider,
+            model=model,
+            original=exc,
+        )
 
     # Auth errors
     if any(
         k in msg_lower
         for k in ("401", "invalid_api_key", "authentication", "unauthorized")
+    ) or any(
+        k in msg_lower
+        for k in ("missing api key", "api key missing", "api_key is required")
     ):
-        return LLMAuthError(msg, provider=provider, model=model, original=exc)
+        return LLMAuthError(
+            "Invalid or missing LLM API key.",
+            provider=provider,
+            model=model,
+            original=exc,
+        )
 
     # Rate limit errors
-    if any(
-        k in msg_lower
-        for k in ("429", "rate_limit", "rate limit", "quota", "too many requests")
+    if (
+        any(
+            k in msg_lower
+            for k in ("429", "rate_limit", "rate limit", "too many requests")
+        )
+        or status_code == 429
     ):
-        retry_after: float | None = None
-        # Some SDKs expose retry_after on the exception object
-        if hasattr(exc, "retry_after"):
-            try:
-                retry_after = float(getattr(exc, "retry_after"))
-            except (TypeError, ValueError):
-                pass  # retry_after is not a valid number; leave as None
+        retry_after = _retry_after_seconds(exc)
         return LLMRateLimitError(
-            msg, retry_after=retry_after, provider=provider, model=model, original=exc
+            "Transient LLM rate limit from provider.",
+            retry_after=retry_after,
+            provider=provider,
+            model=model,
+            original=exc,
         )
 
     # Context length errors
@@ -163,14 +287,32 @@ def classify_provider_error(
             "reduce your prompt",
         )
     ):
-        return LLMContextLengthError(msg, provider=provider, model=model, original=exc)
+        return LLMContextLengthError(
+            "LLM prompt exceeds the model context window.",
+            provider=provider,
+            model=model,
+            original=exc,
+        )
 
     # Server errors
     if any(
         k in msg_lower
         for k in ("500", "502", "503", "504", "server error", "internal error")
-    ):
-        return LLMServerError(msg, provider=provider, model=model, original=exc)
+    ) or (status_code is not None and status_code >= 500):
+        return LLMServerError(
+            "Transient LLM provider server error.",
+            provider=provider,
+            model=model,
+            original=exc,
+        )
+
+    if any(k in msg_lower for k in ("timeout", "timed out", "connection error")):
+        return LLMServerError(
+            "Transient LLM provider transport error.",
+            provider=provider,
+            model=model,
+            original=exc,
+        )
 
     # Fallback: treat as generic LLM error (non-retryable)
     return LLMError(msg, provider=provider, model=model, original=exc)
@@ -231,7 +373,7 @@ async def call_with_retry(
                 if isinstance(exc, LLMRateLimitError) and exc.retry_after:
                     delay = exc.retry_after
                 logger.warning(
-                    "LLM %s error on attempt %d/%d; retrying in %.1fs — %r",
+                    "LLM %s error on attempt %d/%d; retrying in %.1fs — %s",
                     provider_name,
                     attempt + 1,
                     max_retries + 1,
@@ -243,7 +385,7 @@ async def call_with_retry(
                 continue
             # Non-retryable or exhausted
             logger.error(
-                "LLM %s/%s failed after %d attempt(s): %r",
+                "LLM %s/%s failed after %d attempt(s): %s",
                 provider_name,
                 model,
                 attempt + 1,
@@ -257,8 +399,10 @@ async def call_with_retry(
             last_exc = llm_exc
             if is_retryable(llm_exc) and attempt < max_retries:
                 delay = retry_delay(attempt)
+                if isinstance(llm_exc, LLMRateLimitError) and llm_exc.retry_after:
+                    delay = llm_exc.retry_after
                 logger.warning(
-                    "LLM %s transient error on attempt %d/%d; retrying in %.1fs — %r",
+                    "LLM %s transient error on attempt %d/%d; retrying in %.1fs — %s",
                     provider_name,
                     attempt + 1,
                     max_retries + 1,
@@ -269,7 +413,7 @@ async def call_with_retry(
                 attempt += 1
                 continue
             logger.error(
-                "LLM %s/%s failed after %d attempt(s): %r",
+                "LLM %s/%s failed after %d attempt(s): %s",
                 provider_name,
                 model,
                 attempt + 1,

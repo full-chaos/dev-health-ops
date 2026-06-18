@@ -14,6 +14,17 @@ from dev_health_ops.workers.task_utils import _get_db_url
 logger = logging.getLogger(__name__)
 
 
+def _llm_concurrency(value: object | None = None) -> int:
+    import os
+
+    raw = value if value is not None else os.getenv("INVESTMENT_LLM_CONCURRENCY", "5")
+    try:
+        concurrency = int(str(raw))
+    except (TypeError, ValueError):
+        concurrency = 5
+    return max(1, concurrency)
+
+
 @celery_app.task(
     bind=True,
     max_retries=3,
@@ -106,6 +117,7 @@ def run_investment_materialize(
     team_ids: list[str] | None = None,
     llm_provider: str = "auto",
     llm_model: str | None = None,
+    llm_concurrency: int | None = None,
     force: bool = False,
     org_id: str = "",
 ) -> dict:
@@ -120,6 +132,7 @@ def run_investment_materialize(
         team_ids: Optional list of team IDs to filter
         llm_provider: LLM provider (auto|openai|anthropic)
         llm_model: Optional specific LLM model
+        llm_concurrency: Maximum concurrent LLM categorizations
         force: Force recomputation even if cached
         org_id: Organization scope for work-graph/investment queries
 
@@ -127,6 +140,8 @@ def run_investment_materialize(
         dict with materialization status and stats
     """
 
+    from dev_health_ops.llm import LLMAuthError, resolve_provider_name
+    from dev_health_ops.llm.credentials import resolve_llm_credentials
     from dev_health_ops.work_graph.investment.materialize import (
         MaterializeConfig,
         materialize_investments,
@@ -164,20 +179,30 @@ def run_investment_materialize(
     )
 
     try:
+        resolved_provider = resolve_provider_name(llm_provider)
+        llm_credentials = resolve_llm_credentials(
+            resolved_provider, org_id=org_id or None
+        )
         config = MaterializeConfig(
             dsn=db_url,
             from_ts=parsed_from,
             to_ts=parsed_to,
             repo_ids=repo_ids,
-            llm_provider=llm_provider,
+            llm_provider=resolved_provider,
             persist_evidence_snippets=True,
             llm_model=llm_model,
+            llm_api_key=llm_credentials.api_key,
+            llm_base_url=llm_credentials.base_url,
+            llm_concurrency=_llm_concurrency(llm_concurrency),
             team_ids=team_ids,
             force=force,
             org_id=org_id or None,
         )
         stats = run_async(materialize_investments(config))
         return {"status": "success", "stats": stats}
+    except LLMAuthError as exc:
+        logger.error("Investment materialize task failed with LLM auth error: %s", exc)
+        raise
     except Exception as exc:
         logger.exception("Investment materialize task failed: %s", exc)
         raise self.retry(exc=exc, countdown=120 * (2**self.request.retries))

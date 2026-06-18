@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 
+from dev_health_ops.llm.credentials import resolve_llm_credentials
 from dev_health_ops.llm.errors import LLMAuthError
 
 from .base import (
@@ -28,6 +29,20 @@ _MODEL_ENV_BY_PROVIDER: dict[str, tuple[str, ...]] = {
     "qwen-lmstudio": ("LLM_MODEL_QWEN_LMSTUDIO", "LMSTUDIO_MODEL"),
 }
 
+_KNOWN_PROVIDERS = {
+    "anthropic",
+    "gemini",
+    "lmstudio",
+    "local",
+    "mock",
+    "none",
+    "ollama",
+    "openai",
+    "qwen",
+    "qwen-lmstudio",
+    "qwen-local",
+}
+
 
 def _normalize_provider_name(name: str) -> str:
     return (name or "auto").strip().lower()
@@ -51,22 +66,20 @@ def _configured_provider() -> str | None:
     return None
 
 
-def _provider_has_required_config(name: str) -> bool:
+def _provider_has_required_config(
+    name: str, *, api_key: str | None = None, base_url: str | None = None
+) -> bool:
     if name == "mock":
         return True
     if name == "none":
         return False
-    if name == "openai":
-        return bool(os.getenv("OPENAI_API_KEY"))
-    if name == "anthropic":
-        return bool(os.getenv("ANTHROPIC_API_KEY"))
-    if name == "gemini":
-        return bool(os.getenv("GEMINI_API_KEY"))
-    if name == "qwen":
-        return bool(os.getenv("QWEN_API_KEY") or os.getenv("DASHSCOPE_API_KEY"))
-    if name in {"local", "ollama", "lmstudio", "qwen-local", "qwen-lmstudio"}:
+    if name not in _KNOWN_PROVIDERS:
+        return False
+    try:
+        resolve_llm_credentials(name, api_key=api_key, base_url=base_url)
         return True
-    return False
+    except LLMAuthError:
+        return False
 
 
 def _missing_provider_error(name: str) -> LLMAuthError:
@@ -147,7 +160,13 @@ def is_llm_available(name: str = "auto") -> bool:
     return _provider_has_required_config(resolved)
 
 
-def get_provider(name: str = "auto", model: str | None = None) -> LLMProvider:
+def get_provider(
+    name: str = "auto",
+    model: str | None = None,
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
+) -> LLMProvider:
     provider_name = resolve_provider_name(name)
     model_name = resolve_model_name(provider_name, model)
 
@@ -157,10 +176,15 @@ def get_provider(name: str = "auto", model: str | None = None) -> LLMProvider:
         _log_resolved_provider_model(provider_name, model_name)
         return NoneProvider()
 
-    if not _provider_has_required_config(provider_name):
+    if not _provider_has_required_config(
+        provider_name, api_key=api_key, base_url=base_url
+    ):
         raise _missing_provider_error(provider_name)
 
     _log_resolved_provider_model(provider_name, model_name)
+    credentials = resolve_llm_credentials(
+        provider_name, api_key=api_key, base_url=base_url
+    )
 
     if provider_name == "mock":
         from .mock import MockProvider
@@ -170,65 +194,78 @@ def get_provider(name: str = "auto", model: str | None = None) -> LLMProvider:
     if provider_name == "openai":
         from .openai import OpenAIProvider
 
-        api_key = os.getenv("OPENAI_API_KEY")
-        base_url = os.getenv("OPENAI_BASE_URL")
-        if not api_key:
-            raise _missing_provider_error(provider_name)
-        return OpenAIProvider(api_key=api_key, base_url=base_url, model=model_name)
+        return OpenAIProvider(
+            api_key=credentials.api_key,
+            base_url=credentials.base_url or None,
+            model=model_name,
+        )
 
     if provider_name == "anthropic":
         from .anthropic import AnthropicProvider
 
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise _missing_provider_error(provider_name)
-        return AnthropicProvider(api_key=api_key, model=model_name)
+        return AnthropicProvider(
+            api_key=credentials.api_key,
+            base_url=credentials.base_url or None,
+            model=model_name,
+        )
 
     if provider_name == "gemini":
         from .gemini import GeminiProvider
 
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            raise _missing_provider_error(provider_name)
-        return GeminiProvider(api_key=api_key, model=model_name)
+        return GeminiProvider(
+            api_key=credentials.api_key,
+            base_url=credentials.base_url or None,
+            model=model_name,
+        )
 
     if provider_name == "local":
         from .local import LocalProvider
 
-        return LocalProvider(model=model_name)
+        return LocalProvider(
+            api_key=credentials.api_key or None,
+            base_url=credentials.base_url or None,
+            model=model_name,
+        )
 
     if provider_name == "ollama":
         from .local import OllamaProvider
 
-        return OllamaProvider(model=model_name)
+        return OllamaProvider(base_url=credentials.base_url or None, model=model_name)
 
     if provider_name == "lmstudio":
         if model_name and model_name.startswith("openai/gpt-oss"):
             from .local import LMStudioGPT5Provider
 
-            return LMStudioGPT5Provider(model=model_name)
+            return LMStudioGPT5Provider(
+                base_url=credentials.base_url or None, model=model_name
+            )
 
         from .local import LMStudioProvider
 
-        return LMStudioProvider(model=model_name)
+        return LMStudioProvider(base_url=credentials.base_url or None, model=model_name)
 
     if provider_name == "qwen":
         from .qwen import QwenProvider
 
-        api_key = os.getenv("QWEN_API_KEY") or os.getenv("DASHSCOPE_API_KEY")
-        if not api_key:
-            raise _missing_provider_error(provider_name)
-        return QwenProvider(api_key=api_key, model=model_name)
+        return QwenProvider(
+            api_key=credentials.api_key,
+            base_url=credentials.base_url or None,
+            model=model_name,
+        )
 
     if provider_name == "qwen-local":
         from .qwen import QwenLocalProvider
 
-        return QwenLocalProvider(model=model_name)
+        return QwenLocalProvider(
+            base_url=credentials.base_url or None, model=model_name
+        )
 
     if provider_name == "qwen-lmstudio":
         from .qwen import QwenLMStudioProvider
 
-        return QwenLMStudioProvider(model=model_name)
+        return QwenLMStudioProvider(
+            base_url=credentials.base_url or None, model=model_name
+        )
 
     raise ValueError(f"Unknown LLM provider: {provider_name}")
 

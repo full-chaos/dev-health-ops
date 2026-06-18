@@ -466,6 +466,9 @@ def test_local_compose_workers_import_mounted_source() -> None:
 
 def test_platform_compose_workers_and_beat_import_mounted_source() -> None:
     compose_path = _REPO_ROOT.parent / "compose.yml"
+    if not compose_path.exists():
+        pytest.skip("platform compose.yml is only present in the monorepo checkout")
+
     services = _load_yaml(compose_path).get("services") or {}
 
     for service_name in ("worker", "worker-ingest", "worker-heavy", "beat"):

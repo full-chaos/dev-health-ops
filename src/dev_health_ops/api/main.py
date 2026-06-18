@@ -615,7 +615,9 @@ async def work_unit_explain_endpoint(
         # broken stream (the error would otherwise surface inside
         # keep_alive_wrapper after headers are already sent).
         try:
-            resolved_provider = get_provider(llm_provider, model=llm_model)
+            resolved_provider = get_provider(
+                llm_provider, model=llm_model, org_id=current_user.org_id
+            )
         except (ValueError, LLMError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -653,6 +655,7 @@ async def work_unit_explain_endpoint(
                     llm_provider=llm_provider,
                     llm_model=llm_model,
                     provider=resolved_provider,
+                    org_id=current_user.org_id,
                 )
             ),
             media_type="application/json",

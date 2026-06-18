@@ -238,3 +238,31 @@ async def test_explain_work_unit_returns_blank_when_no_llm():
     assert explanation.evidence_highlights == []
     assert explanation.uncertainty_disclosure == ""
     assert explanation.evidence_quality_limits == ""
+
+
+@pytest.mark.asyncio
+async def test_explain_work_unit_returns_blank_for_preresolved_none_provider():
+    investment = _sample_investment()
+    explanation = await explain_work_unit(
+        investment,
+        llm_provider="none",
+        provider=NoneProvider(),
+    )
+
+    assert explanation.work_unit_id == investment.work_unit_id
+    assert explanation.ai_generated is False
+    assert explanation.summary == ""
+    assert explanation.category_rationale == {}
+    assert explanation.evidence_highlights == []
+
+
+@pytest.mark.asyncio
+async def test_explain_work_unit_returns_blank_when_env_provider_none(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "none")
+    investment = _sample_investment()
+    explanation = await explain_work_unit(investment, llm_provider="auto")
+
+    assert explanation.work_unit_id == investment.work_unit_id
+    assert explanation.ai_generated is False
+    assert explanation.summary == ""
+    assert explanation.category_rationale == {}

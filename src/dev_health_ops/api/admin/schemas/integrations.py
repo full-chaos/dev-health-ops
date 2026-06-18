@@ -161,12 +161,15 @@ class SyncRunResponse(BaseModel):
 
 
 class SyncRunUnitSummary(BaseModel):
-    """Rollup of SyncRunUnit rows for the run-status UI."""
+    """Rollup of SyncRunUnit rows for the run-status UI (CHAOS-2519)."""
 
     by_status: dict[str, int]
     by_source: dict[str, dict[str, int]]
     by_dataset: dict[str, dict[str, int]]
     by_cost_class: dict[str, int]
+    slowest_unit_ids: list[str] = Field(default_factory=list)
+    failed_unit_ids: list[str] = Field(default_factory=list)
+    partial_failure_summary: dict[str, Any] | None = None
     units: list[SyncRunUnitResponse]
 
 

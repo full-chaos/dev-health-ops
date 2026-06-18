@@ -24,6 +24,13 @@ Idempotency rules:
     finalize; finalize itself enforces once-only via the unique
     (sync_run_id, kind) constraint on SyncRunPostDispatch.
   * Metrics are NEVER dispatched from individual units.
+
+Observability (CHAOS-2519):
+  Every structured log line emitted by the three tasks carries the full unit
+  context: sync_run_id, unit_id, source_id, dataset_key, provider, cost_class.
+  On failure, an error_category is classified and stored in the unit's result
+  JSON so operators can distinguish provider-wide outages from source-specific
+  or dataset-specific failures without querying raw exception text.
 """
 
 from __future__ import annotations
@@ -62,6 +69,47 @@ logger = logging.getLogger(__name__)
 _runtime_cache = ProviderRuntimeCache()
 
 
+# ---------------------------------------------------------------------------
+# Error categorisation (CHAOS-2519)
+# ---------------------------------------------------------------------------
+
+_PROVIDER_ERROR_PATTERNS: list[tuple[str, str]] = [
+    # (substring_lower, category)
+    ("rate limit", "rate_limit"),
+    ("ratelimit", "rate_limit"),
+    ("429", "rate_limit"),
+    ("timeout", "timeout"),
+    ("timed out", "timeout"),
+    ("connection", "network"),
+    ("network", "network"),
+    ("ssl", "network"),
+    ("certificate", "network"),
+    ("401", "auth"),
+    ("403", "auth"),
+    ("unauthorized", "auth"),
+    ("forbidden", "auth"),
+    ("not found", "not_found"),
+    ("404", "not_found"),
+    ("500", "provider_error"),
+    ("502", "provider_error"),
+    ("503", "provider_error"),
+    ("server error", "provider_error"),
+]
+
+
+def _classify_error(exc: BaseException) -> str:
+    """Return a coarse error category string from an exception.
+
+    Categories: rate_limit, timeout, network, auth, not_found,
+    provider_error, adapter_error.
+    """
+    msg = str(exc).lower()
+    for pattern, category in _PROVIDER_ERROR_PATTERNS:
+        if pattern in msg:
+            return category
+    return "adapter_error"
+
+
 @celery_app.task(queue="sync", name="dev_health_ops.workers.tasks.dispatch_sync_run")
 def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
     """Authorize, route, and queue all pending units of a planned run.
@@ -76,6 +124,10 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         run_uuid = uuid.UUID(str(sync_run_id))
         run = session.query(SyncRun).filter(SyncRun.id == run_uuid).one_or_none()
         if run is None:
+            logger.warning(
+                "dispatch_sync_run.missing",
+                extra={"sync_run_id": sync_run_id},
+            )
             return {"status": "missing", "sync_run_id": sync_run_id}
 
         if not decision.allowed:
@@ -85,6 +137,13 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
             run.error = decision.reason or "sync dispatch denied"
             run.result = {"capped_unit_ids": list(decision.capped_unit_ids)}
             session.flush()
+            logger.warning(
+                "dispatch_sync_run.denied",
+                extra={
+                    "sync_run_id": sync_run_id,
+                    "reason": run.error,
+                },
+            )
             return {"status": "denied", "reason": run.error}
 
         units = _claim_units(session, run_uuid)
@@ -111,11 +170,22 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
             session.flush()
 
     if signatures:
+        logger.info(
+            "dispatch_sync_run.dispatched",
+            extra={
+                "sync_run_id": sync_run_id,
+                "queued_units": len(signatures),
+            },
+        )
         callback = getattr(finalize_sync_run, "si")(sync_run_id)
         callback.set(queue="sync")
         chord(group(signatures), callback).apply_async()
         return {"status": "dispatched", "queued_units": len(signatures)}
 
+    logger.info(
+        "dispatch_sync_run.noop",
+        extra={"sync_run_id": sync_run_id, "queued_units": 0},
+    )
     getattr(finalize_sync_run, "apply_async")(args=(sync_run_id,), queue="sync")
     return {"status": "noop", "queued_units": 0}
 
@@ -140,6 +210,8 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
 
     sync_run_id: str | None = None
     started_at = datetime.now(timezone.utc)
+    # Unit context fields for structured logging — populated once ctx is loaded.
+    _log_ctx: dict[str, Any] = {"unit_id": unit_id}
     try:
         with get_postgres_session_sync() as session:
             ctx = SyncTaskBootstrap.load(session, unit_id)
@@ -149,6 +221,16 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
             unit.attempts = int(unit.attempts or 0) + 1
             unit.error = None
             session.flush()
+            _log_ctx = {
+                "sync_run_id": ctx.sync_run_id,
+                "unit_id": unit_id,
+                "source_id": str(unit.source_id),
+                "dataset_key": ctx.dataset_key,
+                "provider": ctx.provider,
+                "cost_class": ctx.cost_class,
+            }
+
+        logger.info("run_sync_unit.started", extra=_log_ctx)
 
         runtime = _runtime_cache.get(ctx)
         result = run_dataset_unit(ctx, runtime)
@@ -170,6 +252,10 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     started_at,
                 )
             session.flush()
+        logger.info(
+            "run_sync_unit.success",
+            extra={**_log_ctx, "duration_seconds": duration_seconds},
+        )
         return {
             "status": "success",
             "unit_id": unit_id,
@@ -178,16 +264,29 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
     except Exception as exc:
         completed_at = datetime.now(timezone.utc)
         duration_seconds = max(0, int((completed_at - started_at).total_seconds()))
+        error_category = _classify_error(exc)
         with get_postgres_session_sync() as session:
             unit = _load_unit(session, unit_id)
             sync_run_id = str(unit.sync_run_id)
             unit.status = SyncRunUnitStatus.FAILED.value
             unit.duration_seconds = duration_seconds
             unit.error = str(exc)
-            unit.result = None
+            unit.result = {"error_category": error_category}
             session.flush()
-        logger.exception("Sync unit failed: unit_id=%s", unit_id)
-        return {"status": "failed", "unit_id": unit_id, "error": str(exc)}
+        logger.exception(
+            "run_sync_unit.failed",
+            extra={
+                **_log_ctx,
+                "duration_seconds": duration_seconds,
+                "error_category": error_category,
+            },
+        )
+        return {
+            "status": "failed",
+            "unit_id": unit_id,
+            "error": str(exc),
+            "error_category": error_category,
+        }
     finally:
         if sync_run_id is not None:
             getattr(finalize_sync_run, "apply_async")(args=(sync_run_id,), queue="sync")
@@ -209,6 +308,10 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
         run_uuid = uuid.UUID(str(sync_run_id))
         run = session.query(SyncRun).filter(SyncRun.id == run_uuid).one_or_none()
         if run is None:
+            logger.warning(
+                "finalize_sync_run.missing",
+                extra={"sync_run_id": sync_run_id},
+            )
             return {"status": "missing", "sync_run_id": sync_run_id}
 
         units = (
@@ -222,6 +325,10 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
             SyncRunUnitStatus.FAILED.value,
         }
         if any(unit.status not in terminal_statuses for unit in units):
+            logger.debug(
+                "finalize_sync_run.pending",
+                extra={"sync_run_id": sync_run_id, "total_units": len(units)},
+            )
             return {"status": "pending", "sync_run_id": sync_run_id}
 
         success_count = sum(
@@ -269,6 +376,17 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
         provider_for_dispatch = next(iter(successful_by_provider), "unknown")
         run_org_id = str(run.org_id)
         session.flush()
+
+    run_status = _aggregate_run_status(success_count, failed_count)
+    logger.info(
+        "finalize_sync_run.finalized",
+        extra={
+            "sync_run_id": sync_run_id,
+            "completed_units": success_count,
+            "failed_units": failed_count,
+            "run_status": run_status,
+        },
+    )
 
     # The outbox claim is now durably committed (the session block exited and
     # committed). Dispatch post-sync metrics AFTER that commit so a crash

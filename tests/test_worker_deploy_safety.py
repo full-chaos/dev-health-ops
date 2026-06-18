@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from argparse import Namespace
 
+import pytest
+
 
 def test_worker_inspect_sanitizes_task_arguments(monkeypatch, capsys) -> None:
     from dev_health_ops.workers import runner
@@ -59,10 +61,8 @@ def test_worker_inspect_quiet_json_restores_otel_on_parse_error(monkeypatch) -> 
 
     monkeypatch.setenv("OTEL_ENABLED", "true")
 
-    try:
+    with pytest.raises(SystemExit):
         cli.main(["workers", "inspect", "--state", "bogus", "--output", "json"])
-    except SystemExit:
-        pass
 
     assert cli.os.environ["OTEL_ENABLED"] == "true"
 

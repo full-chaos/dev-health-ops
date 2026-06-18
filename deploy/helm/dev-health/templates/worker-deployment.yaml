@@ -7,6 +7,7 @@ metadata:
   labels:
     {{- include "dev-health.componentLabels" (dict "component" "worker" "context" $) | nindent 4 }}
 spec:
+  progressDeadlineSeconds: {{ .Values.worker.progressDeadlineSeconds }}
   {{- if not .Values.worker.autoscaling.enabled }}
   replicas: {{ .Values.worker.replicas }}
   {{- end }}
@@ -21,6 +22,7 @@ spec:
       labels:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "worker" "context" $) | nindent 8 }}
     spec:
+      terminationGracePeriodSeconds: {{ .Values.worker.terminationGracePeriodSeconds }}
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
       serviceAccountName: {{ include "dev-health.serviceAccountName" . }}
       securityContext:

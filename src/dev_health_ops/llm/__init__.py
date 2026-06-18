@@ -1,3 +1,8 @@
+from .credentials import (
+    LLMCredentials,
+    resolve_llm_credentials,
+    resolve_llm_org_settings_credentials,
+)
 from .errors import (
     LLMAuthError,
     LLMContextLengthError,
@@ -26,6 +31,9 @@ __all__ = [
     "is_llm_available",
     "resolve_model_name",
     "resolve_provider_name",
+    "LLMCredentials",
+    "resolve_llm_credentials",
+    "resolve_llm_org_settings_credentials",
     # Error types
     "LLMError",
     "LLMAuthError",

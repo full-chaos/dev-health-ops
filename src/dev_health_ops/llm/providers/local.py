@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+from urllib.parse import urlsplit, urlunsplit
 
 from dev_health_ops.llm.errors import classify_provider_error
 
@@ -35,6 +36,30 @@ DEFAULT_ENDPOINTS = {
     "vllm": "http://localhost:8000/v1",
     "local": "http://localhost:11434/v1",  # Default to Ollama
 }
+
+
+def _redact_url(url: str) -> str:
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return "[invalid-url]"
+    host = parsed.hostname or ""
+    if parsed.port is not None:
+        host = f"{host}:{parsed.port}"
+    return urlunsplit((parsed.scheme, host, parsed.path, "", ""))
+
+
+def _status_code(exc: BaseException) -> int | None:
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int):
+        return status_code
+    response = getattr(exc, "response", None)
+    response_status = getattr(response, "status_code", None)
+    return response_status if isinstance(response_status, int) else None
+
+
+def _error_metadata(exc: BaseException) -> dict[str, str | int | None]:
+    return {"type": type(exc).__name__, "status_code": _status_code(exc)}
 
 
 class LocalProvider(LLMProviderBase):
@@ -166,8 +191,8 @@ class LocalProvider(LLMProviderBase):
                 # the requested response_format (common with local OpenAI-compatible APIs).
                 if "400" in str(e) and response_format and retry_count < max_retries:
                     logger.warning(
-                        "Local LLM API error (likely unsupported response_format). Retrying with text format. Error: %s",
-                        e,
+                        "Local LLM API rejected response_format; retrying with text format: %s",
+                        _error_metadata(e),
                     )
                     # Fallback to plain text JSON request
                     response_format = {"type": "text"}
@@ -176,7 +201,12 @@ class LocalProvider(LLMProviderBase):
 
                 model_name = self.model or "local-model"
                 llm_exc = classify_provider_error(e, provider="local", model=model_name)
-                logger.error("Local LLM API error (%s): %s", self.base_url, llm_exc)
+                logger.error(
+                    "Local LLM API error url=%s error=%s classified=%s",
+                    _redact_url(self.base_url or ""),
+                    _error_metadata(e),
+                    type(llm_exc).__name__,
+                )
                 raise llm_exc from e
         return CompletionResult(
             text="", input_tokens=None, output_tokens=None, model=self.model

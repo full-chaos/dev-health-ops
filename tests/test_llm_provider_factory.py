@@ -21,6 +21,20 @@ def test_auto_without_keys_raises_classified_error():
             get_provider("auto")
 
 
+def test_auto_with_generic_env_key_but_no_provider_names_llm_provider():
+    # A bare LLM_API_KEY cannot identify which provider API to call; fail loud
+    # with guidance to set LLM_PROVIDER rather than a generic auto-detect error.
+    with patch.dict(os.environ, {"LLM_API_KEY": "sk-generic"}, clear=True):
+        with pytest.raises(LLMAuthError, match="LLM_PROVIDER"):
+            get_provider("auto")
+
+
+def test_auto_with_inline_key_but_no_provider_names_llm_provider():
+    with patch.dict(os.environ, {}, clear=True):
+        with pytest.raises(LLMAuthError, match="--llm-provider"):
+            get_provider("auto", api_key="sk-inline")
+
+
 def test_explicit_openai_without_key_is_unavailable():
     with patch.dict(os.environ, {}, clear=True):
         assert is_llm_available("openai") is False

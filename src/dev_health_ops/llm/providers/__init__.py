@@ -84,6 +84,15 @@ def _provider_has_required_config(
 
 def _missing_provider_error(name: str) -> LLMAuthError:
     if name == "auto":
+        if os.getenv("LLM_API_KEY") or os.getenv("LLM_BASE_URL"):
+            return LLMAuthError(
+                "A generic LLM_API_KEY/LLM_BASE_URL was provided but no provider "
+                "could be auto-detected. A bare credential does not identify which "
+                "provider API to call. Set --llm-provider or LLM_PROVIDER "
+                "(e.g. openai, anthropic, gemini, qwen, local).",
+                provider="auto",
+                model="none",
+            )
         return LLMAuthError(
             "No LLM provider is configured for auto. Set --llm-provider mock for "
             "fixtures/testing, or configure LLM_PROVIDER plus provider credentials "
@@ -167,7 +176,18 @@ def get_provider(
     api_key: str | None = None,
     base_url: str | None = None,
 ) -> LLMProvider:
-    provider_name = resolve_provider_name(name)
+    try:
+        provider_name = resolve_provider_name(name)
+    except LLMAuthError:
+        if (api_key or base_url) and _normalize_provider_name(name) == "auto":
+            raise LLMAuthError(
+                "A per-call LLM credential (--llm-api-key/--llm-base-url) was "
+                "provided but no provider could be auto-detected. Set "
+                "--llm-provider or LLM_PROVIDER to choose the provider API.",
+                provider="auto",
+                model="none",
+            ) from None
+        raise
     model_name = resolve_model_name(provider_name, model)
 
     if provider_name == "none":

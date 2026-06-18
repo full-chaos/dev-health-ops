@@ -102,6 +102,7 @@ celery -A dev_health_ops.workers.celery_app beat --loglevel=INFO
 | `metrics` | Daily metrics, complexity, DORA, capacity forecast, investment |
 | `sync` | Git, PR, and work-item syncs, team drift, batch sync |
 | `sync.<provider>` | Provider-specific sync queues (e.g., `sync.github`, `sync.gitlab`, `sync.linear`, `sync.jira`, `sync.launchdarkly`) |
+| `sync.<provider>.<class>` | Cost-class sub-queues (CHAOS-2517): `light`/`medium` on `worker`, `heavy` on `worker-heavy`. Always declared in `task_queues`; routing gated by `SYNC_COST_CLASS_QUEUES`. **Two-phase rollout: expand consumer `-Q` lists first, then flip the flag on producers.** |
 | `backfill` | Historical data backfill operations |
 | `reports` | AI report execution (SavedReport to ReportRun) |
 | `webhooks` | Webhook event processing, billing notifications |

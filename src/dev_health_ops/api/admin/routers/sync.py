@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from typing import Any, Protocol, cast
 
@@ -25,6 +26,7 @@ from dev_health_ops.api.services.configuration import (
     SyncConfigurationService,
 )
 from dev_health_ops.api.services.licensing import TierLimitService
+from dev_health_ops.models import SyncRun
 from dev_health_ops.models.settings import (
     JobRun,
     JobRunStatus,
@@ -99,27 +101,68 @@ def _job_run_response(run: object) -> JobRunResponse:
     )
 
 
-def _backfill_job_response(job: object):
+def _backfill_job_response(job: object, run_counts: dict[str, Any] | None = None):
     from dev_health_ops.api.schemas.backfill import BackfillJobResponse
 
-    total_chunks = int(getattr(job, "total_chunks"))
-    completed_chunks = int(getattr(job, "completed_chunks"))
+    run_counts = run_counts or {}
+    total_chunks = int(run_counts.get("total_chunks", getattr(job, "total_chunks")))
+    completed_chunks = int(
+        run_counts.get("completed_chunks", getattr(job, "completed_chunks"))
+    )
     progress_pct = (completed_chunks / total_chunks * 100) if total_chunks > 0 else 0.0
     return BackfillJobResponse(
         id=str(getattr(job, "id")),
         sync_config_id=str(getattr(job, "sync_config_id")),
-        status=str(getattr(job, "status")),
+        status=str(run_counts.get("status", getattr(job, "status"))),
         since_date=getattr(job, "since_date"),
         before_date=getattr(job, "before_date"),
         total_chunks=total_chunks,
         completed_chunks=completed_chunks,
-        failed_chunks=int(getattr(job, "failed_chunks")),
+        failed_chunks=int(
+            run_counts.get("failed_chunks", getattr(job, "failed_chunks"))
+        ),
         progress_pct=progress_pct,
-        error_message=getattr(job, "error_message"),
+        error_message=run_counts.get("error_message", getattr(job, "error_message")),
         started_at=getattr(job, "started_at"),
-        completed_at=getattr(job, "completed_at"),
+        completed_at=run_counts.get("completed_at", getattr(job, "completed_at")),
         created_at=getattr(job, "created_at"),
     )
+
+
+def _backfill_job_sync_run_id(job: object) -> str | None:
+    task_id = str(getattr(job, "celery_task_id") or "")
+    marker = "sync_run:"
+    if marker not in task_id:
+        return None
+    return task_id.rsplit(marker, 1)[-1] or None
+
+
+async def _backfill_job_run_counts(
+    session: AsyncSession, job: object
+) -> dict[str, Any] | None:
+    sync_run_id = _backfill_job_sync_run_id(job)
+    if sync_run_id is None:
+        return None
+    try:
+        run_uuid = uuid.UUID(sync_run_id)
+    except ValueError:
+        return None
+    stmt = select(SyncRun).where(
+        SyncRun.id == run_uuid,
+        SyncRun.org_id == str(getattr(job, "org_id")),
+    )
+    result = await session.execute(stmt)
+    run = result.scalar_one_or_none()
+    if run is None:
+        return None
+    return {
+        "status": getattr(run, "status"),
+        "total_chunks": int(getattr(run, "total_units")),
+        "completed_chunks": int(getattr(run, "completed_units")),
+        "failed_chunks": int(getattr(run, "failed_units")),
+        "completed_at": getattr(run, "completed_at"),
+        "error_message": getattr(run, "error"),
+    }
 
 
 # Canonical mapping of provider → supported sync targets.
@@ -990,13 +1033,19 @@ async def trigger_sync_config_backfill(
     from dev_health_ops.models.backfill import BackfillJob as BackfillJobModel
 
     windows = chunk_date_range(since=payload.since, before=payload.before, chunk_days=7)
+    fanout_backfill = os.getenv("SYNC_FANOUT_BACKFILL", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     backfill_job = BackfillJobModel(
         org_id=org_id,
         sync_config_id=uuid.UUID(config_id),
         status="pending",
         since_date=payload.since,
         before_date=payload.before,
-        total_chunks=len(windows),
+        total_chunks=0 if fanout_backfill else len(windows),
     )
     session.add(backfill_job)
     await session.flush()
@@ -1019,6 +1068,7 @@ async def trigger_sync_config_backfill(
             "config_id": str(config.id),
             "task_id": result.id,
             "backfill_job_id": backfill_job_id,
+            "mode": "fanout" if fanout_backfill else "legacy",
             "since": payload.since.isoformat(),
             "before": payload.before.isoformat(),
         }
@@ -1078,8 +1128,12 @@ async def list_backfill_jobs(
 
     svc = BackfillJobService(session, org_id)
     jobs, total = await svc.list_jobs(limit=limit, offset=offset)
+    items = []
+    for job in jobs:
+        run_counts = await _backfill_job_run_counts(session, job)
+        items.append(_backfill_job_response(job, run_counts))
     return BackfillJobListResponse(
-        items=[_backfill_job_response(job) for job in jobs],
+        items=items,
         total=total,
         limit=limit,
         offset=offset,
@@ -1098,4 +1152,5 @@ async def get_backfill_job(
     job = await svc.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Backfill job not found")
-    return _backfill_job_response(job)
+    run_counts = await _backfill_job_run_counts(session, job)
+    return _backfill_job_response(job, run_counts)

@@ -23,7 +23,11 @@ from dev_health_ops.models.integrations import (
     SyncRun,
     SyncRunUnit,
 )
-from dev_health_ops.models.settings import ScheduledJob, SyncConfiguration
+from dev_health_ops.models.settings import (
+    IntegrationCredential,
+    ScheduledJob,
+    SyncConfiguration,
+)
 from dev_health_ops.models.users import Organization, User
 from tests._helpers import tables_of
 
@@ -43,6 +47,7 @@ _TABLES = tables_of(
     SyncRun,
     SyncRunUnit,
     SyncConfiguration,
+    IntegrationCredential,
     ScheduledJob,
 )
 
@@ -695,3 +700,62 @@ async def test_sync_configs_list_still_works(client):
     ac, _ = client
     resp = await ac.get("/api/v1/admin/sync-configs")
     assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_trigger_sync_empty_selection_is_zero_units_not_all(client):
+    # Regression (Codex Wave 3): an explicit empty source/dataset list must
+    # mean ZERO units, not "sync everything" (None). Truthiness collapsed [] to
+    # None, turning an empty UI selection into a full integration sync.
+    ac, _ = client
+    created = await _create_integration(ac)
+    integration_id = created["id"]
+
+    mock_plan = MagicMock()
+    mock_plan.sync_run_id = str(uuid.uuid4())
+    mock_plan.total_units = 0
+    mock_plan.unit_ids = ()
+    captured = {}
+
+    def _fake_plan(session, request):
+        captured["source_ids"] = request.source_ids
+        captured["dataset_keys"] = request.dataset_keys
+        return mock_plan
+
+    mock_dispatch = MagicMock()
+    mock_dispatch.apply_async = MagicMock()
+    with (
+        patch(
+            "dev_health_ops.api.admin.routers.integrations.plan_sync_run",
+            side_effect=_fake_plan,
+        ),
+        patch(
+            "dev_health_ops.api.admin.routers.integrations.dispatch_sync_run",
+            mock_dispatch,
+        ),
+    ):
+        resp = await ac.post(
+            f"/api/v1/admin/integrations/{integration_id}/sync",
+            json={"source_ids": [], "dataset_keys": []},
+        )
+
+    assert resp.status_code == 202
+    # explicit empty list -> empty tuple (zero units), NOT None (all enabled)
+    assert captured["source_ids"] == ()
+    assert captured["dataset_keys"] == ()
+
+
+@pytest.mark.asyncio
+async def test_create_integration_rejects_foreign_credential(client):
+    # Regression (Codex Wave 3): credential_id must reference a credential that
+    # belongs to the authenticated org + provider; a random/foreign UUID is 400.
+    ac, _ = client
+    resp = await ac.post(
+        "/api/v1/admin/integrations",
+        json={
+            "name": "bad-cred",
+            "provider": "github",
+            "credential_id": str(uuid.uuid4()),
+        },
+    )
+    assert resp.status_code == 400

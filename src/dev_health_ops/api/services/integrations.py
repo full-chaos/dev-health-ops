@@ -16,6 +16,7 @@ from dev_health_ops.models.integrations import (
     SyncRun,
     SyncRunUnit,
 )
+from dev_health_ops.models.settings import IntegrationCredential
 
 
 class IntegrationService:
@@ -46,6 +47,34 @@ class IntegrationService:
         )
         return result.scalar_one_or_none()
 
+    async def _resolve_credential_id(
+        self, credential_id: str | None, provider: str
+    ) -> uuid.UUID | None:
+        """Validate a credential belongs to this org + provider.
+
+        Prevents persisting a cross-org or provider-mismatched credential FK
+        (a tenant must not reference another tenant's credential UUID).
+        """
+        if credential_id is None:
+            return None
+        try:
+            uid = uuid.UUID(credential_id)
+        except ValueError as exc:
+            raise ValueError(f"Invalid credential_id: {credential_id}") from exc
+        result = await self._session.execute(
+            select(IntegrationCredential.id).where(
+                IntegrationCredential.id == uid,
+                IntegrationCredential.org_id == self._org_id,
+                IntegrationCredential.provider == provider,
+            )
+        )
+        if result.scalar_one_or_none() is None:
+            raise ValueError(
+                "credential_id does not reference a credential for this "
+                "organization and provider"
+            )
+        return uid
+
     async def create(
         self,
         *,
@@ -61,7 +90,7 @@ class IntegrationService:
             org_id=self._org_id,
             name=name,
             provider=provider,
-            credential_id=uuid.UUID(credential_id) if credential_id else None,
+            credential_id=await self._resolve_credential_id(credential_id, provider),
             config=config,
             is_active=is_active,
             schedule_cron=schedule_cron,
@@ -85,7 +114,9 @@ class IntegrationService:
         if name is not None:
             integration.name = name  # type: ignore[assignment]
         if credential_id is not None:
-            integration.credential_id = uuid.UUID(credential_id)  # type: ignore[assignment]
+            integration.credential_id = await self._resolve_credential_id(
+                credential_id, str(integration.provider)
+            )
         if config is not None:
             integration.config = config  # type: ignore[assignment]
         if is_active is not None:

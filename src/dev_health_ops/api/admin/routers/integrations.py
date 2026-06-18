@@ -1,4 +1,5 @@
 """Admin router for integrations, sources, datasets, and sync runs."""
+
 from __future__ import annotations
 
 import logging
@@ -171,15 +172,18 @@ async def create_integration(
     org_id: str = Depends(get_admin_org_id),
 ) -> IntegrationResponse:
     svc = IntegrationService(session, org_id)
-    integration = await svc.create(
-        name=payload.name,
-        provider=payload.provider,
-        credential_id=payload.credential_id,
-        config=payload.config,
-        is_active=payload.is_active,
-        schedule_cron=payload.schedule_cron,
-        timezone=payload.timezone,
-    )
+    try:
+        integration = await svc.create(
+            name=payload.name,
+            provider=payload.provider,
+            credential_id=payload.credential_id,
+            config=payload.config,
+            is_active=payload.is_active,
+            schedule_cron=payload.schedule_cron,
+            timezone=payload.timezone,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     return _integration_to_response(integration)
 
 
@@ -207,15 +211,18 @@ async def update_integration(
     integration = await svc.get_by_id(integration_id)
     if integration is None:
         raise HTTPException(status_code=404, detail="Integration not found")
-    updated = await svc.update(
-        integration,
-        name=payload.name,
-        credential_id=payload.credential_id,
-        config=payload.config,
-        is_active=payload.is_active,
-        schedule_cron=payload.schedule_cron,
-        timezone=payload.timezone,
-    )
+    try:
+        updated = await svc.update(
+            integration,
+            name=payload.name,
+            credential_id=payload.credential_id,
+            config=payload.config,
+            is_active=payload.is_active,
+            schedule_cron=payload.schedule_cron,
+            timezone=payload.timezone,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     return _integration_to_response(updated)
 
 
@@ -385,8 +392,12 @@ async def trigger_integration_sync(
         org_id=org_id,
         mode="incremental",
         triggered_by="admin-api",
-        source_ids=tuple(payload.source_ids) if payload.source_ids else None,
-        dataset_keys=tuple(payload.dataset_keys) if payload.dataset_keys else None,
+        source_ids=tuple(payload.source_ids)
+        if payload.source_ids is not None
+        else None,
+        dataset_keys=tuple(payload.dataset_keys)
+        if payload.dataset_keys is not None
+        else None,
     )
 
     try:
@@ -395,6 +406,11 @@ async def trigger_integration_sync(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+    # Commit the planned run BEFORE enqueueing dispatch so the Celery worker
+    # (a separate DB session) can see it; otherwise a fast worker returns
+    # "missing" and the run is stranded as planned.
+    await session.commit()
 
     try:
         getattr(dispatch_sync_run, "apply_async")(
@@ -433,8 +449,12 @@ async def trigger_integration_backfill(
         org_id=org_id,
         mode="backfill",
         triggered_by="admin-api",
-        source_ids=tuple(payload.source_ids) if payload.source_ids else None,
-        dataset_keys=tuple(payload.dataset_keys) if payload.dataset_keys else None,
+        source_ids=tuple(payload.source_ids)
+        if payload.source_ids is not None
+        else None,
+        dataset_keys=tuple(payload.dataset_keys)
+        if payload.dataset_keys is not None
+        else None,
         since=payload.since,
         before=payload.before,
     )
@@ -445,6 +465,9 @@ async def trigger_integration_backfill(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+    # Commit the planned backfill run before dispatch (see /sync rationale).
+    await session.commit()
 
     try:
         getattr(dispatch_sync_run, "apply_async")(

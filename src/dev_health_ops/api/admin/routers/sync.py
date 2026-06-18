@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Protocol, cast
 
 from croniter import croniter as Croniter
@@ -50,6 +51,26 @@ from .common import get_session
 router = APIRouter()
 
 logger = logging.getLogger(__name__)
+
+
+def _mark_job_run_failed(sync_session, run_id: str, error: str) -> None:
+    completed_at = datetime.now(timezone.utc)
+    run = (
+        sync_session.query(JobRun)
+        .filter(JobRun.id == uuid.UUID(str(run_id)))
+        .one_or_none()
+    )
+    if run is None:
+        return
+    run.status = JobRunStatus.FAILED.value
+    run.completed_at = completed_at
+    run.error = error
+    started_at = getattr(run, "started_at", None)
+    if started_at is not None:
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=timezone.utc)
+        run.duration_seconds = max(0, int((completed_at - started_at).total_seconds()))
+    sync_session.flush()
 
 
 async def _is_planner_active(session: AsyncSession, org_id: str) -> bool:
@@ -1150,26 +1171,39 @@ async def trigger_sync_config(
             return str(run.id)
 
         pending_run_id: str = await session.run_sync(_create_pending_run)
+        await session.commit()
 
         is_batch = _is_batch_eligible(config)
         task = dispatch_batch_sync if is_batch else run_sync_config
         # Per-provider queue routing (CHAOS-2299): an explicit apply_async
         # queue overrides the task decorator's queue="sync" default.
-        result = getattr(task, "apply_async")(
-            kwargs={
-                "config_id": str(config.id),
-                "org_id": str(config.org_id),
-                "triggered_by": "manual",
-                "pending_run_id": pending_run_id,
-            },
-            queue=sync_queue_for_provider(str(config.provider or "")),
-        )
+        try:
+            result = getattr(task, "apply_async")(
+                kwargs={
+                    "config_id": str(config.id),
+                    "org_id": str(config.org_id),
+                    "triggered_by": "manual",
+                    "pending_run_id": pending_run_id,
+                },
+                queue=sync_queue_for_provider(str(config.provider or "")),
+            )
+        except Exception as e:
+            error_message = f"dispatch enqueue failed: {e}"
+            await session.run_sync(
+                lambda sync_session: _mark_job_run_failed(
+                    sync_session, pending_run_id, error_message
+                )
+            )
+            await session.commit()
+            raise HTTPException(status_code=503, detail=f"Task queue unavailable: {e}")
         return {
             "status": "triggered",
             "config_id": str(config.id),
             "task_id": result.id,
             "run_id": pending_run_id,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Task queue unavailable: {e}")
 

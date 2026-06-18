@@ -46,6 +46,7 @@ spec:
             - dev_health_ops.workers.celery_app
             - worker
             - --loglevel={{ .Values.workerIngest.logLevel }}
+            - --disable-prefetch
             - -Q
             - {{ .Values.workerIngest.queues }}
             - --concurrency={{ .Values.workerIngest.concurrency }}
@@ -116,6 +117,7 @@ spec:
             - dev_health_ops.workers.celery_app
             - worker
             - --loglevel={{ .Values.workerHeavy.logLevel }}
+            - --disable-prefetch
             - -Q
             - {{ .Values.workerHeavy.queues }}
             - --concurrency={{ .Values.workerHeavy.concurrency }}

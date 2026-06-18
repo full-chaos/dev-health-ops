@@ -131,6 +131,7 @@ services:
       --host 0.0.0.0 --port 8000 --reload
     environment: &env
       SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DEV_HEALTH_OPS: "0.0.0"
+      PYTHONPATH: /app/src
       # GraphQL analytics endpoint available at /graphql
       GRAPHQL_QUERY_TIMEOUT: "30"
       # CHAOS-2065: runtime DB traffic flows through PgBouncer (transaction mode).
@@ -252,7 +253,8 @@ services:
       args:
         SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
     container_name: worker
-    command: celery -A workers.celery_app worker --loglevel=info -Q default,sync,sync.github,sync.gitlab,sync.linear,sync.jira,sync.launchdarkly,sync.github.light,sync.github.medium,sync.gitlab.light,sync.gitlab.medium,sync.jira.medium,sync.linear.medium,webhooks,reports,monitoring --concurrency=${WORKER_CONCURRENCY:-4}
+    entrypoint: ["celery"]
+    command: -A dev_health_ops.workers.celery_app worker --loglevel=info --disable-prefetch -Q default,sync,sync.github,sync.gitlab,sync.linear,sync.jira,sync.launchdarkly,sync.github.light,sync.github.medium,sync.gitlab.light,sync.gitlab.medium,sync.jira.medium,sync.linear.medium,webhooks,reports,monitoring --concurrency=${WORKER_CONCURRENCY:-4}
     environment:
       <<: *env
       CELERY_BROKER_URL: redis://valkey:6379/0
@@ -278,14 +280,14 @@ services:
   worker-ingest:
     <<: *worker-base
     container_name: worker-ingest
-    command: celery -A workers.celery_app worker --loglevel=info -Q ingest --concurrency=1
+    command: -A dev_health_ops.workers.celery_app worker --loglevel=info --disable-prefetch -Q ingest --concurrency=1
 
   worker-heavy:
     <<: *worker-base
     container_name: worker-heavy
     # `monitoring` is consumed here AND by `worker` above: queue telemetry
     # survives either pool being saturated or down.
-    command: celery -A workers.celery_app worker --loglevel=info -Q metrics,backfill,monitoring,sync.github.heavy,sync.gitlab.heavy --concurrency=${WORKER_HEAVY_CONCURRENCY:-2}
+    command: -A dev_health_ops.workers.celery_app worker --loglevel=info --disable-prefetch -Q metrics,backfill,monitoring,sync.github.heavy,sync.gitlab.heavy --concurrency=${WORKER_HEAVY_CONCURRENCY:-2}
 
   # ---------------------------------------------------------------------------
   # Observability — SigNoz (distributed tracing + metrics)

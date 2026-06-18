@@ -33,6 +33,7 @@ from dev_health_ops.api.services.integrations import (
 )
 from dev_health_ops.sync.discovery import discover_sources_for_integration
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
+from dev_health_ops.sync.trigger_routing import mark_sync_run_failed
 from dev_health_ops.workers.sync_units import dispatch_sync_run
 
 from .common import get_session
@@ -418,7 +419,15 @@ async def trigger_integration_sync(
             queue="sync",
         )
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Task queue unavailable: {exc}")
+        error = f"Task queue unavailable: {exc}"
+        await session.run_sync(
+            lambda sync_session: mark_sync_run_failed(
+                sync_session,
+                plan.sync_run_id,
+                error,
+            )
+        )
+        raise HTTPException(status_code=503, detail=error)
 
     return SyncTriggerResponse(
         status="accepted",
@@ -475,7 +484,15 @@ async def trigger_integration_backfill(
             queue="sync",
         )
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Task queue unavailable: {exc}")
+        error = f"Task queue unavailable: {exc}"
+        await session.run_sync(
+            lambda sync_session: mark_sync_run_failed(
+                sync_session,
+                plan.sync_run_id,
+                error,
+            )
+        )
+        raise HTTPException(status_code=503, detail=error)
 
     return SyncTriggerResponse(
         status="accepted",

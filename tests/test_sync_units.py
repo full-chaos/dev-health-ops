@@ -107,6 +107,32 @@ def _seed_run(session, *, mode=SyncRunMode.INCREMENTAL.value):
     return run, unit
 
 
+def _seed_zero_unit_run(session):
+    org_id = str(uuid.uuid4())
+    integration = Integration(
+        org_id=org_id,
+        provider="linear",
+        name="linear-demo",
+        config={},
+        is_active=True,
+    )
+    session.add(integration)
+    session.flush()
+    run = SyncRun(
+        org_id=org_id,
+        integration_id=integration.id,
+        triggered_by="manual",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunStatus.PLANNED.value,
+        total_units=0,
+        completed_units=0,
+        failed_units=0,
+    )
+    session.add(run)
+    session.flush()
+    return run
+
+
 def _patch_runtime(monkeypatch):
     from dev_health_ops.workers import sync_units
     from dev_health_ops.workers.sync_bootstrap import ProviderRuntime
@@ -161,6 +187,37 @@ def test_run_sync_unit_success_persists_status_and_incremental_watermark(
     assert finalize_calls == [((str(run.id),), "sync")]
 
 
+def test_run_sync_unit_success_survives_finalize_enqueue_failure(
+    db_session, monkeypatch
+):
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(db_session)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        dataset_adapters, "run_dataset_unit", lambda ctx, runtime: {"ok": True}
+    )
+
+    def fail_finalize_enqueue(*_args, **_kwargs):
+        raise RuntimeError("broker down")
+
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run, "apply_async", fail_finalize_enqueue
+    )
+
+    result = getattr(sync_units.run_sync_unit, "run")(str(unit.id))
+
+    db_session.refresh(unit)
+    assert result["status"] == "success"
+    assert unit.status == SyncRunUnitStatus.SUCCESS.value
+    assert unit.result == {"ok": True}
+
+
 def test_run_sync_unit_success_skips_watermark_for_backfill(db_session, monkeypatch):
     from dev_health_ops.processors import dataset_adapters
     from dev_health_ops.workers.sync_units import run_sync_unit
@@ -208,6 +265,61 @@ def test_run_sync_unit_failure_persists_failed_and_error(db_session, monkeypatch
     assert unit.status == SyncRunUnitStatus.FAILED.value
     assert unit.error == "adapter failed"
     assert finalize_calls == [((str(run.id),), "sync")]
+
+
+def test_run_sync_unit_bootstrap_failure_enqueues_finalize(db_session, monkeypatch):
+    from dev_health_ops.workers.sync_bootstrap import SyncTaskBootstrap
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(db_session)
+    _patch_db_session(monkeypatch, db_session)
+    finalize_calls = _patch_finalize_apply(monkeypatch)
+
+    def fail_bootstrap(session, unit_id):
+        raise ValueError("missing source")
+
+    monkeypatch.setattr(SyncTaskBootstrap, "load", fail_bootstrap)
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    db_session.refresh(unit)
+    assert result["status"] == "failed"
+    assert unit.status == SyncRunUnitStatus.FAILED.value
+    assert unit.error == "missing source"
+    assert finalize_calls == [((str(run.id),), "sync")]
+
+
+def test_run_sync_unit_skips_terminal_run_without_overwriting_unit(
+    db_session, monkeypatch
+):
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(db_session)
+    run.status = SyncRunStatus.FAILED.value
+    unit.status = SyncRunUnitStatus.DISPATCHING.value
+    unit.error = "broker down"
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    finalize_calls = _patch_finalize_apply(monkeypatch)
+
+    def fail_if_called(ctx, runtime):
+        raise AssertionError("terminal unit should not execute")
+
+    monkeypatch.setattr(dataset_adapters, "run_dataset_unit", fail_if_called)
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    db_session.refresh(unit)
+    assert result == {
+        "status": "skipped",
+        "unit_id": str(unit.id),
+        "reason": "terminal",
+    }
+    assert unit.status == SyncRunUnitStatus.DISPATCHING.value
+    assert unit.error == "broker down"
+    assert finalize_calls == []
 
 
 def test_finalize_once_only_dispatches_metrics_once(db_session, monkeypatch):
@@ -266,6 +378,29 @@ def test_finalize_aggregates_partial_failed(db_session, monkeypatch):
     assert run.status == SyncRunStatus.PARTIAL_FAILED.value
     assert run.completed_units == 1
     assert run.failed_units == 1
+
+
+def test_finalize_zero_unit_run_does_not_report_success(db_session, monkeypatch):
+    from dev_health_ops.workers import sync_units
+
+    run = _seed_zero_unit_run(db_session)
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setattr(sync_units, "_dispatch_post_sync_tasks", lambda **kwargs: None)
+
+    result = sync_units.finalize_sync_run(str(run.id))
+
+    db_session.refresh(run)
+    assert result["status"] == "finalized"
+    assert run.status == SyncRunStatus.FAILED.value
+    assert run.completed_units == 0
+    assert run.failed_units == 0
+    assert run.error == "No sync units planned"
+    assert run.result == {
+        "completed_units": 0,
+        "failed_units": 0,
+        "reason": "no_sync_units_planned",
+    }
+    assert db_session.query(SyncRunPostDispatch).count() == 1
 
 
 def test_dispatch_sync_run_redispatches_only_planned_units(db_session, monkeypatch):
@@ -329,6 +464,52 @@ def test_dispatch_sync_run_redispatches_only_planned_units(db_session, monkeypat
     ]
     assert planned.status == SyncRunUnitStatus.DISPATCHING.value
     assert recent_dispatching.status == SyncRunUnitStatus.DISPATCHING.value
+
+
+def test_dispatch_sync_run_marks_run_failed_when_chord_enqueue_fails(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(db_session)
+    _patch_db_session(monkeypatch, db_session)
+
+    class FakeSig:
+        def __init__(self, unit_id):
+            self.unit_id = unit_id
+
+        def set(self, *, queue):
+            return self
+
+    class FailingChord:
+        def __init__(self, header, callback):
+            self.header = header
+            self.callback = callback
+
+        def apply_async(self):
+            raise RuntimeError("broker down")
+
+    monkeypatch.setattr(sync_units.run_sync_unit, "s", lambda unit_id: FakeSig(unit_id))
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run, "si", lambda run_id: FakeSig(run_id)
+    )
+    monkeypatch.setattr(sync_units, "group", list)
+    monkeypatch.setattr(
+        sync_units, "chord", lambda header, callback: FailingChord(header, callback)
+    )
+
+    with pytest.raises(RuntimeError, match="broker down"):
+        sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(run)
+    db_session.refresh(unit)
+    assert run.status == SyncRunStatus.FAILED.value
+    assert run.completed_at is not None
+    assert run.error == "broker down"
+    assert run.result == {"error": "broker down", "phase": "dispatch_enqueue"}
+    assert run.failed_units == 1
+    assert unit.status == SyncRunUnitStatus.FAILED.value
+    assert unit.error == "broker down"
 
 
 def test_dispatch_sync_run_redispatches_stale_dispatching_units(

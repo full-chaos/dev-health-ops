@@ -181,6 +181,9 @@ def run_work_graph_build(ns: argparse.Namespace) -> int:
 
 
 def run_investment_materialization(ns: argparse.Namespace) -> int:
+    analytics_db = str(
+        getattr(ns, "analytics_db", None) or os.getenv("CLICKHOUSE_URI") or ""
+    )
     now = datetime.now(timezone.utc)
     if ns.to_date:
         to_day = date.fromisoformat(ns.to_date)
@@ -207,7 +210,7 @@ def run_investment_materialization(ns: argparse.Namespace) -> int:
     org_id = getattr(ns, "org", None) or None
 
     config = MaterializeConfig(
-        dsn=ns.db,
+        dsn=analytics_db,
         from_ts=from_ts,
         to_ts=to_ts,
         repo_ids=repo_ids or None,
@@ -266,7 +269,7 @@ def run_investment_materialization(ns: argparse.Namespace) -> int:
         )
         try:
             mstats = backfill_memberships(
-                MembershipBackfillConfig(dsn=ns.db, org_id=org_id, repo_ids=None)
+                MembershipBackfillConfig(dsn=analytics_db, org_id=org_id, repo_ids=None)
             )
             logging.info(
                 "Membership projection complete. Components=%d Matched=%d "
@@ -384,9 +387,12 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         help="Materialize work unit investment categorization into sinks.",
     )
     investment_materialize.add_argument(
+        "--analytics-db",
         "--db",
-        default=os.getenv("CLICKHOUSE_URI"),
-        help="ClickHouse connection string (clickhouse://user:pass@host:port/db). Env: CLICKHOUSE_URI",
+        dest="analytics_db",
+        default=argparse.SUPPRESS,
+        help="ClickHouse connection string (clickhouse://user:pass@host:port/db). "
+        "Env: CLICKHOUSE_URI. Deprecated alias on this subcommand: --db.",
     )
     investment_materialize.add_argument(
         "--from",
@@ -423,7 +429,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     )
     from dev_health_ops.llm.cli import add_llm_arguments
 
-    add_llm_arguments(investment_materialize)
+    add_llm_arguments(investment_materialize, leaf_mode=True)
     investment_materialize.add_argument(
         "--persist-evidence-snippets",
         dest="persist_evidence_snippets",

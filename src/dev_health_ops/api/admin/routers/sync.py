@@ -1234,12 +1234,32 @@ async def trigger_sync_config_backfill(
     from dev_health_ops.models.backfill import BackfillJob as BackfillJobModel
 
     windows = chunk_date_range(since=payload.since, before=payload.before, chunk_days=7)
-    fanout_backfill = os.getenv("SYNC_FANOUT_BACKFILL", "").strip().lower() in {
+    fanout_env = os.getenv("SYNC_FANOUT_BACKFILL", "").strip().lower() in {
         "1",
         "true",
         "yes",
         "on",
     }
+    # The worker only routes through the fan-out planner when the config was
+    # migrated to an Integration (config_migration.py) AND fan-out is enabled
+    # (global env override or the per-org migrated-routing flag). Mirror that
+    # decision here so the BackfillJob's initial chunk count and the response
+    # "mode" reflect the path the task will actually take.
+    migrated = getattr(config, "migrated_integration_id", None) is not None
+
+    def _routing_enabled(sync_session) -> bool:
+        from dev_health_ops.sync.trigger_routing import (
+            is_migrated_trigger_routing_enabled,
+        )
+
+        return is_migrated_trigger_routing_enabled(sync_session, org_id)
+
+    if not migrated:
+        fanout_backfill = False
+    elif fanout_env:
+        fanout_backfill = True
+    else:
+        fanout_backfill = await session.run_sync(_routing_enabled)
     backfill_job = BackfillJobModel(
         org_id=org_id,
         sync_config_id=uuid.UUID(config_id),

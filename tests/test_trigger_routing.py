@@ -1,0 +1,265 @@
+from __future__ import annotations
+
+import uuid
+
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
+from dev_health_ops.models import (
+    Base,
+    Setting,
+    SettingCategory,
+    SyncConfiguration,
+)
+from dev_health_ops.sync.trigger_routing import (
+    MIGRATED_TRIGGER_ROUTING_SETTING_KEY,
+    is_migrated_trigger_routing_enabled,
+    mark_sync_run_failed,
+    plan_request_for_config,
+)
+
+ORG_ID = "routing-org"
+
+
+@pytest.fixture
+def db_session():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        yield session
+    engine.dispose()
+
+
+def _config(
+    session: Session,
+    *,
+    provider: str = "github",
+    sync_targets: list[str] | None = None,
+    migrated_integration_id: uuid.UUID | None = None,
+    migrated_source_id: uuid.UUID | None = None,
+) -> SyncConfiguration:
+    config = SyncConfiguration(
+        org_id=ORG_ID,
+        name=f"{provider}-config",
+        provider=provider,
+        sync_targets=sync_targets if sync_targets is not None else ["git"],
+        sync_options={},
+        migrated_integration_id=migrated_integration_id,
+        migrated_source_id=migrated_source_id,
+    )
+    session.add(config)
+    session.flush()
+    return config
+
+
+def _set_flag(session: Session, value: str) -> None:
+    session.add(
+        Setting(
+            org_id=ORG_ID,
+            category=SettingCategory.SYNC.value,
+            key=MIGRATED_TRIGGER_ROUTING_SETTING_KEY,
+            value=value,
+        )
+    )
+    session.flush()
+
+
+# --- flag reader -----------------------------------------------------------
+
+
+def test_flag_missing_is_disabled(db_session):
+    assert is_migrated_trigger_routing_enabled(db_session, ORG_ID) is False
+
+
+@pytest.mark.parametrize("value", ["true", "1", "yes", "on", "TRUE", "On"])
+def test_flag_truthy_values_enable(db_session, value):
+    _set_flag(db_session, value)
+    assert is_migrated_trigger_routing_enabled(db_session, ORG_ID) is True
+
+
+@pytest.mark.parametrize("value", ["false", "0", "no", "off", ""])
+def test_flag_falsey_values_disable(db_session, value):
+    _set_flag(db_session, value)
+    assert is_migrated_trigger_routing_enabled(db_session, ORG_ID) is False
+
+
+def test_flag_is_scoped_per_org(db_session):
+    _set_flag(db_session, "true")
+    assert is_migrated_trigger_routing_enabled(db_session, "other-org") is False
+
+
+# --- plan request builder --------------------------------------------------
+
+
+def test_unmigrated_config_returns_none(db_session):
+    config = _config(db_session)
+    assert plan_request_for_config(config, triggered_by="manual") is None
+
+
+def test_parent_config_plans_whole_integration(db_session):
+    integration_id = uuid.uuid4()
+    config = _config(
+        db_session,
+        sync_targets=["git", "prs"],
+        migrated_integration_id=integration_id,
+    )
+    req = plan_request_for_config(config, triggered_by="schedule")
+
+    assert req is not None
+    assert req.integration_id == str(integration_id)
+    assert req.org_id == ORG_ID
+    assert req.mode == "incremental"
+    assert req.triggered_by == "schedule"
+    # Parent => whole integration: no source/dataset scoping.
+    assert req.source_ids is None
+    assert req.dataset_keys is None
+
+
+def test_child_config_scopes_to_source_and_datasets(db_session):
+    integration_id = uuid.uuid4()
+    source_id = uuid.uuid4()
+    config = _config(
+        db_session,
+        provider="github",
+        sync_targets=["prs"],
+        migrated_integration_id=integration_id,
+        migrated_source_id=source_id,
+    )
+    req = plan_request_for_config(config, triggered_by="manual")
+
+    assert req is not None
+    assert req.integration_id == str(integration_id)
+    assert req.source_ids == (str(source_id),)
+    # "prs" legacy target maps to the prs dataset key family.
+    assert req.dataset_keys is not None
+    assert "prs" in req.dataset_keys
+
+
+def test_child_config_without_targets_falls_back_to_all_datasets(db_session):
+    integration_id = uuid.uuid4()
+    source_id = uuid.uuid4()
+    config = _config(
+        db_session,
+        sync_targets=[],
+        migrated_integration_id=integration_id,
+        migrated_source_id=source_id,
+    )
+    req = plan_request_for_config(config, triggered_by="manual")
+
+    assert req is not None
+    assert req.source_ids == (str(source_id),)
+    # No mappable targets => all enabled datasets (None), never an empty run.
+    assert req.dataset_keys is None
+
+
+def test_mode_override(db_session):
+    config = _config(
+        db_session,
+        migrated_integration_id=uuid.uuid4(),
+    )
+    req = plan_request_for_config(config, triggered_by="manual", mode="backfill")
+    assert req is not None
+    assert req.mode == "backfill"
+
+
+def test_operational_error_rolls_back_and_disables(monkeypatch, db_session):
+    """A failed flag read (e.g. missing settings table on PG) must roll back
+    the aborted transaction and return False so the caller's legacy path runs
+    on a clean session."""
+    from sqlalchemy.exc import OperationalError
+
+    def _boom(*_args, **_kwargs):
+        raise OperationalError("SELECT settings", {}, Exception("no such table"))
+
+    rolled_back = {"count": 0}
+    real_rollback = db_session.rollback
+
+    def _spy_rollback(*args, **kwargs):
+        rolled_back["count"] += 1
+        return real_rollback(*args, **kwargs)
+
+    monkeypatch.setattr(db_session, "query", _boom)
+    monkeypatch.setattr(db_session, "rollback", _spy_rollback)
+
+    assert is_migrated_trigger_routing_enabled(db_session, ORG_ID) is False
+    assert rolled_back["count"] == 1
+
+
+# --- mark_sync_run_failed (conditional compare-and-set) --------------------
+
+
+def _make_sync_run(db_session, status):
+    import uuid as _uuid
+
+    from dev_health_ops.models import SyncRun
+
+    run = SyncRun(
+        org_id=ORG_ID,
+        integration_id=_uuid.uuid4(),
+        triggered_by="manual",
+        mode="incremental",
+        status=status,
+        total_units=0,
+    )
+    db_session.add(run)
+    db_session.flush()
+    return run
+
+
+def test_mark_sync_run_failed_marks_planned_run_and_units(db_session):
+    import uuid as _uuid
+
+    from dev_health_ops.models import (
+        SyncRunStatus,
+        SyncRunUnit,
+        SyncRunUnitStatus,
+    )
+
+    run = _make_sync_run(db_session, SyncRunStatus.PLANNED.value)
+    unit = SyncRunUnit(
+        org_id=ORG_ID,
+        sync_run_id=run.id,
+        integration_id=run.integration_id,
+        source_id=_uuid.uuid4(),
+        provider="github",
+        dataset_key="git",
+        cost_class="light",
+        mode="incremental",
+        status=SyncRunUnitStatus.PLANNED.value,
+        attempts=0,
+    )
+    db_session.add(unit)
+    db_session.commit()
+
+    mark_sync_run_failed(db_session, str(run.id), "dispatch enqueue failed")
+
+    db_session.refresh(run)
+    db_session.refresh(unit)
+    assert run.status == SyncRunStatus.FAILED.value
+    assert run.error == "dispatch enqueue failed"
+    assert run.completed_at is not None
+    # The still-PLANNED unit is failed so a late dispatcher claims nothing.
+    assert unit.status == SyncRunUnitStatus.FAILED.value
+
+
+def test_mark_sync_run_failed_noop_when_run_already_advanced(db_session):
+    from dev_health_ops.models import SyncRunStatus
+
+    # An ambiguous enqueue failure where the dispatcher already advanced the run
+    # must NOT be overwritten back to FAILED.
+    run = _make_sync_run(db_session, SyncRunStatus.DISPATCHING.value)
+    db_session.commit()
+
+    mark_sync_run_failed(db_session, str(run.id), "should not overwrite")
+
+    db_session.refresh(run)
+    assert run.status == SyncRunStatus.DISPATCHING.value
+    assert run.error != "should not overwrite"
+
+
+def test_mark_sync_run_failed_missing_run_is_noop(db_session):
+    import uuid as _uuid
+
+    # No row for this id -> best-effort no-op, no exception.
+    mark_sync_run_failed(db_session, str(_uuid.uuid4()), "x")

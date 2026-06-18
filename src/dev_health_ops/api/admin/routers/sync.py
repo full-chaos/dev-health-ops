@@ -35,14 +35,21 @@ from dev_health_ops.models.settings import (
     SyncConfiguration,
 )
 from dev_health_ops.sync.datasets import supported_legacy_targets
+from dev_health_ops.sync.planner import plan_sync_run
+from dev_health_ops.sync.trigger_routing import (
+    is_migrated_trigger_routing_enabled,
+    mark_sync_run_failed,
+    plan_request_for_config,
+)
 from dev_health_ops.workers.queues import sync_queue_for_provider
 from dev_health_ops.workers.sync_batch import _is_batch_eligible
+from dev_health_ops.workers.sync_units import dispatch_sync_run
 
 from .common import get_session
 
-logger = logging.getLogger(__name__)
-
 router = APIRouter()
+
+logger = logging.getLogger(__name__)
 
 
 async def _is_planner_active(session: AsyncSession, org_id: str) -> bool:
@@ -1041,6 +1048,49 @@ async def trigger_sync_config(
             except Exception:
                 # ClickHouse unavailable — allow the sync to proceed rather than block it.
                 pass
+
+    # --- Migrated-trigger routing (CHAOS-2516) -----------------------------------
+    # After tier checks, before legacy dispatch: if the planner flag is on AND
+    # the config was migrated, route through the fan-out planner instead.
+    use_planner = await session.run_sync(
+        lambda s: is_migrated_trigger_routing_enabled(s, org_id)
+    )
+    if use_planner:
+        plan_request = plan_request_for_config(
+            config, triggered_by="manual", mode="incremental"
+        )
+        if plan_request is not None:
+            try:
+                plan = await session.run_sync(
+                    lambda sync_session: plan_sync_run(sync_session, plan_request)
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            await session.commit()
+            try:
+                getattr(dispatch_sync_run, "apply_async")(
+                    args=(plan.sync_run_id,), queue="sync"
+                )
+            except Exception as exc:
+                # The run + units are committed but never dispatched. Mark the
+                # run FAILED so it is not stranded PLANNED with no queued
+                # dispatcher (there is no periodic reconciler for such runs),
+                # then surface the queue outage to the caller.
+                await session.run_sync(
+                    lambda s: mark_sync_run_failed(
+                        s, plan.sync_run_id, "dispatch enqueue failed"
+                    )
+                )
+                raise HTTPException(
+                    status_code=503, detail=f"Task queue unavailable: {exc}"
+                )
+            return {
+                "status": "triggered",
+                "config_id": str(config.id),
+                "sync_run_id": plan.sync_run_id,
+                "total_units": plan.total_units,
+            }
+    # --- End migrated-trigger routing -------------------------------------------
 
     try:
         from dev_health_ops.workers.sync_tasks import (

@@ -449,7 +449,7 @@ linear-cli issues update CHAOS-123 --state "Done"
 
 ---
 
-## 11. Pre-commit + pre-push hooks (lefthook + ruff)
+## 11. Pre-commit + pre-push hooks (lefthook + ruff + mypy)
 
 Lefthook drives three hooks:
 
@@ -461,10 +461,12 @@ Lefthook drives three hooks:
   Implementation: `scripts/strip_agent_attribution.py`. Tests:
   `tests/scripts/test_strip_agent_attribution.py`.
 - **pre-commit** auto-fixes formatting and lint on staged `.py` files and
-  re-stages the fixes (`stage_fixed: true`). The resulting commit is clean.
+  re-stages the fixes (`stage_fixed: true`), then runs `mypy` as a non-fixable
+  gate over the whole project. The resulting commit is clean and type-checked.
 - **pre-push** is a final gate: `ruff format --check` + `ruff check` on the
-  files being pushed. No auto-fix here — pre-push cannot modify the commits
-  it's gating, so blocking with an instruction is the only correct shape.
+  files being pushed, plus `mypy` over the whole project. No auto-fix here —
+  pre-push cannot modify the commits it's gating, so blocking with an
+  instruction is the only correct shape.
 
 ### One-time install
 
@@ -506,6 +508,7 @@ If `lefthook install` (without `--force`) warns about `core.hooksPath`, add `--f
 |------|---------|-----------|
 | 1 | `ruff format {staged_files}` | Auto-formats + re-stages |
 | 2 | `ruff check --fix {staged_files}` | Auto-fixes lint issues + re-stages |
+| 3 | `mypy` | **Gate**: blocks commit if type errors remain (whole-project per `[tool.mypy] files`, not just staged files) |
 
 **pre-push** (on every `git push`, for `.py` files in commits being pushed):
 
@@ -513,9 +516,11 @@ If `lefthook install` (without `--force`) warns about `core.hooksPath`, add `--f
 |------|---------|-----------|
 | 1 | `ruff format --check {push_files}` | **Gate**: blocks if formatting issues remain |
 | 2 | `ruff check {push_files}` | **Gate**: blocks if lint issues remain |
+| 3 | `mypy` | **Gate**: blocks push if type errors remain (whole-project) |
 
 If pre-push blocks you, the failure message tells you exactly what to run
-(`ruff format .` or `ruff check --fix .`), then commit and re-push.
+(`ruff format .`, `ruff check --fix .`, or `mypy` to surface the type errors),
+then fix, commit, and re-push.
 
 ### Escape hatch
 
@@ -524,7 +529,8 @@ git commit --no-verify   # skip pre-commit (use sparingly, e.g. WIP)
 git push --no-verify     # skip pre-push (emergency pushes)
 ```
 
-### No ruff config changes
+### No ruff/mypy config changes
 
-The hooks use the existing `[tool.ruff]` settings from `pyproject.toml`.
-Do not add new rules or exclusions to satisfy the hook — fix the code instead.
+The hooks use the existing `[tool.ruff]` and `[tool.mypy]` settings from
+`pyproject.toml`. Do not add new rules, exclusions, or `# type: ignore`
+suppressions to satisfy the hook — fix the code instead.

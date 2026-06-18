@@ -1,21 +1,31 @@
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.admin.middleware import get_admin_org_id
 from dev_health_ops.api.admin.schemas import (
+    LLMSettingsResponse,
+    LLMSettingsUpsert,
     SettingCreate,
     SettingResponse,
     SettingsListResponse,
     SettingUpdate,
 )
 from dev_health_ops.api.services.configuration import SettingsService
+from dev_health_ops.api.services.licensing import resolve_org_tier
+from dev_health_ops.licensing.types import TIER_ORDER, LicenseTier
+from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.settings import SettingCategory
 
 from .common import get_session
 
 router = APIRouter()
+_LLM_SETTING_KEYS = ("provider", "model", "api_key", "base_url")
+_BYO_LLM_MIN_TIER = LicenseTier.TEAM
 
 
 def _setting_response(setting: object) -> SettingResponse:
@@ -23,6 +33,50 @@ def _setting_response(setting: object) -> SettingResponse:
     if response.is_encrypted:
         return response.model_copy(update={"value": "[ENCRYPTED]"})
     return response
+
+
+def _mask_api_key(value: str | None) -> str | None:
+    if not value:
+        return None
+    if len(value) <= 8:
+        return "********"
+    return f"{value[:4]}…{value[-4:]}"
+
+
+async def _require_byo_llm_tier(session: AsyncSession, org_id: str) -> None:
+    org_uuid = uuid.UUID(org_id)
+    result = await session.execute(
+        select(OrgLicense).where(OrgLicense.org_id == org_uuid)
+    )
+    org_license = result.scalar_one_or_none()
+
+    def _resolve(sync_session):
+        return resolve_org_tier(sync_session, org_uuid, org_license)
+
+    tier = await session.run_sync(_resolve)
+    if TIER_ORDER.index(tier) < TIER_ORDER.index(_BYO_LLM_MIN_TIER):
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "feature_not_licensed",
+                "feature": "byo_llm",
+                "required_tier": _BYO_LLM_MIN_TIER.value,
+                "current_tier": tier.value,
+            },
+        )
+
+
+async def _llm_settings_response(svc: SettingsService) -> LLMSettingsResponse:
+    provider = await svc.get("provider", SettingCategory.LLM.value)
+    model = await svc.get("model", SettingCategory.LLM.value)
+    api_key = await svc.get("api_key", SettingCategory.LLM.value)
+    base_url = await svc.get("base_url", SettingCategory.LLM.value)
+    return LLMSettingsResponse(
+        provider=provider,
+        model=model,
+        api_key=_mask_api_key(api_key),
+        base_url=base_url,
+    )
 
 
 @router.get("/settings/categories")
@@ -40,8 +94,70 @@ async def list_settings_by_category(
     settings = await svc.list_by_category(category)
     return SettingsListResponse(
         category=category,
-        settings=[SettingResponse(**s) for s in settings],
+        settings=[_setting_response(SettingResponse(**s)) for s in settings],
     )
+
+
+@router.get("/llm-settings", response_model=LLMSettingsResponse)
+async def get_llm_settings(
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+) -> LLMSettingsResponse:
+    await _require_byo_llm_tier(session, org_id)
+    svc = SettingsService(session, org_id)
+    return await _llm_settings_response(svc)
+
+
+@router.put("/llm-settings", response_model=LLMSettingsResponse)
+async def upsert_llm_settings(
+    payload: LLMSettingsUpsert,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+) -> LLMSettingsResponse:
+    await _require_byo_llm_tier(session, org_id)
+    svc = SettingsService(session, org_id)
+    await svc.set(
+        "provider",
+        payload.provider.strip().lower(),
+        SettingCategory.LLM.value,
+        description="BYO LLM provider for this organization",
+    )
+    await svc.set(
+        "model",
+        payload.model,
+        SettingCategory.LLM.value,
+        description="BYO LLM model for this organization",
+    )
+    if payload.api_key is not None:
+        await svc.set(
+            "api_key",
+            payload.api_key,
+            SettingCategory.LLM.value,
+            encrypt=True,
+            description="Encrypted BYO LLM API key for this organization",
+        )
+    await svc.set(
+        "base_url",
+        payload.base_url,
+        SettingCategory.LLM.value,
+        description="BYO LLM base URL for this organization",
+    )
+    return await _llm_settings_response(svc)
+
+
+@router.delete("/llm-settings")
+async def delete_llm_settings(
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+) -> dict[str, bool]:
+    await _require_byo_llm_tier(session, org_id)
+    svc = SettingsService(session, org_id)
+    deleted = False
+    for key in _LLM_SETTING_KEYS:
+        deleted = (await svc.delete(key, SettingCategory.LLM.value)) or deleted
+    if not deleted:
+        raise HTTPException(status_code=404, detail="LLM settings not found")
+    return {"deleted": True}
 
 
 @router.get("/settings/{category}/{key}", response_model=SettingResponse)

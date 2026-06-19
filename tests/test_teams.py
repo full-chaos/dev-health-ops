@@ -349,7 +349,7 @@ def test_cli_sync_teams_org_bridge_failure_exits_one(tmp_path):
     )
 
     with patch(
-        "dev_health_ops.providers.teams._bridge_teams_to_postgres",
+        "dev_health_ops.providers.teams._project_teams_to_postgres",
         side_effect=RuntimeError("bridge down"),
     ):
         ns = MagicMock()
@@ -382,9 +382,9 @@ def test_cli_sync_teams_org_scoped_routes_through_postgres_then_clickhouse(tmp_p
 
     with (
         patch(
-            "dev_health_ops.providers.teams._bridge_teams_to_postgres",
-            return_value=1,
-        ) as mock_pg_bridge,
+            "dev_health_ops.providers.teams._project_teams_to_postgres",
+            return_value={"projected": 1},
+        ) as mock_projection,
         patch(
             "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
         ) as mock_ch_bridge,
@@ -402,354 +402,13 @@ def test_cli_sync_teams_org_scoped_routes_through_postgres_then_clickhouse(tmp_p
         result = _cmd_sync_teams(ns)
 
     assert result == 0
-    mock_pg_bridge.assert_called_once()
+    mock_projection.assert_called_once()
     mock_ch_bridge.assert_called_once_with(
         org_id="org-1",
         db_url=ns.analytics_db,
         postgres_db_url="sqlite+aiosqlite:///semantic.db",
     )
-    # Direct ClickHouse write must NOT be called for org-scoped runs.
     mock_run_with_store.assert_not_called()
-
-
-def test_bridge_teams_to_postgres_creates_full_mapping_metadata():
-    from argparse import Namespace
-
-    from dev_health_ops.models.settings import TeamMapping
-    from dev_health_ops.models.teams import Team
-    from dev_health_ops.providers.teams import _bridge_teams_to_postgres
-
-    added: list[TeamMapping] = []
-
-    class FakeScalarResult:
-        def __init__(self, rows):
-            self._rows = rows
-
-        def scalar_one_or_none(self):
-            return self._rows[0] if self._rows else None
-
-        def scalars(self):
-            return self
-
-        def __iter__(self):
-            return iter(self._rows)
-
-        def all(self):
-            return self._rows
-
-    class FakeSession:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return None
-
-        def execute(self, _stmt):
-            if added:
-                return FakeScalarResult([team.team_id for team in added])
-            return FakeScalarResult([])
-
-        def add(self, item):
-            added.append(item)
-
-        def flush(self):
-            return None
-
-    team = Team(id="linear:ENG", name="Engineering", description="Eng team")
-    ns = Namespace(org="org-1", provider="linear")
-
-    with patch(
-        "dev_health_ops.providers.teams.get_postgres_session_sync_for_uri",
-        return_value=FakeSession(),
-    ):
-        count = _bridge_teams_to_postgres([team], ns)
-
-    assert count == 1
-    assert added[0].project_keys == ["ENG"]
-    added_extra = added[0].extra_data or {}
-    assert added_extra["provider_type"] == "linear"
-    assert added_extra["provider_team_id"] == "ENG"
-
-
-def test_bridge_teams_to_postgres_persists_provider_members_as_identities():
-    from argparse import Namespace
-
-    from dev_health_ops.models.settings import IdentityMapping, TeamMapping
-    from dev_health_ops.models.teams import Team
-    from dev_health_ops.providers.teams import _bridge_teams_to_postgres
-
-    added = []
-
-    class FakeScalarResult:
-        def __init__(self, rows):
-            self._rows = rows
-
-        def scalar_one_or_none(self):
-            return self._rows[0] if self._rows else None
-
-        def scalars(self):
-            return self
-
-        def __iter__(self):
-            return iter(self._rows)
-
-        def all(self):
-            return self._rows
-
-    class FakeSession:
-        def __init__(self):
-            self.calls = 0
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return None
-
-        def execute(self, _stmt):
-            self.calls += 1
-            if self.calls in (1, 2):
-                return FakeScalarResult([])
-            return FakeScalarResult(["linear:ENG"])
-
-        def add(self, item):
-            added.append(item)
-
-        def flush(self):
-            return None
-
-    team = Team(
-        id="linear:ENG",
-        name="Engineering",
-        description="Eng team",
-        members=["alice@example.com"],
-    )
-    ns = Namespace(org="org-1", provider="linear")
-
-    with patch(
-        "dev_health_ops.providers.teams.get_postgres_session_sync_for_uri",
-        return_value=FakeSession(),
-    ):
-        count = _bridge_teams_to_postgres([team], ns)
-
-    assert count == 1
-    identity = next(item for item in added if isinstance(item, IdentityMapping))
-    assert any(isinstance(item, TeamMapping) for item in added)
-    assert identity.org_id == "org-1"
-    assert identity.canonical_id == "alice@example.com"
-    assert identity.email == "alice@example.com"
-    assert identity.provider_identities == {"linear": ["alice@example.com"]}
-    assert identity.team_ids == ["linear:ENG"]
-
-
-def test_bridge_teams_to_postgres_removes_absent_provider_members():
-    from argparse import Namespace
-
-    from dev_health_ops.models.settings import IdentityMapping, TeamMapping
-    from dev_health_ops.models.teams import Team
-    from dev_health_ops.providers.teams import _bridge_teams_to_postgres
-
-    existing_mapping = TeamMapping(
-        team_id="linear:ENG",
-        name="Engineering",
-        org_id="org-1",
-        extra_data={"provider_type": "linear"},
-    )
-    existing_identity = IdentityMapping(
-        org_id="org-1",
-        canonical_id="alice@example.com",
-        email="alice@example.com",
-        provider_identities={"linear": ["alice@example.com"]},
-        team_ids=["linear:ENG"],
-    )
-
-    class FakeScalarResult:
-        def __init__(self, rows):
-            self._rows = rows
-
-        def scalar_one_or_none(self):
-            return self._rows[0] if self._rows else None
-
-        def scalars(self):
-            return self
-
-        def __iter__(self):
-            return iter(self._rows)
-
-        def all(self):
-            return self._rows
-
-    class FakeSession:
-        def __init__(self):
-            self.calls = 0
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return None
-
-        def execute(self, _stmt):
-            self.calls += 1
-            if self.calls == 1:
-                return FakeScalarResult([existing_mapping])
-            if self.calls == 2:
-                return FakeScalarResult([existing_identity])
-            return FakeScalarResult(["linear:ENG"])
-
-        def flush(self):
-            return None
-
-    team = Team(id="linear:ENG", name="Engineering", members=[])
-    setattr(team, "members_complete", True)
-    ns = Namespace(org="org-1", provider="linear")
-
-    with patch(
-        "dev_health_ops.providers.teams.get_postgres_session_sync_for_uri",
-        return_value=FakeSession(),
-    ):
-        count = _bridge_teams_to_postgres([team], ns)
-
-    assert count == 1
-    assert existing_identity.team_ids == []
-
-
-def test_bridge_teams_to_postgres_preserves_members_for_incomplete_snapshot():
-    from argparse import Namespace
-
-    from dev_health_ops.models.settings import IdentityMapping, TeamMapping
-    from dev_health_ops.models.teams import Team
-    from dev_health_ops.providers.teams import _bridge_teams_to_postgres
-
-    existing_mapping = TeamMapping(team_id="OPS", name="Ops", org_id="org-1")
-    existing_identity = IdentityMapping(
-        org_id="org-1",
-        canonical_id="alice@example.com",
-        email="alice@example.com",
-        provider_identities={"jira": ["alice-account"]},
-        team_ids=["OPS"],
-    )
-
-    class FakeScalarResult:
-        def __init__(self, rows):
-            self._rows = rows
-
-        def scalar_one_or_none(self):
-            return self._rows[0] if self._rows else None
-
-        def scalars(self):
-            return self
-
-        def __iter__(self):
-            return iter(self._rows)
-
-        def all(self):
-            return self._rows
-
-    class FakeSession:
-        def __init__(self):
-            self.calls = 0
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return None
-
-        def execute(self, _stmt):
-            self.calls += 1
-            if self.calls == 1:
-                return FakeScalarResult([existing_mapping])
-            return FakeScalarResult(["OPS"])
-
-        def flush(self):
-            return None
-
-    team = Team(id="OPS", name="Ops", members=[])
-    ns = Namespace(org="org-1", provider="jira")
-
-    with patch(
-        "dev_health_ops.providers.teams.get_postgres_session_sync_for_uri",
-        return_value=FakeSession(),
-    ):
-        count = _bridge_teams_to_postgres([team], ns)
-
-    assert count == 1
-    assert existing_identity.team_ids == ["OPS"]
-
-
-def test_bridge_teams_to_postgres_preserves_curated_mapping_fields():
-    from argparse import Namespace
-
-    from dev_health_ops.models.settings import TeamMapping
-    from dev_health_ops.models.teams import Team
-    from dev_health_ops.providers.teams import _bridge_teams_to_postgres
-
-    existing = TeamMapping(
-        team_id="linear:ENG",
-        name="Curated Engineering",
-        org_id="org-1",
-        description="Curated description",
-        project_keys=["KEEP"],
-        repo_patterns=["full-chaos/*"],
-        extra_data={"owner": "admin"},
-        sync_policy=1,
-    )
-
-    class FakeScalarResult:
-        def __init__(self, rows):
-            self._rows = rows
-
-        def scalar_one_or_none(self):
-            return self._rows[0] if self._rows else None
-
-        def scalars(self):
-            return self
-
-        def __iter__(self):
-            return iter(self._rows)
-
-        def all(self):
-            return self._rows
-
-    class FakeSession:
-        def __init__(self):
-            self.calls = 0
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return None
-
-        def execute(self, _stmt):
-            self.calls += 1
-            if self.calls == 1:
-                return FakeScalarResult([existing])
-            return FakeScalarResult([existing.team_id])
-
-        def flush(self):
-            return None
-
-    team = Team(
-        id="linear:ENG", name="Provider Engineering", description="Provider desc"
-    )
-    ns = Namespace(org="org-1", provider="linear")
-
-    with patch(
-        "dev_health_ops.providers.teams.get_postgres_session_sync_for_uri",
-        return_value=FakeSession(),
-    ):
-        count = _bridge_teams_to_postgres([team], ns)
-
-    assert count == 1
-    assert existing.name == "Curated Engineering"
-    assert existing.description == "Curated description"
-    assert existing.project_keys == ["KEEP"]
-    assert existing.repo_patterns == ["full-chaos/*"]
-    existing_extra = existing.extra_data or {}
-    assert existing_extra["owner"] == "admin"
-    assert existing_extra["provider_type"] == "linear"
 
 
 def test_cli_sync_teams_org_scoped_ch_bridge_failure_exits_one(tmp_path):
@@ -764,8 +423,8 @@ def test_cli_sync_teams_org_scoped_ch_bridge_failure_exits_one(tmp_path):
 
     with (
         patch(
-            "dev_health_ops.providers.teams._bridge_teams_to_postgres",
-            return_value=1,
+            "dev_health_ops.providers.teams._project_teams_to_postgres",
+            return_value={"projected": 1},
         ),
         patch(
             "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
@@ -830,8 +489,8 @@ def test_cli_sync_teams_org_scoped_jira_ops_links_written_after_bridge():
             return_value=iter([project]),
         ),
         patch(
-            "dev_health_ops.providers.teams._bridge_teams_to_postgres",
-            return_value=1,
+            "dev_health_ops.providers.teams._project_teams_to_postgres",
+            return_value={"projected": 1},
         ),
         patch(
             "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
@@ -857,39 +516,6 @@ def test_cli_sync_teams_org_scoped_jira_ops_links_written_after_bridge():
     assert len(captured) == 1
     assert captured[0].project_key == "OPS"
     assert captured[0].ops_team_id == "team-1"
-
-
-def test_bridge_teams_to_postgres_uses_requested_semantic_db_url():
-    from argparse import Namespace
-
-    from dev_health_ops.models.teams import Team
-    from dev_health_ops.providers.teams import _bridge_teams_to_postgres
-
-    class FakeSession:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return None
-
-        def execute(self, _stmt):
-            raise AssertionError("session should not be used in this routing test")
-
-    with patch(
-        "dev_health_ops.providers.teams.get_postgres_session_sync_for_uri",
-        return_value=FakeSession(),
-    ) as mock_session_for_uri:
-        _bridge_teams_to_postgres(
-            [Team(id="team-a", name="Team A")],
-            Namespace(
-                org="org-1",
-                provider="config",
-                db="sqlite:///semantic.db",
-                analytics_db="clickhouse://analytics.example/default",
-            ),
-        )
-
-    mock_session_for_uri.assert_called_once_with("sqlite+aiosqlite:///semantic.db")
 
 
 @pytest.mark.asyncio

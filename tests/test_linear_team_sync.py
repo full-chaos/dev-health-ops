@@ -93,7 +93,7 @@ def _make_ns(
 class TestLinearTeamSync:
     """Tests for the linear branch inside sync_teams()."""
 
-    @patch("dev_health_ops.providers.teams._bridge_teams_to_postgres")
+    @patch("dev_health_ops.providers.teams._project_teams_to_postgres")
     @patch("dev_health_ops.providers.linear.client.LinearClient")
     def test_happy_path_two_teams(
         self,
@@ -102,7 +102,7 @@ class TestLinearTeamSync:
     ) -> None:
         """Happy path: two active teams with members → two Team objects created.
 
-        Org-scoped path (ns.org set): _bridge_teams_to_postgres is called directly;
+        Org-scoped path (ns.org set): _project_teams_to_postgres is called directly;
         asyncio.run is NOT called for the ClickHouse write (bridge_teams_to_clickhouse
         handles that internally).
         """
@@ -110,7 +110,7 @@ class TestLinearTeamSync:
 
         mock_client = MagicMock()
         mock_client_class.from_env.return_value = mock_client
-        mock_bridge.return_value = 2
+        mock_bridge.return_value = {"projected": 2}
         mock_client.iter_teams.return_value = [
             _mock_linear_team(
                 key="ENG",
@@ -141,7 +141,7 @@ class TestLinearTeamSync:
         assert "linear:ENG" in team_ids
         assert "linear:PROD" in team_ids
 
-    @patch("dev_health_ops.providers.teams._bridge_teams_to_postgres")
+    @patch("dev_health_ops.providers.teams._project_teams_to_postgres")
     @patch("dev_health_ops.providers.teams.resolve_sink_uri")
     @patch("dev_health_ops.providers.linear.client.LinearClient")
     def test_archived_teams_skipped(
@@ -156,7 +156,7 @@ class TestLinearTeamSync:
         mock_client = MagicMock()
         mock_client_class.from_env.return_value = mock_client
         mock_resolve_sink.return_value = "clickhouse://localhost:8123/default"
-        mock_bridge.return_value = 1
+        mock_bridge.return_value = {"projected": 1}
         mock_client.iter_teams.return_value = [
             _mock_linear_team(key="ARCH", name="Archived Team", archived=True),
             _mock_linear_team(
@@ -167,14 +167,10 @@ class TestLinearTeamSync:
         ]
 
         ns = _make_ns()
-        with (
-            patch("asyncio.run") as mock_run,
-            patch(
-                "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
-                return_value=1,
-            ),
+        with patch(
+            "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
+            return_value=1,
         ):
-            mock_run.side_effect = _close_coroutine
             result = sync_teams(ns)
 
         assert result == 0
@@ -182,7 +178,7 @@ class TestLinearTeamSync:
         assert len(teams_arg) == 1
         assert teams_arg[0].id == "linear:ENG"
 
-    @patch("dev_health_ops.providers.teams._bridge_teams_to_postgres")
+    @patch("dev_health_ops.providers.teams._project_teams_to_postgres")
     @patch("dev_health_ops.providers.teams.resolve_sink_uri")
     @patch("dev_health_ops.providers.linear.client.LinearClient")
     def test_empty_members_creates_team_with_empty_list(
@@ -197,20 +193,16 @@ class TestLinearTeamSync:
         mock_client = MagicMock()
         mock_client_class.from_env.return_value = mock_client
         mock_resolve_sink.return_value = "clickhouse://localhost:8123/default"
-        mock_bridge.return_value = 1
+        mock_bridge.return_value = {"projected": 1}
         mock_client.iter_teams.return_value = [
             _mock_linear_team(key="EMPTY", name="Empty Team", members=[]),
         ]
 
         ns = _make_ns()
-        with (
-            patch("asyncio.run") as mock_run,
-            patch(
-                "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
-                return_value=1,
-            ),
+        with patch(
+            "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
+            return_value=1,
         ):
-            mock_run.side_effect = _close_coroutine
             result = sync_teams(ns)
 
         assert result == 0
@@ -219,7 +211,7 @@ class TestLinearTeamSync:
         assert teams_arg[0].id == "linear:EMPTY"
         assert teams_arg[0].members == []
 
-    @patch("dev_health_ops.providers.teams._bridge_teams_to_postgres")
+    @patch("dev_health_ops.providers.teams._project_teams_to_postgres")
     @patch("dev_health_ops.providers.teams.resolve_sink_uri")
     @patch("dev_health_ops.providers.linear.client.LinearClient")
     def test_member_pagination_calls_get_team_members(
@@ -234,7 +226,7 @@ class TestLinearTeamSync:
         mock_client = MagicMock()
         mock_client_class.from_env.return_value = mock_client
         mock_resolve_sink.return_value = "clickhouse://localhost:8123/default"
-        mock_bridge.return_value = 1
+        mock_bridge.return_value = {"projected": 1}
 
         # Team with hasNextPage=True — only 1 member in initial nodes
         initial_member = _mock_member(name="Alice", email="alice@example.com")
@@ -253,14 +245,10 @@ class TestLinearTeamSync:
         mock_client.get_team_members.return_value = [initial_member, extra_member]
 
         ns = _make_ns()
-        with (
-            patch("asyncio.run") as mock_run,
-            patch(
-                "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
-                return_value=1,
-            ),
+        with patch(
+            "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
+            return_value=1,
         ):
-            mock_run.side_effect = _close_coroutine
             result = sync_teams(ns)
 
         assert result == 0
@@ -272,7 +260,7 @@ class TestLinearTeamSync:
         assert "alice@example.com" in teams_arg[0].members
         assert "bob@example.com" in teams_arg[0].members
 
-    @patch("dev_health_ops.providers.teams._bridge_teams_to_postgres")
+    @patch("dev_health_ops.providers.teams._project_teams_to_postgres")
     @patch("dev_health_ops.providers.teams.resolve_sink_uri")
     @patch("dev_health_ops.providers.linear.client.LinearClient")
     def test_partial_member_pagination_is_marked_incomplete(
@@ -286,7 +274,7 @@ class TestLinearTeamSync:
         mock_client = MagicMock()
         mock_client_class.from_env.return_value = mock_client
         mock_resolve_sink.return_value = "clickhouse://localhost:8123/default"
-        mock_bridge.return_value = 1
+        mock_bridge.return_value = {"projected": 1}
         initial_member = _mock_member(name="Alice", email="alice@example.com")
         mock_client.iter_teams.return_value = [
             _mock_linear_team(
@@ -300,14 +288,10 @@ class TestLinearTeamSync:
         mock_client.get_team_members.side_effect = RuntimeError("linear timeout")
 
         ns = _make_ns()
-        with (
-            patch("asyncio.run") as mock_run,
-            patch(
-                "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
-                return_value=1,
-            ),
+        with patch(
+            "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
+            return_value=1,
         ):
-            mock_run.side_effect = _close_coroutine
             result = sync_teams(ns)
 
         assert result == 0
@@ -330,7 +314,7 @@ class TestLinearTeamSync:
 
         assert result == 1
 
-    @patch("dev_health_ops.providers.teams._bridge_teams_to_postgres")
+    @patch("dev_health_ops.providers.teams._project_teams_to_postgres")
     @patch("dev_health_ops.providers.teams.resolve_sink_uri")
     @patch("dev_health_ops.providers.linear.client.LinearClient")
     def test_member_email_fallback_to_name(
@@ -345,7 +329,7 @@ class TestLinearTeamSync:
         mock_client = MagicMock()
         mock_client_class.from_env.return_value = mock_client
         mock_resolve_sink.return_value = "clickhouse://localhost:8123/default"
-        mock_bridge.return_value = 1
+        mock_bridge.return_value = {"projected": 1}
         mock_client.iter_teams.return_value = [
             _mock_linear_team(
                 key="ENG",
@@ -374,14 +358,10 @@ class TestLinearTeamSync:
         ]
 
         ns = _make_ns()
-        with (
-            patch("asyncio.run") as mock_run,
-            patch(
-                "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
-                return_value=1,
-            ),
+        with patch(
+            "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
+            return_value=1,
         ):
-            mock_run.side_effect = _close_coroutine
             result = sync_teams(ns)
 
         assert result == 0

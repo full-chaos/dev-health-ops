@@ -4,6 +4,7 @@ import logging
 import os
 
 from dev_health_ops.llm.credentials import (
+    org_byo_provider_matches,
     resolve_llm_credentials,
     resolve_llm_org_settings_model,
     resolve_usable_org_llm_provider,
@@ -154,16 +155,22 @@ def resolve_provider_name(name: str = "auto", *, org_id: str | None = None) -> s
     if requested != "auto":
         return requested
 
-    # Org BYO wins when present and usable (CHAOS-2550): a tenant that
-    # configured its own provider must not be overridden by the platform
-    # default env. An incomplete org config logs a warning and falls through
-    # so the platform default is used instead of crashing.
+    env_name = _normalize_provider_name(os.getenv("LLM_PROVIDER", "auto"))
+    # Operator kill-switch / explicit disable beats org BYO: LLM_PROVIDER=none
+    # (maintenance/emergency disable) or mock (fixtures/testing) must not be
+    # overridden by a tenant's BYO configuration.
+    if env_name in {"none", "mock"}:
+        return env_name
+
+    # Org BYO wins over the normal platform default when present and usable
+    # (CHAOS-2550): a tenant that configured its own provider must not be
+    # overridden by the platform default env. An incomplete org config logs a
+    # warning and falls through so the platform default is used (never crashes).
     org_provider = resolve_usable_org_llm_provider(org_id=org_id)
     if org_provider:
         return org_provider
 
     # Platform default: explicit LLM_PROVIDER, then env auto-detection.
-    env_name = _normalize_provider_name(os.getenv("LLM_PROVIDER", "auto"))
     if env_name != "auto":
         return env_name
 
@@ -183,14 +190,18 @@ def resolve_model_name(
         return None
     if model:
         return model
+    # Source-bound (CHAOS-2550): when org BYO is the active source for this
+    # provider, the model must come from the org settings (or the provider
+    # default), never the platform env -- otherwise an org gateway receives a
+    # platform-configured model name.
+    if org_byo_provider_matches(provider, org_id=org_id):
+        org_model = resolve_llm_org_settings_model(provider, org_id=org_id)
+        return org_model or DEFAULT_MODEL_BY_PROVIDER.get(provider)
     for env_name in _MODEL_ENV_BY_PROVIDER.get(provider, ()):
         if os.getenv(env_name):
             return os.getenv(env_name)
     if os.getenv("LLM_MODEL"):
         return os.getenv("LLM_MODEL")
-    org_model = resolve_llm_org_settings_model(provider, org_id=org_id)
-    if org_model:
-        return org_model
     return DEFAULT_MODEL_BY_PROVIDER.get(provider)
 
 

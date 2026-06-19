@@ -239,3 +239,52 @@ def test_resolve_llm_credentials_is_source_bound_for_org():
     assert anthropic_creds.api_key == "sk-platform-anthropic"
     # The org's openai base_url must never bleed into the anthropic resolution.
     assert anthropic_creds.base_url != "https://org.invalid/v1"
+
+
+def test_org_byo_model_is_source_bound_not_platform_env():
+    """Review finding (CHAOS-2550): when org BYO wins, the model must come from
+    the org (or provider default), NOT a platform env model var. Otherwise an
+    org gateway receives a platform-configured model name (wrong routing)."""
+    org = {
+        "org-1": {
+            "provider": "openai",
+            "api_key": "sk-org",
+            "base_url": "https://org.invalid/v1",
+            "model": "org-model",
+        }
+    }
+    with patch.dict(
+        os.environ,
+        {"LLM_MODEL_OPENAI": "platform-model", "LLM_MODEL": "platform-global"},
+        clear=True,
+    ):
+        with _patch_org(org):
+            provider = get_provider("auto", org_id="org-1")
+
+    assert isinstance(provider, OpenAIProvider)
+    assert provider._impl.cfg.api_key == "sk-org"
+    assert provider._impl.cfg.base_url == "https://org.invalid/v1"
+    # The model must be the org model, not the platform env model.
+    assert provider._impl.cfg.model == "org-model"
+    assert provider._impl.cfg.model != "platform-model"
+
+
+@pytest.mark.parametrize("disable_value", ["none", "mock"])
+def test_env_provider_disable_beats_org_byo(disable_value):
+    """Review finding (CHAOS-2550): an operator kill-switch / explicit override
+    via LLM_PROVIDER=none (maintenance disable) or mock (fixtures) must take
+    precedence over org BYO for auto callers; org config must not silently
+    re-enable a disabled platform."""
+    org = {
+        "org-1": {
+            "provider": "openai",
+            "api_key": "sk-org",
+            "base_url": "https://org.invalid/v1",
+        }
+    }
+    with patch.dict(os.environ, {"LLM_PROVIDER": disable_value}, clear=True):
+        with _patch_org(org):
+            assert resolve_provider_name("auto", org_id="org-1") == disable_value
+            if disable_value == "none":
+                # none is an explicit disable: not "available" for real work.
+                assert is_llm_available("auto", org_id="org-1") is False

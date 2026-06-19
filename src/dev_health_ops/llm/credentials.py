@@ -159,6 +159,20 @@ def _llm_credentials_complete(provider_name: str, credentials: LLMCredentials) -
     return True
 
 
+def org_byo_provider_matches(provider_name: str, org_id: str | None) -> bool:
+    """True iff the org configured THIS provider with a complete bundle.
+
+    Identifies when org BYO is the active credential source for a provider so
+    model resolution can stay source-bound (org model, not platform env model).
+    Does not log; the incomplete-config warning is emitted during provider and
+    credential resolution.
+    """
+    org_credentials = resolve_llm_org_settings_credentials(provider_name, org_id=org_id)
+    if not (org_credentials.api_key or org_credentials.base_url):
+        return False
+    return _llm_credentials_complete(provider_name, org_credentials)
+
+
 def resolve_usable_org_llm_provider(*, org_id: str | None = None) -> str:
     """Return the org's BYO provider iff it is configured AND complete.
 

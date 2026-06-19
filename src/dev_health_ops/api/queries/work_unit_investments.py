@@ -52,6 +52,7 @@ async def fetch_work_unit_investments(
             argMax(evidence_quality, work_unit_investments.computed_at) AS evidence_quality,
             argMax(evidence_quality_band, work_unit_investments.computed_at) AS evidence_quality_band,
             argMax(categorization_status, work_unit_investments.computed_at) AS categorization_status,
+            argMax(categorization_model_version, work_unit_investments.computed_at) AS categorization_model_version,
             argMax(categorization_run_id, work_unit_investments.computed_at) AS categorization_run_id,
             max(work_unit_investments.computed_at) AS computed_at
         FROM work_unit_investments

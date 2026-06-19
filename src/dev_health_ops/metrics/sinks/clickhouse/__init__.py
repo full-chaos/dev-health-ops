@@ -49,6 +49,7 @@ from dev_health_ops.metrics.sinks.clickhouse.compounding_risk import (
 from dev_health_ops.metrics.sinks.clickhouse.core import ClickHouseCore
 from dev_health_ops.metrics.sinks.clickhouse.dora import DoraMixin
 from dev_health_ops.metrics.sinks.clickhouse.investment import InvestmentMixin
+from dev_health_ops.metrics.sinks.clickhouse.llm_tokens import LLMTokenUsageMixin
 from dev_health_ops.metrics.sinks.clickhouse.recommendations import RecommendationsMixin
 from dev_health_ops.metrics.sinks.clickhouse.wellbeing import WellbeingMixin
 from dev_health_ops.metrics.sinks.clickhouse.work_graph import WorkGraphMixin
@@ -67,6 +68,7 @@ class ClickHouseMetricsSink(
     DoraMixin,
     WellbeingMixin,
     InvestmentMixin,
+    LLMTokenUsageMixin,
     WorkGraphMixin,
     ClickHouseCore,
 ):

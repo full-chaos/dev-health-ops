@@ -30,6 +30,7 @@ from dev_health_ops.metrics.schemas import (
     InvestmentExplanationRecord,
     InvestmentMetricsRecord,
     IssueTypeMetricsRecord,
+    LLMTokenUsageRecord,
     MemberRecord,
     ProjectRecord,
     ReleaseImpactDailyRecord,
@@ -400,6 +401,9 @@ class BaseMetricsSink(ABC):
 
     def write_investment_explanation(self, record: InvestmentExplanationRecord) -> None:
         """Write or replace an investment explanation to the cache."""
+        pass
+
+    def write_llm_token_usage(self, rows: Sequence[LLMTokenUsageRecord]) -> None:
         pass
 
     def read_investment_explanation(

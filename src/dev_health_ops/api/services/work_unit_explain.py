@@ -26,6 +26,8 @@ from dev_health_ops.llm.explainers.work_unit_explainer import (
     extract_allowed_inputs,
     validate_explanation_language,
 )
+from dev_health_ops.metrics.llm_token_usage import write_llm_token_usage
+from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
 from ..models.schemas import EvidenceQuality, WorkUnitExplanation, WorkUnitInvestment
 
@@ -51,6 +53,7 @@ async def explain_work_unit(
     *,
     provider: LLMProvider | None = None,
     org_id: str | None = None,
+    db_url: str | None = None,
 ) -> WorkUnitExplanation:
     """
     Generate an LLM explanation for a work unit's precomputed investment view.
@@ -118,7 +121,26 @@ async def explain_work_unit(
         if provider is not None
         else get_provider(llm_provider, model=llm_model, org_id=org_id)
     )
-    raw_response = await resolved_provider.complete_text(prompt)
+    completion = await resolved_provider.complete(prompt)
+    raw_response = completion.text
+    resolved_llm_provider = resolve_provider_name(llm_provider, org_id=org_id)
+    if db_url and llm_provider != "mock":
+        try:
+            ch_sink = ClickHouseMetricsSink(db_url)
+            try:
+                write_llm_token_usage(
+                    ch_sink,
+                    org_id=org_id or "",
+                    provider=resolved_llm_provider,
+                    model=completion.model or llm_model,
+                    source="work_unit_explain",
+                    input_tokens=completion.input_tokens,
+                    output_tokens=completion.output_tokens,
+                )
+            finally:
+                ch_sink.close()
+        except Exception:
+            logger.debug("Token usage storage failed", exc_info=True)
     logger.debug(
         "Received LLM response for work_unit_id=%s, length=%d",
         investment.work_unit_id,

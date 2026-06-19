@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from dev_health_ops.api.services.investment_mix_explain import explain_investment_mix
+from dev_health_ops.llm.providers.base import CompletionResult
 
 
 @pytest.mark.asyncio
@@ -31,8 +32,13 @@ async def test_explain_investment_mix_mismatch_warning():
         mock_units.return_value = []
 
         mock_provider = MagicMock()
-        mock_provider.complete_text = AsyncMock(
-            return_value='{"summary": "test", "top_findings": [], "confidence": {"level": "low"}, "what_to_check_next": [], "anti_claims": []}'
+        mock_provider.complete = AsyncMock(
+            return_value=CompletionResult(
+                text='{"summary": "test", "top_findings": [], "confidence": {"level": "low"}, "what_to_check_next": [], "anti_claims": []}',
+                input_tokens=1,
+                output_tokens=1,
+                model="mock",
+            )
         )
         mock_get_provider.return_value = mock_provider
 

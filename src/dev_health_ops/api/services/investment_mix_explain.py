@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -8,12 +9,13 @@ from typing import Any, Literal
 
 from dev_health_ops.api.utils.logging import sanitize_for_log
 from dev_health_ops.investment_taxonomy import SUBCATEGORIES, THEMES, theme_of
-from dev_health_ops.llm import get_provider, is_llm_available
+from dev_health_ops.llm import get_provider, is_llm_available, resolve_provider_name
 from dev_health_ops.llm.explainers.investment_mix_explainer import (
     build_prompt,
     load_prompt,
     parse_and_validate_response,
 )
+from dev_health_ops.metrics.llm_token_usage import write_llm_token_usage
 from dev_health_ops.metrics.schemas import InvestmentExplanationRecord
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
@@ -28,6 +30,69 @@ from .investment import build_investment_response
 from .work_units import build_work_unit_investments
 
 logger = logging.getLogger(__name__)
+
+_TOKEN_USAGE_WRITE_TIMEOUT_SECONDS = 2.0
+
+
+def _write_investment_mix_token_usage(
+    *,
+    db_url: str,
+    org_id: str,
+    provider: str,
+    model: str | None,
+    input_tokens: int | None,
+    output_tokens: int | None,
+) -> bool:
+    ch_sink = ClickHouseMetricsSink(db_url)
+    try:
+        return write_llm_token_usage(
+            ch_sink,
+            org_id=org_id,
+            provider=provider,
+            model=model,
+            source="investment_mix_explain",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+    finally:
+        ch_sink.close()
+
+
+async def _persist_investment_mix_token_usage(
+    *,
+    db_url: str,
+    org_id: str,
+    provider: str,
+    model: str | None,
+    input_tokens: int | None,
+    output_tokens: int | None,
+) -> None:
+    try:
+        persisted = await asyncio.wait_for(
+            asyncio.to_thread(
+                _write_investment_mix_token_usage,
+                db_url=db_url,
+                org_id=org_id,
+                provider=provider,
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            ),
+            timeout=_TOKEN_USAGE_WRITE_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        logger.warning(
+            "Token usage storage timed out source=investment_mix_explain",
+            exc_info=True,
+        )
+    except Exception:
+        logger.warning(
+            "Token usage storage failed source=investment_mix_explain",
+            exc_info=True,
+        )
+    else:
+        if not persisted:
+            logger.warning("Token usage storage failed source=investment_mix_explain")
 
 
 def _top_items(distribution: dict[str, float], limit: int) -> list[tuple[str, float]]:
@@ -296,8 +361,19 @@ async def explain_investment_mix(
     prompt_text = load_prompt()
     full_prompt = build_prompt(base_prompt=prompt_text, payload=payload)
 
+    resolved_llm_provider = resolve_provider_name(llm_provider, org_id=org_id)
     provider = get_provider(llm_provider, model=llm_model)
-    raw = await provider.complete_text(full_prompt)
+    completion = await provider.complete(full_prompt)
+    raw = completion.text
+    if llm_provider != "mock":
+        await _persist_investment_mix_token_usage(
+            db_url=db_url,
+            org_id=org_id,
+            provider=resolved_llm_provider,
+            model=completion.model or llm_model,
+            input_tokens=completion.input_tokens,
+            output_tokens=completion.output_tokens,
+        )
     raw_len = len(raw) if raw is not None else 0
     if logger.isEnabledFor(logging.DEBUG):
         # Sanitize and truncate the LLM response before logging to avoid log injection.

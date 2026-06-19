@@ -60,6 +60,12 @@ def _normalize_provider(provider: str) -> str:
     return (provider or "auto").strip().lower()
 
 
+def _safe_log_value(value: str) -> str:
+    """Strip CR/LF before logging to prevent log injection from org-provided
+    values (provider names come from tenant-controlled settings)."""
+    return value.replace("\r", "").replace("\n", "")
+
+
 def _load_org_llm_settings(org_id: str | None) -> dict[str, str]:
     if not org_id:
         return {}
@@ -203,7 +209,7 @@ def resolve_usable_org_llm_provider(*, org_id: str | None = None) -> str:
         logger.warning(
             "Org BYO LLM provider '%s' is not a recognized provider; "
             "falling back to the platform default.",
-            provider_name,
+            _safe_log_value(provider_name),
         )
         return ""
     credentials = LLMCredentials(
@@ -220,7 +226,7 @@ def resolve_usable_org_llm_provider(*, org_id: str | None = None) -> str:
         logger.warning(
             "Org BYO LLM provider '%s' is configured but incomplete "
             "(missing required credentials); falling back to the platform default.",
-            provider_name,
+            _safe_log_value(provider_name),
         )
         return ""
     return provider_name
@@ -243,7 +249,7 @@ def _resolve_org_byo_credentials(
         logger.warning(
             "Org BYO LLM credentials for provider '%s' are incomplete; "
             "falling back to the platform default.",
-            provider_name,
+            _safe_log_value(provider_name),
         )
         return None
     return org_credentials

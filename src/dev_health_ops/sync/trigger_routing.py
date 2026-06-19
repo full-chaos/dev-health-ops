@@ -184,25 +184,7 @@ def stamp_sync_run_canonical_config(
     error: str | None,
     stats: dict[str, Any] | None = None,
 ) -> None:
-    import uuid
-
-    from dev_health_ops.models.settings import SyncConfiguration
-
-    integration_id = getattr(sync_run, "integration_id", None)
-    org_id = getattr(sync_run, "org_id", None)
-    if integration_id is None or org_id is None:
-        return
-
-    integration_uuid = uuid.UUID(str(integration_id))
-    config = (
-        session.query(SyncConfiguration)
-        .filter(
-            SyncConfiguration.org_id == str(org_id),
-            SyncConfiguration.migrated_integration_id == integration_uuid,
-            SyncConfiguration.parent_id.is_(None),
-        )
-        .one_or_none()
-    )
+    config = canonical_sync_config_for_sync_run(session, sync_run)
     if config is None:
         return
 
@@ -211,6 +193,40 @@ def stamp_sync_run_canonical_config(
     config.last_sync_error = error
     if stats is not None:
         config.last_sync_stats = stats
+
+
+def canonical_sync_config_for_sync_run(session: Session, sync_run: Any) -> Any | None:
+    import uuid
+
+    from dev_health_ops.models.settings import SyncConfiguration
+
+    integration_id = getattr(sync_run, "integration_id", None)
+    org_id = getattr(sync_run, "org_id", None)
+    if integration_id is None or org_id is None:
+        return None
+
+    integration_uuid = uuid.UUID(str(integration_id))
+    configs = (
+        session.query(SyncConfiguration)
+        .filter(
+            SyncConfiguration.org_id == str(org_id),
+            SyncConfiguration.migrated_integration_id == integration_uuid,
+            SyncConfiguration.parent_id.is_(None),
+        )
+        .order_by(SyncConfiguration.created_at.asc(), SyncConfiguration.id.asc())
+        .limit(2)
+        .all()
+    )
+    if not configs:
+        return None
+    if len(configs) > 1:
+        logger.warning(
+            "Multiple parent SyncConfigurations found for integration %s in org %s; using %s as canonical",
+            integration_uuid,
+            org_id,
+            configs[0].id,
+        )
+    return configs[0]
 
 
 def _config_has_children(session: Session, config: SyncConfiguration) -> bool:
@@ -299,6 +315,7 @@ def mark_sync_run_failed(session: Session, sync_run_id: str, error: str) -> None
 
 __all__ = [
     "MIGRATED_TRIGGER_ROUTING_SETTING_KEY",
+    "canonical_sync_config_for_sync_run",
     "is_migrated_trigger_routing_enabled",
     "mark_sync_run_failed",
     "planner_request_for_config_if_routed",

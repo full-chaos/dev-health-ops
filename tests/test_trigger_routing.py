@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import create_engine
@@ -302,6 +303,41 @@ def test_mark_sync_run_failed_stamps_canonical_config(db_session):
         "error": "dispatch enqueue failed",
         "phase": "dispatch_enqueue",
     }
+
+
+def test_mark_sync_run_failed_stamps_oldest_duplicate_parent_config(db_session):
+    from dev_health_ops.models import SyncRunStatus
+
+    run = _make_sync_run(db_session, SyncRunStatus.PLANNED.value)
+    older = SyncConfiguration(
+        org_id=ORG_ID,
+        name="canonical-older",
+        provider="github",
+        sync_targets=["git"],
+        migrated_integration_id=run.integration_id,
+    )
+    newer = SyncConfiguration(
+        org_id=ORG_ID,
+        name="canonical-newer",
+        provider="github",
+        sync_targets=["git"],
+        migrated_integration_id=run.integration_id,
+    )
+    older.created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    newer.created_at = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    db_session.add_all([newer, older])
+    db_session.commit()
+
+    mark_sync_run_failed(db_session, str(run.id), "dispatch enqueue failed")
+
+    db_session.refresh(older)
+    db_session.refresh(newer)
+    assert older.last_sync_at is not None
+    assert older.last_sync_success is False
+    assert older.last_sync_error == "dispatch enqueue failed"
+    assert newer.last_sync_at is None
+    assert newer.last_sync_success is None
+    assert newer.last_sync_error is None
 
 
 def test_mark_sync_run_failed_noop_when_run_already_advanced(db_session):

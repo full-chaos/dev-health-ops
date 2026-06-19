@@ -7,6 +7,7 @@ for review (``sync_policy == 1``).
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
     from dev_health_ops.api.admin.schemas import DiscoveredTeam
 
 PROVIDER_MANAGED_FIELDS = ["name", "description", "repo_patterns", "project_keys"]
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -48,14 +50,30 @@ class TeamDriftSyncService:
         *,
         replace_empty_provider_values: bool = False,
     ) -> dict[str, Any]:
+        """Project provider-discovered teams into Postgres TeamMapping rows.
+
+        This entrypoint intentionally creates missing TeamMapping rows for CLI
+        provider projections so org-scoped syncs have a control-plane record to
+        bridge into ClickHouse. Worker/admin drift discovery keeps its approval
+        workflow: missing provider teams are reported as ``new_available`` by
+        ``run_drift_sync`` until an admin imports them. Both paths share the
+        same field diff and merge implementation for existing mappings.
+        """
         normalized_provider = str(provider or "config").lower()
-        discovered_teams = [
-            self._provider_team_to_discovered(normalized_provider, team)
-            for team in teams_data
-        ]
-        discovered_teams = [
-            team for team in discovered_teams if team.associations.get("team_id")
-        ]
+        discovered_teams: list[Any] = []
+        for team in teams_data:
+            discovered = self._provider_team_to_discovered(normalized_provider, team)
+            if not discovered.associations.get("team_id"):
+                logger.warning(
+                    "Dropping provider team without derivable team_id "
+                    "(provider=%s, provider_team_id=%r, name=%r, item=%r)",
+                    normalized_provider,
+                    getattr(discovered, "provider_team_id", None),
+                    getattr(discovered, "name", None),
+                    team,
+                )
+                continue
+            discovered_teams.append(discovered)
         if not discovered_teams:
             return {
                 "provider": normalized_provider,
@@ -269,18 +287,39 @@ class TeamDriftSyncService:
         return len(set(result.scalars()))
 
     def _provider_team_to_discovered(self, provider: str, team: Any) -> Any:
-        team_id = str(self._team_value(team, "id", "") or "").strip()
+        input_associations = self._team_value(team, "associations", {}) or {}
+        associations = (
+            dict(input_associations) if isinstance(input_associations, dict) else {}
+        )
+        team_id = str(
+            self._team_value(
+                team,
+                "id",
+                associations.get(
+                    "team_id", self._team_value(team, "provider_team_id", "")
+                ),
+            )
+            or ""
+        ).strip()
+        provider_team_id = str(
+            self._team_value(team, "provider_team_id", "")
+            or self._provider_team_id(team_id, provider)
+        ).strip()
         team_name = str(self._team_value(team, "name", team_id) or team_id)
-        associations = {
-            "team_id": team_id,
-            "repo_patterns": self._team_string_list(team, "repo_patterns"),
-            "project_keys": self._project_keys_for_team(team_id, provider, team),
-        }
+        associations.setdefault("team_id", team_id)
+        associations.setdefault(
+            "repo_patterns", self._team_string_list(team, "repo_patterns")
+        )
+        associations.setdefault(
+            "project_keys", self._project_keys_for_team(team_id, provider, team)
+        )
         members = self._team_value(team, "members", []) or []
-        member_count = len(members) if isinstance(members, list) else None
+        member_count = self._team_value(team, "member_count", None)
+        if member_count is None:
+            member_count = len(members) if isinstance(members, list) else None
         return _ProviderDiscoveredTeam(
             provider_type=provider,
-            provider_team_id=self._provider_team_id(team_id, provider),
+            provider_team_id=provider_team_id,
             name=team_name,
             description=self._team_value(team, "description", None),
             member_count=member_count,

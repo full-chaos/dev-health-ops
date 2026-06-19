@@ -13,6 +13,7 @@ from dev_health_ops.models import (
     SettingCategory,
     SyncConfiguration,
 )
+from dev_health_ops.models.integrations import Integration, IntegrationSource
 from dev_health_ops.sync.trigger_routing import (
     MIGRATED_TRIGGER_ROUTING_SETTING_KEY,
     is_migrated_trigger_routing_enabled,
@@ -67,6 +68,31 @@ def _set_flag(session: Session, value: str) -> None:
         )
     )
     session.flush()
+
+
+def _source(session: Session, integration_id: uuid.UUID) -> IntegrationSource:
+    session.add(
+        Integration(
+            id=integration_id,
+            org_id=ORG_ID,
+            provider="github",
+            name="github-integration",
+            config={},
+        )
+    )
+    source = IntegrationSource(
+        org_id=ORG_ID,
+        integration_id=integration_id,
+        provider="github",
+        source_type="repository",
+        external_id="full-chaos/dev-health",
+        name="dev-health",
+        full_name="full-chaos/dev-health",
+        is_enabled=True,
+    )
+    session.add(source)
+    session.flush()
+    return source
 
 
 # --- flag reader -----------------------------------------------------------
@@ -170,6 +196,7 @@ def test_mode_override(db_session):
 def test_planner_managed_parent_routes_without_flag(db_session):
     integration_id = uuid.uuid4()
     config = _config(db_session, migrated_integration_id=integration_id)
+    _source(db_session, integration_id)
 
     req = planner_request_for_config_if_routed(
         db_session, config, triggered_by="manual"
@@ -177,6 +204,20 @@ def test_planner_managed_parent_routes_without_flag(db_session):
 
     assert req is not None
     assert req.integration_id == str(integration_id)
+
+
+def test_sourceless_migrated_single_needs_flag(db_session):
+    integration_id = uuid.uuid4()
+    config = _config(db_session, migrated_integration_id=integration_id)
+
+    assert (
+        planner_request_for_config_if_routed(db_session, config, triggered_by="manual")
+        is None
+    )
+    _set_flag(db_session, "true")
+    assert planner_request_for_config_if_routed(
+        db_session, config, triggered_by="manual"
+    )
 
 
 def test_migrated_parent_with_children_needs_flag(db_session):

@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.backfill import BackfillJob
 from dev_health_ops.models.git import Base
+from dev_health_ops.models.integrations import Integration, IntegrationSource
 from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.settings import (
     IntegrationCredential,
@@ -51,6 +52,8 @@ _TABLES = tables_of(
     ScheduledJob,
     JobRun,
     Setting,
+    Integration,
+    IntegrationSource,
     BackfillJob,
 )
 
@@ -129,6 +132,32 @@ async def _create_sync_config(ac, name: str = "my-sync", provider: str = "github
     )
 
 
+async def _seed_source(session_maker, org_id: str, integration_id: uuid.UUID) -> None:
+    async with session_maker() as session:
+        session.add(
+            Integration(
+                id=integration_id,
+                org_id=org_id,
+                provider="github",
+                name="github-integration",
+                config={},
+            )
+        )
+        session.add(
+            IntegrationSource(
+                org_id=org_id,
+                integration_id=integration_id,
+                provider="github",
+                source_type="repository",
+                external_id="full-chaos/dev-health",
+                name="dev-health",
+                full_name="full-chaos/dev-health",
+                is_enabled=True,
+            )
+        )
+        await session.commit()
+
+
 # ---------------------------------------------------------------------------
 # Endpoint tests — legacy path (fanout disabled)
 # ---------------------------------------------------------------------------
@@ -137,7 +166,7 @@ async def _create_sync_config(ac, name: str = "my-sync", provider: str = "github
 @pytest.mark.asyncio
 async def test_backfill_legacy_creates_pending_job_run(client, session_maker):
     """Legacy backfill must persist a PENDING JobRun before dispatching."""
-    ac, _ = client
+    ac, seeded_state = client
 
     create_resp = await _create_sync_config(ac, name="bf-legacy-run", provider="github")
     assert create_resp.status_code == 201
@@ -220,7 +249,9 @@ async def test_backfill_legacy_passes_pending_run_id_to_task(client):
 
 
 @pytest.mark.asyncio
-async def test_backfill_fanout_does_not_create_job_run(client, session_maker):
+async def test_backfill_fanout_does_not_create_job_run(
+    client, session_maker, seeded_state
+):
     """Fan-out backfill must NOT create a JobRun (passes pending_run_id=None)."""
     ac, _ = client
 
@@ -238,8 +269,10 @@ async def test_backfill_fanout_does_not_create_job_run(client, session_maker):
             )
         )
         cfg = result.scalar_one()
-        setattr(cfg, "migrated_integration_id", uuid.uuid4())
+        integration_id = uuid.uuid4()
+        setattr(cfg, "migrated_integration_id", integration_id)
         await session.commit()
+    await _seed_source(session_maker, seeded_state["org_id"], integration_id)
 
     mock_task = MagicMock(id="bf-fanout-task-id")
     mock_run_backfill = MagicMock()
@@ -271,7 +304,7 @@ async def test_backfill_fanout_does_not_create_job_run(client, session_maker):
 
 @pytest.mark.asyncio
 async def test_backfill_planner_managed_config_routes_to_fanout_without_flag(
-    client, session_maker
+    client, session_maker, seeded_state
 ):
     ac, _ = client
 
@@ -288,8 +321,10 @@ async def test_backfill_planner_managed_config_routes_to_fanout_without_flag(
             )
         )
         cfg = result.scalar_one()
-        setattr(cfg, "migrated_integration_id", uuid.uuid4())
+        integration_id = uuid.uuid4()
+        setattr(cfg, "migrated_integration_id", integration_id)
         await session.commit()
+    await _seed_source(session_maker, seeded_state["org_id"], integration_id)
 
     mock_task = MagicMock(id="bf-planner-managed-task-id")
     mock_run_backfill = MagicMock()
@@ -308,6 +343,47 @@ async def test_backfill_planner_managed_config_routes_to_fanout_without_flag(
     assert resp.json()["mode"] == "fanout"
     call_kwargs = mock_run_backfill.delay.call_args.kwargs
     assert call_kwargs.get("pending_run_id") is None
+
+
+@pytest.mark.asyncio
+async def test_backfill_sourceless_migrated_config_without_flag_uses_legacy_path(
+    client, session_maker
+):
+    ac, _ = client
+
+    create_resp = await _create_sync_config(
+        ac, name="bf-sourceless-migrated", provider="github"
+    )
+    assert create_resp.status_code == 201
+    config_id = create_resp.json()["id"]
+
+    async with session_maker() as session:
+        result = await session.execute(
+            select(SyncConfiguration).where(
+                SyncConfiguration.id == uuid.UUID(config_id)
+            )
+        )
+        cfg = result.scalar_one()
+        setattr(cfg, "migrated_integration_id", uuid.uuid4())
+        await session.commit()
+
+    mock_task = MagicMock(id="bf-sourceless-task-id")
+    mock_run_backfill = MagicMock()
+    mock_run_backfill.delay.return_value = mock_task
+
+    with (
+        patch("dev_health_ops.workers.sync_tasks.run_backfill", mock_run_backfill),
+        patch.dict("os.environ", {"SYNC_FANOUT_BACKFILL": ""}),
+    ):
+        resp = await ac.post(
+            f"/api/v1/admin/sync-configs/{config_id}/backfill",
+            json={"since": "2026-01-01", "before": "2026-01-08"},
+        )
+
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["mode"] == "legacy"
+    call_kwargs = mock_run_backfill.delay.call_args.kwargs
+    assert call_kwargs.get("pending_run_id") is not None
 
 
 # ---------------------------------------------------------------------------
@@ -495,7 +571,7 @@ def test_run_backfill_signature_has_pending_run_id():
 
     from dev_health_ops.workers.sync_backfill import run_backfill
 
-    params = inspect.signature(run_backfill.run).parameters
+    params = inspect.signature(getattr(run_backfill, "run")).parameters
     assert "pending_run_id" in params, (
         "run_backfill is missing pending_run_id parameter"
     )

@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.git import Base
+from dev_health_ops.models.integrations import Integration, IntegrationSource
 from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.settings import (
     IntegrationCredential,
@@ -47,6 +48,8 @@ _TABLES = tables_of(
     ScheduledJob,
     JobRun,
     Setting,
+    Integration,
+    IntegrationSource,
 )
 
 
@@ -168,6 +171,32 @@ async def _seed_planner_flag(session_maker, org_id: str, value: str = "true"):
         await session.commit()
 
 
+async def _seed_source(session_maker, org_id: str, integration_id: uuid.UUID) -> None:
+    async with session_maker() as session:
+        session.add(
+            Integration(
+                id=integration_id,
+                org_id=org_id,
+                provider="github",
+                name="github-integration",
+                config={},
+            )
+        )
+        session.add(
+            IntegrationSource(
+                org_id=org_id,
+                integration_id=integration_id,
+                provider="github",
+                source_type="repository",
+                external_id="full-chaos/dev-health",
+                name="dev-health",
+                full_name="full-chaos/dev-health",
+                is_enabled=True,
+            )
+        )
+        await session.commit()
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -184,6 +213,7 @@ async def test_flag_on_migrated_config_uses_planner_path(client, session_maker):
     config_id = await _seed_config(
         session_maker, org_id, migrated_integration_id=integration_id
     )
+    await _seed_source(session_maker, org_id, integration_id)
     await _seed_planner_flag(session_maker, org_id, value="true")
 
     fake_plan = MagicMock()
@@ -304,6 +334,7 @@ async def test_planner_managed_config_routes_without_flag(client, session_maker)
     config_id = await _seed_config(
         session_maker, org_id, migrated_integration_id=integration_id
     )
+    await _seed_source(session_maker, org_id, integration_id)
 
     fake_plan = MagicMock()
     fake_plan.sync_run_id = str(uuid.uuid4())
@@ -339,6 +370,54 @@ async def test_planner_managed_config_routes_without_flag(client, session_maker)
     )
     fake_run_sync_config.apply_async.assert_not_called()
     fake_dispatch_batch_sync.apply_async.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sourceless_migrated_config_without_flag_uses_legacy_path(
+    client, session_maker
+):
+    ac, seeded_state = client
+    org_id = seeded_state["org_id"]
+
+    config_id = await _seed_config(
+        session_maker, org_id, migrated_integration_id=uuid.uuid4()
+    )
+
+    fake_plan = MagicMock()
+    fake_plan.sync_run_id = str(uuid.uuid4())
+    fake_plan.total_units = 2
+    fake_dispatch = MagicMock()
+    fake_dispatch.apply_async = MagicMock(return_value=MagicMock(id="task-planner"))
+    fake_task_result = MagicMock()
+    fake_task_result.id = "legacy-task-id"
+    fake_run_sync_config = MagicMock()
+    fake_run_sync_config.apply_async = MagicMock(return_value=fake_task_result)
+    fake_dispatch_batch_sync = MagicMock()
+    fake_dispatch_batch_sync.apply_async = MagicMock(return_value=fake_task_result)
+
+    with (
+        patch(
+            "dev_health_ops.api.admin.routers.sync.plan_sync_run",
+            return_value=fake_plan,
+        ) as mock_plan,
+        patch("dev_health_ops.api.admin.routers.sync.dispatch_sync_run", fake_dispatch),
+        patch.dict(
+            "sys.modules",
+            {
+                "dev_health_ops.workers.sync_tasks": MagicMock(
+                    run_sync_config=fake_run_sync_config,
+                    dispatch_batch_sync=fake_dispatch_batch_sync,
+                )
+            },
+        ),
+    ):
+        resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
+
+    assert resp.status_code == 202, resp.text
+    assert "sync_run_id" not in resp.json()
+    mock_plan.assert_not_called()
+    fake_dispatch.apply_async.assert_not_called()
+    fake_run_sync_config.apply_async.assert_called_once()
 
 
 @pytest.mark.asyncio

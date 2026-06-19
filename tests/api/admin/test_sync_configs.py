@@ -303,7 +303,9 @@ async def test_batch_create_linear_without_repos_creates_active_config_and_job(
 
 
 @pytest.mark.asyncio
-async def test_batch_create_counts_planner_sources_for_repo_limit(client, monkeypatch):
+async def test_batch_create_counts_cross_provider_planner_sources_for_repo_limit(
+    client, monkeypatch
+):
     ac, _ = client
     requested_counts = []
 
@@ -332,11 +334,11 @@ async def test_batch_create_counts_planner_sources_for_repo_limit(client, monkey
     second = await ac.post(
         "/api/v1/admin/sync-configs/batch",
         json={
-            "name": "repo-cap-two",
-            "provider": "github",
+            "name": "repo-cap-gitlab",
+            "provider": "gitlab",
             "sync_targets": ["git"],
-            "sync_options": {"owner": "full-chaos"},
-            "repos": ["three", "four"],
+            "sync_options": {"group": "full-chaos"},
+            "repos": ["3", "4"],
         },
     )
 

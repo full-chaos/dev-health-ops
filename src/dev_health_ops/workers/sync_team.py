@@ -13,12 +13,6 @@ from dev_health_ops.workers.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
-def _string_list(value: object | None) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [str(item) for item in value if item]
-
-
 def _uuid_value(value: object) -> uuid.UUID:
     if isinstance(value, uuid.UUID):
         return value
@@ -51,15 +45,10 @@ async def _discover_and_sync_all(org_id: str | None) -> dict:
         TeamDriftSyncService,
     )
     from dev_health_ops.db import get_postgres_session
+    from dev_health_ops.providers.team_capabilities import org_drift_capable_providers
 
     effective_org_id = org_id or ""
-
-    # Capability registry: all org-scoped providers that support drift discovery.
-    # Entries are ordered; the set is the single source of truth for which
-    # providers the worker covers. Adding a provider here is sufficient to
-    # include it in Phase 1 credential lookup, Phase 2 concurrent discovery,
-    # and Phase 3 drift persistence.
-    providers = ("github", "gitlab", "jira", "linear", "ms-teams")
+    providers = org_drift_capable_providers()
 
     # Phase 1: read + decrypt credentials in one short-lived session. These are
     # fast local reads; the connection is released before any network I/O.
@@ -206,23 +195,33 @@ def sync_team_drift(self, org_id: str | None = None) -> dict:
     name="dev_health_ops.workers.tasks.reconcile_team_members",
 )
 def reconcile_team_members(self, org_id: str | None = None) -> dict:
+    from dev_health_ops.api.services.configuration.team_member_resolver import (
+        members_by_team,
+    )
     from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.models.settings import IdentityMapping
 
-    team_members: dict[str, set[str]] = {}
+    if org_id is not None:
+        from dev_health_ops.providers.team_bridge import bridge_teams_to_clickhouse
+
+        teams_synced = bridge_teams_to_clickhouse(
+            org_id=org_id, db_url=require_clickhouse_uri()
+        )
+        return {
+            "status": "success",
+            "teams_scanned": teams_synced,
+            "teams_updated": teams_synced,
+            "mapped_teams": teams_synced,
+        }
+
     with get_postgres_session_sync() as session:
-        mappings = (
+        identity_mappings = (
             session.query(IdentityMapping)
             .filter(IdentityMapping.org_id == org_id)
+            .filter(IdentityMapping.is_active.is_(True))
             .all()
         )
-
-        for mapping in mappings:
-            canonical_id = str(mapping.canonical_id)
-            for team_id in _string_list(mapping.team_ids):
-                if not team_id:
-                    continue
-                team_members.setdefault(str(team_id), set()).add(canonical_id)
+        team_members = members_by_team(identity_mappings)
 
     async def _run() -> dict:
         from dev_health_ops.models.teams import Team

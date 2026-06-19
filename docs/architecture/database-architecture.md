@@ -132,7 +132,7 @@ Commands automatically use the appropriate database:
 | `sync git` | ClickHouse | Git data ingestion |
 | `sync prs` | ClickHouse | PR data ingestion |
 | `sync work-items` | ClickHouse | Work item ingestion |
-| `sync teams` | Both | **Org-scoped** (`--org`): provider → Postgres `team_mappings` → `bridge_teams_to_clickhouse`; **No-org**: direct ClickHouse write |
+| `sync teams` | Both | **Org-scoped** (`--org`): provider → Postgres `team_mappings` (via `TeamDriftSyncService`) → `bridge_teams_to_clickhouse`; **No-org**: direct ClickHouse write |
 | `metrics daily` | ClickHouse | Metrics computation |
 | `metrics dora` | ClickHouse | DORA metrics |
 | `api` | Both | Serves both layers |
@@ -143,22 +143,72 @@ The `sync teams` command has two distinct routing paths depending on whether `--
 
 | Path | Trigger | Write order | ClickHouse writer |
 |------|---------|-------------|-------------------|
-| **Org-scoped** | `--org <id>` present | 1. `_bridge_teams_to_postgres` (upserts `team_mappings`) → 2. `bridge_teams_to_clickhouse` (reads Postgres, resolves identities, writes `teams`) | `bridge_teams_to_clickhouse` only |
+| **Org-scoped** | `--org <id>` present | 1. `TeamDriftSyncService.project_provider_teams` (upserts `team_mappings` in Postgres) → 2. `bridge_teams_to_clickhouse` (reads Postgres, resolves identities, writes `teams` to ClickHouse) | `bridge_teams_to_clickhouse` only |
 | **No-org** | `--org` absent | Direct `run_with_store` → ClickHouse `teams` table | `run_with_store` |
 
 **Invariants for the org-scoped path:**
 
-- PostgreSQL `team_mappings` is always the source of truth for org-scoped teams.
-- `bridge_teams_to_clickhouse` is the **sole** ClickHouse writer for org-scoped syncs.
-  It reads `TeamMapping` + `IdentityMapping` from Postgres (both filtered by `org_id`),
-  resolves member identities (email, canonical_id, all provider logins), and writes the
-  enriched payload to the ClickHouse `teams` table.
-- `run_with_store` (direct ClickHouse write from provider data) is **never** called on the
-  org-scoped path.
-- A Postgres bridge failure (`_bridge_teams_to_postgres` returns 0 or raises) causes exit 1.
-- A ClickHouse bridge failure (`bridge_teams_to_clickhouse` raises) is fatal (exit 1) so
-  callers cannot report a successful sync when analytics has not been updated.
+- PostgreSQL `team_mappings` is always the Postgres-first control plane and source of truth for org-scoped teams.
+- ClickHouse `teams` is the analytics read source of truth.
+- `bridge_teams_to_clickhouse` is the **sole** ClickHouse writer for org-scoped syncs. It reads `TeamMapping` + `IdentityMapping` from Postgres (both filtered by `org_id`), resolves member identities (email, canonical_id, all provider logins), and writes the enriched payload to the ClickHouse `teams` table.
+- `run_with_store` (direct ClickHouse write from provider data) is **never** called on the org-scoped path.
+- A Postgres projection failure (e.g. `TeamDriftSyncService` raises) causes exit 1.
+- A ClickHouse bridge failure (`bridge_teams_to_clickhouse` raises) is fatal (exit 1) so callers cannot report a successful sync when analytics has not been updated.
 
+#### Team Sync Architecture Diagrams
+
+##### Current State (Split-Brain)
+Before the unification, the CLI and Celery/admin paths diverged, using different member resolvers and Postgres projection writers:
+
+```mermaid
+graph TD
+    subgraph CLI Path
+        CLI[CLI: sync teams --org] -->|Calls| CLI_Local[CLI-Local Postgres Writer]
+        CLI_Local -->|Writes| PG[(PostgreSQL: team_mappings)]
+        CLI_Local -->|Resolves members| CLI_Resolver[CLI-Local Member Resolver]
+        CLI_Resolver -->|Mutates| PG_Identities[(PostgreSQL: identity_mappings)]
+        CLI -->|Calls| Bridge[bridge_teams_to_clickhouse]
+    end
+
+    subgraph Celery / Admin Path
+        Admin[Admin API / Celery Worker] -->|Calls| Service[TeamDriftSyncService]
+        Service -->|Writes| PG
+        Worker[Celery: reconcile_team_members] -->|Resolves members| Worker_Resolver[reconcile_team_members]
+        Admin -->|Calls| Bridge
+    end
+
+    Bridge -->|Resolves members| Bridge_Resolver[Bridge Member Resolver]
+    Bridge -->|Writes| CH[(ClickHouse: teams)]
+```
+
+##### Target State (Unified Model)
+After the unification, all paths converge on the shared `TeamDriftSyncService` and a single shared member resolver:
+
+```mermaid
+graph TD
+    subgraph CLI Path
+        CLI[CLI: sync teams --org] -->|Calls| Service[TeamDriftSyncService]
+    end
+
+    subgraph Celery / Admin Path
+        Admin[Admin API / Celery Worker] -->|Calls| Service
+    end
+
+    subgraph Reconcile Command
+        Reconcile[CLI: teams reconcile --org] -->|Ensures mapping| PG
+        Reconcile -->|Calls| Bridge[bridge_teams_to_clickhouse]
+    end
+
+    Service -->|Writes/Flags| PG[(PostgreSQL: team_mappings)]
+    PG -->|Triggers| Bridge
+    Bridge -->|Sole Writer| CH[(ClickHouse: teams)]
+
+    subgraph Shared Identity Resolution
+        Bridge -->|Calls| SharedResolver[Shared members_by_team]
+        Worker[Celery: reconcile_team_members] -->|Calls| SharedResolver
+        SharedResolver -->|Reads confirmed facets| PG_Identities[(PostgreSQL: identity_mappings)]
+    end
+```
 ## API Service Routing
 
 | Service | Database | Session Factory |

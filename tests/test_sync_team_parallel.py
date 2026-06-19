@@ -6,6 +6,8 @@ Covers the full capability registry: github, gitlab, jira, linear, ms-teams.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -115,22 +117,14 @@ async def test_providers_discovered_concurrently(monkeypatch):
     assert sessions["open"] == 0, "Session leaked (not closed)"
 
 
-@pytest.mark.asyncio
-async def test_capability_registry_covers_all_supported_providers():
-    """The capability registry in _discover_and_sync_all must cover all 5 org-scoped providers.
-
-    This test is a static invariant: if a provider is added to providers/teams.py
-    sync_teams() but not to the worker registry, this test catches the drift.
-    """
+def test_worker_reads_team_capability_registry():
     import inspect
 
     from dev_health_ops.workers import sync_team as mod
 
     source = inspect.getsource(mod._discover_and_sync_all)
-    for provider in ("github", "gitlab", "jira", "linear", "ms-teams"):
-        assert provider in source, (
-            f"Provider '{provider}' missing from _discover_and_sync_all capability registry"
-        )
+    assert "org_drift_capable_providers()" in source
+    assert '("github", "gitlab", "jira", "linear", "ms-teams")' not in source
 
 
 def test_reconcile_team_members_uses_clickhouse_uri_and_preserves_org_scope():
@@ -140,5 +134,108 @@ def test_reconcile_team_members_uses_clickhouse_uri_and_preserves_org_scope():
 
     source = inspect.getsource(mod.reconcile_team_members)
     assert "require_clickhouse_uri()" in source
+    assert "bridge_teams_to_clickhouse" in source
     assert "_get_db_url" not in source
     assert 'org_id=str(getattr(team, "org_id"' in source
+
+
+def test_reconcile_team_members_matches_bridge_member_facets(monkeypatch):
+    from dev_health_ops.providers import team_bridge
+    from dev_health_ops.workers import sync_team as mod
+
+    identity_mappings = [
+        SimpleNamespace(
+            canonical_id="u1",
+            email="alice@example.com",
+            display_name="Alice Example",
+            provider_identities={"github": ["alice-gh"], "jira": ["alice-jira"]},
+            team_ids=["team-1"],
+        ),
+        SimpleNamespace(
+            canonical_id="u2",
+            email=None,
+            display_name="Bob Example",
+            provider_identities={"linear": ["bob-linear"]},
+            team_ids=["team-1"],
+        ),
+    ]
+    team_mapping = SimpleNamespace(
+        team_id="team-1",
+        name="Team One",
+        description="A team",
+        project_keys=[],
+        repo_patterns=[],
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    class Scalars:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return self.rows
+
+    class BridgeSession:
+        def __init__(self):
+            self.calls = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, *_args):
+            self.calls += 1
+            return Scalars([team_mapping] if self.calls == 1 else identity_mappings)
+
+    class FakeStore:
+        inserted: list[list[dict[str, object]]] = []
+
+        def __init__(self, _uri):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def insert_teams(self, teams: list[dict[str, object]]):
+            self.__class__.inserted.append(list(teams))
+
+    monkeypatch.setattr(
+        team_bridge, "get_postgres_session_sync", lambda: BridgeSession()
+    )
+    monkeypatch.setattr(team_bridge, "ClickHouseStore", FakeStore)
+    monkeypatch.setattr(
+        team_bridge, "_clickhouse_uri", lambda _db_url=None: "clickhouse://test"
+    )
+    monkeypatch.setattr(mod, "require_clickhouse_uri", lambda: "clickhouse://test")
+
+    getattr(mod.reconcile_team_members, "run")(org_id="org-1")
+    reconcile_payload_members = FakeStore.inserted.pop()[0]["members"]
+    assert isinstance(reconcile_payload_members, list)
+    reconcile_members = set(reconcile_payload_members)
+
+    team_bridge.bridge_teams_to_clickhouse(org_id="org-1")
+    bridge_payload_members = FakeStore.inserted.pop()[0]["members"]
+    assert isinstance(bridge_payload_members, list)
+    bridge_members = set(bridge_payload_members)
+
+    assert (
+        reconcile_members
+        == bridge_members
+        == {
+            "u1",
+            "alice@example.com",
+            "alice-gh",
+            "alice-jira",
+            "u2",
+            "bob-linear",
+            "Bob Example",
+        }
+    )

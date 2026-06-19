@@ -24,12 +24,12 @@ def write_llm_token_usage(
     output_tokens: int | None,
     calls: int = 1,
     computed_at: datetime | None = None,
-) -> None:
+) -> bool:
     input_count = token_count(input_tokens)
     output_count = token_count(output_tokens)
     call_count = int(calls or 0)
     if call_count <= 0 and input_count <= 0 and output_count <= 0:
-        return
+        return True
     try:
         sink.write_llm_token_usage(
             [
@@ -45,5 +45,7 @@ def write_llm_token_usage(
                 )
             ]
         )
+        return True
     except Exception:
         logger.debug("Failed to persist LLM token usage", exc_info=True)
+        return False

@@ -7,6 +7,7 @@ from typing import Any, cast
 import pytest
 
 from dev_health_ops.api.queries import investment as investment_queries
+from dev_health_ops.api.services import investment_mix_explain
 from dev_health_ops.api.services.provenance import (
     reset_mock_fixture_warning_state,
     warn_once_for_mock_fixture_rows,
@@ -74,3 +75,35 @@ async def test_mock_fixture_count_query_applies_category_filters(monkeypatch):
     assert "subcategory_kv.1 IN %(subcategories)s" in captured["sql"]
     assert captured["params"]["themes"] == ["feature_delivery"]
     assert captured["params"]["subcategories"] == ["feature_delivery.customer"]
+
+
+@pytest.mark.asyncio
+async def test_investment_mix_token_write_is_offloaded_and_failure_warns(
+    monkeypatch, caplog
+):
+    called: dict[str, Any] = {}
+
+    async def fake_to_thread(func, /, *args, **kwargs):
+        called["func"] = func
+        called["kwargs"] = kwargs
+        raise RuntimeError("clickhouse unavailable")
+
+    monkeypatch.setattr(investment_mix_explain.asyncio, "to_thread", fake_to_thread)
+
+    with caplog.at_level(logging.WARNING):
+        await investment_mix_explain._persist_investment_mix_token_usage(
+            db_url="clickhouse://localhost:8123/default",
+            org_id="org-a",
+            provider="openai",
+            model="gpt-5-mini",
+            input_tokens=10,
+            output_tokens=5,
+        )
+
+    assert called["func"] is investment_mix_explain._write_investment_mix_token_usage
+    assert called["kwargs"]["org_id"] == "org-a"
+    assert any(
+        "Token usage storage failed source=investment_mix_explain"
+        in record.getMessage()
+        for record in caplog.records
+    )

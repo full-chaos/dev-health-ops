@@ -321,3 +321,30 @@ async def test_admin_gate_allows_cleanup_for_downgraded_org(session_maker):
     async with session_maker() as session:
         # Cleanup bypasses the tier gate too.
         await require_byo_llm_access(session, org_id, for_cleanup=True)
+
+
+@pytest.mark.asyncio
+async def test_runtime_flag_state_tier_floor_beats_positive_override(session_maker):
+    # codex finding: byo_llm enforces a hard TEAM-tier floor at runtime that a
+    # positive per-org override must NOT bypass. A COMMUNITY org with a stale
+    # enabled byo_llm override must resolve to 'disabled' (runtime BYO off),
+    # matching the admin gate which blocks sub-TEAM regardless of override.
+    org_id = await _seed(
+        session_maker, tier="community", flag_enabled=True, override_enabled=True
+    )
+    async with session_maker() as session:
+        state = await session.run_sync(
+            lambda s: licensing_module.byo_llm_flag_state(s, uuid.UUID(org_id))
+        )
+    assert state == "disabled"
+
+
+@pytest.mark.asyncio
+async def test_runtime_flag_state_team_with_override_enabled(session_maker):
+    # Sanity: a TEAM org with the flag enabled resolves to 'enabled' at runtime.
+    org_id = await _seed(session_maker, tier="team", flag_enabled=True)
+    async with session_maker() as session:
+        state = await session.run_sync(
+            lambda s: licensing_module.byo_llm_flag_state(s, uuid.UUID(org_id))
+        )
+    assert state == "enabled"

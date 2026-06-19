@@ -150,16 +150,7 @@ def should_route_config_to_planner(session: Session, config: SyncConfiguration) 
     if integration_id is None:
         return False
 
-    parent_id = getattr(config, "parent_id", None)
-    source_id = getattr(config, "migrated_source_id", None)
-    child_eligible = parent_id is not None and source_id is not None
-    parent_or_single_eligible = parent_id is None
-    if not (parent_or_single_eligible or child_eligible):
-        return False
-
-    if parent_or_single_eligible and _integration_has_enabled_sources(
-        session, integration_id
-    ):
+    if bool(getattr(config, "planner_managed", False)):
         return True
 
     return is_migrated_trigger_routing_enabled(session, str(config.org_id))
@@ -229,37 +220,6 @@ def canonical_sync_config_for_sync_run(session: Session, sync_run: Any) -> Any |
             configs[0].id,
         )
     return configs[0]
-
-
-def _config_has_children(session: Session, config: SyncConfiguration) -> bool:
-    import uuid
-
-    from dev_health_ops.models.settings import SyncConfiguration
-
-    config_id = uuid.UUID(str(config.id))
-    return (
-        session.query(SyncConfiguration.id)
-        .filter(SyncConfiguration.parent_id == config_id)
-        .first()
-        is not None
-    )
-
-
-def _integration_has_enabled_sources(session: Session, integration_id: Any) -> bool:
-    import uuid
-
-    from dev_health_ops.models.integrations import IntegrationSource
-
-    integration_uuid = uuid.UUID(str(integration_id))
-    return (
-        session.query(IntegrationSource.id)
-        .filter(
-            IntegrationSource.integration_id == integration_uuid,
-            IntegrationSource.is_enabled.is_(True),
-        )
-        .first()
-        is not None
-    )
 
 
 def mark_sync_run_failed(session: Session, sync_run_id: str, error: str) -> None:

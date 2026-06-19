@@ -22,7 +22,8 @@ from dev_health_ops.models import (
     SyncWatermark,
 )
 from dev_health_ops.models.backfill import BackfillJob
-from dev_health_ops.models.settings import SyncConfiguration
+from dev_health_ops.models.settings import Setting, SettingCategory, SyncConfiguration
+from dev_health_ops.sync.trigger_routing import MIGRATED_TRIGGER_ROUTING_SETTING_KEY
 from dev_health_ops.sync.watermarks import get_watermark, set_watermark
 
 ORG_ID = "backfill-fanout-org"
@@ -394,6 +395,7 @@ def test_run_backfill_task_fanout_resolves_migrated_integration_id(
         sync_options={},
         is_active=True,
         migrated_integration_id=integration.id,
+        planner_managed=True,
     )
     db_session.add(config)
     db_session.flush()
@@ -473,6 +475,7 @@ def test_run_backfill_task_fanout_child_config_scopes_source(db_session, monkeyp
         is_active=True,
         migrated_integration_id=integration.id,
         migrated_source_id=source.id,
+        planner_managed=True,
     )
     db_session.add(config)
     db_session.flush()
@@ -555,6 +558,70 @@ def test_run_backfill_task_unmigrated_config_falls_back_to_legacy(
         org_id=ORG_ID,
     )
 
+    assert result["status"] == "success"
+    assert len(legacy_calls) == 1
+    assert legacy_calls[0]["sync_config_id"] == str(config.id)
+
+
+def test_run_backfill_task_migrated_non_planner_config_with_source_needs_flag(
+    db_session, monkeypatch
+):
+    from dev_health_ops.backfill import runner
+    from dev_health_ops.workers import sync_backfill, sync_runtime
+
+    integration = _create_integration(db_session)
+    _create_source(db_session, integration, "full-chaos/dev-health")
+    config = SyncConfiguration(
+        name="migrated legacy backfill",
+        provider="github",
+        org_id=ORG_ID,
+        sync_targets=["git"],
+        sync_options={},
+        is_active=True,
+        migrated_integration_id=integration.id,
+    )
+    db_session.add_all(
+        [
+            config,
+            Setting(
+                org_id=ORG_ID,
+                category=SettingCategory.SYNC.value,
+                key=MIGRATED_TRIGGER_ROUTING_SETTING_KEY,
+                value="false",
+            ),
+        ]
+    )
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setattr(sync_backfill, "_get_db_url", lambda: "clickhouse://test")
+    monkeypatch.setattr(
+        sync_runtime, "_dispatch_post_sync_tasks", lambda **kwargs: None
+    )
+
+    legacy_calls: list = []
+
+    def _fake_legacy(**kwargs):
+        legacy_calls.append(kwargs)
+        return {"status": "success"}
+
+    monkeypatch.setattr(runner, "run_backfill_for_config", _fake_legacy)
+    monkeypatch.setattr(
+        runner,
+        "run_backfill_via_planner",
+        lambda *args, **kwargs: pytest.fail(
+            "planner must not run when planner_managed is false and flag is off"
+        ),
+    )
+
+    run_backfill_task = getattr(sync_backfill.run_backfill, "run")
+    result = run_backfill_task(
+        sync_config_id=str(config.id),
+        since="2026-06-01",
+        before="2026-06-07",
+        org_id=ORG_ID,
+    )
+
+    assert config.planner_managed is False
     assert result["status"] == "success"
     assert len(legacy_calls) == 1
     assert legacy_calls[0]["sync_config_id"] == str(config.id)

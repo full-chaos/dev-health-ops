@@ -285,6 +285,9 @@ class SyncConfiguration(Base):
     )
 
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    planner_managed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     last_sync_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -360,6 +363,7 @@ class SyncConfiguration(Base):
         parent_id: uuid.UUID | None = None,
         migrated_integration_id: uuid.UUID | None = None,
         migrated_source_id: uuid.UUID | None = None,
+        planner_managed: bool = False,
     ) -> None:
         self.id = uuid.uuid4()
         self.org_id = org_id or ""
@@ -372,6 +376,7 @@ class SyncConfiguration(Base):
         self.parent_id = parent_id
         self.migrated_integration_id = migrated_integration_id
         self.migrated_source_id = migrated_source_id
+        self.planner_managed = planner_managed
         self.created_at = datetime.now(timezone.utc)
         self.updated_at = datetime.now(timezone.utc)
 

@@ -348,6 +348,50 @@ async def test_batch_create_counts_cross_provider_planner_sources_for_repo_limit
 
 
 @pytest.mark.asyncio
+async def test_single_create_counts_existing_planner_sources_for_repo_limit(
+    client, monkeypatch
+):
+    ac, _ = client
+    requested_counts = []
+
+    class TierLimitStub:
+        def __init__(self, _session):
+            pass
+
+        def check_repo_limit(self, _org_id, requested_count):
+            requested_counts.append(requested_count)
+            if requested_count > 2:
+                return False, "Repo limit exceeded"
+            return True, None
+
+    monkeypatch.setattr(sync_router_module, "TierLimitService", TierLimitStub)
+
+    batch = await ac.post(
+        "/api/v1/admin/sync-configs/batch",
+        json={
+            "name": "repo-cap-batch",
+            "provider": "github",
+            "sync_targets": ["git"],
+            "sync_options": {"owner": "full-chaos"},
+            "repos": ["one", "two"],
+        },
+    )
+    single = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": "repo-cap-single",
+            "provider": "github",
+            "sync_targets": ["git"],
+            "sync_options": {"owner": "full-chaos", "repo": "three"},
+        },
+    )
+
+    assert batch.status_code == 201, batch.text
+    assert single.status_code == 403, single.text
+    assert requested_counts == [2, 3]
+
+
+@pytest.mark.asyncio
 async def test_get_sync_config_by_id(client):
     ac, _ = client
 

@@ -14,12 +14,14 @@ from dev_health_ops.models import (
     SyncConfiguration,
 )
 from dev_health_ops.models.integrations import Integration, IntegrationSource
+from dev_health_ops.sync.config_migration import migrate_configs_to_integrations
 from dev_health_ops.sync.trigger_routing import (
     MIGRATED_TRIGGER_ROUTING_SETTING_KEY,
     is_migrated_trigger_routing_enabled,
     mark_sync_run_failed,
     plan_request_for_config,
     planner_request_for_config_if_routed,
+    should_route_config_to_planner,
 )
 
 ORG_ID = "routing-org"
@@ -42,6 +44,7 @@ def _config(
     migrated_integration_id: uuid.UUID | None = None,
     migrated_source_id: uuid.UUID | None = None,
     parent_id: uuid.UUID | None = None,
+    planner_managed: bool = False,
 ) -> SyncConfiguration:
     config = SyncConfiguration(
         org_id=ORG_ID,
@@ -52,6 +55,7 @@ def _config(
         migrated_integration_id=migrated_integration_id,
         migrated_source_id=migrated_source_id,
         parent_id=parent_id,
+        planner_managed=planner_managed,
     )
     session.add(config)
     session.flush()
@@ -195,7 +199,9 @@ def test_mode_override(db_session):
 
 def test_planner_managed_parent_routes_without_flag(db_session):
     integration_id = uuid.uuid4()
-    config = _config(db_session, migrated_integration_id=integration_id)
+    config = _config(
+        db_session, migrated_integration_id=integration_id, planner_managed=True
+    )
     _source(db_session, integration_id)
 
     req = planner_request_for_config_if_routed(
@@ -206,9 +212,10 @@ def test_planner_managed_parent_routes_without_flag(db_session):
     assert req.integration_id == str(integration_id)
 
 
-def test_sourceless_migrated_single_needs_flag(db_session):
+def test_migrated_single_with_source_needs_flag_without_planner_marker(db_session):
     integration_id = uuid.uuid4()
     config = _config(db_session, migrated_integration_id=integration_id)
+    _source(db_session, integration_id)
 
     assert (
         planner_request_for_config_if_routed(db_session, config, triggered_by="manual")
@@ -237,6 +244,57 @@ def test_migrated_parent_with_children_needs_flag(db_session):
     _set_flag(db_session, "true")
     assert planner_request_for_config_if_routed(
         db_session, parent, triggered_by="manual"
+    )
+
+
+def test_migrated_parent_with_sources_stays_legacy_for_all_triggers(db_session):
+    _set_flag(db_session, "false")
+
+    parent = SyncConfiguration(
+        org_id=ORG_ID,
+        name="legacy parent",
+        provider="github",
+        sync_targets=["git"],
+        sync_options={"owner": "full-chaos"},
+        is_active=True,
+    )
+    db_session.add(parent)
+    db_session.flush()
+    child = SyncConfiguration(
+        org_id=ORG_ID,
+        name="full-chaos/dev-health",
+        provider="github",
+        sync_targets=["git"],
+        sync_options={"owner": "full-chaos", "repo": "dev-health"},
+        parent_id=parent.id,
+        is_active=True,
+    )
+    db_session.add(child)
+    db_session.flush()
+
+    migrate_configs_to_integrations(db_session)
+    db_session.flush()
+
+    assert parent.planner_managed is False
+    assert child.planner_managed is False
+    assert parent.migrated_integration_id is not None
+    assert child.migrated_source_id is not None
+    assert should_route_config_to_planner(db_session, parent) is False
+    assert (
+        planner_request_for_config_if_routed(db_session, parent, triggered_by="manual")
+        is None
+    )
+    assert (
+        planner_request_for_config_if_routed(
+            db_session, parent, triggered_by="schedule"
+        )
+        is None
+    )
+    assert (
+        planner_request_for_config_if_routed(
+            db_session, parent, triggered_by="backfill", mode="backfill"
+        )
+        is None
     )
 
 

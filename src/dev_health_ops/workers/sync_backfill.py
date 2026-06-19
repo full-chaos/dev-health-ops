@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
@@ -15,15 +14,6 @@ from dev_health_ops.workers.task_utils import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _sync_fanout_backfill_enabled() -> bool:
-    return os.getenv("SYNC_FANOUT_BACKFILL", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
 
 
 def _mark_backfill_job_running(backfill_job_id: str, started_at: datetime) -> None:
@@ -178,10 +168,7 @@ def run_backfill(
     )
     from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.models.settings import IntegrationCredential, SyncConfiguration
-    from dev_health_ops.sync.trigger_routing import (
-        plan_request_for_config,
-        planner_request_for_config_if_routed,
-    )
+    from dev_health_ops.sync.trigger_routing import planner_request_for_config_if_routed
 
     sync_config_uuid = uuid.UUID(sync_config_id)
     started_at = datetime.now(timezone.utc)
@@ -230,10 +217,6 @@ def run_backfill(
             plan_req = planner_request_for_config_if_routed(
                 session, config, triggered_by="backfill", mode="backfill"
             )
-            if plan_req is None and _sync_fanout_backfill_enabled():
-                plan_req = plan_request_for_config(
-                    config, triggered_by="backfill", mode="backfill"
-                )
             if plan_req is not None:
                 use_fanout = True
                 planner_integration_id = plan_req.integration_id

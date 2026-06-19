@@ -130,6 +130,7 @@ async def _seed_config(
     org_id: str,
     *,
     migrated_integration_id: uuid.UUID | None = None,
+    planner_managed: bool = False,
 ) -> str:
     """Seed a SyncConfiguration and return its id."""
     async with session_maker() as session:
@@ -139,6 +140,7 @@ async def _seed_config(
             org_id=org_id,
             sync_targets=["git"],
             migrated_integration_id=migrated_integration_id,
+            planner_managed=planner_managed,
         )
         session.add(config)
         await session.commit()
@@ -211,7 +213,9 @@ async def test_flag_on_migrated_config_uses_planner_path(client, session_maker):
 
     integration_id = uuid.uuid4()
     config_id = await _seed_config(
-        session_maker, org_id, migrated_integration_id=integration_id
+        session_maker,
+        org_id,
+        migrated_integration_id=integration_id,
     )
     await _seed_source(session_maker, org_id, integration_id)
     await _seed_planner_flag(session_maker, org_id, value="true")
@@ -273,7 +277,9 @@ async def test_flag_off_uses_legacy_path(client, session_maker):
 
     integration_id = uuid.uuid4()
     config_id = await _seed_config(
-        session_maker, org_id, migrated_integration_id=integration_id
+        session_maker,
+        org_id,
+        migrated_integration_id=integration_id,
     )
     await _seed_child(session_maker, org_id, config_id)
     # No flag seeded => flag is off
@@ -332,7 +338,10 @@ async def test_planner_managed_config_routes_without_flag(client, session_maker)
 
     integration_id = uuid.uuid4()
     config_id = await _seed_config(
-        session_maker, org_id, migrated_integration_id=integration_id
+        session_maker,
+        org_id,
+        migrated_integration_id=integration_id,
+        planner_managed=True,
     )
     await _seed_source(session_maker, org_id, integration_id)
 

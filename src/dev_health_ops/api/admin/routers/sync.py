@@ -44,7 +44,6 @@ from dev_health_ops.sync.datasets import supported_datasets, supported_legacy_ta
 from dev_health_ops.sync.planner import plan_sync_run
 from dev_health_ops.sync.trigger_routing import (
     mark_sync_run_failed,
-    plan_request_for_config,
     planner_request_for_config_if_routed,
 )
 from dev_health_ops.workers.queues import sync_queue_for_provider
@@ -168,10 +167,7 @@ async def _is_planner_active(session: AsyncSession, org_id: str) -> bool:
     return await session.run_sync(_check)
 
 
-async def _active_repo_count_for_batch_limit(
-    session: AsyncSession, org_id: str, provider: str
-) -> int:
-    _ = provider
+async def _active_repo_usage_count_for_limit(session: AsyncSession, org_id: str) -> int:
     active_configs = await session.execute(
         select(SyncConfiguration).where(
             SyncConfiguration.org_id == org_id,
@@ -179,17 +175,12 @@ async def _active_repo_count_for_batch_limit(
         )
     )
     active_config_rows = list(active_configs.scalars().all())
-    parent_ids_with_children = {
-        config.parent_id
-        for config in active_config_rows
-        if config.parent_id is not None
-    }
     planner_parent_ids = [
         config.id
         for config in active_config_rows
         if config.parent_id is None
+        and bool(config.planner_managed)
         and config.migrated_integration_id is not None
-        and config.id not in parent_ids_with_children
     ]
     planner_integration_ids = [
         config.migrated_integration_id
@@ -771,9 +762,7 @@ async def batch_create_sync_configs(
         This endpoint will create the parent config only (zero children) when
         the planner flag is enabled.
     """
-    current_count = await _active_repo_count_for_batch_limit(
-        session, org_id, payload.provider
-    )
+    current_count = await _active_repo_usage_count_for_limit(session, org_id)
     new_count = len(payload.repos)
 
     def _check_limit(sync_session) -> tuple[bool, str | None]:
@@ -836,6 +825,7 @@ async def batch_create_sync_configs(
         sync_options=parent_options,
         is_active=True,
         migrated_integration_id=integration.id,
+        planner_managed=True,
     )
     session.add(parent)
     await session.flush()
@@ -879,8 +869,7 @@ async def create_sync_config(
     svc = SyncConfigurationService(session, org_id)
 
     # Fix 1 (HIGH): Enforce repo limit before creating a new sync config.
-    existing_configs = await svc.list_all(active_only=True)
-    current_count = len(existing_configs)
+    current_count = await _active_repo_usage_count_for_limit(session, org_id)
 
     def _check_repo_limit(sync_session) -> tuple[bool, str | None]:
         tier_svc = TierLimitService(sync_session)
@@ -1309,21 +1298,11 @@ async def trigger_sync_config_backfill(
     from dev_health_ops.models.backfill import BackfillJob as BackfillJobModel
 
     windows = chunk_date_range(since=payload.since, before=payload.before, chunk_days=7)
-    fanout_env = os.getenv("SYNC_FANOUT_BACKFILL", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
     planner_backfill_request = await session.run_sync(
         lambda sync_session: planner_request_for_config_if_routed(
             sync_session, config, triggered_by="backfill", mode="backfill"
         )
     )
-    if planner_backfill_request is None and fanout_env:
-        planner_backfill_request = plan_request_for_config(
-            config, triggered_by="backfill", mode="backfill"
-        )
     fanout_backfill = planner_backfill_request is not None
     backfill_job = BackfillJobModel(
         org_id=org_id,

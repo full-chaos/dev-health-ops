@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 import jwt
 from jwt.exceptions import InvalidTokenError
 
-from dev_health_ops.licensing.types import LicenseTier
+from dev_health_ops.licensing.types import TIER_ORDER, LicenseTier
 from dev_health_ops.models.licensing import (
     STANDARD_FEATURES,
     TIER_LIMITS_DEFAULTS,
@@ -375,6 +375,37 @@ class FeatureService:
         """Clear the feature and override caches."""
         self._feature_cache.clear()
         self._override_cache.clear()
+
+
+def byo_llm_flag_state(session: Session, org_id: uuid.UUID) -> str:
+    """Return the byo_llm flag state: 'enabled' | 'disabled' | 'unregistered'.
+
+    'unregistered' covers pre-migration / minimal DBs where the feature_flags
+    table is absent or the byo_llm row has not been seeded; callers treat it as
+    backward-compatible (ungated). Genuine lookup errors are NOT swallowed --
+    they propagate so callers can fail CLOSED (a kill switch must survive
+    degraded licensing storage rather than silently allow).
+    """
+    import sqlalchemy as sa
+
+    if not sa.inspect(session.get_bind()).has_table("feature_flags"):
+        return "unregistered"
+    svc = FeatureService(session)
+    # byo_llm enforces a hard TEAM-tier floor that positive per-org overrides
+    # must NOT bypass (matching the admin gate's tier check). Resolve the tier
+    # directly: check_feature_access honors a positive override before comparing
+    # tier, which would otherwise let a stale override keep BYO active at runtime
+    # for an org downgraded below TEAM.
+    org_license = svc._get_org_license(org_id)
+    org_tier = resolve_org_tier(session, org_id, org_license)
+    if TIER_ORDER.index(org_tier) < TIER_ORDER.index(LicenseTier.TEAM):
+        return "disabled"
+    access = svc.check_feature_access(org_id, "byo_llm")
+    if access.allowed:
+        return "enabled"
+    if (access.reason or "").startswith("Unknown feature"):
+        return "unregistered"
+    return "disabled"
 
 
 class TierLimitService:

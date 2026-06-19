@@ -855,7 +855,7 @@ def test_validate_bundle_feature_keys_empty_succeeds():
 
 
 def test_validate_bundle_feature_keys_all_standard():
-    """All 25 STANDARD_FEATURES keys pass validation."""
+    """All STANDARD_FEATURES keys pass validation."""
     from dev_health_ops.api.billing.bundle_validation import (
         validate_bundle_feature_keys,
     )

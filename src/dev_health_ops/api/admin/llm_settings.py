@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.admin.schemas import LLMSettingsResponse, LLMSettingsUpsert
 from dev_health_ops.api.services.configuration import SettingsService
-from dev_health_ops.api.services.licensing import resolve_org_tier
+from dev_health_ops.api.services.licensing import byo_llm_flag_state, resolve_org_tier
 from dev_health_ops.licensing.types import TIER_ORDER, LicenseTier
 from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.settings import SettingCategory
@@ -34,7 +34,9 @@ class LLMSettingsAccessError(Exception):
         return self.detail.get("message", "BYO LLM settings access denied")
 
 
-async def require_byo_llm_access(session: AsyncSession, org_id: str) -> None:
+async def require_byo_llm_access(
+    session: AsyncSession, org_id: str, *, for_cleanup: bool = False
+) -> None:
     try:
         org_uuid = uuid.UUID(org_id)
     except ValueError as exc:
@@ -58,6 +60,14 @@ async def require_byo_llm_access(session: AsyncSession, org_id: str) -> None:
             },
         )
 
+    # CHAOS-2551: DELETE/cleanup must always be able to remove previously
+    # stored BYO secrets once org/admin scope is validated. A disabled kill
+    # switch OR a license downgrade (sub-TEAM tier) must stop
+    # reads/writes/runtime use but must NOT trap stored credentials, so cleanup
+    # skips both the tier and feature-flag gates below.
+    if for_cleanup:
+        return
+
     license_result = await session.execute(
         select(OrgLicense).where(OrgLicense.org_id == org_uuid)
     )
@@ -75,6 +85,27 @@ async def require_byo_llm_access(session: AsyncSession, org_id: str) -> None:
                 "feature": "byo_llm",
                 "required_tier": BYO_LLM_MIN_TIER.value,
                 "current_tier": tier.value,
+            },
+        )
+
+    # CHAOS-2551: in addition to the tier gate above, require the byo_llm
+    # feature flag to be enabled. Pre-migration / minimal DBs (no feature_flags
+    # table or an unseeded flag) report "unregistered" and fall back to the
+    # prior tier-only gate. Genuine flag-lookup errors are NOT swallowed -- they
+    # propagate so the gate fails CLOSED (request denied) rather than silently
+    # allowing BYO access while the licensing store is degraded. (Cleanup/DELETE
+    # returns above and never reaches this gate.)
+    def _flag_state(sync_session):
+        return byo_llm_flag_state(sync_session, org_uuid)
+
+    state = await session.run_sync(_flag_state)
+    if state == "disabled":
+        raise LLMSettingsAccessError(
+            status_code=403,
+            detail={
+                "error": "feature_not_enabled",
+                "feature": "byo_llm",
+                "message": "BYO LLM is not enabled for this organization",
             },
         )
 

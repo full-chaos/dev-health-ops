@@ -161,11 +161,11 @@ def _get_llm_settings_service(
 
 
 async def _require_cli_byo_llm_access(
-    ns: argparse.Namespace, session: AsyncSession
+    ns: argparse.Namespace, session: AsyncSession, *, for_cleanup: bool = False
 ) -> None:
     from dev_health_ops.api.admin.llm_settings import require_byo_llm_access
 
-    await require_byo_llm_access(session, ns.org)
+    await require_byo_llm_access(session, ns.org, for_cleanup=for_cleanup)
 
 
 def _normalize_llm_provider(provider: str | None) -> str:
@@ -255,7 +255,9 @@ async def _llm_settings_delete_async(ns: argparse.Namespace) -> int:
 
     session = await _get_session(ns)
     try:
-        await _require_cli_byo_llm_access(ns, session)
+        # Cleanup must work even when the flag is disabled or the org has been
+        # downgraded below the BYO tier (CHAOS-2551 review).
+        await _require_cli_byo_llm_access(ns, session, for_cleanup=True)
         svc = _get_llm_settings_service(ns, session)
         deleted = await delete_llm_settings(svc)
         if not deleted:

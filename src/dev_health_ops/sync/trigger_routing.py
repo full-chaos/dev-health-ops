@@ -22,7 +22,8 @@ legacy path and this module's :func:`plan_request_for_config` is never reached.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any
 
 from dev_health_ops.sync.datasets import supported_datasets
 from dev_health_ops.sync.planner import SyncPlanRequest
@@ -144,6 +145,88 @@ def plan_request_for_config(
     )
 
 
+def should_route_config_to_planner(session: Session, config: SyncConfiguration) -> bool:
+    integration_id = getattr(config, "migrated_integration_id", None)
+    if integration_id is None:
+        return False
+
+    parent_id = getattr(config, "parent_id", None)
+    source_id = getattr(config, "migrated_source_id", None)
+    child_eligible = parent_id is not None and source_id is not None
+    parent_or_single_eligible = parent_id is None
+    if not (parent_or_single_eligible or child_eligible):
+        return False
+
+    if parent_or_single_eligible and not _config_has_children(session, config):
+        return True
+
+    return is_migrated_trigger_routing_enabled(session, str(config.org_id))
+
+
+def planner_request_for_config_if_routed(
+    session: Session,
+    config: SyncConfiguration,
+    *,
+    triggered_by: str,
+    mode: str = "incremental",
+) -> SyncPlanRequest | None:
+    if not should_route_config_to_planner(session, config):
+        return None
+    return plan_request_for_config(config, triggered_by=triggered_by, mode=mode)
+
+
+def stamp_sync_run_canonical_config(
+    session: Session,
+    sync_run: Any,
+    *,
+    completed_at: datetime | None = None,
+    success: bool,
+    error: str | None,
+    stats: dict[str, Any] | None = None,
+) -> None:
+    import uuid
+
+    from dev_health_ops.models.settings import SyncConfiguration
+
+    integration_id = getattr(sync_run, "integration_id", None)
+    org_id = getattr(sync_run, "org_id", None)
+    if integration_id is None or org_id is None:
+        return
+
+    integration_uuid = uuid.UUID(str(integration_id))
+    config = (
+        session.query(SyncConfiguration)
+        .filter(
+            SyncConfiguration.org_id == str(org_id),
+            SyncConfiguration.migrated_integration_id == integration_uuid,
+            SyncConfiguration.parent_id.is_(None),
+        )
+        .one_or_none()
+    )
+    if config is None:
+        return
+
+    config.last_sync_at = completed_at or datetime.now(timezone.utc)
+    config.last_sync_success = success
+    config.last_sync_error = error
+    if stats is not None:
+        config.last_sync_stats = stats
+
+
+def _config_has_children(session: Session, config: SyncConfiguration) -> bool:
+    import uuid
+
+    from dev_health_ops.models.settings import SyncConfiguration
+
+    config_id = uuid.UUID(str(config.id))
+    return (
+        session.query(SyncConfiguration.id)
+        .filter(SyncConfiguration.parent_id == config_id)
+        .first()
+        is not None
+    )
+
+
 def mark_sync_run_failed(session: Session, sync_run_id: str, error: str) -> None:
     """Mark a committed-but-undispatched SyncRun FAILED so it is not stranded.
 
@@ -200,6 +283,14 @@ def mark_sync_run_failed(session: Session, sync_run_id: str, error: str) -> None
             },
             synchronize_session=False,
         )
+        stamp_sync_run_canonical_config(
+            session,
+            run,
+            completed_at=now,
+            success=False,
+            error=error,
+            stats={"error": error, "phase": "dispatch_enqueue"},
+        )
         session.commit()
     except Exception:
         logger.exception("Failed to mark stranded sync_run %s as failed", sync_run_id)
@@ -210,5 +301,8 @@ __all__ = [
     "MIGRATED_TRIGGER_ROUTING_SETTING_KEY",
     "is_migrated_trigger_routing_enabled",
     "mark_sync_run_failed",
+    "planner_request_for_config_if_routed",
     "plan_request_for_config",
+    "should_route_config_to_planner",
+    "stamp_sync_run_canonical_config",
 ]

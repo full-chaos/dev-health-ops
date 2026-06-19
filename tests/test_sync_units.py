@@ -491,6 +491,44 @@ def test_dispatch_sync_run_redispatches_only_planned_units(db_session, monkeypat
     assert recent_dispatching.status == SyncRunUnitStatus.DISPATCHING.value
 
 
+def test_dispatch_sync_run_denies_inactive_planner_config(db_session, monkeypatch):
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(db_session)
+    config = SyncConfiguration(
+        org_id=run.org_id,
+        name="paused-planner",
+        provider="github",
+        sync_targets=["git"],
+        sync_options={},
+        migrated_integration_id=run.integration_id,
+        is_active=False,
+    )
+    db_session.add(config)
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+
+    def fail_queue(*_args, **_kwargs):
+        raise AssertionError("inactive planner config must not queue units")
+
+    monkeypatch.setattr(sync_units.run_sync_unit, "s", fail_queue)
+    monkeypatch.setattr(sync_units, "chord", fail_queue)
+
+    result = sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(run)
+    db_session.refresh(unit)
+    db_session.refresh(config)
+    assert result == {"status": "denied", "reason": "sync configuration is paused"}
+    assert run.status == SyncRunStatus.FAILED.value
+    assert run.error == "sync configuration is paused"
+    assert run.result == {"reason": "inactive_sync_configuration"}
+    assert unit.status == SyncRunUnitStatus.FAILED.value
+    assert unit.error == "sync configuration is paused"
+    assert config.last_sync_success is False
+    assert config.last_sync_error == "sync configuration is paused"
+
+
 def test_dispatch_sync_run_marks_run_failed_when_chord_enqueue_fails(
     db_session, monkeypatch
 ):

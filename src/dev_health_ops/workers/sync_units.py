@@ -56,7 +56,10 @@ from dev_health_ops.models import (
 from dev_health_ops.sync.dispatch_policy import route
 from dev_health_ops.sync.guard import DispatchGuard
 from dev_health_ops.sync.planner import map_datasets_to_legacy_targets
-from dev_health_ops.sync.trigger_routing import stamp_sync_run_canonical_config
+from dev_health_ops.sync.trigger_routing import (
+    canonical_sync_config_for_sync_run,
+    stamp_sync_run_canonical_config,
+)
 from dev_health_ops.sync.watermarks import set_watermark
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.queues import _cost_class_queues_enabled
@@ -151,6 +154,43 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                 },
             )
             return {"status": "denied", "reason": run.error}
+
+        canonical_config = canonical_sync_config_for_sync_run(session, run)
+        if canonical_config is not None and not bool(canonical_config.is_active):
+            completed_at = datetime.now(timezone.utc)
+            error = "sync configuration is paused"
+            run.status = SyncRunStatus.FAILED.value
+            run.completed_at = completed_at
+            run.error = error
+            run.result = {"reason": "inactive_sync_configuration"}
+            session.query(SyncRunUnit).filter(
+                SyncRunUnit.sync_run_id == run_uuid,
+                SyncRunUnit.status == SyncRunUnitStatus.PLANNED.value,
+            ).update(
+                {
+                    SyncRunUnit.status: SyncRunUnitStatus.FAILED.value,
+                    SyncRunUnit.error: error,
+                    SyncRunUnit.updated_at: completed_at,
+                },
+                synchronize_session=False,
+            )
+            stamp_sync_run_canonical_config(
+                session,
+                run,
+                completed_at=completed_at,
+                success=False,
+                error=error,
+                stats={"reason": "inactive_sync_configuration"},
+            )
+            session.flush()
+            logger.warning(
+                "dispatch_sync_run.inactive_config",
+                extra={
+                    "sync_run_id": sync_run_id,
+                    "config_id": str(canonical_config.id),
+                },
+            )
+            return {"status": "denied", "reason": error}
 
         units = _claim_units(session, run_uuid)
         signatures = []

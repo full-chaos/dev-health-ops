@@ -392,6 +392,104 @@ async def test_single_create_counts_existing_planner_sources_for_repo_limit(
 
 
 @pytest.mark.asyncio
+async def test_create_sync_config_acquires_repo_limit_lock_before_count(
+    client, monkeypatch
+):
+    ac, _ = client
+    calls: list[str] = []
+
+    async def acquire_lock(_session, _org_id):
+        calls.append("lock")
+
+    async def count_repos(_session, _org_id):
+        calls.append("count")
+        return 0
+
+    monkeypatch.setattr(
+        sync_router_module, "_acquire_repo_limit_create_lock", acquire_lock
+    )
+    monkeypatch.setattr(
+        sync_router_module, "_active_repo_usage_count_for_limit", count_repos
+    )
+
+    resp = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": "lock-before-count-single",
+            "provider": "github",
+            "sync_targets": ["git"],
+            "sync_options": {"owner": "full-chaos", "repo": "dev-health"},
+        },
+    )
+
+    assert resp.status_code == 201, resp.text
+    assert calls[:2] == ["lock", "count"]
+
+
+@pytest.mark.asyncio
+async def test_batch_create_sync_configs_acquires_repo_limit_lock_before_count(
+    client, monkeypatch
+):
+    ac, _ = client
+    calls: list[str] = []
+
+    async def acquire_lock(_session, _org_id):
+        calls.append("lock")
+
+    async def count_repos(_session, _org_id):
+        calls.append("count")
+        return 0
+
+    monkeypatch.setattr(
+        sync_router_module, "_acquire_repo_limit_create_lock", acquire_lock
+    )
+    monkeypatch.setattr(
+        sync_router_module, "_active_repo_usage_count_for_limit", count_repos
+    )
+
+    resp = await ac.post(
+        "/api/v1/admin/sync-configs/batch",
+        json={
+            "name": "lock-before-count-batch",
+            "provider": "github",
+            "sync_targets": ["git"],
+            "sync_options": {"owner": "full-chaos"},
+            "repos": ["dev-health"],
+        },
+    )
+
+    assert resp.status_code == 201, resp.text
+    assert calls[:2] == ["lock", "count"]
+
+
+@pytest.mark.asyncio
+async def test_repo_limit_advisory_lock_key_is_deterministic_and_sqlite_noops(
+    session_maker,
+):
+    org_uuid = str(uuid.uuid4())
+    slug = "full-chaos/test-org"
+
+    assert sync_router_module._repo_limit_advisory_lock_key(
+        org_uuid
+    ) == sync_router_module._repo_limit_advisory_lock_key(org_uuid)
+    assert sync_router_module._repo_limit_advisory_lock_key(
+        slug
+    ) == sync_router_module._repo_limit_advisory_lock_key(slug)
+    assert 0 <= sync_router_module._repo_limit_advisory_lock_key(slug) < 2**63
+    assert sync_router_module._repo_limit_advisory_lock_key(
+        org_uuid
+    ) != sync_router_module._repo_limit_advisory_lock_key(slug)
+
+    async with session_maker() as session:
+        execute = AsyncMock()
+        session.execute = execute
+
+        await sync_router_module._acquire_repo_limit_create_lock(session, org_uuid)
+
+    execute.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_get_sync_config_by_id(client):
     ac, _ = client
 

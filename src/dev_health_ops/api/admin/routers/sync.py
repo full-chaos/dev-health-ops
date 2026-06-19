@@ -8,7 +8,7 @@ from typing import Any, Protocol, cast
 
 from croniter import croniter as Croniter
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.admin.middleware import get_admin_org_id
@@ -201,6 +201,24 @@ async def _active_repo_usage_count_for_limit(session: AsyncSession, org_id: str)
         )
     )
     return legacy_count + int(source_count or 0)
+
+
+def _repo_limit_advisory_lock_key(org_id: str) -> int:
+    try:
+        org_int = uuid.UUID(org_id).int
+    except ValueError:
+        org_int = uuid.uuid5(uuid.NAMESPACE_URL, org_id).int
+    return org_int & ((1 << 63) - 1)
+
+
+async def _acquire_repo_limit_create_lock(session: AsyncSession, org_id: str) -> None:
+    bind = session.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(:lock_key)"),
+        {"lock_key": _repo_limit_advisory_lock_key(org_id)},
+    )
 
 
 class _MutableSyncConfiguration(Protocol):
@@ -762,6 +780,7 @@ async def batch_create_sync_configs(
         This endpoint will create the parent config only (zero children) when
         the planner flag is enabled.
     """
+    await _acquire_repo_limit_create_lock(session, org_id)
     current_count = await _active_repo_usage_count_for_limit(session, org_id)
     new_count = len(payload.repos)
 
@@ -869,6 +888,7 @@ async def create_sync_config(
     svc = SyncConfigurationService(session, org_id)
 
     # Fix 1 (HIGH): Enforce repo limit before creating a new sync config.
+    await _acquire_repo_limit_create_lock(session, org_id)
     current_count = await _active_repo_usage_count_for_limit(session, org_id)
 
     def _check_repo_limit(sync_session) -> tuple[bool, str | None]:

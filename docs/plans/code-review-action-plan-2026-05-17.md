@@ -226,9 +226,9 @@ These were flagged in the review but couldn't be conclusively resolved without l
 
 The full review thread, including the parts that became these tickets, ran against:
 
-- [`AGENTS.md`](../../AGENTS.md) (canonical contract)
-- [`pyproject.toml`](../../pyproject.toml) (deps)
-- [`mkdocs.yml`](../../mkdocs.yml) (docs nav)
+- `AGENTS.md` (canonical contract)
+- `pyproject.toml` (deps)
+- `mkdocs.yml` (docs nav)
 - `src/dev_health_ops/api/auth/*`, `api/admin/*`, `api/graphql/*`, `api/ingest/*`, `api/middleware/*`
 - `src/dev_health_ops/connectors/*`, `providers/*`, `processors/*`
 - `src/dev_health_ops/metrics/sinks/*`, `storage/*`

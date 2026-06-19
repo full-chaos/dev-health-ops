@@ -51,7 +51,7 @@ class AIImpactClickHouseLoader:
                 "\n              AND toString(pr.repo_id) IN {repo_ids:Array(String)}"
             )
         params = self._scope.inject(params)
-        org_filter_attr = self._scope.filter(alias="attr")
+        org_filter_attr = self._scope.filter_uuid(alias="attr")
         org_filter_pr = self._scope.filter(alias="pr")
         limit_clause = ""
         if limit is not None and int(limit) > 0:
@@ -256,7 +256,7 @@ class AIImpactClickHouseLoader:
         # repo are included, but reviewers from purely-human repos are excluded.
         # A full per-PR-reviewer join requires a separate PR-review events table
         # and is deferred to a future wave.
-        org_filter_ai_attr = self._scope.filter(alias="attr")
+        org_filter_ai_attr = self._scope.filter_uuid(alias="attr")
         query = f"""
         SELECT sum(reviews_given) AS reviews_given
         FROM (
@@ -305,7 +305,7 @@ class AIImpactClickHouseLoader:
         (including multi-repo work items). Only repo-pinned records are
         constrained to their own repo's links.
         """
-        org_filter_attr = self._scope.filter(alias="attr")
+        org_filter_attr = self._scope.filter_uuid(alias="attr")
         org_filter_link = self._scope.filter(alias="link")
         return f"""
             SELECT repo_id, number, any(kind) AS kind

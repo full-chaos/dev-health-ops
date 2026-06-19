@@ -114,3 +114,95 @@ class TestOrgScopedQuery:
         q = OrgScopedQuery("acme")
         sql = "SELECT 1 FROM t WHERE foo = 1" + q.filter()
         assert sql == "SELECT 1 FROM t WHERE foo = 1 AND org_id = {org_id:String}"
+
+
+class TestOrgScopedQueryUUID:
+    """Regression tests for UUID-safe filter_uuid / expression_uuid methods.
+
+    These guard against CANNOT_PARSE_UUID crashes when org_id is the
+    sentinel string 'default' and the target column is typed UUID
+    (ai_attribution_resolved, ai_attribution, ai_workgraph).
+    """
+
+    def test_filter_uuid_with_alias(self) -> None:
+        q = OrgScopedQuery("default")
+        assert (
+            q.filter_uuid(alias="attr")
+            == " AND toString(attr.org_id) = {org_id:String}"
+        )
+
+    def test_filter_uuid_no_alias(self) -> None:
+        q = OrgScopedQuery("default")
+        assert q.filter_uuid() == " AND toString(org_id) = {org_id:String}"
+
+    def test_filter_uuid_empty_org_returns_empty(self) -> None:
+        q = OrgScopedQuery("")
+        assert q.filter_uuid() == ""
+        assert q.filter_uuid(alias="attr") == ""
+
+    def test_filter_uuid_rejects_invalid_alias(self) -> None:
+        q = OrgScopedQuery("default")
+        with pytest.raises(ValueError, match="valid identifier"):
+            q.filter_uuid(alias="1bad")
+
+    def test_expression_uuid_with_alias(self) -> None:
+        q = OrgScopedQuery("default")
+        assert (
+            q.expression_uuid(alias="attr") == "toString(attr.org_id) = {org_id:String}"
+        )
+
+    def test_expression_uuid_no_alias(self) -> None:
+        q = OrgScopedQuery("default")
+        assert q.expression_uuid() == "toString(org_id) = {org_id:String}"
+
+    def test_expression_uuid_empty_org_returns_empty(self) -> None:
+        q = OrgScopedQuery("")
+        assert q.expression_uuid() == ""
+        assert q.expression_uuid(alias="attr") == ""
+
+    def test_expression_uuid_rejects_invalid_alias(self) -> None:
+        q = OrgScopedQuery("default")
+        with pytest.raises(ValueError, match="valid identifier"):
+            q.expression_uuid(alias="1bad")
+
+    def test_filter_uuid_uses_tostring_not_bare_column(self) -> None:
+        """Regression: must emit toString(col) not bare col = {org_id:String}.
+
+        A bare ``attr.org_id = {org_id:String}`` causes ClickHouse to cast the
+        String param to UUID, which fails for the sentinel value 'default'
+        (Code: 376 CANNOT_PARSE_UUID).
+        """
+        q = OrgScopedQuery("default")
+        result = q.filter_uuid(alias="attr")
+        assert "toString(attr.org_id)" in result
+        assert "attr.org_id = {org_id:String}" not in result
+
+    def test_expression_uuid_uses_tostring_not_bare_column(self) -> None:
+        q = OrgScopedQuery("default")
+        result = q.expression_uuid(alias="attr")
+        assert "toString(attr.org_id)" in result
+        assert "attr.org_id = {org_id:String}" not in result
+
+    def test_expression_uuid_composes_in_filter_list(self) -> None:
+        """UUID-safe expression composes cleanly in a filter list (no double-AND).
+
+        Mirrors the existing test_expression_composes_cleanly_in_filter_list
+        regression for the String variant.
+        """
+        q = OrgScopedQuery("default")
+        filters = ["day >= {start_day:Date}", "day <= {end_day:Date}"]
+        org_expr = q.expression_uuid(alias="attr")
+        if org_expr:
+            filters.append(org_expr)
+        where_clause = " AND ".join(filters)
+        assert where_clause == (
+            "day >= {start_day:Date} AND day <= {end_day:Date} "
+            "AND toString(attr.org_id) = {org_id:String}"
+        )
+        assert " AND  AND " not in where_clause
+
+    def test_inject_unchanged_for_uuid_methods(self) -> None:
+        """inject() is shared — UUID methods don't need a separate inject path."""
+        q = OrgScopedQuery("default")
+        params = q.inject({"x": 1})
+        assert params == {"x": 1, "org_id": "default"}

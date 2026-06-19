@@ -60,6 +60,49 @@ class OrgScopedQuery:
         col = f"{alias}.org_id" if alias else "org_id"
         return f"{col} = {{org_id:String}}"
 
+    def filter_uuid(self, *, alias: str = "") -> str:
+        """Return ``" AND toString({alias?.}org_id) = {org_id:String}"`` or ``""``.
+
+        UUID-safe variant of :meth:`filter` for tables whose ``org_id`` column
+        is typed ``UUID`` (e.g. ``ai_attribution_resolved``, ``ai_attribution``,
+        ``ai_workgraph``).  Casting the column to String via ``toString()`` is
+        always valid; casting the String constant ``'default'`` to UUID is not.
+
+        Same identifier safety check and empty-org short-circuit as
+        :meth:`filter`.  Callers do NOT need to change their :meth:`inject`
+        calls — the param binding name ``org_id`` is unchanged.
+        """
+        if alias and not alias.isidentifier():
+            raise ValueError(
+                "OrgScopedQuery.filter_uuid: alias must be a valid identifier, "
+                f"got {alias!r}"
+            )
+        if not self.org_id:
+            return ""
+        col = f"{alias}.org_id" if alias else "org_id"
+        return f" AND toString({col}) = {{org_id:String}}"
+
+    def expression_uuid(self, *, alias: str = "") -> str:
+        """Return ``"toString({alias?.}org_id) = {org_id:String}"`` or ``""``.
+
+        UUID-safe companion to :meth:`expression` for tables whose ``org_id``
+        column is typed ``UUID``.  Use in filter-list callers (join with
+        ``" AND "``) targeting ``ai_attribution_resolved``, ``ai_attribution``,
+        or ``ai_workgraph`` tables.
+
+        Same identifier safety check as :meth:`expression`.  The param binding
+        name ``org_id`` is unchanged so :meth:`inject` calls are unaffected.
+        """
+        if alias and not alias.isidentifier():
+            raise ValueError(
+                "OrgScopedQuery.expression_uuid: alias must be a valid identifier, "
+                f"got {alias!r}"
+            )
+        if not self.org_id:
+            return ""
+        col = f"{alias}.org_id" if alias else "org_id"
+        return f"toString({col}) = {{org_id:String}}"
+
     def inject(self, params: dict[str, Any]) -> dict[str, Any]:
         """Return a new params dict with ``org_id`` added when set.
 

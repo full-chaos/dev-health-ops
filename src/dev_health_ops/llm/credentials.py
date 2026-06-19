@@ -42,6 +42,7 @@ _LLM_PROVIDER_KEY = "provider"
 _LLM_MODEL_KEY = "model"
 _LLM_API_KEY_KEY = "api_key"
 _LLM_BASE_URL_KEY = "base_url"
+_LLM_CONCURRENCY_KEY = "concurrency"
 
 
 def _first_env(names: tuple[str, ...]) -> str:
@@ -105,6 +106,16 @@ def resolve_llm_org_settings_model(provider: str, *, org_id: str | None = None) 
     if configured_provider and requested_provider not in {"auto", configured_provider}:
         return ""
     return settings.get(_LLM_MODEL_KEY, "")
+
+
+def resolve_llm_org_settings_concurrency(*, org_id: str | None = None) -> int | None:
+    raw = _load_org_llm_settings(org_id).get(_LLM_CONCURRENCY_KEY, "")
+    if not raw:
+        return None
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return None
 
 
 def resolve_llm_org_settings_credentials(

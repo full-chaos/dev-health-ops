@@ -8,7 +8,8 @@ Complete reference for the dev-health-ops command-line interface.
 
 The CLI entry point is `dev-hops` (module `dev_health_ops.cli`). Command groups:
 
-- `sync` — ingest provider data (git, prs, blame, cicd, deployments, incidents, security, tests, teams, work-items)
+- `sync` : ingest provider data (git, prs, blame, cicd, deployments, incidents, security, tests, teams, work-items)
+- `teams` : team catalog operations (reconcile)
 - `metrics` — compute analytics (daily, rebuild, dora, complexity, capacity, release-impact, validate-flags, compounding-risk)
 - `audit` — diagnostics (completeness, schema, perf, coverage)
 - `fixtures` — synthetic/demo data (generate, validate, product-telemetry)
@@ -263,7 +264,12 @@ Accepts the same provider/auth/batch options as [`sync git`](#sync-git). Provide
 
 ### `sync teams`
 
-Sync team definitions. Persists to the analytics store, so `CLICKHOUSE_URI` (or `--analytics-db`) is required regardless of the `--provider` source (see [Input Validation](#input-validation-preflight)).
+Sync team definitions. The behavior depends on whether `--org` is provided:
+
+- **Managed (org-scoped, `--org ORG`)**: The provider data is projected into PostgreSQL `team_mappings` via the shared `TeamDriftSyncService.project_provider_teams` (which preserves admin-curated configurations and flags changes for review if `sync_policy == 1`). Then, `bridge_teams_to_clickhouse(org_id)` is called to write the resolved teams and members to ClickHouse. The CLI org path never writes ClickHouse directly.
+- **Unmanaged (no `--org`)**: The provider data is written directly to ClickHouse (preserving synthetic/local seeding).
+
+`CLICKHOUSE_URI` (or `--analytics-db`) is required. For managed syncs, `POSTGRES_URI` (or `--db`) is also required.
 
 ```bash
 # From config file
@@ -286,10 +292,28 @@ dev-hops sync teams --provider gitlab \
   --auth "$GITLAB_TOKEN"
 ```
 
-The bundled `src/dev_health_ops/config/team_mapping.yaml` is intentionally empty
-for onboarding. By default, `sync teams` exits non-zero when discovery or
-persistence results in zero teams; use `--allow-empty` only when an empty/no-op
-sync is expected.
+The bundled `src/dev_health_ops/config/team_mapping.yaml` is intentionally empty for onboarding. By default, `sync teams` exits non-zero when discovery or persistence results in zero teams; use `--allow-empty` only when an empty/no-op sync is expected.
+
+---
+
+## Teams Commands
+
+Team catalog operations.
+
+### `teams reconcile`
+
+Reconcile org-scoped ClickHouse teams into PostgreSQL `team_mappings`. This command is idempotent and re-runnable.
+
+```bash
+dev-hops teams reconcile --org ORG_ID
+```
+
+For each org-scoped team in ClickHouse, this command ensures a corresponding `TeamMapping` exists in PostgreSQL (creating one with `sync_policy=2` if missing). It then runs `bridge_teams_to_clickhouse(org_id)` to re-bridge the teams and their members from `IdentityMapping` back to ClickHouse.
+
+Requires:
+- ClickHouse (`--analytics-db` / `CLICKHOUSE_URI`)
+- PostgreSQL (`--db` / `POSTGRES_URI`)
+- Organization (`--org` / `ORG_ID`)
 
 ---
 

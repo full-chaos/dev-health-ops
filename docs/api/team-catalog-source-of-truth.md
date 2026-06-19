@@ -90,14 +90,19 @@ in a follow-up. New consumers should use the GraphQL `catalog` field.
 
 ## Files
 
-- `src/dev_health_ops/api/graphql/sql/templates.py` —
-  `catalog_values_team_template()`
-- `src/dev_health_ops/api/graphql/sql/compiler.py` —
-  `compile_catalog_values()` (TEAM branch)
-- `src/dev_health_ops/api/graphql/sql/validate.py` — `Dimension.TEAM`
-- `tests/graphql/test_compiler.py` —
-  `TestCompileCatalogValues::test_team_catalog_uses_teams_table_as_source_of_truth`
+- `src/dev_health_ops/api/graphql/sql/templates.py` : `catalog_values_team_template()`
+- `src/dev_health_ops/api/graphql/sql/compiler.py` : `compile_catalog_values()` (TEAM branch)
+- `src/dev_health_ops/api/graphql/sql/validate.py` : `Dimension.TEAM`
+- `tests/graphql/test_compiler.py` : `TestCompileCatalogValues::test_team_catalog_uses_teams_table_as_source_of_truth`
 
+## Dual-Database Architecture and Sync Flow
+
+While ClickHouse remains the analytics read source of truth for the team catalog, PostgreSQL serves as the Postgres-first control plane for org-scoped team configurations.
+
+The sync flow is structured as follows:
+1. **Shared Projection Service**: The CLI and Celery/admin paths use the shared `TeamDriftSyncService` to project provider-discovered teams into PostgreSQL `team_mappings`. This ensures consistent merge semantics and flags changes for review if `sync_policy == 1`.
+2. **Single Member Resolver**: A single shared member resolver (`members_by_team`) resolves member identities from PostgreSQL `identity_mappings` to populate ClickHouse `teams.members`.
+3. **Sole ClickHouse Writer**: The `bridge_teams_to_clickhouse` function is the sole writer for org-scoped ClickHouse teams, ensuring that the analytics layer is always populated from the PostgreSQL control plane.
 ## History
 
 - CHAOS-1751: Established `teams` as the source of truth for the TEAM

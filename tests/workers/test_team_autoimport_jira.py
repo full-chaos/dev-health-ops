@@ -13,7 +13,7 @@ from dev_health_ops.metrics.schemas import (
     TeamMembershipRecord,
     TeamProjectOwnershipRecord,
 )
-from dev_health_ops.workers import team_autoimport_jira
+from dev_health_ops.workers import team_autoimport, team_autoimport_jira
 
 
 @dataclass
@@ -76,6 +76,22 @@ def _fake_sink(
         teams={},
         jira_legacy_links=list(jira_legacy_links or []),
     )
+
+
+class CapturingClickHouseSink(FakeDimensionSink):
+    instances: list[CapturingClickHouseSink] = []
+
+    def __init__(self, *, dsn: str) -> None:
+        super().__init__(
+            projects={},
+            members={},
+            memberships={},
+            ownership={},
+            teams={},
+            jira_legacy_links=[],
+        )
+        self.dsn = dsn
+        self.instances.append(self)
 
 
 def test_jira_populate_writes_native_and_jira_legacy_ownership_without_touching_links(
@@ -161,6 +177,89 @@ def test_jira_populate_writes_native_and_jira_legacy_ownership_without_touching_
         "jira_legacy",
     ) in sink.ownership
     assert ("org-1", "jira:account-1") in sink.members
+
+
+def test_chaos_2547_2544_jira_autoimport_uses_analytics_db_url_with_env_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def discover_jira(
+        self: object, email: str, api_token: str, url: str
+    ) -> list[DiscoveredTeam]:
+        return [
+            DiscoveredTeam(
+                provider_type="jira",
+                provider_team_id="OPS",
+                name="Ops Project",
+                associations={"project_keys": ["OPS"]},
+            )
+        ]
+
+    async def discover_members_jira_bulk(
+        self: object,
+        *,
+        email: str,
+        api_token: str,
+        url: str,
+        project_keys: list[str],
+    ) -> list[DiscoveredMember]:
+        return [
+            DiscoveredMember(
+                provider_type="jira",
+                provider_identity="account-1",
+                display_name="Ops Lead",
+                email="ops@example.com",
+                role="lead",
+            )
+        ]
+
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    CapturingClickHouseSink.instances = []
+    monkeypatch.setattr(
+        team_autoimport_jira.TeamDiscoveryService,
+        "discover_jira",
+        discover_jira,
+    )
+    monkeypatch.setattr(
+        team_autoimport_jira.TeamMembershipService,
+        "discover_members_jira_bulk",
+        discover_members_jira_bulk,
+    )
+    monkeypatch.setattr(
+        team_autoimport_jira,
+        "ClickHouseMetricsSink",
+        CapturingClickHouseSink,
+    )
+
+    summary = team_autoimport.run_team_autoimport(
+        provider="jira",
+        org_id="org-1",
+        credentials={
+            "email": "jira@example.com",
+            "api_token": "jira-token",
+            "base_url": "https://jira.example.com",
+        },
+        scope={"mode": "sync_config"},
+        analytics_db_url="clickhouse://jira-config-dsn",
+    )
+
+    assert summary["status"] == "success"
+    assert summary["projects_imported"] == 1
+    assert summary["members_imported"] == 1
+    assert summary["team_memberships_imported"] == 1
+    assert summary["team_project_ownership_imported"] == 1
+    assert len(CapturingClickHouseSink.instances) == 1
+    sink = CapturingClickHouseSink.instances[0]
+    assert sink.dsn == "clickhouse://jira-config-dsn"
+    assert sink.closed is True
+    assert ("org-1", "jira", "org-1:jira:OPS") in sink.projects
+    assert ("org-1", "jira:account-1") in sink.members
+    assert (
+        "org-1",
+        "jira",
+        "OPS",
+        "jira:account-1",
+        "native",
+    ) in sink.memberships
 
 
 def test_jira_populate_preserves_manual_project_ownership_row(

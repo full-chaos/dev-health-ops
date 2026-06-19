@@ -66,11 +66,13 @@ def _run(coro: Coroutine[Any, Any, _T]) -> _T:
     return cast(_T, result)
 
 
-def _sink_from_kwargs(kwargs: dict[str, Any]) -> tuple[_DimensionSink, bool]:
+def _sink_from_kwargs(
+    scope: dict[str, Any], kwargs: dict[str, Any]
+) -> tuple[_DimensionSink, bool]:
     injected = kwargs.get("sink")
     if injected is not None:
         return cast(_DimensionSink, injected), False
-    dsn = str(kwargs.get("clickhouse_uri") or os.getenv("CLICKHOUSE_URI") or "")
+    dsn = str(scope.get("analytics_db") or os.getenv("CLICKHOUSE_URI") or "")
     if not dsn:
         raise ValueError("ClickHouse DSN is required for Jira team auto-import")
     return cast(_DimensionSink, ClickHouseMetricsSink(dsn=dsn)), True
@@ -267,7 +269,7 @@ def populate(
                 )
             )
 
-    sink, should_close = _sink_from_kwargs(kwargs)
+    sink, should_close = _sink_from_kwargs(scope, kwargs)
     try:
         for link in _load_jira_legacy_links(sink, org_id=org_id):
             project_key = str(link.get("project_key") or "")

@@ -12,7 +12,7 @@ from dev_health_ops.metrics.schemas import (
     TeamMembershipRecord,
     TeamProjectOwnershipRecord,
 )
-from dev_health_ops.workers import team_autoimport_linear
+from dev_health_ops.workers import team_autoimport, team_autoimport_linear
 
 
 @dataclass
@@ -62,6 +62,21 @@ def _fake_sink() -> FakeDimensionSink:
         ownership={},
         teams={},
     )
+
+
+class CapturingClickHouseSink(FakeDimensionSink):
+    instances: list[CapturingClickHouseSink] = []
+
+    def __init__(self, *, dsn: str) -> None:
+        super().__init__(
+            projects={},
+            members={},
+            memberships={},
+            ownership={},
+            teams={},
+        )
+        self.dsn = dsn
+        self.instances.append(self)
 
 
 def test_linear_populate_writes_projects_memberships_and_project_ownership(
@@ -129,6 +144,77 @@ def test_linear_populate_writes_projects_memberships_and_project_ownership(
         "native",
     ) in sink.ownership
     assert sink.teams[("org-1", "ENG")]["native_team_key"] == "ENG"
+
+
+def test_chaos_2547_2544_autoimport_uses_analytics_db_url_with_env_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def discover_linear(self: object, api_key: str) -> list[DiscoveredTeam]:
+        return [
+            DiscoveredTeam(
+                provider_type="linear",
+                provider_team_id="ENG",
+                name="Engineering",
+                associations={"project_keys": ["ENG"]},
+            )
+        ]
+
+    async def discover_members_linear(
+        self: object, api_key: str, team_key: str
+    ) -> list[DiscoveredMember]:
+        return [
+            DiscoveredMember(
+                provider_type="linear",
+                provider_identity="dev@example.com",
+                display_name="Dev User",
+                email="dev@example.com",
+            )
+        ]
+
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    CapturingClickHouseSink.instances = []
+    monkeypatch.setattr(
+        team_autoimport_linear.TeamDiscoveryService,
+        "discover_linear",
+        discover_linear,
+    )
+    monkeypatch.setattr(
+        team_autoimport_linear.TeamMembershipService,
+        "discover_members_linear",
+        discover_members_linear,
+    )
+    monkeypatch.setattr(
+        team_autoimport_linear,
+        "ClickHouseMetricsSink",
+        CapturingClickHouseSink,
+    )
+
+    summary = team_autoimport.run_team_autoimport(
+        provider="linear",
+        org_id="org-1",
+        credentials={"api_key": "lin-key"},
+        scope={"mode": "sync_config"},
+        analytics_db_url="clickhouse://config-dsn",
+    )
+
+    assert summary["status"] == "success"
+    assert summary["projects_imported"] == 1
+    assert summary["members_imported"] == 1
+    assert summary["team_memberships_imported"] == 1
+    assert summary["team_project_ownership_imported"] == 1
+    assert len(CapturingClickHouseSink.instances) == 1
+    sink = CapturingClickHouseSink.instances[0]
+    assert sink.dsn == "clickhouse://config-dsn"
+    assert sink.closed is True
+    assert ("org-1", "linear", "org-1:linear:ENG") in sink.projects
+    assert ("org-1", "linear:dev@example.com") in sink.members
+    assert (
+        "org-1",
+        "linear",
+        "ENG",
+        "linear:dev@example.com",
+        "native",
+    ) in sink.memberships
 
 
 def test_linear_populate_rerun_keeps_stable_logical_dimension_rows(

@@ -81,6 +81,7 @@ def _run_team_autoimport_for_backfill(
     since: date,
     before: date,
     window_count: int,
+    analytics_db_url: str | None,
 ) -> dict[str, Any] | None:
     if not sync_options.get("auto_import_teams"):
         return None
@@ -96,6 +97,7 @@ def _run_team_autoimport_for_backfill(
             "since": since.isoformat(),
             "before": before.isoformat(),
         },
+        analytics_db_url=analytics_db_url,
     )
 
 
@@ -169,6 +171,7 @@ def run_backfill_for_config(
         since=since,
         before=before,
         window_count=len(windows),
+        analytics_db_url=db_url,
     )
 
     result = {

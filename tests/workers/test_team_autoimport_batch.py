@@ -48,10 +48,12 @@ def test_batch_child_autoimport_true_calls_once(monkeypatch) -> None:
         sync_targets=["git"],
         config_id="cfg-1",
         triggered_by="manual",
+        analytics_db_url="clickhouse://batch-dsn",
     )
 
     assert result == {"status": "success"}
     assert len(calls) == 1
+    assert calls[0]["analytics_db_url"] == "clickhouse://batch-dsn"
     assert calls[0]["scope"] == {
         "mode": "batch_child",
         "sync_config_id": "cfg-1",

@@ -62,6 +62,7 @@ def run_team_autoimport(
     org_id: str,
     credentials: dict[str, Any],
     scope: dict[str, Any] | None = None,
+    analytics_db_url: str | None = None,
 ) -> dict[str, Any]:
     normalized_provider = provider.strip().lower()
     if not _provider_capability(normalized_provider):
@@ -90,10 +91,14 @@ def run_team_autoimport(
         )
 
     try:
+        populator_scope = dict(scope or {})
+        if analytics_db_url:
+            populator_scope["analytics_db"] = analytics_db_url
+
         summary = populator(
             org_id=org_id,
             credentials=credentials,
-            scope=dict(scope or {}),
+            scope=populator_scope,
         )
     except Exception as exc:
         logger.exception(

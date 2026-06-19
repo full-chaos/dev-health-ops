@@ -53,6 +53,7 @@ def test_run_team_autoimport_calls_resolved_populator(monkeypatch) -> None:
         org_id="org-1",
         credentials={"token": "secret"},
         scope={"project_keys": ["OPS"]},
+        analytics_db_url="clickhouse://config-dsn",
     )
 
     assert result == {
@@ -65,6 +66,9 @@ def test_run_team_autoimport_calls_resolved_populator(monkeypatch) -> None:
         {
             "org_id": "org-1",
             "credentials": {"token": "secret"},
-            "scope": {"project_keys": ["OPS"]},
+            "scope": {
+                "project_keys": ["OPS"],
+                "analytics_db": "clickhouse://config-dsn",
+            },
         }
     ]

@@ -101,7 +101,7 @@ async def test_admin_llm_settings_encrypts_and_masks_api_key(session_maker):
                 "provider": "openai",
                 "model": "gpt-test",
                 "api_key": "sk-secret-value",
-                "base_url": "https://api.example.test/v1",
+                "base_url": "https://api.openai.com/v1",
             },
         )
         assert resp.status_code == 200, resp.text
@@ -110,7 +110,7 @@ async def test_admin_llm_settings_encrypts_and_masks_api_key(session_maker):
             "provider": "openai",
             "model": "gpt-test",
             "api_key": "sk-s…alue",
-            "base_url": "https://api.example.test/v1",
+            "base_url": "https://api.openai.com/v1",
         }
 
         get_resp = await ac.get("/api/v1/admin/llm-settings")
@@ -132,7 +132,7 @@ async def test_admin_llm_settings_encrypts_and_masks_api_key(session_maker):
 
     credentials = resolve_llm_org_settings_credentials("openai", org_id=state["org_id"])
     assert credentials.api_key == "sk-secret-value"
-    assert credentials.base_url == "https://api.example.test/v1"
+    assert credentials.base_url == "https://api.openai.com/v1"
 
 
 @pytest.mark.asyncio

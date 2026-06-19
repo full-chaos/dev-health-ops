@@ -4,6 +4,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlparse
 
 from dev_health_ops.llm.errors import LLMAuthError
 
@@ -46,6 +47,56 @@ _LLM_MODEL_KEY = "model"
 _LLM_API_KEY_KEY = "api_key"
 _LLM_BASE_URL_KEY = "base_url"
 _LLM_CONCURRENCY_KEY = "concurrency"
+
+
+# CHAOS-2552: anti-SSRF allowlist for BYO LLM base_url. Per the locked owner
+# decision this is an ALLOWLIST of approved provider gateways + default SDK
+# URLs (NOT IP-deny -- IP-deny would block local providers whose default
+# endpoints are loopback). Hosts mirror the provider modules' defaults:
+# openai/anthropic SDK defaults; gemini (providers/gemini.py); qwen/dashscope
+# (providers/qwen.py); local/self-hosted loopback (providers/local.py).
+_ALLOWED_LLM_BASE_URL_HOSTS = frozenset(
+    {
+        "api.openai.com",
+        "api.anthropic.com",
+        "generativelanguage.googleapis.com",
+        "dashscope.aliyuncs.com",
+        "dashscope-intl.aliyuncs.com",
+        "dashscope-us.aliyuncs.com",
+        "localhost",
+        "127.0.0.1",
+        "::1",
+    }
+)
+
+
+def validate_llm_base_url(base_url: str | None) -> tuple[bool, str | None]:
+    """Validate a BYO LLM base_url against the approved gateway allowlist.
+
+    Returns ``(ok, error)``. An empty/None base_url is allowed (the provider
+    SDK default applies). Otherwise the URL must be http(s) and its host must
+    be in the approved allowlist of provider gateways and default local
+    endpoints (anti-SSRF, CHAOS-2552).
+    """
+    if not base_url:
+        return True, None
+    parsed = urlparse(base_url)
+    if parsed.scheme not in ("http", "https"):
+        return False, "LLM base_url must use http or https"
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False, "LLM base_url is missing a host"
+    if host not in _ALLOWED_LLM_BASE_URL_HOSTS:
+        return False, (
+            "LLM base_url host is not in the approved gateway allowlist "
+            "(approved provider gateways and default local endpoints only)"
+        )
+    return True, None
+
+
+def _org_base_url_allowed(credentials: LLMCredentials) -> bool:
+    ok, _error = validate_llm_base_url(credentials.base_url)
+    return ok
 
 
 def _first_env(names: tuple[str, ...]) -> str:
@@ -223,7 +274,9 @@ def org_byo_provider_matches(provider_name: str, org_id: str | None) -> bool:
     org_credentials = resolve_llm_org_settings_credentials(provider_name, org_id=org_id)
     if not (org_credentials.api_key or org_credentials.base_url):
         return False
-    return _llm_credentials_complete(provider_name, org_credentials)
+    if not _llm_credentials_complete(provider_name, org_credentials):
+        return False
+    return _org_base_url_allowed(org_credentials)
 
 
 def _is_known_llm_provider(provider_name: str) -> bool:
@@ -276,6 +329,13 @@ def resolve_usable_org_llm_provider(*, org_id: str | None = None) -> str:
             _safe_log_value(provider_name),
         )
         return ""
+    if not _org_base_url_allowed(credentials):
+        logger.warning(
+            "Org BYO LLM base_url for provider '%s' is not in the approved "
+            "allowlist; falling back to the platform default.",
+            _safe_log_value(provider_name),
+        )
+        return ""
     return provider_name
 
 
@@ -296,6 +356,13 @@ def _resolve_org_byo_credentials(
         logger.warning(
             "Org BYO LLM credentials for provider '%s' are incomplete; "
             "falling back to the platform default.",
+            _safe_log_value(provider_name),
+        )
+        return None
+    if not _org_base_url_allowed(org_credentials):
+        logger.warning(
+            "Org BYO LLM base_url for provider '%s' is not in the approved "
+            "allowlist; falling back to the platform default.",
             _safe_log_value(provider_name),
         )
         return None

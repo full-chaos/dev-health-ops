@@ -60,50 +60,36 @@ def test_byo_llm_registered_at_team_tier():
 # ---------------------------------------------------------------------------
 
 
-class _Access:
-    def __init__(self, allowed: bool, reason: str = ""):
-        self.allowed = allowed
-        self.reason = reason
+def _patch_flag_state(state_or_exc):
+    def _fake(_session, _org_id):
+        if isinstance(state_or_exc, Exception):
+            raise state_or_exc
+        return state_or_exc
 
-
-def _patch_feature_service(access_or_exc):
-    class _Svc:
-        def __init__(self, _session):
-            pass
-
-        def check_feature_access(self, _org, _key):
-            if isinstance(access_or_exc, Exception):
-                raise access_or_exc
-            return access_or_exc
-
-    return patch.object(licensing_module, "FeatureService", _Svc)
+    return patch.object(licensing_module, "byo_llm_flag_state", _fake)
 
 
 def test_runtime_gate_allows_when_flag_enabled():
-    with _patch_feature_service(_Access(True)):
+    with _patch_flag_state("enabled"):
         assert creds._org_byo_llm_enabled(object(), str(uuid.uuid4())) is True
 
 
 def test_runtime_gate_blocks_when_flag_disabled():
-    with _patch_feature_service(_Access(False, "Feature is globally disabled")):
-        assert creds._org_byo_llm_enabled(object(), str(uuid.uuid4())) is False
-
-
-def test_runtime_gate_blocks_when_org_override_disabled():
-    with _patch_feature_service(
-        _Access(False, "Feature disabled for this organization")
-    ):
+    with _patch_flag_state("disabled"):
         assert creds._org_byo_llm_enabled(object(), str(uuid.uuid4())) is False
 
 
 def test_runtime_gate_does_not_gate_when_flag_unregistered():
-    with _patch_feature_service(_Access(False, "Unknown feature: byo_llm")):
+    with _patch_flag_state("unregistered"):
         assert creds._org_byo_llm_enabled(object(), str(uuid.uuid4())) is True
 
 
-def test_runtime_gate_graceful_on_error():
-    with _patch_feature_service(RuntimeError("no such table: feature_flags")):
-        assert creds._org_byo_llm_enabled(object(), str(uuid.uuid4())) is True
+def test_runtime_gate_propagates_real_errors_to_fail_closed():
+    # A genuine flag-lookup error must NOT be swallowed: it propagates so the
+    # caller (_load_org_llm_settings) returns {} -> org BYO ignored (fail closed).
+    with _patch_flag_state(RuntimeError("connection reset mid-query")):
+        with pytest.raises(RuntimeError):
+            creds._org_byo_llm_enabled(object(), str(uuid.uuid4()))
 
 
 def test_load_org_llm_settings_returns_empty_when_flag_disabled():
@@ -113,12 +99,27 @@ def test_load_org_llm_settings_returns_empty_when_flag_disabled():
 
     with (
         patch.object(creds, "_org_byo_llm_enabled", return_value=False),
-        patch(
-            "dev_health_ops.db.get_postgres_session_sync",
-            _fake_session,
-        ),
+        patch("dev_health_ops.db.get_postgres_session_sync", _fake_session),
     ):
         # A real org_id with the flag disabled -> stored BYO settings ignored.
+        assert creds._load_org_llm_settings(str(uuid.uuid4())) == {}
+
+
+def test_load_org_llm_settings_fails_closed_when_flag_lookup_errors():
+    # If the flag lookup raises, _load_org_llm_settings must return {} (fail
+    # closed: ignore stored org BYO; the resolver uses the platform default).
+    @contextlib.contextmanager
+    def _fake_session():
+        yield object()
+
+    with (
+        patch.object(
+            creds,
+            "_org_byo_llm_enabled",
+            side_effect=RuntimeError("flag store down"),
+        ),
+        patch("dev_health_ops.db.get_postgres_session_sync", _fake_session),
+    ):
         assert creds._load_org_llm_settings(str(uuid.uuid4())) == {}
 
 
@@ -230,3 +231,18 @@ async def test_admin_gate_falls_back_to_tier_when_flag_unregistered(session_make
     org_id = await _seed(session_maker, tier="team", flag_enabled=None)
     async with session_maker() as session:
         await require_byo_llm_access(session, org_id)  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_admin_gate_fails_closed_when_flag_lookup_errors(session_maker):
+    # codex finding: the admin gate must NOT swallow a genuine flag-lookup
+    # error and then allow the request. A real error propagates -> the request
+    # is denied (fail closed), even for a TEAM-tier org.
+    org_id = await _seed(session_maker, tier="team", flag_enabled=True)
+    with patch(
+        "dev_health_ops.api.admin.llm_settings.byo_llm_flag_state",
+        side_effect=RuntimeError("licensing store unavailable"),
+    ):
+        async with session_maker() as session:
+            with pytest.raises(RuntimeError):
+                await require_byo_llm_access(session, org_id)

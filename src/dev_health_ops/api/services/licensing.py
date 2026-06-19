@@ -377,6 +377,27 @@ class FeatureService:
         self._override_cache.clear()
 
 
+def byo_llm_flag_state(session: Session, org_id: uuid.UUID) -> str:
+    """Return the byo_llm flag state: 'enabled' | 'disabled' | 'unregistered'.
+
+    'unregistered' covers pre-migration / minimal DBs where the feature_flags
+    table is absent or the byo_llm row has not been seeded; callers treat it as
+    backward-compatible (ungated). Genuine lookup errors are NOT swallowed --
+    they propagate so callers can fail CLOSED (a kill switch must survive
+    degraded licensing storage rather than silently allow).
+    """
+    import sqlalchemy as sa
+
+    if not sa.inspect(session.get_bind()).has_table("feature_flags"):
+        return "unregistered"
+    access = FeatureService(session).check_feature_access(org_id, "byo_llm")
+    if access.allowed:
+        return "enabled"
+    if (access.reason or "").startswith("Unknown feature"):
+        return "unregistered"
+    return "disabled"
+
+
 class TierLimitService:
     """Tier limit checking and enforcement service.
 

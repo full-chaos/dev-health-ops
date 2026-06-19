@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any
 
 from dev_health_ops.llm.errors import LLMAuthError
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -55,6 +58,12 @@ def _first_env(names: tuple[str, ...]) -> str:
 
 def _normalize_provider(provider: str) -> str:
     return (provider or "auto").strip().lower()
+
+
+def _safe_log_value(value: str) -> str:
+    """Strip CR/LF before logging to prevent log injection from org-provided
+    values (provider names come from tenant-controlled settings)."""
+    return value.replace("\r", "").replace("\n", "")
 
 
 def _load_org_llm_settings(org_id: str | None) -> dict[str, str]:
@@ -132,6 +141,120 @@ def resolve_llm_org_settings_credentials(
     )
 
 
+def _env_llm_credentials(provider_name: str) -> LLMCredentials:
+    """Platform/default credentials sourced *only* from environment variables.
+
+    Source-bound: both api_key and base_url come from the environment, never
+    mixed with org-scoped or per-call values (CHAOS-2550 credential-isolation
+    invariant).
+    """
+    return LLMCredentials(
+        api_key=_first_env(_API_KEY_ENV_BY_PROVIDER.get(provider_name, ())),
+        base_url=_first_env(_BASE_URL_ENV_BY_PROVIDER.get(provider_name, ())),
+    )
+
+
+def _llm_credentials_complete(provider_name: str, credentials: LLMCredentials) -> bool:
+    """Whether a credential bundle satisfies the provider's hard requirements.
+
+    Only API-key-required providers (openai/anthropic/gemini/qwen) can be
+    "incomplete"; local/self-hosted providers are usable without a key.
+    """
+    if provider_name in _API_KEY_REQUIRED_PROVIDERS and not credentials.api_key:
+        return False
+    return True
+
+
+def org_byo_provider_matches(provider_name: str, org_id: str | None) -> bool:
+    """True iff the org configured THIS provider with a complete bundle.
+
+    Identifies when org BYO is the active credential source for a provider so
+    model resolution can stay source-bound (org model, not platform env model).
+    Does not log; the incomplete-config warning is emitted during provider and
+    credential resolution.
+    """
+    org_credentials = resolve_llm_org_settings_credentials(provider_name, org_id=org_id)
+    if not (org_credentials.api_key or org_credentials.base_url):
+        return False
+    return _llm_credentials_complete(provider_name, org_credentials)
+
+
+def _is_known_llm_provider(provider_name: str) -> bool:
+    """Whether ``provider_name`` is a real provider this resolver can build.
+
+    Backed by the per-provider env-var maps (the canonical set of supported
+    real providers; excludes mock/none which are explicit-only).
+    """
+    return (
+        provider_name in _API_KEY_ENV_BY_PROVIDER
+        or provider_name in _BASE_URL_ENV_BY_PROVIDER
+    )
+
+
+def resolve_usable_org_llm_provider(*, org_id: str | None = None) -> str:
+    """Return the org's BYO provider iff it is configured AND complete.
+
+    Returns "" when the org has no BYO provider, names mock/none, names an
+    unrecognized provider, supplies no credential material, or is configured
+    but missing required credentials. In the not-usable cases a warning is
+    logged (where the config is non-trivial) and "" is returned so callers
+    transparently fall back to the platform default instead of crashing
+    (CHAOS-2550 decision #1: "silent-but-missing > crashing").
+    """
+    settings = _load_org_llm_settings(org_id)
+    provider_name = _normalize_provider(settings.get(_LLM_PROVIDER_KEY, ""))
+    if not provider_name or provider_name in {"auto", "mock", "none"}:
+        return ""
+    if not _is_known_llm_provider(provider_name):
+        logger.warning(
+            "Org BYO LLM provider '%s' is not a recognized provider; "
+            "falling back to the platform default.",
+            _safe_log_value(provider_name),
+        )
+        return ""
+    credentials = LLMCredentials(
+        api_key=settings.get(_LLM_API_KEY_KEY, ""),
+        base_url=settings.get(_LLM_BASE_URL_KEY, ""),
+    )
+    if not (credentials.api_key or credentials.base_url):
+        # Provider named but no credential material: not an active BYO config.
+        # Treat as "not configured" so BOTH provider and credential resolution
+        # fall back to the platform default and stay in agreement (the
+        # _resolve_org_byo_credentials path returns None on empty material too).
+        return ""
+    if not _llm_credentials_complete(provider_name, credentials):
+        logger.warning(
+            "Org BYO LLM provider '%s' is configured but incomplete "
+            "(missing required credentials); falling back to the platform default.",
+            _safe_log_value(provider_name),
+        )
+        return ""
+    return provider_name
+
+
+def _resolve_org_byo_credentials(
+    provider_name: str, org_id: str | None
+) -> LLMCredentials | None:
+    """Org-scoped BYO credentials for ``provider_name`` when complete, else None.
+
+    Returns None when the org has not configured this provider. When the org
+    HAS configured it but the bundle is incomplete, logs a warning and returns
+    None so the caller falls back to the platform default (CHAOS-2550
+    decision #1).
+    """
+    org_credentials = resolve_llm_org_settings_credentials(provider_name, org_id=org_id)
+    if not (org_credentials.api_key or org_credentials.base_url):
+        return None
+    if not _llm_credentials_complete(provider_name, org_credentials):
+        logger.warning(
+            "Org BYO LLM credentials for provider '%s' are incomplete; "
+            "falling back to the platform default.",
+            _safe_log_value(provider_name),
+        )
+        return None
+    return org_credentials
+
+
 def resolve_llm_credentials(
     provider: str,
     *,
@@ -140,14 +263,25 @@ def resolve_llm_credentials(
     base_url: str | None = None,
 ) -> LLMCredentials:
     provider_name = _normalize_provider(provider)
-    env_api_key = _first_env(_API_KEY_ENV_BY_PROVIDER.get(provider_name, ()))
-    env_base_url = _first_env(_BASE_URL_ENV_BY_PROVIDER.get(provider_name, ()))
-    org_credentials = resolve_llm_org_settings_credentials(provider_name, org_id=org_id)
 
-    resolved = LLMCredentials(
-        api_key=str(api_key or env_api_key or org_credentials.api_key or ""),
-        base_url=str(base_url or env_base_url or org_credentials.base_url or ""),
-    )
+    # Source-bound resolution (CHAOS-2550): never mix api_key/base_url across
+    # sources. A platform key must never reach an org-provided base_url, and an
+    # org key must never reach a platform base_url.
+    if api_key or base_url:
+        # Per-call override: isolated to the explicitly provided values.
+        resolved = LLMCredentials(
+            api_key=str(api_key or ""),
+            base_url=str(base_url or ""),
+        )
+    else:
+        org_credentials = _resolve_org_byo_credentials(provider_name, org_id)
+        if org_credentials is not None:
+            # Org BYO: both fields come from the org settings only.
+            resolved = org_credentials
+        else:
+            # Platform default: both fields come from the environment only.
+            resolved = _env_llm_credentials(provider_name)
+
     if provider_name in _API_KEY_REQUIRED_PROVIDERS and not resolved.api_key:
         env_names = ", ".join(_API_KEY_ENV_BY_PROVIDER.get(provider_name, ()))
         raise LLMAuthError(

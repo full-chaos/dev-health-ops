@@ -701,6 +701,43 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
         semaphore = asyncio.Semaphore(config.llm_concurrency)
         llm_results: dict[int, Any] = {}
         llm_failure_counts: Counter[str] = Counter()
+        llm_token_usage_flushed = False
+
+        def flush_llm_token_usage() -> tuple[int, int, int]:
+            nonlocal llm_token_usage_flushed
+            llm_calls = sum(
+                int(getattr(outcome, "llm_calls", 0))
+                for outcome in llm_results.values()
+            )
+            llm_input_tokens = sum(
+                int(getattr(outcome, "input_tokens", 0))
+                for outcome in llm_results.values()
+            )
+            llm_output_tokens = sum(
+                int(getattr(outcome, "output_tokens", 0))
+                for outcome in llm_results.values()
+            )
+            if not llm_token_usage_flushed:
+                write_llm_token_usage(
+                    sink,
+                    org_id=config.org_id or "",
+                    provider=resolved_llm_provider,
+                    model=model_version,
+                    source="investment_materialize",
+                    input_tokens=llm_input_tokens,
+                    output_tokens=llm_output_tokens,
+                    calls=llm_calls,
+                    computed_at=computed_at,
+                )
+                llm_token_usage_flushed = True
+            return llm_calls, llm_input_tokens, llm_output_tokens
+
+        def record_completed_llm_task_result(result: Any) -> None:
+            if not isinstance(result, tuple) or len(result) != 2:
+                logger.warning("Unexpected LLM task result: %r", result)
+                return
+            idx, outcome = result
+            llm_results[idx] = outcome
 
         async def categorize_with_limit(idx: int, bundle: Any) -> tuple[int, Any]:
             async with semaphore:
@@ -737,7 +774,14 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
                         for pending_task in tasks:
                             if not pending_task.done():
                                 pending_task.cancel()
-                        await asyncio.gather(*tasks, return_exceptions=True)
+                        settled_results = await asyncio.gather(
+                            *tasks, return_exceptions=True
+                        )
+                        for settled_result in settled_results:
+                            if isinstance(settled_result, BaseException):
+                                continue
+                            record_completed_llm_task_result(settled_result)
+                        flush_llm_token_usage()
                         verdict = _format_llm_summary(
                             len(llm_results), llm_failure_counts
                         )
@@ -750,11 +794,7 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
                         "LLM task failed (%s): %s", failure_class, classified
                     )
                     continue
-                if not isinstance(result, tuple) or len(result) != 2:
-                    logger.warning("Unexpected LLM task result: %r", result)
-                    continue
-                idx, outcome = result
-                llm_results[idx] = outcome
+                record_completed_llm_task_result(result)
             logger.info(
                 "Completed LLM categorizations: %s",
                 _format_llm_summary(len(llm_results), llm_failure_counts),
@@ -764,16 +804,7 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
         for idx, outcome in fallback_results:
             llm_results[idx] = outcome
 
-        llm_calls = sum(
-            int(getattr(outcome, "llm_calls", 0)) for outcome in llm_results.values()
-        )
-        llm_input_tokens = sum(
-            int(getattr(outcome, "input_tokens", 0)) for outcome in llm_results.values()
-        )
-        llm_output_tokens = sum(
-            int(getattr(outcome, "output_tokens", 0))
-            for outcome in llm_results.values()
-        )
+        llm_calls, llm_input_tokens, llm_output_tokens = flush_llm_token_usage()
         if llm_calls or llm_failure_counts:
             logger.info(
                 "LLM usage summary: calls=%d input_tokens=%d output_tokens=%d %s",
@@ -784,18 +815,6 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
                     len(llm_results) - len(fallback_results), llm_failure_counts
                 ),
             )
-        write_llm_token_usage(
-            sink,
-            org_id=config.org_id or "",
-            provider=resolved_llm_provider,
-            model=model_version,
-            source="investment_materialize",
-            input_tokens=llm_input_tokens,
-            output_tokens=llm_output_tokens,
-            calls=llm_calls,
-            computed_at=computed_at,
-        )
-
         # Post-process: create records from outcomes
         for idx, data in preprocessed.items():
             if idx in skipped_existing:

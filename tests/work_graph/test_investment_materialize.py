@@ -12,6 +12,7 @@ import pytest
 
 from dev_health_ops.llm import LLMAuthError
 from dev_health_ops.metrics.schemas import (
+    LLMTokenUsageRecord,
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
 )
@@ -30,6 +31,7 @@ class FakeSink:
         self.client = object()
         self.investment_rows: list[WorkUnitInvestmentRecord] = []
         self.quote_rows: list[WorkUnitInvestmentEvidenceQuoteRecord] = []
+        self.llm_token_rows: list[LLMTokenUsageRecord] = []
         self.membership_rows: list = []
         self.membership_run_records: list = []
         self.query_calls: list[tuple[str, dict]] = []
@@ -43,6 +45,9 @@ class FakeSink:
 
     def write_work_unit_investment_quotes(self, rows) -> None:
         self.quote_rows.extend(rows)
+
+    def write_llm_token_usage(self, rows) -> None:
+        self.llm_token_rows.extend(rows)
 
     def write_work_unit_memberships(self, rows) -> None:
         self.membership_rows.extend(rows)
@@ -425,6 +430,132 @@ async def test_materialize_fatal_llm_error_cancels_and_writes_no_rows(monkeypatc
     assert sleeper_cancelled is True
     assert sink.investment_rows == []
     assert sink.quote_rows == []
+
+
+@pytest.mark.asyncio
+async def test_materialize_fatal_llm_error_flushes_completed_token_usage(monkeypatch):
+    repo_one = str(uuid.uuid4())
+    repo_two = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    edges = [
+        {
+            "edge_id": "edge-1",
+            "source_type": "issue",
+            "source_id": "jira:ABC-1",
+            "target_type": "commit",
+            "target_id": f"{repo_one}@abc123",
+            "repo_id": repo_one,
+            "confidence": 0.9,
+        },
+        {
+            "edge_id": "edge-2",
+            "source_type": "issue",
+            "source_id": "jira:ABC-2",
+            "target_type": "commit",
+            "target_id": f"{repo_two}@def456",
+            "repo_id": repo_two,
+            "confidence": 0.9,
+        },
+    ]
+    work_items = [
+        {
+            "work_item_id": "jira:ABC-1",
+            "provider": "jira",
+            "repo_id": repo_one,
+            "title": "Fix billing outage",
+            "description": "Resolve customer billing failures. " * 20,
+            "type": "incident",
+            "labels": ["outage"],
+            "parent_id": "",
+            "epic_id": "",
+            "created_at": now - timedelta(days=2),
+            "updated_at": now - timedelta(days=1),
+            "completed_at": now - timedelta(days=1),
+        },
+        {
+            "work_item_id": "jira:ABC-2",
+            "provider": "jira",
+            "repo_id": repo_two,
+            "title": "Add checkout flow",
+            "description": "Ship checkout workflow improvements. " * 20,
+            "type": "task",
+            "labels": ["feature"],
+            "parent_id": "",
+            "epic_id": "",
+            "created_at": now - timedelta(days=2),
+            "updated_at": now - timedelta(days=1),
+            "completed_at": now - timedelta(days=1),
+        },
+    ]
+    commits = [
+        {
+            "repo_id": repo_one,
+            "hash": "abc123",
+            "message": "Fix billing outage",
+            "author_when": now - timedelta(days=1),
+            "committer_when": now - timedelta(days=1),
+        },
+        {
+            "repo_id": repo_two,
+            "hash": "def456",
+            "message": "Add checkout flow",
+            "author_when": now - timedelta(days=1),
+            "committer_when": now - timedelta(days=1),
+        },
+    ]
+    sink = FakeSink()
+    call_count = 0
+
+    async def _fake_categorize(bundle, llm_provider, llm_model=None, provider=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return CategorizationOutcome(
+                subcategories={"feature_delivery.roadmap": 1.0},
+                evidence_quotes=[],
+                uncertainty="Limited evidence.",
+                status="ok",
+                errors=[],
+                warnings=[],
+                llm_calls=1,
+                input_tokens=123,
+                output_tokens=45,
+                llm_model="test-model",
+            )
+        raise RuntimeError("insufficient_quota: billing hard limit reached")
+
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
+    )
+    _patch_queries(monkeypatch, edges, work_items, commits)
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.categorize_text_bundle",
+        _fake_categorize,
+    )
+
+    config = MaterializeConfig(
+        dsn="clickhouse://localhost:8123/default",
+        from_ts=now - timedelta(days=5),
+        to_ts=now,
+        repo_ids=None,
+        llm_provider="mock",
+        persist_evidence_snippets=False,
+        llm_model="test-model",
+        llm_concurrency=1,
+        org_id="org-token-test",
+    )
+
+    with pytest.raises(LLMAuthError, match="quota exhausted"):
+        await materialize_investments(config)
+
+    assert sink.investment_rows == []
+    assert len(sink.llm_token_rows) == 1
+    token_row = sink.llm_token_rows[0]
+    assert token_row.org_id == "org-token-test"
+    assert token_row.source == "investment_materialize"
+    assert token_row.input_tokens == 123
+    assert token_row.output_tokens == 45
+    assert token_row.calls == 1
 
 
 @pytest.mark.asyncio

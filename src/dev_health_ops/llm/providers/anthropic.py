@@ -8,6 +8,7 @@ import logging
 
 from dev_health_ops.llm.errors import call_with_retry, classify_provider_error
 
+from ._http import make_hardened_async_httpx_client
 from .base import (
     DEFAULT_MODEL_BY_PROVIDER,
     CompletionResult,
@@ -54,7 +55,9 @@ class AnthropicProvider(LLMProviderBase):
                 from anthropic import AsyncAnthropic
 
                 self._client = AsyncAnthropic(
-                    api_key=self.api_key, base_url=self.base_url
+                    api_key=self.api_key,
+                    base_url=self.base_url,
+                    http_client=make_hardened_async_httpx_client(),
                 )
             except ImportError:
                 raise ImportError(

@@ -198,14 +198,34 @@ def test_per_call_credentials_override_org_and_env():
     assert provider._impl.cfg.base_url == "https://inline.invalid/v1"
 
 
-def test_org_local_provider_usable_with_base_url_only():
-    """A self-hosted org provider (no API key required) is usable with just a
-    base_url, and wins over an empty platform default."""
+def test_org_local_provider_loopback_base_url_rejected_falls_back():
+    org = {"org-1": {"provider": "local", "base_url": "http://localhost:11434/v1"}}
+    with patch.dict(
+        os.environ,
+        {
+            "OPENAI_API_KEY": "sk-platform",
+            "OPENAI_BASE_URL": "https://platform.invalid/v1",
+        },
+        clear=True,
+    ):
+        with _patch_org(org):
+            assert creds.resolve_usable_org_llm_provider(org_id="org-1") == ""
+            assert resolve_provider_name("auto", org_id="org-1") == "openai"
+            provider = get_provider("auto", org_id="org-1")
+
+    assert isinstance(provider, OpenAIProvider)
+    assert provider._impl.cfg.api_key == "sk-platform"
+    assert provider._impl.cfg.base_url == "https://platform.invalid/v1"
+
+
+def test_org_local_provider_loopback_base_url_without_platform_fails_closed():
     org = {"org-1": {"provider": "local", "base_url": "http://localhost:11434/v1"}}
     with patch.dict(os.environ, {}, clear=True):
         with _patch_org(org):
-            assert resolve_provider_name("auto", org_id="org-1") == "local"
-            assert is_llm_available("auto", org_id="org-1") is True
+            assert creds.resolve_usable_org_llm_provider(org_id="org-1") == ""
+            assert is_llm_available("auto", org_id="org-1") is False
+            with pytest.raises(LLMAuthError):
+                resolve_provider_name("auto", org_id="org-1")
 
 
 def test_resolve_llm_credentials_is_source_bound_for_org():

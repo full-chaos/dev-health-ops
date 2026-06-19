@@ -103,9 +103,13 @@ async def test_qwen_provider_completion():
         assert response.input_tokens == 8
         assert response.output_tokens == 4
         # Verify client was initialized with correct base_url
-        mock_openai_class.assert_called_once_with(
-            api_key="sk-123", base_url=DEFAULT_DASHSCOPE_BASE_URL, max_retries=0
-        )
+        mock_openai_class.assert_called_once()
+        _, client_kwargs = mock_openai_class.call_args
+        assert client_kwargs["api_key"] == "sk-123"
+        assert client_kwargs["base_url"] == DEFAULT_DASHSCOPE_BASE_URL
+        assert client_kwargs["max_retries"] == 0
+        assert client_kwargs["http_client"].follow_redirects is False
+        assert client_kwargs["http_client"].trust_env is False
         # Verify completion was called with correct model
         mock_client.chat.completions.create.assert_called_once()
         args, kwargs = mock_client.chat.completions.create.call_args

@@ -52,6 +52,27 @@ def _normalize_provider_name(name: str) -> str:
     return (name or "auto").strip().lower()
 
 
+def _env_flag(name: str, *, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _optional_env_flag(name: str) -> bool | None:
+    value = os.getenv(name)
+    if value is None:
+        return None
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _lmstudio_validate_model_on_startup() -> bool:
+    provider_flag = _optional_env_flag("LMSTUDIO_VALIDATE_MODEL_ON_STARTUP")
+    if provider_flag is not None:
+        return provider_flag
+    return _env_flag("LLM_VALIDATE_MODEL_ON_STARTUP")
+
+
 def _configured_provider(*, org_id: str | None = None) -> str | None:
     if os.getenv("OPENAI_API_KEY"):
         return "openai"
@@ -276,7 +297,10 @@ def get_provider(
             from .local import LMStudioGPT5Provider
 
             return LMStudioGPT5Provider(
-                base_url=credentials.base_url or None, model=model_name
+                api_key=credentials.api_key or None,
+                base_url=credentials.base_url or None,
+                model=model_name,
+                validate_model_on_startup=_lmstudio_validate_model_on_startup(),
             )
 
         from .local import LMStudioProvider

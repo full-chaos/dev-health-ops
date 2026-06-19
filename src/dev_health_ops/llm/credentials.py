@@ -20,7 +20,7 @@ _API_KEY_ENV_BY_PROVIDER: dict[str, tuple[str, ...]] = {
     "qwen": ("LLM_API_KEY", "QWEN_API_KEY", "DASHSCOPE_API_KEY"),
     "local": ("LLM_API_KEY", "LOCAL_LLM_API_KEY"),
     "ollama": ("LLM_API_KEY", "LOCAL_LLM_API_KEY"),
-    "lmstudio": ("LLM_API_KEY", "LOCAL_LLM_API_KEY"),
+    "lmstudio": ("LMSTUDIO_API_KEY", "LLM_API_KEY", "LOCAL_LLM_API_KEY"),
     "qwen-local": ("LLM_API_KEY", "LOCAL_LLM_API_KEY"),
     "qwen-lmstudio": ("LLM_API_KEY", "LOCAL_LLM_API_KEY"),
 }

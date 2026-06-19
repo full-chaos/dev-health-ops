@@ -48,7 +48,7 @@ class LLMSettingsUpsert(BaseModel):
     model: str | None = None
     api_key: str | None = None
     base_url: str | None = None
-    concurrency: int | None = Field(default=None, ge=1)
+    concurrency: int | None = Field(default=None, ge=1, le=32)
 
 
 class IntegrationCredentialResponse(BaseModel):

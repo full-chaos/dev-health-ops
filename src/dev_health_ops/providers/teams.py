@@ -5,18 +5,16 @@ import importlib
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from dev_health_ops.db import (
-    get_postgres_session_sync_for_uri,
+    get_postgres_session,
     resolve_db_uri,
     resolve_sink_uri,
 )
-from dev_health_ops.models.settings import IdentityMapping, TeamMapping
 from dev_health_ops.models.teams import Team
 from dev_health_ops.storage import detect_db_type
 from dev_health_ops.utils.cli import add_sink_arg, validate_sink
@@ -643,10 +641,10 @@ def sync_teams(ns: argparse.Namespace) -> int:
         postgres_db_uri = resolve_db_uri(ns)
         postgres_bridge_count: int = 0
         try:
-            result = _bridge_teams_to_postgres(teams_data, ns)
-            postgres_bridge_count = result if result is not None else 0
-        except Exception as e:  # noqa: BLE001 - bridge failures must affect exit code
-            logging.error("Failed to bridge teams to PostgreSQL: %s", e)
+            projection_result = asyncio.run(_project_teams_to_postgres(teams_data, ns))
+            postgres_bridge_count = int(projection_result.get("projected", 0) or 0)
+        except Exception as e:  # noqa: BLE001 - projection failures must affect exit code
+            logging.error("Failed to project teams to PostgreSQL: %s", e)
             postgres_bridge_count = 0
 
         if postgres_bridge_count <= 0:
@@ -755,236 +753,34 @@ async def _count_persisted_teams(store: Any, teams_data: list) -> int:
     return len(expected_ids & persisted_ids)
 
 
-def _team_string_list(team: Any, field: str) -> list[str]:
-    value = team.get(field) if isinstance(team, dict) else getattr(team, field, [])
-    if not isinstance(value, list):
-        return []
-    return [str(item) for item in value if item]
-
-
-def _provider_team_id(team_id: str, provider: str) -> str:
-    if provider == "github" and team_id.startswith("gh:"):
-        return team_id.removeprefix("gh:")
-    if provider == "gitlab" and team_id.startswith("gl:"):
-        return team_id.removeprefix("gl:")
-    if provider == "linear" and team_id.startswith("linear:"):
-        return team_id.removeprefix("linear:")
-    if provider == "ms-teams" and team_id.startswith("ms-teams:"):
-        return team_id.removeprefix("ms-teams:")
-    return team_id
-
-
-def _project_keys_for_team(team_id: str, provider: str, team: Any) -> list[str]:
-    configured = _team_string_list(team, "project_keys")
-    if configured:
-        return configured
-    if provider == "jira":
-        return [team_id]
-    if provider == "linear" and team_id.startswith("linear:"):
-        return [team_id.removeprefix("linear:")]
-    return []
-
-
-def _team_members(team: Any) -> list[str]:
-    return [
-        str(member).strip()
-        for member in (getattr(team, "members", None) or [])
-        if str(member).strip()
-    ]
-
-
-def _team_members_complete(team: Any) -> bool:
-    return bool(getattr(team, "members_complete", False))
-
-
-def _identity_member_values(identity: Any) -> set[str]:
-    values: set[str] = set()
-    email = getattr(identity, "email", None)
-    if email:
-        values.add(str(email))
-    canonical_id = getattr(identity, "canonical_id", None)
-    if canonical_id:
-        values.add(str(canonical_id))
-    for provider_values in (
-        getattr(identity, "provider_identities", None) or {}
-    ).values():
-        if isinstance(provider_values, list):
-            values.update(str(value) for value in provider_values if value)
-        elif provider_values:
-            values.add(str(provider_values))
-    return values
-
-
-def _reconcile_team_member_identities(
-    session: Any,
-    *,
-    org_id: str,
-    team_id: str,
-    provider: str,
-    members: list[str],
-    members_complete: bool,
-) -> None:
-    desired_members = set(members)
-    if members_complete:
-        existing_identities = (
-            session.execute(
-                select(IdentityMapping).where(
-                    IdentityMapping.org_id == org_id,
-                    IdentityMapping.is_active.is_(True),
-                )
-            )
-            .scalars()
-            .all()
-        )
-        for identity in existing_identities:
-            provider_identities = dict(
-                getattr(identity, "provider_identities", {}) or {}
-            )
-            if provider not in provider_identities:
-                continue
-            team_ids = list(getattr(identity, "team_ids", []) or [])
-            if team_id not in team_ids:
-                continue
-            if _identity_member_values(identity) & desired_members:
-                continue
-            team_ids = [
-                existing_team_id
-                for existing_team_id in team_ids
-                if existing_team_id != team_id
-            ]
-            setattr(identity, "team_ids", team_ids)
-
-    for member in members:
-        existing = session.execute(
-            select(IdentityMapping).filter_by(org_id=org_id, canonical_id=member)
-        ).scalar_one_or_none()
-        if existing is None:
-            session.add(
-                IdentityMapping(
-                    org_id=org_id,
-                    canonical_id=member,
-                    email=member if "@" in member else None,
-                    display_name=None if "@" in member else member,
-                    provider_identities={provider: [member]},
-                    team_ids=[team_id],
-                    is_active=True,
-                )
-            )
-            continue
-
-        provider_identities = dict(getattr(existing, "provider_identities", {}) or {})
-        provider_members = list(provider_identities.get(provider) or [])
-        if member not in provider_members:
-            provider_members.append(member)
-        provider_identities[provider] = provider_members
-
-        team_ids = list(getattr(existing, "team_ids", []) or [])
-        if team_id not in team_ids:
-            team_ids.append(team_id)
-
-        setattr(existing, "provider_identities", provider_identities)
-        setattr(existing, "team_ids", team_ids)
-        setattr(existing, "is_active", True)
-
-
-def _bridge_teams_to_postgres(teams_data: list, ns: argparse.Namespace) -> int | None:
-    """Upsert provider-discovered teams into the org-scoped TeamMapping layer."""
-    import logging
+async def _project_teams_to_postgres(
+    teams_data: list, ns: argparse.Namespace
+) -> dict[str, Any]:
+    from dev_health_ops.api.services.configuration.team_drift_sync import (
+        TeamDriftSyncService,
+    )
 
     org_id = getattr(ns, "org", None)
     if org_id is None:
-        return None
+        return {"projected": 0}
     provider = str(getattr(ns, "provider", "config") or "config").lower()
+    if getattr(ns, "db", None):
+        engine = create_async_engine(resolve_db_uri(ns))
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with factory() as session:
+                result = await TeamDriftSyncService(
+                    session, str(org_id)
+                ).project_provider_teams(provider, teams_data)
+                await session.commit()
+                return result
+        finally:
+            await engine.dispose()
 
-    expected_ids = {
-        str(getattr(team, "id", "") or "").strip() for team in teams_data
-    } - {""}
-    if not expected_ids:
-        return 0
-
-    try:
-        with get_postgres_session_sync_for_uri(resolve_db_uri(ns)) as session:
-            for team in teams_data:
-                team_id = str(getattr(team, "id", "")).strip()
-                if not team_id:
-                    continue
-
-                existing = session.execute(
-                    select(TeamMapping).filter_by(org_id=org_id, team_id=team_id)
-                ).scalar_one_or_none()
-
-                team_name = str(getattr(team, "name", team_id) or team_id)
-                team_description = getattr(team, "description", None)
-                repo_patterns = _team_string_list(team, "repo_patterns")
-                project_keys = _project_keys_for_team(team_id, provider, team)
-                members = _team_members(team)
-                members_complete = _team_members_complete(team)
-                extra_data = dict(getattr(existing, "extra_data", {}) or {})
-                extra_data.update(
-                    {
-                        "provider_type": provider,
-                        "provider_team_id": _provider_team_id(team_id, provider),
-                        "last_discovered_at": datetime.now(timezone.utc).isoformat(),
-                        "sync_source": "cli-sync-teams",
-                    }
-                )
-
-                if existing:
-                    managed_fields = set(getattr(existing, "managed_fields", []) or [])
-                    if getattr(existing, "sync_policy", 1) == 0:
-                        if "name" in managed_fields:
-                            setattr(existing, "name", team_name)
-                        if (
-                            "description" in managed_fields
-                            and team_description is not None
-                        ):
-                            setattr(existing, "description", team_description)
-                        if "repo_patterns" in managed_fields:
-                            setattr(existing, "repo_patterns", repo_patterns)
-                        if "project_keys" in managed_fields:
-                            setattr(existing, "project_keys", project_keys)
-                    setattr(existing, "is_active", True)
-                    setattr(existing, "extra_data", extra_data)
-                    setattr(existing, "last_drift_sync_at", datetime.now(timezone.utc))
-                else:
-                    session.add(
-                        TeamMapping(
-                            team_id=team_id,
-                            name=team_name,
-                            org_id=org_id,
-                            description=team_description,
-                            repo_patterns=repo_patterns,
-                            project_keys=project_keys,
-                            extra_data=extra_data,
-                            is_active=True,
-                        )
-                    )
-                _reconcile_team_member_identities(
-                    session,
-                    org_id=org_id,
-                    team_id=team_id,
-                    provider=provider,
-                    members=members,
-                    members_complete=members_complete,
-                )
-            session.flush()
-            persisted_ids = set(
-                session.execute(
-                    select(TeamMapping.team_id).where(
-                        TeamMapping.org_id == org_id,
-                        TeamMapping.team_id.in_(expected_ids),
-                    )
-                ).scalars()
-            )
-            logging.info(
-                "Bridged %d teams to PostgreSQL TeamMapping (org=%s).",
-                len(persisted_ids),
-                org_id,
-            )
-            return len(persisted_ids)
-    except Exception as e:
-        logging.error("Failed to bridge teams to PostgreSQL: %s", e)
-        return 0
+    async with get_postgres_session() as session:
+        return await TeamDriftSyncService(session, str(org_id)).project_provider_teams(
+            provider, teams_data
+        )
 
 
 def register_commands(sync_subparsers: argparse._SubParsersAction) -> None:

@@ -148,6 +148,7 @@ async def _complete(
 
                     span.set_status(Status(StatusCode.ERROR, str(exc)[:200]))
                 except ImportError:
+                    # OpenTelemetry status API is optional; skip enrichment.
                     pass
             raise
 

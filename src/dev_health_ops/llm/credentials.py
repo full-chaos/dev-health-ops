@@ -38,7 +38,6 @@ _BASE_URL_ENV_BY_PROVIDER: dict[str, tuple[str, ...]] = {
 }
 
 _API_KEY_REQUIRED_PROVIDERS = {"openai", "anthropic", "gemini", "qwen"}
-_LLM_SETTINGS_CATEGORY = "llm"
 _LLM_PROVIDER_KEY = "provider"
 _LLM_MODEL_KEY = "model"
 _LLM_API_KEY_KEY = "api_key"

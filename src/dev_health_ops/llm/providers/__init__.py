@@ -173,7 +173,9 @@ def _log_resolved_provider_model(provider: str, model: str | None) -> None:
         return
     _LOGGED_PROVIDER_MODELS.add(key)
     logger.info(
-        "Resolved LLM provider: provider=%s model=%s", provider, model or "none"
+        "Resolved LLM provider: provider=%s model=%s",
+        provider.replace("\r", "").replace("\n", ""),
+        (model or "none").replace("\r", "").replace("\n", ""),
     )
 
 

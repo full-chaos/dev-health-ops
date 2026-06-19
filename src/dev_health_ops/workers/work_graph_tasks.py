@@ -461,6 +461,9 @@ def dispatch_investment_materialize_partitioned(
     )
     from dev_health_ops.work_graph.investment.queries import fetch_work_graph_edges
 
+    # Hoisted to guarantee definite assignment on every return path (CodeQL).
+    run_membership = not (repo_ids or team_ids or from_date or to_date)
+
     db_url = db_url or _get_db_url()
     sink = create_sink(db_url)
     try:
@@ -483,7 +486,6 @@ def dispatch_investment_materialize_partitioned(
     chunks = [indexes[i : i + size] for i in range(0, len(indexes), size)]
     run_id = uuid.uuid4().hex
     computed_at = datetime.now(timezone.utc).isoformat()
-    run_membership = not (repo_ids or team_ids or from_date or to_date)
 
     header = [
         celery_app.signature(

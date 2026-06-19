@@ -208,8 +208,8 @@ def test_resolve_provider_name_uses_org_settings_in_auto(monkeypatch):
     # only configured BYO settings must resolve its provider via org_id. Hermetic:
     # clear ALL env provider signals (env detection precedes org settings) and
     # mock the org-settings loader so this is order-independent in the full suite.
-    import dev_health_ops.llm.credentials as creds
     from dev_health_ops.llm import LLMAuthError
+    from dev_health_ops.llm import credentials as creds
     from dev_health_ops.llm.providers import resolve_provider_name
 
     for var in (

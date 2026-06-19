@@ -9,7 +9,6 @@ import pytest
 
 import dev_health_ops.llm.providers as provider_factory
 from dev_health_ops.llm import LLMAuthError, get_provider, is_llm_available
-from dev_health_ops.llm.providers import resolve_model_name
 from dev_health_ops.llm.providers.local import LocalProvider
 from dev_health_ops.llm.providers.mock import MockProvider
 from dev_health_ops.llm.providers.none import NoneProvider
@@ -88,7 +87,7 @@ def test_provider_specific_model_env_overrides_global_model():
         provider = get_provider("openai")
         assert isinstance(provider, OpenAIProvider)
         assert provider._impl.cfg.model == "openai-model"
-        assert resolve_model_name("openai") == "openai-model"
+        assert provider_factory.resolve_model_name("openai") == "openai-model"
 
 
 def test_mock_provider_stamps_mock_model():

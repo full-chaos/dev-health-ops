@@ -64,6 +64,7 @@ def hermetic_dns(monkeypatch: pytest.MonkeyPatch):
         None,
         "https://api.openai.com/v1",
         "https://my-gateway.example.com/v1",
+        "https://unresolvable.example.test/v1",
     ],
 )
 def test_ssrf_shape_accepts_valid_base_urls(url: str | None):

@@ -90,18 +90,13 @@ def _ip_is_safe_public_target(address: str) -> bool:
     )
 
 
-def _resolved_addresses(
-    host: str, port: int | None
-) -> tuple[set[str] | None, str | None]:
+def _resolved_addresses(host: str, port: int | None) -> set[str]:
     try:
         results = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    except OSError as exc:
-        return None, f"LLM base_url host could not be resolved: {exc}"
+    except OSError:
+        return set()
 
-    addresses = {str(result[4][0]) for result in results if result[4]}
-    if not addresses:
-        return None, "LLM base_url host did not resolve to any address"
-    return addresses, None
+    return {str(result[4][0]) for result in results if result[4]}
 
 
 def validate_llm_base_url(base_url: str | None) -> tuple[bool, str | None]:
@@ -141,9 +136,11 @@ def validate_llm_base_url(base_url: str | None) -> tuple[bool, str | None]:
     if literal is not None and not _ip_is_safe_public_target(host):
         return False, "LLM base_url host resolves to a non-public address"
 
-    addresses, error = _resolved_addresses(host, port)
-    if error or addresses is None:
-        return False, error
+    addresses = _resolved_addresses(host, port)
+    # Unresolvable names are not SSRF targets at persist-time. Runtime
+    # re-validation plus network egress filtering (CHAOS-2558) handle DNS TOCTOU.
+    if not addresses:
+        return True, None
     unsafe_addresses = [
         addr for addr in addresses if not _ip_is_safe_public_target(addr)
     ]

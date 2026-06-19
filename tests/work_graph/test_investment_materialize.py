@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import builtins
 import json
+import logging
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
@@ -10,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from dev_health_ops.llm import LLMAuthError
+from dev_health_ops.llm import LLMAuthError, LLMRateLimitError
 from dev_health_ops.metrics.schemas import (
     LLMTokenUsageRecord,
     WorkUnitInvestmentEvidenceQuoteRecord,
@@ -109,6 +110,54 @@ def _sample_data():
     return repo_id, [edge], work_items, commits
 
 
+def _multi_component_data(count: int):
+    now = datetime.now(timezone.utc)
+    repo_ids = [str(uuid.uuid4()) for _ in range(count)]
+    edges = []
+    work_items = []
+    commits = []
+    for idx, repo_id in enumerate(repo_ids, start=1):
+        issue_id = f"jira:ABC-{idx}"
+        commit_hash = f"abc{idx}"
+        edges.append(
+            {
+                "edge_id": f"edge-{idx}",
+                "source_type": "issue",
+                "source_id": issue_id,
+                "target_type": "commit",
+                "target_id": f"{repo_id}@{commit_hash}",
+                "repo_id": repo_id,
+                "confidence": 0.9,
+            }
+        )
+        work_items.append(
+            {
+                "work_item_id": issue_id,
+                "provider": "jira",
+                "repo_id": repo_id,
+                "title": f"Work item {idx}",
+                "description": f"Ship workflow improvement {idx}. " * 20,
+                "type": "task",
+                "labels": ["feature"],
+                "parent_id": "",
+                "epic_id": "",
+                "created_at": now - timedelta(days=2),
+                "updated_at": now - timedelta(days=1),
+                "completed_at": now - timedelta(days=1),
+            }
+        )
+        commits.append(
+            {
+                "repo_id": repo_id,
+                "hash": commit_hash,
+                "message": f"Work item {idx}",
+                "author_when": now - timedelta(days=1),
+                "committer_when": now - timedelta(days=1),
+            }
+        )
+    return repo_ids, edges, work_items, commits
+
+
 def _patch_queries(monkeypatch, edges, work_items, commits):
     monkeypatch.setattr(
         "dev_health_ops.work_graph.investment.materialize.fetch_work_graph_edges",
@@ -144,6 +193,127 @@ def _patch_queries(monkeypatch, edges, work_items, commits):
         "dev_health_ops.work_graph.investment.materialize.resolve_repo_ids_for_teams",
         lambda client, team_ids, **kwargs: [],
     )
+
+
+async def _ok_categorize(bundle, llm_provider, llm_model=None, provider=None):
+    return CategorizationOutcome(
+        subcategories={"feature_delivery.roadmap": 1.0},
+        evidence_quotes=[],
+        uncertainty="Limited evidence.",
+        status="ok",
+        errors=[],
+    )
+
+
+def _patch_successful_materialize(monkeypatch, sink, edges, work_items, commits):
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.get_provider",
+        lambda *args, **kwargs: FakeProvider(),
+    )
+    _patch_queries(monkeypatch, edges, work_items, commits)
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.categorize_text_bundle",
+        _ok_categorize,
+    )
+
+
+@pytest.mark.asyncio
+async def test_materialize_requires_org_for_real_provider(monkeypatch):
+    sink = FakeSink()
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
+    )
+    now = datetime.now(timezone.utc)
+
+    with pytest.raises(ValueError, match=r"--org.*--allow-unscoped"):
+        await materialize_investments(
+            MaterializeConfig(
+                dsn="clickhouse://localhost:8123/default",
+                from_ts=now - timedelta(days=5),
+                to_ts=now,
+                repo_ids=None,
+                llm_provider="openai",
+                persist_evidence_snippets=False,
+                llm_model="test-model",
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_materialize_allow_unscoped_permits_empty_org_real_provider(monkeypatch):
+    repo_id, edges, work_items, commits = _sample_data()
+    work_items[0]["description"] = "Resolve authentication failures. " * 20
+    sink = FakeSink()
+    _patch_successful_materialize(monkeypatch, sink, edges, work_items, commits)
+    now = datetime.now(timezone.utc)
+
+    stats = await materialize_investments(
+        MaterializeConfig(
+            dsn="clickhouse://localhost:8123/default",
+            from_ts=now - timedelta(days=5),
+            to_ts=now,
+            repo_ids=[repo_id],
+            llm_provider="openai",
+            persist_evidence_snippets=False,
+            llm_model="test-model",
+            allow_unscoped=True,
+        )
+    )
+
+    assert stats["records"] == 1
+    assert sink.investment_rows[0].org_id == ""
+
+
+@pytest.mark.asyncio
+async def test_materialize_mock_provider_permits_empty_org(monkeypatch):
+    repo_id, edges, work_items, commits = _sample_data()
+    work_items[0]["description"] = "Resolve authentication failures. " * 20
+    sink = FakeSink()
+    _patch_successful_materialize(monkeypatch, sink, edges, work_items, commits)
+    now = datetime.now(timezone.utc)
+
+    stats = await materialize_investments(
+        MaterializeConfig(
+            dsn="clickhouse://localhost:8123/default",
+            from_ts=now - timedelta(days=5),
+            to_ts=now,
+            repo_ids=[repo_id],
+            llm_provider="mock",
+            persist_evidence_snippets=False,
+            llm_model="test-model",
+        )
+    )
+
+    assert stats["records"] == 1
+    assert sink.investment_rows[0].org_id == ""
+
+
+@pytest.mark.asyncio
+async def test_materialize_real_provider_with_org_unaffected(monkeypatch):
+    repo_id, edges, work_items, commits = _sample_data()
+    work_items[0]["description"] = "Resolve authentication failures. " * 20
+    sink = FakeSink()
+    _patch_successful_materialize(monkeypatch, sink, edges, work_items, commits)
+    now = datetime.now(timezone.utc)
+
+    stats = await materialize_investments(
+        MaterializeConfig(
+            dsn="clickhouse://localhost:8123/default",
+            from_ts=now - timedelta(days=5),
+            to_ts=now,
+            repo_ids=[repo_id],
+            llm_provider="openai",
+            persist_evidence_snippets=False,
+            llm_model="test-model",
+            org_id="org-123",
+        )
+    )
+
+    assert stats["records"] == 1
+    assert sink.investment_rows[0].org_id == "org-123"
 
 
 @pytest.mark.asyncio
@@ -315,6 +485,172 @@ async def test_materialize_llm_concurrency_one_serializes(monkeypatch):
     stats = await materialize_investments(config)
     assert stats["records"] == 2
     assert max_active == 1
+
+
+@pytest.mark.asyncio
+async def test_materialize_adaptive_concurrency_halves_and_recovers(
+    monkeypatch, caplog
+):
+    repo_ids, edges, work_items, commits = _multi_component_data(6)
+    sink = FakeSink()
+    call_count = 0
+
+    async def _fake_categorize(bundle, llm_provider, llm_model=None, provider=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count <= 2:
+            raise LLMRateLimitError("rate limited", provider="mock", model="test-model")
+        await asyncio.sleep(0.01)
+        return CategorizationOutcome(
+            subcategories={"feature_delivery.roadmap": 1.0},
+            evidence_quotes=[],
+            uncertainty="Limited evidence.",
+            status="ok",
+            errors=[],
+        )
+
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
+    )
+    _patch_queries(monkeypatch, edges, work_items, commits)
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.categorize_text_bundle",
+        _fake_categorize,
+    )
+
+    now = datetime.now(timezone.utc)
+    stats = await materialize_investments(
+        MaterializeConfig(
+            dsn="clickhouse://localhost:8123/default",
+            from_ts=now - timedelta(days=5),
+            to_ts=now,
+            repo_ids=repo_ids,
+            llm_provider="mock",
+            persist_evidence_snippets=False,
+            llm_model="test-model",
+            llm_concurrency=4,
+        )
+    )
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert stats["records"] == 6
+    assert stats["llm_failure_counts"] == {"rate_limit": 2}
+    assert any("adaptive concurrency reduced to 2/4" in msg for msg in messages)
+    assert any("adaptive concurrency recovered to 3/4" in msg for msg in messages)
+
+
+@pytest.mark.asyncio
+async def test_materialize_uses_org_llm_concurrency_override(monkeypatch):
+    repo_ids, edges, work_items, commits = _multi_component_data(3)
+    sink = FakeSink()
+    active = 0
+    max_active = 0
+
+    async def _fake_categorize(bundle, llm_provider, llm_model=None, provider=None):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        try:
+            await asyncio.sleep(0.01)
+            return CategorizationOutcome(
+                subcategories={"feature_delivery.roadmap": 1.0},
+                evidence_quotes=[],
+                uncertainty="Limited evidence.",
+                status="ok",
+                errors=[],
+            )
+        finally:
+            active -= 1
+
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.llm.credentials.resolve_llm_org_settings_concurrency",
+        lambda *, org_id=None: 1 if org_id == "org-123" else None,
+    )
+    _patch_queries(monkeypatch, edges, work_items, commits)
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.categorize_text_bundle",
+        _fake_categorize,
+    )
+
+    now = datetime.now(timezone.utc)
+    stats = await materialize_investments(
+        MaterializeConfig(
+            dsn="clickhouse://localhost:8123/default",
+            from_ts=now - timedelta(days=5),
+            to_ts=now,
+            repo_ids=repo_ids,
+            llm_provider="mock",
+            persist_evidence_snippets=False,
+            llm_model="test-model",
+            llm_concurrency=3,
+            org_id="org-123",
+        )
+    )
+
+    assert stats["records"] == 3
+    assert max_active == 1
+
+
+@pytest.mark.asyncio
+async def test_materialize_clamps_excessive_org_llm_concurrency(monkeypatch, caplog):
+    repo_ids, edges, work_items, commits = _multi_component_data(40)
+    sink = FakeSink()
+    active = 0
+    max_active = 0
+
+    async def _fake_categorize(bundle, llm_provider, llm_model=None, provider=None):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        try:
+            await asyncio.sleep(0.02)
+            return CategorizationOutcome(
+                subcategories={"feature_delivery.roadmap": 1.0},
+                evidence_quotes=[],
+                uncertainty="Limited evidence.",
+                status="ok",
+                errors=[],
+            )
+        finally:
+            active -= 1
+
+    caplog.set_level(logging.WARNING)
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.llm.credentials.resolve_llm_org_settings_concurrency",
+        lambda *, org_id=None: 99 if org_id == "org-123" else None,
+    )
+    _patch_queries(monkeypatch, edges, work_items, commits)
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.categorize_text_bundle",
+        _fake_categorize,
+    )
+
+    now = datetime.now(timezone.utc)
+    stats = await materialize_investments(
+        MaterializeConfig(
+            dsn="clickhouse://localhost:8123/default",
+            from_ts=now - timedelta(days=5),
+            to_ts=now,
+            repo_ids=repo_ids,
+            llm_provider="mock",
+            persist_evidence_snippets=False,
+            llm_model="test-model",
+            llm_concurrency=3,
+            org_id="org-123",
+        )
+    )
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert stats["records"] == 40
+    assert max_active == 32
+    assert any("LLM concurrency 99 exceeds maximum 32" in msg for msg in messages)
 
 
 @pytest.mark.asyncio
@@ -627,6 +963,7 @@ async def test_materialize_passes_configured_llm_credentials(monkeypatch):
         llm_model="gpt-4o-mini",
         llm_api_key="sk-inline-secret",
         llm_base_url="https://inline.invalid/v1",
+        allow_unscoped=True,
     )
 
     stats = await materialize_investments(config)

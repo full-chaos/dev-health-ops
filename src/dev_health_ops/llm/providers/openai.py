@@ -133,6 +133,8 @@ class OpenAIProviderConfig:
     model: str
     max_output_tokens: int
     temperature: float
+    validate_model_on_startup: bool = False
+    validation_provider_name: str = "openai"
 
 
 class OpenAIProvider(LLMProviderBase):
@@ -187,6 +189,8 @@ class _OpenAIProviderBase(LLMProviderBase):
     def __init__(self, cfg: OpenAIProviderConfig) -> None:
         self.cfg = cfg
         self._client: Any | None = None
+        if cfg.validate_model_on_startup:
+            self._validate_model_on_startup()
 
     def _get_client(self) -> Any:
         if self._client is None:
@@ -198,6 +202,35 @@ class _OpenAIProviderBase(LLMProviderBase):
                 max_retries=0,
             )
         return self._client
+
+    def _validate_model_on_startup(self) -> None:
+        from openai import OpenAI
+
+        client = OpenAI(
+            api_key=self.cfg.api_key,
+            base_url=self.cfg.base_url,
+            max_retries=0,
+        )
+        try:
+            client.models.list()
+        except Exception as exc:
+            llm_exc = classify_provider_error(
+                exc,
+                provider=self.cfg.validation_provider_name,
+                model=self.cfg.model,
+            )
+            logger.error(
+                "LLM startup model validation failed for provider '%s' model '%s'. "
+                "Check provider reachability, base URL, credentials, and loaded model. "
+                "Disable with LLM_VALIDATE_MODEL_ON_STARTUP=false or "
+                "LMSTUDIO_VALIDATE_MODEL_ON_STARTUP=false: %s",
+                self.cfg.validation_provider_name,
+                self.cfg.model,
+                llm_exc,
+            )
+            raise llm_exc from exc
+        finally:
+            client.close()
 
     def _supports_temperature(self) -> bool:
         # GPT-5 ignores temperature; keep for legacy and future overrides.

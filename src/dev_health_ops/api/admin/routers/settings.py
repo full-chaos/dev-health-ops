@@ -24,7 +24,7 @@ from dev_health_ops.models.settings import SettingCategory
 from .common import get_session
 
 router = APIRouter()
-_LLM_SETTING_KEYS = ("provider", "model", "api_key", "base_url")
+_LLM_SETTING_KEYS = ("provider", "model", "api_key", "base_url", "concurrency")
 _BYO_LLM_MIN_TIER = LicenseTier.TEAM
 
 
@@ -89,11 +89,13 @@ async def _llm_settings_response(svc: SettingsService) -> LLMSettingsResponse:
     model = await svc.get("model", SettingCategory.LLM.value)
     api_key = await svc.get("api_key", SettingCategory.LLM.value)
     base_url = await svc.get("base_url", SettingCategory.LLM.value)
+    concurrency = await svc.get("concurrency", SettingCategory.LLM.value)
     return LLMSettingsResponse(
         provider=provider,
         model=model,
         api_key=_mask_api_key(api_key),
         base_url=base_url,
+        concurrency=int(concurrency) if concurrency else None,
     )
 
 
@@ -117,7 +119,11 @@ async def list_settings_by_category(
     )
 
 
-@router.get("/llm-settings", response_model=LLMSettingsResponse)
+@router.get(
+    "/llm-settings",
+    response_model=LLMSettingsResponse,
+    response_model_exclude_none=True,
+)
 async def get_llm_settings(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
@@ -127,7 +133,11 @@ async def get_llm_settings(
     return await _llm_settings_response(svc)
 
 
-@router.put("/llm-settings", response_model=LLMSettingsResponse)
+@router.put(
+    "/llm-settings",
+    response_model=LLMSettingsResponse,
+    response_model_exclude_none=True,
+)
 async def upsert_llm_settings(
     payload: LLMSettingsUpsert,
     session: AsyncSession = Depends(get_session),
@@ -161,6 +171,13 @@ async def upsert_llm_settings(
         SettingCategory.LLM.value,
         description="BYO LLM base URL for this organization",
     )
+    if payload.concurrency is not None:
+        await svc.set(
+            "concurrency",
+            str(payload.concurrency),
+            SettingCategory.LLM.value,
+            description="BYO LLM maximum concurrent categorizations for this organization",
+        )
     return await _llm_settings_response(svc)
 
 

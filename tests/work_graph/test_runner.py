@@ -133,6 +133,7 @@ def _materialize_ns(**overrides) -> argparse.Namespace:
         llm_base_url=None,
         llm_concurrency=None,
         force=False,
+        allow_unscoped=False,
     )
     base.update(overrides)
     return argparse.Namespace(**base)
@@ -268,6 +269,33 @@ def test_cli_materialize_threads_inline_llm_credentials_and_concurrency():
     assert config.llm_base_url == "https://inline.invalid/v1"
     assert config.llm_concurrency == 1
     assert "sk-inline-secret" not in repr(config)
+    backfill_mock.assert_not_called()
+
+
+def test_cli_materialize_threads_allow_unscoped():
+    fake_materialize, materialize_mock, backfill_mock = (
+        _patch_materialize_and_projection()
+    )
+
+    with (
+        patch(
+            "dev_health_ops.work_graph.runner.materialize_investments",
+            fake_materialize,
+        ),
+        patch(
+            "dev_health_ops.work_graph.investment.backfill.backfill_memberships",
+            backfill_mock,
+        ),
+    ):
+        rc = run_investment_materialization(
+            _materialize_ns(org=None, allow_unscoped=True, repo_id=["repo-uuid-1"])
+        )
+
+    assert rc == 0
+    materialize_mock.assert_called_once()
+    config = materialize_mock.call_args.args[0]
+    assert config.org_id is None
+    assert config.allow_unscoped is True
     backfill_mock.assert_not_called()
 
 

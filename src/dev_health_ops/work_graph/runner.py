@@ -232,6 +232,7 @@ def run_investment_materialization(ns: argparse.Namespace) -> int:
         team_ids=team_ids or None,
         force=getattr(ns, "force", False),
         org_id=org_id,
+        allow_unscoped=getattr(ns, "allow_unscoped", False),
     )
 
     # CHAOS-2433 round-4 finding #1: the materializer writes work_unit_investments
@@ -457,5 +458,10 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     )
     investment_materialize.add_argument(
         "--force", action="store_true", help="Force re-materialization."
+    )
+    investment_materialize.add_argument(
+        "--allow-unscoped",
+        action="store_true",
+        help="Allow real LLM materialization without --org, writing empty-org rows.",
     )
     investment_materialize.set_defaults(func=run_investment_materialization)

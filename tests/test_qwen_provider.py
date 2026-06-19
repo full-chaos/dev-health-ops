@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from dev_health_ops.llm import LLMRateLimitError
 from dev_health_ops.llm.providers import get_provider
 from dev_health_ops.llm.providers.qwen import (
     DEFAULT_DASHSCOPE_BASE_URL,
@@ -10,6 +11,14 @@ from dev_health_ops.llm.providers.qwen import (
     QwenLocalProvider,
     QwenProvider,
 )
+
+
+class _RateLimitError(Exception):
+    status_code = 429
+
+    def __init__(self, retry_after: str = "0.25") -> None:
+        super().__init__("429 too many requests")
+        self.headers = {"Retry-After": retry_after}
 
 
 def test_qwen_provider_registration():
@@ -95,9 +104,55 @@ async def test_qwen_provider_completion():
         assert response.output_tokens == 4
         # Verify client was initialized with correct base_url
         mock_openai_class.assert_called_once_with(
-            api_key="sk-123", base_url=DEFAULT_DASHSCOPE_BASE_URL
+            api_key="sk-123", base_url=DEFAULT_DASHSCOPE_BASE_URL, max_retries=0
         )
         # Verify completion was called with correct model
         mock_client.chat.completions.create.assert_called_once()
         args, kwargs = mock_client.chat.completions.create.call_args
         assert kwargs["model"] == "qwen-plus"
+
+
+@pytest.mark.asyncio
+async def test_qwen_retries_429_and_honors_retry_after():
+    with (
+        patch("openai.AsyncOpenAI") as mock_openai_class,
+        patch(
+            "dev_health_ops.llm.providers.local.asyncio.sleep", new_callable=AsyncMock
+        ) as sleep,
+    ):
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "Qwen response"
+        mock_response.usage = None
+        mock_client.chat.completions.create = AsyncMock(
+            side_effect=[_RateLimitError("0.5"), mock_response]
+        )
+
+        response = await QwenProvider(api_key="sk-123").complete("Hello")
+
+        assert response.text == "Qwen response"
+        assert mock_client.chat.completions.create.call_count == 2
+        sleep.assert_awaited_once_with(0.5)
+
+
+@pytest.mark.asyncio
+async def test_qwen_gives_up_after_max_retries():
+    with (
+        patch("openai.AsyncOpenAI") as mock_openai_class,
+        patch(
+            "dev_health_ops.llm.providers.local.asyncio.sleep", new_callable=AsyncMock
+        ),
+    ):
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+        mock_client.chat.completions.create = AsyncMock(
+            side_effect=[_RateLimitError(), _RateLimitError()]
+        )
+
+        with pytest.raises(LLMRateLimitError):
+            await QwenProvider(api_key="sk-123").complete("Hello")
+
+        assert mock_client.chat.completions.create.call_count == 2

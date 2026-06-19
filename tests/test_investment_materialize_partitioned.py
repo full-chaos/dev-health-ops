@@ -67,6 +67,8 @@ def test_dispatch_partitioned_materialize_chunks_components_with_shared_run() ->
     second_kwargs = header[1].sig_kwargs["kwargs"]
     assert first_kwargs["component_indexes"] == [0, 1]
     assert second_kwargs["component_indexes"] == [2]
+    assert "allow_unscoped" not in first_kwargs
+    assert "allow_unscoped" not in second_kwargs
     assert first_kwargs["run_id"] == second_kwargs["run_id"] == result["run_id"]
     assert first_kwargs["computed_at"] == second_kwargs["computed_at"]
     assert callback.task_name == (
@@ -75,6 +77,36 @@ def test_dispatch_partitioned_materialize_chunks_components_with_shared_run() ->
     assert callback.sig_kwargs["kwargs"]["run_membership_backfill_after"] is True
     chord_instance.apply_async.assert_called_once_with()
     assert mock_signature.call_count == 3
+
+
+def test_dispatch_partitioned_materialize_includes_allow_unscoped_when_true() -> None:
+    with (
+        patch(
+            "dev_health_ops.metrics.sinks.factory.create_sink",
+            return_value=_FakeSink(),
+        ),
+        patch(
+            "dev_health_ops.work_graph.investment.queries.fetch_work_graph_edges",
+            return_value=[_edge(1)],
+        ),
+        patch(
+            "dev_health_ops.workers.work_graph_tasks.celery_app.signature",
+            side_effect=_signature_factory,
+        ),
+        patch("dev_health_ops.workers.work_graph_tasks.chord") as mock_chord,
+    ):
+        mock_chord.return_value = MagicMock()
+        task = cast(Any, dispatch_investment_materialize_partitioned)
+        task.run(
+            db_url="clickhouse://x",
+            org_id="",
+            chunk_size=2,
+            allow_unscoped=True,
+        )
+
+    header = mock_chord.call_args.args[0]
+    chunk_kwargs = header[0].sig_kwargs["kwargs"]
+    assert chunk_kwargs["allow_unscoped"] is True
 
 
 def test_dispatch_partitioned_materialize_skips_marker_for_windowed_run() -> None:

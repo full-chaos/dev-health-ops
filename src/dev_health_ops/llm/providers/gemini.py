@@ -24,6 +24,8 @@ class GeminiProvider(LocalProvider):
     - GEMINI_BASE_URL: Optional endpoint override
     """
 
+    provider_name = "gemini"
+
     def __init__(
         self,
         api_key: str | None = None,

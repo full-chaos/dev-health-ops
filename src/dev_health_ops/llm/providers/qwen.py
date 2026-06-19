@@ -31,6 +31,8 @@ class QwenProvider(LocalProvider):
     - DASHSCOPE_BASE_URL: Optional regional endpoint override
     """
 
+    provider_name = "qwen"
+
     def __init__(
         self,
         api_key: str | None = None,

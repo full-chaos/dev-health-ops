@@ -29,7 +29,9 @@ from unittest.mock import MagicMock, patch
 import dev_health_ops.connectors  # noqa: F401
 from dev_health_ops.workers.sync_runtime import _dispatch_post_sync_tasks
 
-_INVESTMENT_TASK = "dev_health_ops.workers.tasks.run_investment_materialize"
+_INVESTMENT_TASK = (
+    "dev_health_ops.workers.tasks.dispatch_investment_materialize_partitioned"
+)
 _WORK_GRAPH_TASK = "dev_health_ops.workers.tasks.run_work_graph_build"
 _PROJECTION_TASK = "dev_health_ops.workers.tasks.run_membership_backfill"
 _DAILY_METRICS_TASK = "dev_health_ops.workers.tasks.run_daily_metrics"
@@ -77,19 +79,12 @@ def test_investment_chain_dispatched_with_git_and_work_items() -> None:
         org_id="org-123",
     )
 
-    # The chain must be built build FIRST, materialize SECOND, project THIRD.
     assert mock_chain.call_count == 1
-    team_sig, daily_sig, build_sig, materialize_sig, project_sig = (
-        mock_chain.call_args.args
-    )
+    team_sig, daily_sig, build_sig, materialize_sig = mock_chain.call_args.args
     assert team_sig.task_name == _TEAM_SYNC_TASK
     assert daily_sig.task_name == _DAILY_METRICS_TASK
     assert build_sig.task_name == _WORK_GRAPH_TASK
     assert materialize_sig.task_name == _INVESTMENT_TASK
-    assert project_sig.task_name == _PROJECTION_TASK, (
-        "the membership PROJECTION (no-LLM, full coverage) must run last as the "
-        "sole membership writer (CHAOS-2433 round-3 #2)"
-    )
 
     # All signatures are org-scoped onto the metrics queue.
     assert team_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
@@ -100,14 +95,11 @@ def test_investment_chain_dispatched_with_git_and_work_items() -> None:
     assert build_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
     assert build_sig.sig_kwargs["queue"] == "metrics"
     assert materialize_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
-    assert materialize_sig.sig_kwargs["queue"] == "metrics"
-    assert project_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
-    assert project_sig.sig_kwargs["queue"] == "metrics"
+    assert materialize_sig.sig_kwargs["queue"] == "default"
 
     # Downstream steps are linked IMMUTABLE so a parent's return dict is not
     # injected as a positional arg (which would break the next task).
     assert materialize_sig.sig_kwargs.get("immutable") is True
-    assert project_sig.sig_kwargs.get("immutable") is True
     assert build_sig.sig_kwargs.get("immutable") is True
 
     # The chain is actually dispatched (not just constructed).
@@ -128,10 +120,9 @@ def test_investment_chain_dispatched_with_git_only() -> None:
     )
 
     assert mock_chain.call_count == 1
-    build_sig, materialize_sig, project_sig = mock_chain.call_args.args
+    build_sig, materialize_sig = mock_chain.call_args.args
     assert build_sig.task_name == _WORK_GRAPH_TASK
     assert materialize_sig.task_name == _INVESTMENT_TASK
-    assert project_sig.task_name == _PROJECTION_TASK
     chain_instance.apply_async.assert_called_once_with()
 
 
@@ -148,19 +139,15 @@ def test_investment_chain_dispatched_with_work_items_only_jira() -> None:
     )
 
     assert mock_chain.call_count == 1
-    team_sig, daily_sig, build_sig, materialize_sig, project_sig = (
-        mock_chain.call_args.args
-    )
+    team_sig, daily_sig, build_sig, materialize_sig = mock_chain.call_args.args
     assert team_sig.task_name == _TEAM_SYNC_TASK
     assert daily_sig.task_name == _DAILY_METRICS_TASK
     assert build_sig.task_name == _WORK_GRAPH_TASK
     assert materialize_sig.task_name == _INVESTMENT_TASK
-    assert project_sig.task_name == _PROJECTION_TASK
     assert team_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
     assert daily_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
     assert daily_sig.sig_kwargs.get("immutable") is True
     assert materialize_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
-    assert project_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
     chain_instance.apply_async.assert_called_once_with()
 
 
@@ -214,7 +201,7 @@ def test_post_sync_dispatch_forwards_backfill_window() -> None:
         )
 
     window_send_task.assert_not_called()
-    team_sig, daily_sig, build_sig, materialize_sig, _ = window_chain.call_args.args
+    team_sig, daily_sig, build_sig, materialize_sig = window_chain.call_args.args
     assert team_sig.task_name == _TEAM_SYNC_TASK
     assert team_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
     assert daily_sig.task_name == _DAILY_METRICS_TASK

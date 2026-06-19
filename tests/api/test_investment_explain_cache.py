@@ -14,6 +14,7 @@ from dev_health_ops.api.services.investment_mix_explain import (
     _compute_cache_key,
     explain_investment_mix,
 )
+from dev_health_ops.llm.providers.base import CompletionResult
 
 
 def test_compute_cache_key_deterministic():
@@ -215,8 +216,13 @@ async def test_explain_investment_mix_mock_provider_skips_cache():
         mock_units.return_value = []
 
         mock_provider = MagicMock()
-        mock_provider.complete_text = AsyncMock(
-            return_value='{"summary": "Test summary", "top_findings": [], "confidence": {"level": "moderate"}, "what_to_check_next": [], "anti_claims": []}'
+        mock_provider.complete = AsyncMock(
+            return_value=CompletionResult(
+                text='{"summary": "Test summary", "top_findings": [], "confidence": {"level": "moderate"}, "what_to_check_next": [], "anti_claims": []}',
+                input_tokens=10,
+                output_tokens=20,
+                model="mock",
+            )
         )
         mock_get_provider.return_value = mock_provider
 
@@ -270,8 +276,13 @@ async def test_explain_forwards_org_id_to_work_unit_evidence():
         mock_units.return_value = []
 
         mock_provider = MagicMock()
-        mock_provider.complete_text = AsyncMock(
-            return_value='{"summary": "Test summary", "top_findings": [], "confidence": {"level": "moderate"}, "what_to_check_next": [], "anti_claims": []}'
+        mock_provider.complete = AsyncMock(
+            return_value=CompletionResult(
+                text='{"summary": "Test summary", "top_findings": [], "confidence": {"level": "moderate"}, "what_to_check_next": [], "anti_claims": []}',
+                input_tokens=10,
+                output_tokens=20,
+                model="mock",
+            )
         )
         mock_get_provider.return_value = mock_provider
 

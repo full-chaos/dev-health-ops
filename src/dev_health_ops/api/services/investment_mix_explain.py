@@ -365,14 +365,15 @@ async def explain_investment_mix(
     provider = get_provider(llm_provider, model=llm_model)
     completion = await provider.complete(full_prompt)
     raw = completion.text
-    await _persist_investment_mix_token_usage(
-        db_url=db_url,
-        org_id=org_id,
-        provider=resolved_llm_provider,
-        model=completion.model or llm_model,
-        input_tokens=completion.input_tokens,
-        output_tokens=completion.output_tokens,
-    )
+    if llm_provider != "mock":
+        await _persist_investment_mix_token_usage(
+            db_url=db_url,
+            org_id=org_id,
+            provider=resolved_llm_provider,
+            model=completion.model or llm_model,
+            input_tokens=completion.input_tokens,
+            output_tokens=completion.output_tokens,
+        )
     raw_len = len(raw) if raw is not None else 0
     if logger.isEnabledFor(logging.DEBUG):
         # Sanitize and truncate the LLM response before logging to avoid log injection.

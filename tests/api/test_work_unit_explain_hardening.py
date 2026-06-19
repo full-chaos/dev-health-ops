@@ -22,6 +22,7 @@ from dev_health_ops.api.auth.router import get_current_user  # noqa: E402
 from dev_health_ops.api.main import app  # noqa: E402
 from dev_health_ops.api.services.auth import AuthenticatedUser  # noqa: E402
 from dev_health_ops.llm.errors import LLMAuthError, LLMRateLimitError  # noqa: E402
+from dev_health_ops.llm.providers.base import CompletionResult  # noqa: E402
 from tests.api.test_work_unit_explain import _sample_investment  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -41,7 +42,7 @@ class _FailingProvider:
     def __init__(self, exc):
         self.exc = exc
 
-    async def complete_text(self, prompt: str) -> str:
+    async def complete(self, prompt: str) -> CompletionResult:
         raise self.exc
 
 

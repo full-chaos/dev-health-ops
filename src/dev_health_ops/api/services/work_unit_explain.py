@@ -124,7 +124,7 @@ async def explain_work_unit(
     completion = await resolved_provider.complete(prompt)
     raw_response = completion.text
     resolved_llm_provider = resolve_provider_name(llm_provider, org_id=org_id)
-    if db_url:
+    if db_url and llm_provider != "mock":
         try:
             ch_sink = ClickHouseMetricsSink(db_url)
             try:

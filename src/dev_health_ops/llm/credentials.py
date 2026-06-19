@@ -66,25 +66,40 @@ def _safe_log_value(value: str) -> str:
     return value.replace("\r", "").replace("\n", "")
 
 
-def _org_byo_llm_enabled(session: Any, org_id: str) -> bool:
-    """Whether the byo_llm feature flag is enabled for this org (CHAOS-2551).
+def _apply_byo_llm_flag_gate(
+    session: Any, org_id: str, settings: dict[str, str]
+) -> dict[str, str]:
+    """Apply the byo_llm feature-flag gate to already-loaded org BYO settings.
 
-    Returns True when the flag is enabled OR unregistered (pre-migration /
-    minimal DB) so behavior matches the prior, ungated resolver. Returns False
-    only when the flag is explicitly disabled (global flag, per-org override,
-    or insufficient tier).
+    Called only when the org HAS BYO settings. Returns the settings unchanged
+    when the flag is enabled OR unregistered (pre-migration / minimal DB), and
+    {} when the flag is explicitly disabled (global flag, per-org override, or
+    insufficient tier) -- the org reverts to the platform default.
 
-    Genuine flag-lookup failures are NOT swallowed here: they propagate to the
-    caller (_load_org_llm_settings), which returns {} so the resolver ignores
-    stored org BYO and falls back to the platform default. A runtime kill
-    switch must fail CLOSED rather than keep using tenant BYO credentials when
-    the licensing store is degraded.
+    A genuine flag-lookup failure for a BYO-configured org is NOT swallowed: it
+    raises LLMAuthError so the resolver fails loudly instead of silently
+    rerouting the tenant's BYO traffic to the platform LLM (a data-residency
+    boundary). Orgs without BYO settings never reach this path, so transient
+    licensing-store errors do not disrupt them.
     """
     import uuid as _uuid
 
     from dev_health_ops.api.services.licensing import byo_llm_flag_state
 
-    return byo_llm_flag_state(session, _uuid.UUID(org_id)) != "disabled"
+    try:
+        state = byo_llm_flag_state(session, _uuid.UUID(org_id))
+    except Exception as exc:
+        raise LLMAuthError(
+            "Unable to determine the byo_llm feature flag state for an "
+            "organization with BYO LLM settings; refusing to resolve so the "
+            "tenant's BYO traffic is not silently rerouted to the platform "
+            "default LLM.",
+            provider="auto",
+            model="none",
+        ) from exc
+    if state == "disabled":
+        return {}
+    return settings
 
 
 def _load_org_llm_settings(org_id: str | None) -> dict[str, str]:
@@ -102,10 +117,6 @@ def _load_org_llm_settings(org_id: str | None) -> dict[str, str]:
 
     try:
         with get_postgres_session_sync() as session:
-            if not _org_byo_llm_enabled(session, org_id):
-                # byo_llm disabled for this org: ignore stored BYO settings so
-                # the resolver falls back to the platform default (CHAOS-2551).
-                return {}
             result = session.execute(
                 select(Setting).where(
                     Setting.org_id == org_id,
@@ -113,20 +124,31 @@ def _load_org_llm_settings(org_id: str | None) -> dict[str, str]:
                 )
             )
             rows: list[Any] = list(result.scalars().all())
+
+            settings: dict[str, str] = {}
+            for row in rows:
+                value = row.value or ""
+                if row.is_encrypted and value:
+                    try:
+                        value = decrypt_value(value)
+                    except ValueError:
+                        continue
+                if value:
+                    settings[str(row.key)] = str(value)
+
+            if not settings:
+                # No org BYO configured: nothing to gate and no data-residency
+                # concern -> platform default (skip the flag lookup entirely).
+                return {}
+
+            # Org HAS BYO settings: gate on the byo_llm feature flag.
+            return _apply_byo_llm_flag_gate(session, org_id, settings)
+    except LLMAuthError:
+        # Controlled flag-lookup failure for a BYO-configured org: propagate so
+        # the resolver does NOT silently reroute the tenant to the platform LLM.
+        raise
     except Exception:
         return {}
-
-    settings: dict[str, str] = {}
-    for row in rows:
-        value = row.value or ""
-        if row.is_encrypted and value:
-            try:
-                value = decrypt_value(value)
-            except ValueError:
-                continue
-        if value:
-            settings[str(row.key)] = str(value)
-    return settings
 
 
 def resolve_llm_org_settings_provider(*, org_id: str | None = None) -> str:

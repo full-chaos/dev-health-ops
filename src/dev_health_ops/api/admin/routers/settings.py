@@ -56,9 +56,13 @@ def _reject_llm_category(category: str) -> None:
         )
 
 
-async def _require_byo_llm_tier(session: AsyncSession, org_id: str) -> None:
+async def _require_byo_llm_tier(
+    session: AsyncSession, org_id: str, *, allow_disabled_flag: bool = False
+) -> None:
     try:
-        await require_byo_llm_access(session, org_id)
+        await require_byo_llm_access(
+            session, org_id, allow_disabled_flag=allow_disabled_flag
+        )
     except LLMSettingsAccessError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
@@ -117,7 +121,9 @@ async def delete_llm_settings(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> dict[str, bool]:
-    await _require_byo_llm_tier(session, org_id)
+    # DELETE must remain available so an admin can clean up stored BYO secrets
+    # even when the byo_llm flag is disabled (CHAOS-2551 review).
+    await _require_byo_llm_tier(session, org_id, allow_disabled_flag=True)
     svc = SettingsService(session, org_id)
     deleted = await delete_llm_settings_values(svc)
     if not deleted:

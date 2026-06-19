@@ -56,8 +56,11 @@ def test_byo_llm_registered_at_team_tier():
 
 
 # ---------------------------------------------------------------------------
-# Runtime gate: _org_byo_llm_enabled
+# Runtime gate: _apply_byo_llm_flag_gate / _load_org_llm_settings
 # ---------------------------------------------------------------------------
+
+
+from dev_health_ops.llm.errors import LLMAuthError  # noqa: E402
 
 
 def _patch_flag_state(state_or_exc):
@@ -69,58 +72,99 @@ def _patch_flag_state(state_or_exc):
     return patch.object(licensing_module, "byo_llm_flag_state", _fake)
 
 
-def test_runtime_gate_allows_when_flag_enabled():
+_SETTINGS = {"provider": "openai", "api_key": "sk-org"}
+
+
+def test_flag_gate_returns_settings_when_enabled():
     with _patch_flag_state("enabled"):
-        assert creds._org_byo_llm_enabled(object(), str(uuid.uuid4())) is True
+        out = creds._apply_byo_llm_flag_gate(object(), str(uuid.uuid4()), _SETTINGS)
+    assert out == _SETTINGS
 
 
-def test_runtime_gate_blocks_when_flag_disabled():
-    with _patch_flag_state("disabled"):
-        assert creds._org_byo_llm_enabled(object(), str(uuid.uuid4())) is False
-
-
-def test_runtime_gate_does_not_gate_when_flag_unregistered():
+def test_flag_gate_returns_settings_when_unregistered():
     with _patch_flag_state("unregistered"):
-        assert creds._org_byo_llm_enabled(object(), str(uuid.uuid4())) is True
+        out = creds._apply_byo_llm_flag_gate(object(), str(uuid.uuid4()), _SETTINGS)
+    assert out == _SETTINGS
 
 
-def test_runtime_gate_propagates_real_errors_to_fail_closed():
-    # A genuine flag-lookup error must NOT be swallowed: it propagates so the
-    # caller (_load_org_llm_settings) returns {} -> org BYO ignored (fail closed).
-    with _patch_flag_state(RuntimeError("connection reset mid-query")):
-        with pytest.raises(RuntimeError):
-            creds._org_byo_llm_enabled(object(), str(uuid.uuid4()))
+def test_flag_gate_returns_empty_when_disabled():
+    with _patch_flag_state("disabled"):
+        out = creds._apply_byo_llm_flag_gate(object(), str(uuid.uuid4()), _SETTINGS)
+    assert out == {}
 
 
-def test_load_org_llm_settings_returns_empty_when_flag_disabled():
+def test_flag_gate_raises_on_lookup_error_for_byo_org():
+    # Data-residency: a BYO-configured org must NOT be silently rerouted to the
+    # platform when the flag lookup fails -> raise (fail loudly), not return {}.
+    with _patch_flag_state(RuntimeError("licensing store down")):
+        with pytest.raises(LLMAuthError):
+            creds._apply_byo_llm_flag_gate(object(), str(uuid.uuid4()), _SETTINGS)
+
+
+class _FakeRow:
+    def __init__(self, key, value, is_encrypted=False):
+        self.key = key
+        self.value = value
+        self.is_encrypted = is_encrypted
+
+
+class _FakeResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return self._rows
+
+
+class _FakeSession:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def execute(self, *_a, **_k):
+        return _FakeResult(self._rows)
+
+
+def _patch_session(rows):
     @contextlib.contextmanager
-    def _fake_session():
-        yield object()
+    def _cm():
+        yield _FakeSession(rows)
 
-    with (
-        patch.object(creds, "_org_byo_llm_enabled", return_value=False),
-        patch("dev_health_ops.db.get_postgres_session_sync", _fake_session),
-    ):
-        # A real org_id with the flag disabled -> stored BYO settings ignored.
-        assert creds._load_org_llm_settings(str(uuid.uuid4())) == {}
+    return patch("dev_health_ops.db.get_postgres_session_sync", _cm)
 
 
-def test_load_org_llm_settings_fails_closed_when_flag_lookup_errors():
-    # If the flag lookup raises, _load_org_llm_settings must return {} (fail
-    # closed: ignore stored org BYO; the resolver uses the platform default).
-    @contextlib.contextmanager
-    def _fake_session():
-        yield object()
+def test_load_settings_byo_org_flag_enabled_returns_settings():
+    rows = [_FakeRow("provider", "openai"), _FakeRow("api_key", "sk-org")]
+    with _patch_session(rows), _patch_flag_state("enabled"):
+        out = creds._load_org_llm_settings(str(uuid.uuid4()))
+    assert out == {"provider": "openai", "api_key": "sk-org"}
 
-    with (
-        patch.object(
-            creds,
-            "_org_byo_llm_enabled",
-            side_effect=RuntimeError("flag store down"),
-        ),
-        patch("dev_health_ops.db.get_postgres_session_sync", _fake_session),
-    ):
-        assert creds._load_org_llm_settings(str(uuid.uuid4())) == {}
+
+def test_load_settings_byo_org_flag_disabled_returns_empty():
+    rows = [_FakeRow("provider", "openai"), _FakeRow("api_key", "sk-org")]
+    with _patch_session(rows), _patch_flag_state("disabled"):
+        out = creds._load_org_llm_settings(str(uuid.uuid4()))
+    assert out == {}
+
+
+def test_load_settings_byo_org_flag_error_raises_no_silent_reroute():
+    # codex finding: a BYO-configured org hitting a flag-lookup error must raise
+    # (no silent reroute to the platform LLM), NOT return {}.
+    rows = [_FakeRow("provider", "openai"), _FakeRow("api_key", "sk-org")]
+    with _patch_session(rows), _patch_flag_state(RuntimeError("store down")):
+        with pytest.raises(LLMAuthError):
+            creds._load_org_llm_settings(str(uuid.uuid4()))
+
+
+def test_load_settings_non_byo_org_flag_error_returns_empty():
+    # An org with NO BYO settings is unaffected by a flag-lookup error: there is
+    # nothing to gate and no residency concern, so it returns {} (no raise) and
+    # never even performs the flag lookup.
+    with _patch_session([]), _patch_flag_state(RuntimeError("store down")):
+        out = creds._load_org_llm_settings(str(uuid.uuid4()))
+    assert out == {}
 
 
 # ---------------------------------------------------------------------------
@@ -246,3 +290,19 @@ async def test_admin_gate_fails_closed_when_flag_lookup_errors(session_maker):
         async with session_maker() as session:
             with pytest.raises(RuntimeError):
                 await require_byo_llm_access(session, org_id)
+
+
+@pytest.mark.asyncio
+async def test_admin_gate_allows_cleanup_when_flag_disabled(session_maker):
+    # codex finding: a kill switch must stop reads/writes/runtime use but must
+    # NOT trap stored secrets. The DELETE path passes allow_disabled_flag=True
+    # so an admin can clean up BYO settings even when the flag is disabled.
+    org_id = await _seed(session_maker, tier="team", flag_enabled=False)
+    async with session_maker() as session:
+        # Default (PUT/GET) still denied ...
+        with pytest.raises(LLMSettingsAccessError) as exc:
+            await require_byo_llm_access(session, org_id)
+        assert exc.value.detail["error"] == "feature_not_enabled"
+    async with session_maker() as session:
+        # ... but cleanup (DELETE) is allowed.
+        await require_byo_llm_access(session, org_id, allow_disabled_flag=True)

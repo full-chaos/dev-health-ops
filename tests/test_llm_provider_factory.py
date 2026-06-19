@@ -9,7 +9,7 @@ import pytest
 
 import dev_health_ops.llm.providers as provider_factory
 from dev_health_ops.llm import LLMAuthError, get_provider, is_llm_available
-from dev_health_ops.llm.providers.local import LocalProvider
+from dev_health_ops.llm.providers.local import LMStudioGPT5Provider, LocalProvider
 from dev_health_ops.llm.providers.mock import MockProvider
 from dev_health_ops.llm.providers.none import NoneProvider
 from dev_health_ops.llm.providers.openai import OpenAIProvider
@@ -72,6 +72,91 @@ def test_generic_llm_env_credentials_are_available_for_explicit_provider():
     assert isinstance(provider, OpenAIProvider)
     assert provider._impl.cfg.api_key == "sk-generic"
     assert provider._impl.cfg.base_url == "https://generic.invalid/v1"
+
+
+def test_lmstudio_gpt5_accepts_inline_credentials_over_default():
+    with patch.dict(os.environ, {}, clear=True):
+        provider = get_provider(
+            "lmstudio",
+            model="openai/gpt-oss-20b",
+            api_key="sk-inline-lmstudio",
+            base_url="http://inline-lmstudio.invalid/v1",
+        )
+
+    assert isinstance(provider, LMStudioGPT5Provider)
+    assert provider.cfg.api_key == "sk-inline-lmstudio"
+    assert provider.cfg.base_url == "http://inline-lmstudio.invalid/v1"
+
+
+def test_lmstudio_gpt5_uses_lmstudio_api_key_env_before_default():
+    with patch.dict(
+        os.environ,
+        {"LMSTUDIO_API_KEY": "sk-env-lmstudio"},
+        clear=True,
+    ):
+        provider = get_provider("lmstudio", model="openai/gpt-oss-20b")
+
+    assert isinstance(provider, LMStudioGPT5Provider)
+    assert provider.cfg.api_key == "sk-env-lmstudio"
+
+
+def test_lmstudio_gpt5_falls_back_to_dummy_key_when_unset():
+    with patch.dict(os.environ, {}, clear=True):
+        provider = get_provider("lmstudio", model="openai/gpt-oss-20b")
+
+    assert isinstance(provider, LMStudioGPT5Provider)
+    assert provider.cfg.api_key == "lm-studio"
+
+
+def test_lmstudio_gpt5_validation_flag_off_skips_models_list():
+    with patch("openai.OpenAI") as mock_openai_class:
+        LMStudioGPT5Provider(
+            model="openai/gpt-oss-20b",
+            api_key="sk-inline-lmstudio",
+            validate_model_on_startup=False,
+        )
+
+    mock_openai_class.assert_not_called()
+
+
+def test_lmstudio_gpt5_validation_flag_on_passes_when_reachable():
+    with patch("openai.OpenAI") as mock_openai_class:
+        mock_client = mock_openai_class.return_value
+        provider = LMStudioGPT5Provider(
+            model="openai/gpt-oss-20b",
+            api_key="sk-inline-lmstudio",
+            validate_model_on_startup=True,
+        )
+
+    assert provider.cfg.validate_model_on_startup is True
+    mock_openai_class.assert_called_once_with(
+        api_key="sk-inline-lmstudio",
+        base_url="http://localhost:1234/v1",
+        max_retries=0,
+    )
+    mock_client.models.list.assert_called_once_with()
+    mock_client.close.assert_called_once_with()
+
+
+def test_lmstudio_gpt5_validation_flag_on_unreachable_fails_fast():
+    with patch("openai.OpenAI") as mock_openai_class:
+        mock_client = mock_openai_class.return_value
+        mock_client.models.list.side_effect = RuntimeError("connection refused")
+
+        with pytest.raises(
+            RuntimeError, match="startup model validation failed"
+        ) as exc:
+            LMStudioGPT5Provider(
+                model="openai/gpt-oss-20b",
+                api_key="sk-inline-lmstudio",
+                validate_model_on_startup=True,
+            )
+
+    message = str(exc.value)
+    assert "provider 'lmstudio'" in message
+    assert "OpenAI-compatible /v1 endpoint" in message
+    assert "LMSTUDIO_VALIDATE_MODEL_ON_STARTUP=false" in message
+    mock_client.close.assert_called_once_with()
 
 
 def test_provider_specific_model_env_overrides_global_model():

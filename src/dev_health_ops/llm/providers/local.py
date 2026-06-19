@@ -62,6 +62,35 @@ def _error_metadata(exc: BaseException) -> dict[str, str | int | None]:
     return {"type": type(exc).__name__, "status_code": _status_code(exc)}
 
 
+def _first_env(names: tuple[str, ...]) -> str:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value
+    return ""
+
+
+def _env_flag(name: str, *, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _optional_env_flag(name: str) -> bool | None:
+    value = os.getenv(name)
+    if value is None:
+        return None
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _lmstudio_validate_model_on_startup() -> bool:
+    provider_flag = _optional_env_flag("LMSTUDIO_VALIDATE_MODEL_ON_STARTUP")
+    if provider_flag is not None:
+        return provider_flag
+    return _env_flag("LLM_VALIDATE_MODEL_ON_STARTUP")
+
+
 class LocalProvider(LLMProviderBase):
     """
     OpenAI-compatible provider for local LLM servers.
@@ -264,18 +293,29 @@ class LMStudioGPT5Provider(OpenAIGPT5Provider):
         self,
         model: str,
         base_url: str | None = None,
+        api_key: str | None = None,
         max_completion_tokens: int = 4096,
         temperature: float = 0.3,
+        validate_model_on_startup: bool | None = None,
     ) -> None:
         base_url = base_url or os.getenv(
             "LMSTUDIO_BASE_URL", DEFAULT_ENDPOINTS["lmstudio"]
         )
-        # Use dummy API key for local
+        api_key = api_key or _first_env(
+            ("LLM_API_KEY", "LMSTUDIO_API_KEY", "LOCAL_LLM_API_KEY")
+        )
+        should_validate_model = (
+            _lmstudio_validate_model_on_startup()
+            if validate_model_on_startup is None
+            else validate_model_on_startup
+        )
         cfg = OpenAIProviderConfig(
-            api_key="lm-studio",
+            api_key=api_key or "lm-studio",
             base_url=base_url,
             model=model,
             max_output_tokens=max_completion_tokens,
             temperature=temperature,
+            validate_model_on_startup=should_validate_model,
+            validation_provider_name="lmstudio",
         )
         super().__init__(cfg)

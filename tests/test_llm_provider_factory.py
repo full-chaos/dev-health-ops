@@ -91,12 +91,27 @@ def test_lmstudio_gpt5_accepts_inline_credentials_over_default():
 def test_lmstudio_gpt5_uses_lmstudio_api_key_env_before_default():
     with patch.dict(
         os.environ,
-        {"LMSTUDIO_API_KEY": "sk-env-lmstudio"},
+        {
+            "LLM_PROVIDER": "lmstudio",
+            "LLM_API_KEY": "sk-global",
+            "LMSTUDIO_API_KEY": "sk-env-lmstudio",
+        },
         clear=True,
     ):
-        provider = get_provider("lmstudio", model="openai/gpt-oss-20b")
+        provider = get_provider("auto", model="openai/gpt-oss-20b")
 
     assert isinstance(provider, LMStudioGPT5Provider)
+    assert provider.cfg.api_key == "sk-env-lmstudio"
+
+
+def test_lmstudio_gpt5_direct_constructor_prefers_lmstudio_api_key_env():
+    with patch.dict(
+        os.environ,
+        {"LLM_API_KEY": "sk-global", "LMSTUDIO_API_KEY": "sk-env-lmstudio"},
+        clear=True,
+    ):
+        provider = LMStudioGPT5Provider(model="openai/gpt-oss-20b")
+
     assert provider.cfg.api_key == "sk-env-lmstudio"
 
 

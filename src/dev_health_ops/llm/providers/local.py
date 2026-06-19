@@ -302,7 +302,7 @@ class LMStudioGPT5Provider(OpenAIGPT5Provider):
             "LMSTUDIO_BASE_URL", DEFAULT_ENDPOINTS["lmstudio"]
         )
         api_key = api_key or _first_env(
-            ("LLM_API_KEY", "LMSTUDIO_API_KEY", "LOCAL_LLM_API_KEY")
+            ("LMSTUDIO_API_KEY", "LLM_API_KEY", "LOCAL_LLM_API_KEY")
         )
         should_validate_model = (
             _lmstudio_validate_model_on_startup()

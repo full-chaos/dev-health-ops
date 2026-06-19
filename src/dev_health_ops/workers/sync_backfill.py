@@ -147,6 +147,30 @@ def _mark_sync_job_run_failed(
         logger.debug("Failed to mark sync job run failed: %s", pending_run_id)
 
 
+def _mark_sync_job_run_cancelled(
+    pending_run_id: str | None, error: str, completed_at: datetime
+) -> None:
+    if pending_run_id is None:
+        return
+    try:
+        from dev_health_ops.db import get_postgres_session_sync
+        from dev_health_ops.models.settings import JobRun, JobRunStatus
+
+        with get_postgres_session_sync() as session:
+            run = (
+                session.query(JobRun)
+                .filter(JobRun.id == uuid.UUID(pending_run_id))
+                .one_or_none()
+            )
+            if run:
+                setattr(run, "status", JobRunStatus.CANCELLED.value)
+                setattr(run, "error", error)
+                setattr(run, "completed_at", completed_at)
+                session.flush()
+    except Exception:
+        logger.debug("Failed to mark sync job run cancelled: %s", pending_run_id)
+
+
 @celery_app.task(
     bind=True,
     max_retries=3,
@@ -191,6 +215,19 @@ def run_backfill(
             )
             if config is None:
                 raise ValueError(f"Sync configuration not found: {sync_config_id}")
+            if not bool(config.is_active):
+                completed_at = datetime.now(timezone.utc)
+                if backfill_job_id:
+                    _update_backfill_job_counts(
+                        backfill_job_id,
+                        status="cancelled",
+                        completed_at=completed_at,
+                        error_message="Sync configuration is paused",
+                    )
+                _mark_sync_job_run_cancelled(
+                    pending_run_id, "Sync configuration is paused", completed_at
+                )
+                return {"status": "skipped", "reason": "sync_config_inactive"}
 
             provider = str(config.provider or "").strip().lower()
             sync_targets = _normalize_sync_targets(

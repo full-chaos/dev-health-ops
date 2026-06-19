@@ -22,7 +22,14 @@ from dev_health_ops.models import (
     SyncWatermark,
 )
 from dev_health_ops.models.backfill import BackfillJob
-from dev_health_ops.models.settings import Setting, SettingCategory, SyncConfiguration
+from dev_health_ops.models.settings import (
+    JobRun,
+    JobRunStatus,
+    ScheduledJob,
+    Setting,
+    SettingCategory,
+    SyncConfiguration,
+)
 from dev_health_ops.sync.trigger_routing import MIGRATED_TRIGGER_ROUTING_SETTING_KEY
 from dev_health_ops.sync.watermarks import get_watermark, set_watermark
 
@@ -373,6 +380,86 @@ def test_run_backfill_uses_legacy_path_when_feature_flag_off(db_session, monkeyp
     assert legacy_calls[0]["sync_config_id"] == str(config.id)
     assert legacy_calls[0]["since"] == date(2026, 6, 1)
     assert legacy_calls[0]["before"] == date(2026, 6, 7)
+
+
+def test_run_backfill_paused_config_marks_backfill_and_job_run_cancelled(
+    db_session, monkeypatch
+):
+    from dev_health_ops.backfill import runner
+    from dev_health_ops.workers import sync_backfill
+
+    config = SyncConfiguration(
+        name="paused backfill",
+        provider="github",
+        org_id=ORG_ID,
+        sync_targets=["git"],
+        sync_options={},
+        is_active=False,
+    )
+    db_session.add(config)
+    db_session.flush()
+    scheduled_job = ScheduledJob(
+        name=f"sync-config-{config.id}",
+        job_type="sync",
+        schedule_cron="0 * * * *",
+        org_id=ORG_ID,
+        provider="github",
+        job_config={},
+        sync_config_id=config.id,
+        tz="UTC",
+        status=1,
+    )
+    db_session.add(scheduled_job)
+    db_session.flush()
+    job_run = JobRun(
+        job_id=scheduled_job.id,
+        triggered_by="backfill",
+        status=JobRunStatus.PENDING.value,
+    )
+    backfill_job = BackfillJob(
+        org_id=ORG_ID,
+        sync_config_id=config.id,
+        status="queued",
+        since_date=date(2026, 6, 1),
+        before_date=date(2026, 6, 7),
+        total_chunks=0,
+        completed_chunks=0,
+        failed_chunks=0,
+    )
+    db_session.add_all([job_run, backfill_job])
+    db_session.commit()
+    _patch_db_session(monkeypatch, db_session)
+
+    monkeypatch.setattr(
+        runner,
+        "run_backfill_for_config",
+        lambda **kwargs: pytest.fail("paused config must not run legacy backfill"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_backfill_via_planner",
+        lambda *args, **kwargs: pytest.fail("paused config must not run planner"),
+    )
+
+    run_backfill_task = getattr(sync_backfill.run_backfill, "run")
+    result = run_backfill_task(
+        sync_config_id=str(config.id),
+        since="2026-06-01",
+        before="2026-06-07",
+        org_id=ORG_ID,
+        backfill_job_id=str(backfill_job.id),
+        pending_run_id=str(job_run.id),
+    )
+
+    db_session.refresh(backfill_job)
+    db_session.refresh(job_run)
+    assert result == {"status": "skipped", "reason": "sync_config_inactive"}
+    assert backfill_job.status == "cancelled"
+    assert backfill_job.error_message == "Sync configuration is paused"
+    assert backfill_job.completed_at is not None
+    assert job_run.status == JobRunStatus.CANCELLED.value
+    assert job_run.error == "Sync configuration is paused"
+    assert job_run.completed_at is not None
 
 
 def test_run_backfill_task_fanout_resolves_migrated_integration_id(

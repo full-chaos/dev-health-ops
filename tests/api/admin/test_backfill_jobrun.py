@@ -403,6 +403,46 @@ async def test_backfill_sourceless_migrated_config_without_flag_uses_legacy_path
     assert call_kwargs.get("pending_run_id") is not None
 
 
+@pytest.mark.asyncio
+async def test_backfill_paused_config_returns_409_without_dispatch(
+    client, session_maker
+):
+    ac, _ = client
+
+    create_resp = await _create_sync_config(
+        ac, name="bf-paused-rejected", provider="github"
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = create_resp.json()["id"]
+
+    async with session_maker() as session:
+        result = await session.execute(
+            select(SyncConfiguration).where(
+                SyncConfiguration.id == uuid.UUID(config_id)
+            )
+        )
+        cfg = result.scalar_one()
+        cfg.is_active = False
+        await session.commit()
+
+    mock_run_backfill = MagicMock()
+    with patch("dev_health_ops.workers.sync_tasks.run_backfill", mock_run_backfill):
+        resp = await ac.post(
+            f"/api/v1/admin/sync-configs/{config_id}/backfill",
+            json={"since": "2026-01-01", "before": "2026-01-08"},
+        )
+
+    assert resp.status_code == 409
+    assert "paused" in resp.json()["detail"]
+    mock_run_backfill.delay.assert_not_called()
+
+    async with session_maker() as session:
+        job_runs = (await session.execute(select(JobRun))).scalars().all()
+        backfill_jobs = (await session.execute(select(BackfillJob))).scalars().all()
+    assert job_runs == []
+    assert backfill_jobs == []
+
+
 # ---------------------------------------------------------------------------
 # Worker-level tests — JobRun state transitions
 # ---------------------------------------------------------------------------
@@ -568,6 +608,7 @@ async def test_run_backfill_worker_transitions_job_run_running_then_failed(
 def test_run_backfill_helpers_noop_on_none():
     """All three JobRun helpers must silently no-op when pending_run_id is None."""
     from dev_health_ops.workers.sync_backfill import (
+        _mark_sync_job_run_cancelled,
         _mark_sync_job_run_failed,
         _mark_sync_job_run_running,
         _mark_sync_job_run_success,
@@ -579,6 +620,7 @@ def test_run_backfill_helpers_noop_on_none():
         _mark_sync_job_run_running(None, now)
         _mark_sync_job_run_success(None, now)
         _mark_sync_job_run_failed(None, "err", now)
+        _mark_sync_job_run_cancelled(None, "err", now)
     mock_pg.assert_not_called()
 
 

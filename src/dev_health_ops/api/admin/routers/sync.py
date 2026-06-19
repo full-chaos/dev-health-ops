@@ -1283,6 +1283,11 @@ async def trigger_sync_config_backfill(
     config = await svc.get_by_id(config_id)
     if config is None:
         raise HTTPException(status_code=404, detail="Sync configuration not found")
+    if not bool(getattr(config, "is_active", False)):
+        raise HTTPException(
+            status_code=409,
+            detail="Sync configuration is paused and cannot be backfilled",
+        )
 
     requested_days = (payload.before - payload.since).days
 

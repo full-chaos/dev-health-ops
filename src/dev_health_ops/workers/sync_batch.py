@@ -423,6 +423,21 @@ def dispatch_batch_sync(
             )
             if config is None:
                 raise _TerminalSyncError(f"Sync configuration not found: {config_id}")
+            if not bool(config.is_active):
+                if pending_run_id is not None:
+                    from dev_health_ops.models.settings import JobRun, JobRunStatus
+
+                    run_record = (
+                        session.query(JobRun)
+                        .filter(JobRun.id == uuid.UUID(pending_run_id))
+                        .one_or_none()
+                    )
+                    if run_record is not None:
+                        run_record.status = JobRunStatus.CANCELLED.value
+                        run_record.completed_at = datetime.now(timezone.utc)
+                        run_record.error = "Sync configuration is paused"
+                session.flush()
+                return {"status": "skipped", "reason": "sync_config_inactive"}
 
             provider = (config.provider or "").lower()
             sync_targets = _normalize_sync_targets(

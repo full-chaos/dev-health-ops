@@ -228,7 +228,7 @@ Sync-side tests in `ops/tests/test_security_alerts.py` already exist and stay gr
 
 - `web/src/app/(app)/security/page.tsx` — RSC. Decodes `searchParams.f` into a `SecurityFilter` with `decodeFilter`. Renders `<SecurityDashboard filter={...} />` + `<SecurityAlertQueue filter={...} />`. Follows the shape of `opportunities/page.tsx:15-107`.
 - `web/src/app/(app)/security/repos/[repoId]/page.tsx` — RSC. Merges `{ repoIds: [params.repoId] }` into the decoded filter. Renders only `<SecurityAlertQueue filter={...} lockedRepoId={params.repoId} />` (no dashboard).
-- `web/src/app/(app)/security/loading.tsx`, page-level loading UI.
+- `web/src/app/(app)/security/loading.tsx` — page-level skeleton.
 - `web/src/app/(app)/security/error.tsx` — page-level error with `<ErrorCard />`.
 
 ### GraphQL layer
@@ -279,7 +279,7 @@ All new, grouped under one folder.
 
 ### Loading / error / empty
 
-- Loading: per-widget `<Skeleton>` tiles; per-row loading placeholder in the table while `fetching` is true on first load.
+- Loading: per-widget `<Skeleton>` tiles; per-row skeleton in the table while `fetching` is true on first load.
 - Error: page-level `error.tsx` catches render-time throws; per-widget `<ErrorCard />` when a single urql query errors so the rest of the page renders.
 - Empty: `<EmptyState title="No alerts match these filters" cta="Clear filters" />` when the queue has zero edges.
 

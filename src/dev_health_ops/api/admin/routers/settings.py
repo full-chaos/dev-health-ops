@@ -83,7 +83,11 @@ async def list_settings_by_category(
     )
 
 
-@router.get("/llm-settings", response_model=LLMSettingsResponse)
+@router.get(
+    "/llm-settings",
+    response_model=LLMSettingsResponse,
+    response_model_exclude_none=True,
+)
 async def get_llm_settings(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
@@ -93,7 +97,11 @@ async def get_llm_settings(
     return await get_llm_settings_response(svc)
 
 
-@router.put("/llm-settings", response_model=LLMSettingsResponse)
+@router.put(
+    "/llm-settings",
+    response_model=LLMSettingsResponse,
+    response_model_exclude_none=True,
+)
 async def upsert_llm_settings(
     payload: LLMSettingsUpsert,
     session: AsyncSession = Depends(get_session),

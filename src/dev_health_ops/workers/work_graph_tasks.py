@@ -169,6 +169,7 @@ def run_investment_materialize(
     llm_concurrency: int | None = None,
     force: bool = False,
     org_id: str = "",
+    allow_unscoped: bool = False,
 ) -> dict:
     """Materialize investment distributions from work graph.
 
@@ -184,6 +185,7 @@ def run_investment_materialize(
         llm_concurrency: Maximum concurrent LLM categorizations
         force: Force recomputation even if cached
         org_id: Organization scope for work-graph/investment queries
+        allow_unscoped: Allow real LLM materialization without an org scope
 
     Returns:
         dict with materialization status and stats
@@ -230,6 +232,7 @@ def run_investment_materialize(
             team_ids=team_ids,
             force=force,
             org_id=org_id or None,
+            allow_unscoped=allow_unscoped,
         )
         stats = run_async(materialize_investments(config))
         return {"status": "success", "stats": stats}
@@ -265,6 +268,7 @@ def run_investment_materialize_chunk(
     llm_concurrency: int | None = None,
     force: bool = False,
     org_id: str = "",
+    allow_unscoped: bool = False,
     run_id: str = "",
     computed_at: str = "",
     component_indexes: list[int] | None = None,
@@ -341,6 +345,7 @@ def run_investment_materialize_chunk(
             team_ids=team_ids,
             force=force,
             org_id=org_id or None,
+            allow_unscoped=allow_unscoped,
             run_id=run_id,
             computed_at=shared_computed_at,
             component_indexes=component_indexes,
@@ -452,6 +457,7 @@ def dispatch_investment_materialize_partitioned(
     llm_concurrency: int | None = None,
     force: bool = False,
     org_id: str = "",
+    allow_unscoped: bool = False,
     chunk_size: int | None = None,
 ) -> dict:
     from dev_health_ops.metrics.sinks.factory import create_sink
@@ -487,30 +493,34 @@ def dispatch_investment_materialize_partitioned(
     run_id = uuid.uuid4().hex
     computed_at = datetime.now(timezone.utc).isoformat()
 
-    header = [
-        celery_app.signature(
-            "dev_health_ops.workers.tasks.run_investment_materialize_chunk",
-            kwargs={
-                "db_url": db_url,
-                "from_date": from_date,
-                "to_date": to_date,
-                "window_days": window_days,
-                "repo_ids": repo_ids,
-                "team_ids": team_ids,
-                "llm_provider": llm_provider,
-                "llm_model": llm_model,
-                "llm_concurrency": llm_concurrency,
-                "force": force,
-                "org_id": org_id,
-                "run_id": run_id,
-                "computed_at": computed_at,
-                "component_indexes": chunk_indexes,
-                "chunk_index": chunk_index,
-            },
-            queue="metrics",
+    header = []
+    for chunk_index, chunk_indexes in enumerate(chunks):
+        chunk_kwargs = {
+            "db_url": db_url,
+            "from_date": from_date,
+            "to_date": to_date,
+            "window_days": window_days,
+            "repo_ids": repo_ids,
+            "team_ids": team_ids,
+            "llm_provider": llm_provider,
+            "llm_model": llm_model,
+            "llm_concurrency": llm_concurrency,
+            "force": force,
+            "org_id": org_id,
+            "run_id": run_id,
+            "computed_at": computed_at,
+            "component_indexes": chunk_indexes,
+            "chunk_index": chunk_index,
+        }
+        if allow_unscoped:
+            chunk_kwargs["allow_unscoped"] = True
+        header.append(
+            celery_app.signature(
+                "dev_health_ops.workers.tasks.run_investment_materialize_chunk",
+                kwargs=chunk_kwargs,
+                queue="metrics",
+            )
         )
-        for chunk_index, chunk_indexes in enumerate(chunks)
-    ]
     callback = celery_app.signature(
         "dev_health_ops.workers.tasks.finalize_investment_materialize_partitioned",
         kwargs={

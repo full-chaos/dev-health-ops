@@ -6,11 +6,17 @@ Supports Ollama, LMStudio, vLLM, and other OpenAI-compatible endpoints.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from urllib.parse import urlsplit, urlunsplit
 
-from dev_health_ops.llm.errors import classify_provider_error
+from dev_health_ops.llm.errors import (
+    LLMRateLimitError,
+    classify_provider_error,
+    is_retryable,
+    retry_delay,
+)
 
 from .base import (
     DEFAULT_MODEL_BY_PROVIDER,
@@ -62,6 +68,35 @@ def _error_metadata(exc: BaseException) -> dict[str, str | int | None]:
     return {"type": type(exc).__name__, "status_code": _status_code(exc)}
 
 
+def _first_env(names: tuple[str, ...]) -> str:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value
+    return ""
+
+
+def _env_flag(name: str, *, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _optional_env_flag(name: str) -> bool | None:
+    value = os.getenv(name)
+    if value is None:
+        return None
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _lmstudio_validate_model_on_startup() -> bool:
+    provider_flag = _optional_env_flag("LMSTUDIO_VALIDATE_MODEL_ON_STARTUP")
+    if provider_flag is not None:
+        return provider_flag
+    return _env_flag("LLM_VALIDATE_MODEL_ON_STARTUP")
+
+
 class LocalProvider(LLMProviderBase):
     """
     OpenAI-compatible provider for local LLM servers.
@@ -77,6 +112,8 @@ class LocalProvider(LLMProviderBase):
     - LOCAL_LLM_MODEL: Model name (default: varies by provider)
     - LOCAL_LLM_API_KEY: API key if required (default: "not-needed")
     """
+
+    provider_name = "local"
 
     def __init__(
         self,
@@ -116,6 +153,7 @@ class LocalProvider(LLMProviderBase):
                 self._client = AsyncOpenAI(
                     api_key=self.api_key,
                     base_url=self.base_url,
+                    max_retries=0,
                 )
             except ImportError:
                 raise ImportError(
@@ -200,7 +238,24 @@ class LocalProvider(LLMProviderBase):
                     continue
 
                 model_name = self.model or "local-model"
-                llm_exc = classify_provider_error(e, provider="local", model=model_name)
+                llm_exc = classify_provider_error(
+                    e, provider=self.provider_name, model=model_name
+                )
+                if is_retryable(llm_exc) and retry_count < max_retries:
+                    delay = retry_delay(retry_count)
+                    if isinstance(llm_exc, LLMRateLimitError) and llm_exc.retry_after:
+                        delay = llm_exc.retry_after
+                    logger.warning(
+                        "%s LLM API transient error on attempt %d/%d; retrying in %.1fs: %s",
+                        self.provider_name,
+                        retry_count + 1,
+                        max_retries + 1,
+                        delay,
+                        llm_exc,
+                    )
+                    retry_count += 1
+                    await asyncio.sleep(delay)
+                    continue
                 logger.error(
                     "Local LLM API error url=%s error=%s classified=%s",
                     _redact_url(self.base_url or ""),
@@ -264,18 +319,29 @@ class LMStudioGPT5Provider(OpenAIGPT5Provider):
         self,
         model: str,
         base_url: str | None = None,
+        api_key: str | None = None,
         max_completion_tokens: int = 4096,
         temperature: float = 0.3,
+        validate_model_on_startup: bool | None = None,
     ) -> None:
         base_url = base_url or os.getenv(
             "LMSTUDIO_BASE_URL", DEFAULT_ENDPOINTS["lmstudio"]
         )
-        # Use dummy API key for local
+        api_key = api_key or _first_env(
+            ("LMSTUDIO_API_KEY", "LLM_API_KEY", "LOCAL_LLM_API_KEY")
+        )
+        should_validate_model = (
+            _lmstudio_validate_model_on_startup()
+            if validate_model_on_startup is None
+            else validate_model_on_startup
+        )
         cfg = OpenAIProviderConfig(
-            api_key="lm-studio",
+            api_key=api_key or "lm-studio",
             base_url=base_url,
             model=model,
             max_output_tokens=max_completion_tokens,
             temperature=temperature,
+            validate_model_on_startup=should_validate_model,
+            validation_provider_name="lmstudio",
         )
         super().__init__(cfg)

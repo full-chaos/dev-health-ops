@@ -144,6 +144,7 @@ async def test_admin_llm_settings_cli_set_get_delete_round_trip(
         "model": "gpt-test",
         "api_key": "sk-s…alue",
         "base_url": "https://api.example.test/v1",
+        "concurrency": None,
     }
 
     get_result = await admin_cli._llm_settings_get_async(_ns(org=eligible_org))
@@ -177,6 +178,7 @@ async def test_admin_llm_settings_cli_set_get_delete_round_trip(
         "model": None,
         "api_key": None,
         "base_url": None,
+        "concurrency": None,
     }
 
 

@@ -66,6 +66,8 @@ from dev_health_ops.work_graph.investment.utils import (
 
 logger = logging.getLogger(__name__)
 
+_MAX_LLM_CONCURRENCY = 32
+
 NodeKey = tuple[str, str]
 
 
@@ -266,6 +268,7 @@ class MaterializeConfig:
     run_id: str | None = None
     computed_at: datetime | None = None
     component_indexes: list[int] | None = None
+    allow_unscoped: bool = False
 
 
 def _build_components(
@@ -501,6 +504,16 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
         resolved_llm_provider = resolve_provider_name(
             config.llm_provider, org_id=config.org_id or None
         )
+        if (
+            not (config.org_id or "").strip()
+            and resolved_llm_provider not in {"mock", "none"}
+            and not config.allow_unscoped
+        ):
+            raise ValueError(
+                "Investment materialize requires a non-empty org for real LLM "
+                "providers. Pass --org <org_id> or --allow-unscoped to write "
+                "empty-org rows intentionally."
+            )
         provider_instance = get_provider(
             resolved_llm_provider,
             org_id=config.org_id or None,
@@ -696,13 +709,84 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
                     len(skipped_existing),
                 )
 
-        # Parallel LLM categorization with concurrency limit
-        semaphore = asyncio.Semaphore(config.llm_concurrency)
+        from dev_health_ops.llm.credentials import resolve_llm_org_settings_concurrency
+
+        requested_concurrency = (
+            resolve_llm_org_settings_concurrency(org_id=config.org_id or None)
+            or config.llm_concurrency
+        )
+        configured_concurrency = min(
+            max(1, requested_concurrency), _MAX_LLM_CONCURRENCY
+        )
+        if configured_concurrency != requested_concurrency:
+            logger.warning(
+                "LLM concurrency %d exceeds maximum %d; clamping to %d",
+                requested_concurrency,
+                _MAX_LLM_CONCURRENCY,
+                configured_concurrency,
+            )
+
+        class _AdaptiveLLMConcurrency:
+            def __init__(self, limit: int) -> None:
+                self.base_limit = max(1, int(limit))
+                self.effective_limit = self.base_limit
+                self.active = 0
+                self.rate_limit_streak = 0
+                self.success_streak = 0
+                self.condition = asyncio.Condition()
+
+            async def acquire(self) -> None:
+                async with self.condition:
+                    while self.active >= self.effective_limit:
+                        await self.condition.wait()
+                    self.active += 1
+
+            async def release(self) -> None:
+                async with self.condition:
+                    self.active = max(0, self.active - 1)
+                    self.condition.notify_all()
+
+            async def record_success(self) -> None:
+                async with self.condition:
+                    self.rate_limit_streak = 0
+                    if self.effective_limit < self.base_limit:
+                        self.success_streak += 1
+                        if self.success_streak >= 2:
+                            self.effective_limit = min(
+                                self.base_limit, self.effective_limit + 1
+                            )
+                            self.success_streak = 0
+                            logger.info(
+                                "LLM adaptive concurrency recovered to %d/%d",
+                                self.effective_limit,
+                                self.base_limit,
+                            )
+                            self.condition.notify_all()
+
+            async def record_failure(self, failure_class: str) -> None:
+                async with self.condition:
+                    if failure_class == "rate_limit":
+                        self.rate_limit_streak += 1
+                        self.success_streak = 0
+                        if self.rate_limit_streak >= 2 and self.effective_limit > 1:
+                            self.effective_limit = max(1, self.effective_limit // 2)
+                            self.rate_limit_streak = 0
+                            logger.warning(
+                                "LLM adaptive concurrency reduced to %d/%d after sustained rate limits",
+                                self.effective_limit,
+                                self.base_limit,
+                            )
+                            self.condition.notify_all()
+                    else:
+                        self.rate_limit_streak = 0
+
+        adaptive_concurrency = _AdaptiveLLMConcurrency(configured_concurrency)
         llm_results: dict[int, Any] = {}
         llm_failure_counts: Counter[str] = Counter()
 
         async def categorize_with_limit(idx: int, bundle: Any) -> tuple[int, Any]:
-            async with semaphore:
+            await adaptive_concurrency.acquire()
+            try:
                 outcome = await categorize_text_bundle(
                     bundle,
                     llm_provider=resolved_llm_provider,
@@ -710,12 +794,14 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
                     provider=provider_instance,
                 )
                 return (idx, outcome)
+            finally:
+                await adaptive_concurrency.release()
 
         if pending_llm:
             logger.info(
                 "Starting parallel LLM categorization (%d tasks, concurrency=%d)",
                 len(pending_llm),
-                config.llm_concurrency,
+                configured_concurrency,
             )
             tasks = [
                 asyncio.create_task(categorize_with_limit(idx, bundle))
@@ -732,6 +818,7 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
                     )
                     failure_class = _llm_failure_class(classified)
                     llm_failure_counts[failure_class] += 1
+                    await adaptive_concurrency.record_failure(failure_class)
                     if _is_deterministic_llm_failure(classified):
                         for pending_task in tasks:
                             if not pending_task.done():
@@ -752,6 +839,7 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
                 if not isinstance(result, tuple) or len(result) != 2:
                     logger.warning("Unexpected LLM task result: %r", result)
                     continue
+                await adaptive_concurrency.record_success()
                 idx, outcome = result
                 llm_results[idx] = outcome
             logger.info(

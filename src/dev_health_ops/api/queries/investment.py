@@ -33,6 +33,7 @@ LATEST_WORK_UNIT_INVESTMENTS_CTE = """
                 argMax(evidence_quality, computed_at) AS evidence_quality,
                 argMax(evidence_quality_band, computed_at) AS evidence_quality_band,
                 argMax(categorization_status, computed_at) AS categorization_status,
+                argMax(categorization_model_version, computed_at) AS categorization_model_version,
                 argMax(categorization_run_id, computed_at) AS categorization_run_id,
                 org_id,
                 -- Alias must NOT be ``computed_at``: that name is the ordering
@@ -89,6 +90,51 @@ async def fetch_investment_breakdown(
         ORDER BY value DESC
     """
     return await query_dicts(sink, query, params)
+
+
+async def fetch_mock_fixture_investment_row_count(
+    sink: BaseMetricsSink,
+    *,
+    start_ts: datetime,
+    end_ts: datetime,
+    scope_filter: str,
+    scope_params: dict[str, Any],
+    org_id: str = "",
+    themes: list[str] | None = None,
+    subcategories: list[str] | None = None,
+) -> int:
+    params: dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
+    params.update(scope_params)
+    params["org_id"] = org_id
+    filters: list[str] = []
+    if themes:
+        filters.append("splitByChar('.', subcategory_kv.1)[1] IN %(themes)s")
+        params["themes"] = themes
+    if subcategories:
+        filters.append("subcategory_kv.1 IN %(subcategories)s")
+        params["subcategories"] = subcategories
+    category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
+    query = f"""
+        WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE}
+        SELECT count() AS count
+        FROM latest_work_unit_investments AS work_unit_investments
+        ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
+        WHERE work_unit_investments.from_ts < %(end_ts)s
+          AND work_unit_investments.to_ts >= %(start_ts)s
+          AND work_unit_investments.org_id = %(org_id)s
+          AND (
+            lower(ifNull(work_unit_investments.provider, '')) IN ('mock', 'fixture', 'fixtures', 'synthetic')
+            OR lower(ifNull(work_unit_investments.categorization_model_version, '')) LIKE '%mock%'
+            OR lower(ifNull(work_unit_investments.categorization_model_version, '')) LIKE '%synthetic%'
+            OR lower(ifNull(work_unit_investments.categorization_model_version, '')) LIKE '%fixture%'
+          )
+        {scope_filter}
+        {category_filter}
+    """
+    rows = await query_dicts(sink, query, params)
+    if not rows:
+        return 0
+    return int(rows[0].get("count") or 0)
 
 
 async def fetch_investment_edges(

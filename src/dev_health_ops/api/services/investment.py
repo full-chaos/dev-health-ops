@@ -19,9 +19,11 @@ from ..queries.investment import (
     fetch_investment_breakdown,
     fetch_investment_quality_stats,
     fetch_investment_sunburst,
+    fetch_mock_fixture_investment_row_count,
 )
 from ..queries.scopes import build_scope_filter_multi
 from .filtering import resolve_repo_filter_ids, time_window
+from .provenance import warn_once_for_mock_fixture_rows
 
 
 def _split_category_filters(filters: MetricFilter) -> tuple[list[str], list[str]]:
@@ -186,6 +188,17 @@ async def build_investment_response(
             subcategories=subcategory_filters or None,
         )
 
+        mock_fixture_count = await fetch_mock_fixture_investment_row_count(
+            sink,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            scope_filter=scope_filter,
+            scope_params=scope_params,
+            org_id=org_id,
+            themes=theme_filters or None,
+            subcategories=subcategory_filters or None,
+        )
+
         # Fetch evidence quality stats
         quality_row = await fetch_investment_quality_stats(
             sink,
@@ -213,6 +226,13 @@ async def build_investment_response(
 
     # Compute evidence quality stats
     evidence_quality_stats = _compute_quality_stats(quality_row)
+    warn_once_for_mock_fixture_rows(
+        org_id=org_id,
+        surface="investment",
+        rows=[{"categorization_model_version": "synthetic"}]
+        if mock_fixture_count > 0
+        else [],
+    )
 
     return InvestmentResponse(
         theme_distribution=theme_distribution,
@@ -261,6 +281,23 @@ async def build_investment_sunburst(
             scope_filter, scope_params = build_scope_filter_multi(
                 "repo", repo_ids, repo_column="repo_id"
             )
+        mock_fixture_count = await fetch_mock_fixture_investment_row_count(
+            sink,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            scope_filter=scope_filter,
+            scope_params=scope_params,
+            org_id=org_id,
+            themes=theme_filters or None,
+            subcategories=subcategory_filters or None,
+        )
+        warn_once_for_mock_fixture_rows(
+            org_id=org_id,
+            surface="investment_sunburst",
+            rows=[{"categorization_model_version": "synthetic"}]
+            if mock_fixture_count > 0
+            else [],
+        )
         rows = await fetch_investment_sunburst(
             sink,
             start_ts=start_ts,

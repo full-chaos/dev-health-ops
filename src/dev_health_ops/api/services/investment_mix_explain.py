@@ -8,12 +8,13 @@ from typing import Any, Literal
 
 from dev_health_ops.api.utils.logging import sanitize_for_log
 from dev_health_ops.investment_taxonomy import SUBCATEGORIES, THEMES, theme_of
-from dev_health_ops.llm import get_provider, is_llm_available
+from dev_health_ops.llm import get_provider, is_llm_available, resolve_provider_name
 from dev_health_ops.llm.explainers.investment_mix_explainer import (
     build_prompt,
     load_prompt,
     parse_and_validate_response,
 )
+from dev_health_ops.metrics.llm_token_usage import write_llm_token_usage
 from dev_health_ops.metrics.schemas import InvestmentExplanationRecord
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
@@ -296,8 +297,26 @@ async def explain_investment_mix(
     prompt_text = load_prompt()
     full_prompt = build_prompt(base_prompt=prompt_text, payload=payload)
 
+    resolved_llm_provider = resolve_provider_name(llm_provider, org_id=org_id)
     provider = get_provider(llm_provider, model=llm_model)
-    raw = await provider.complete_text(full_prompt)
+    completion = await provider.complete(full_prompt)
+    raw = completion.text
+    try:
+        ch_sink = ClickHouseMetricsSink(db_url)
+        try:
+            write_llm_token_usage(
+                ch_sink,
+                org_id=org_id,
+                provider=resolved_llm_provider,
+                model=completion.model or llm_model,
+                source="investment_mix_explain",
+                input_tokens=completion.input_tokens,
+                output_tokens=completion.output_tokens,
+            )
+        finally:
+            ch_sink.close()
+    except Exception:
+        logger.debug("Token usage storage failed", exc_info=True)
     raw_len = len(raw) if raw is not None else 0
     if logger.isEnabledFor(logging.DEBUG):
         # Sanitize and truncate the LLM response before logging to avoid log injection.

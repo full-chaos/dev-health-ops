@@ -667,6 +667,7 @@ async def work_unit_explain_endpoint(
                 llm_model=llm_model,
                 provider=resolved_provider,
                 org_id=current_user.org_id,
+                db_url=_analytics_db_url(),
             )
         except LLMError as exc:
             raise _http_exception_from_llm_error(exc) from exc

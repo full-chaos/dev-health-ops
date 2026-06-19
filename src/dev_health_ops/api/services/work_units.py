@@ -4,6 +4,7 @@ import json
 import logging
 from collections.abc import Iterable
 from datetime import datetime, time, timezone
+from typing import Literal
 
 from ..models.filters import MetricFilter
 from ..models.schemas import (
@@ -22,8 +23,12 @@ from ..queries.work_unit_investments import (
     fetch_work_unit_investments,
 )
 from .filtering import resolve_repo_filter_ids, time_window
+from .provenance import warn_once_for_mock_fixture_rows
 
 logger = logging.getLogger(__name__)
+
+EffortMetric = Literal["churn_loc", "active_hours"]
+EvidenceQualityBand = Literal["high", "moderate", "low", "very_low", "unknown"]
 
 
 def _ensure_utc(dt: datetime | None) -> datetime | None:
@@ -39,6 +44,23 @@ def _clean_optional_text(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _effort_metric(value: object) -> EffortMetric:
+    return "active_hours" if value == "active_hours" else "churn_loc"
+
+
+def _evidence_quality_band(value: object) -> EvidenceQualityBand:
+    text = str(value or "")
+    if text == "high":
+        return "high"
+    if text == "moderate":
+        return "moderate"
+    if text == "low":
+        return "low"
+    if text == "very_low":
+        return "very_low"
+    return "unknown"
 
 
 def _split_category_filters(filters: MetricFilter) -> tuple[list[str], list[str]]:
@@ -183,6 +205,8 @@ async def build_work_unit_investments(
                     filtered_rows.append(row)
             rows = filtered_rows
 
+        warn_once_for_mock_fixture_rows(org_id=org_id, surface="work_units", rows=rows)
+
         quote_rows: list[dict[str, object]] = []
         if include_text:
             unit_runs = [
@@ -232,7 +256,7 @@ async def build_work_unit_investments(
         subcategory_distribution = _parse_distribution(
             row.get("subcategory_distribution_json")
         )
-        effort_metric = str(row.get("effort_metric") or "churn_loc")
+        effort_metric = _effort_metric(row.get("effort_metric"))
         effort_value = float(row.get("effort_value") or 0.0)
 
         structural_evidence: list[dict[str, object]] = []
@@ -289,10 +313,8 @@ async def build_work_unit_investments(
         raw_quality = row.get("evidence_quality")
         evidence_quality_value = float(raw_quality) if raw_quality is not None else None
         raw_band = row.get("evidence_quality_band")
-        evidence_band = (
-            str(raw_band)
-            if raw_band
-            else ("unknown" if raw_quality is None else "very_low")
+        evidence_band = _evidence_quality_band(
+            raw_band if raw_band else ("unknown" if raw_quality is None else "very_low")
         )
 
         results.append(

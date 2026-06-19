@@ -25,6 +25,7 @@ from dev_health_ops.llm import (
     resolve_provider_name,
 )
 from dev_health_ops.llm.providers.none import NoneProvider
+from dev_health_ops.metrics.llm_token_usage import write_llm_token_usage
 from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
@@ -783,6 +784,17 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
                     len(llm_results) - len(fallback_results), llm_failure_counts
                 ),
             )
+        write_llm_token_usage(
+            sink,
+            org_id=config.org_id or "",
+            provider=resolved_llm_provider,
+            model=model_version,
+            source="investment_materialize",
+            input_tokens=llm_input_tokens,
+            output_tokens=llm_output_tokens,
+            calls=llm_calls,
+            computed_at=computed_at,
+        )
 
         # Post-process: create records from outcomes
         for idx, data in preprocessed.items():

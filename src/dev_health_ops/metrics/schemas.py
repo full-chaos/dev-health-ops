@@ -898,6 +898,18 @@ class WorkUnitInvestmentEvidenceQuoteRecord:
 
 
 @dataclass(frozen=True)
+class LLMTokenUsageRecord:
+    org_id: str
+    provider: str
+    model: str
+    source: str
+    input_tokens: int
+    output_tokens: int
+    calls: int
+    computed_at: datetime
+
+
+@dataclass(frozen=True)
 class InvestmentExplanationRecord:
     """Cached LLM-generated explanation for investment mix views."""
 

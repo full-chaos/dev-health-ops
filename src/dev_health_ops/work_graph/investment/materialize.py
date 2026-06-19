@@ -266,6 +266,7 @@ class MaterializeConfig:
     run_id: str | None = None
     computed_at: datetime | None = None
     component_indexes: list[int] | None = None
+    allow_unscoped: bool = False
 
 
 def _build_components(
@@ -501,6 +502,16 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
         resolved_llm_provider = resolve_provider_name(
             config.llm_provider, org_id=config.org_id or None
         )
+        if (
+            not (config.org_id or "").strip()
+            and resolved_llm_provider not in {"mock", "none"}
+            and not config.allow_unscoped
+        ):
+            raise ValueError(
+                "Investment materialize requires a non-empty org for real LLM "
+                "providers. Pass --org <org_id> or --allow-unscoped to write "
+                "empty-org rows intentionally."
+            )
         provider_instance = get_provider(
             resolved_llm_provider,
             org_id=config.org_id or None,

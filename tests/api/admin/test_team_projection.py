@@ -8,6 +8,7 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from dev_health_ops.api.admin.schemas_flat import DiscoveredTeam
 from dev_health_ops.api.services.configuration.team_drift_sync import (
     PROVIDER_MANAGED_FIELDS,
     TeamDriftSyncService,
@@ -217,3 +218,124 @@ async def test_project_provider_teams_does_not_seed_raw_member_identities(
         identities = list((await session.execute(select(IdentityMapping))).scalars())
 
     assert identities == []
+
+
+@pytest.mark.asyncio
+async def test_project_provider_teams_accepts_discovered_team_shape(session_maker):
+    async with session_maker() as session:
+        service = TeamDriftSyncService(session, "org-1")
+        result = await service.project_provider_teams(
+            "github",
+            [
+                DiscoveredTeam(
+                    provider_type="github",
+                    provider_team_id="platform",
+                    name="Platform",
+                    description="Platform team",
+                    associations={
+                        "team_id": "gh:platform",
+                        "repo_patterns": ["platform/*"],
+                        "project_keys": ["PLAT"],
+                    },
+                )
+            ],
+        )
+        mapping = await session.scalar(
+            select(TeamMapping).where(TeamMapping.team_id == "gh:platform")
+        )
+
+    assert result["created"] == 1
+    assert result["projected"] == 1
+    assert mapping is not None
+    assert mapping.extra_data["provider_team_id"] == "platform"
+    assert mapping.repo_patterns == ["platform/*"]
+    assert mapping.project_keys == ["PLAT"]
+
+
+@pytest.mark.asyncio
+async def test_project_provider_teams_and_drift_sync_share_merge_results(
+    session_maker,
+):
+    async with session_maker() as session:
+        session.add(
+            TeamMapping(
+                team_id="gh:platform",
+                name="Old Platform",
+                org_id="org-1",
+                description="Old description",
+                repo_patterns=["old/*"],
+                project_keys=["OLD"],
+                extra_data={"provider_type": "github", "provider_team_id": "platform"},
+                managed_fields=list(PROVIDER_MANAGED_FIELDS),
+                sync_policy=0,
+            )
+        )
+        await session.flush()
+
+        service = TeamDriftSyncService(session, "org-1")
+        await service.project_provider_teams(
+            "github",
+            [
+                ProviderTeam(
+                    id="gh:platform",
+                    name="New Platform",
+                    description="New description",
+                    repo_patterns=["new/*"],
+                    project_keys=["NEW"],
+                )
+            ],
+        )
+        mapping = await session.scalar(
+            select(TeamMapping).where(TeamMapping.team_id == "gh:platform")
+        )
+        project_result = {
+            "name": mapping.name,
+            "description": mapping.description,
+            "repo_patterns": mapping.repo_patterns,
+            "project_keys": mapping.project_keys,
+        }
+
+    async with session_maker() as session:
+        session.add(
+            TeamMapping(
+                team_id="gh:platform",
+                name="Old Platform",
+                org_id="org-1",
+                description="Old description",
+                repo_patterns=["old/*"],
+                project_keys=["OLD"],
+                extra_data={"provider_type": "github", "provider_team_id": "platform"},
+                managed_fields=list(PROVIDER_MANAGED_FIELDS),
+                sync_policy=0,
+            )
+        )
+        await session.flush()
+
+        service = TeamDriftSyncService(session, "org-1")
+        await service.run_drift_sync(
+            "github",
+            [
+                DiscoveredTeam(
+                    provider_type="github",
+                    provider_team_id="platform",
+                    name="New Platform",
+                    description="New description",
+                    associations={
+                        "team_id": "gh:platform",
+                        "repo_patterns": ["new/*"],
+                        "project_keys": ["NEW"],
+                    },
+                )
+            ],
+        )
+        mapping = await session.scalar(
+            select(TeamMapping).where(TeamMapping.team_id == "gh:platform")
+        )
+        drift_result = {
+            "name": mapping.name,
+            "description": mapping.description,
+            "repo_patterns": mapping.repo_patterns,
+            "project_keys": mapping.project_keys,
+        }
+
+    assert project_result == drift_result

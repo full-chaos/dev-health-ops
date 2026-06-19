@@ -375,16 +375,6 @@ def _dispatch_post_sync_tasks(
         # build *succeeds*. The links are immutable (.si()) so a parent's return
         # value is not injected as a positional arg into the next step.
         #
-        # CHAOS-2433 round-3 finding #2 — UNIFIED MEMBERSHIP WRITER:
-        # build -> materialize (LLM; writes work_unit_investments ONLY) ->
-        # project-membership (no-LLM; writes work_unit_membership + the
-        # completion marker with FULL current-component coverage).  The
-        # materializer no longer writes membership/markers, so a date-windowed
-        # materialize can never publish partial-coverage that would blank
-        # out-of-window components.  The projection iterates the whole current
-        # work graph and reads the investments materialize just persisted, so
-        # membership stays fresh AND full-coverage.  run_membership_backfill is
-        # the projection task (no-LLM, org-wide, full coverage).
         build_sig = celery_app.signature(
             "dev_health_ops.workers.tasks.run_work_graph_build",
             kwargs=build_kwargs,
@@ -392,15 +382,9 @@ def _dispatch_post_sync_tasks(
             immutable=has_work_items,
         )
         materialize_sig = celery_app.signature(
-            "dev_health_ops.workers.tasks.run_investment_materialize",
+            "dev_health_ops.workers.tasks.dispatch_investment_materialize_partitioned",
             kwargs=materialize_kwargs,
-            queue="metrics",
-            immutable=True,
-        )
-        project_membership_sig = celery_app.signature(
-            "dev_health_ops.workers.tasks.run_membership_backfill",
-            kwargs={"org_id": org_id},
-            queue="metrics",
+            queue="default",
             immutable=True,
         )
         if has_work_items:
@@ -420,13 +404,11 @@ def _dispatch_post_sync_tasks(
                 daily_metrics_sig,
                 build_sig,
                 materialize_sig,
-                project_membership_sig,
             ).apply_async()
         else:
-            chain(build_sig, materialize_sig, project_membership_sig).apply_async()
+            chain(build_sig, materialize_sig).apply_async()
         dispatched.append("run_work_graph_build")
-        dispatched.append("run_investment_materialize")
-        dispatched.append("run_membership_backfill")
+        dispatched.append("dispatch_investment_materialize_partitioned")
 
     if has_git or has_dora:
         # CHAOS-2382: DORA is provider-agnostic — computed from synced

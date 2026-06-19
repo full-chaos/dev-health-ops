@@ -70,9 +70,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    conn = op.get_bind()
-    # Delete only the row seeded by this migration.
-    conn.execute(
-        sa.text("DELETE FROM feature_flags WHERE key = :key"),
-        {"key": _FEATURE_KEY},
-    )
+    # Intentionally non-destructive (CHAOS-2551 review): this migration only
+    # idempotently seeds a single data row and creates no schema. Deleting the
+    # byo_llm feature_flags row on downgrade would be unsafe because:
+    #   1. the row may have pre-existed this migration (the upgrade skips insert
+    #      when it already exists), so a delete would remove state we did not
+    #      create; and
+    #   2. org_feature_overrides reference feature_flags.id with ON DELETE
+    #      CASCADE, so deleting the flag would erase admin-configured per-org
+    #      enable/disable state.
+    # Leaving the inert data row in place is the safe rollback; the reverted
+    # application code no longer gates on it.
+    pass

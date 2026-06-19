@@ -1,36 +1,9 @@
-"""Invariant tests for sync_teams routing (CHAOS-2401).
-
-Pins the two routing paths introduced by CHAOS-2401:
-
-Org-scoped path (``--org <id>`` present):
-    provider → _bridge_teams_to_postgres → bridge_teams_to_clickhouse
-    - run_with_store is NOT called (no direct ClickHouse write from provider data)
-    - _bridge_teams_to_postgres IS called and its count gates the exit code
-    - bridge_teams_to_clickhouse IS called with the correct org_id
-    - bridge_teams_to_clickhouse failure is fatal after PostgreSQL succeeds
-
-No-org path (``--org`` absent):
-    provider → run_with_store (direct ClickHouse write)
-    - _bridge_teams_to_postgres is NOT called
-    - bridge_teams_to_clickhouse is NOT called
-    - run_with_store IS called with org_id=None
-
-Membership invariants (bridge_teams_to_clickhouse):
-    - Reads TeamMapping + IdentityMapping from Postgres (org-scoped)
-    - Emits identity-resolved members (email, canonical_id, provider logins)
-    - Does not read from provider-supplied teams_data directly
-"""
-
 from __future__ import annotations
 
 import argparse
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _make_ns(
@@ -53,96 +26,10 @@ def _make_ns(
     return ns
 
 
-# ---------------------------------------------------------------------------
-# Org-scoped routing invariants
-# ---------------------------------------------------------------------------
-
-
 class TestOrgScopedRouting:
-    """Org-scoped sync must go through Postgres-first path."""
-
-    def test_org_scoped_does_not_call_run_with_store(self, tmp_path: Any) -> None:
-        """run_with_store must NOT be called for org-scoped syncs.
-
-        The org-scoped path is: _bridge_teams_to_postgres → bridge_teams_to_clickhouse.
-        run_with_store (direct ClickHouse write from provider data) must be bypassed.
-        """
-        import yaml
-
-        from dev_health_ops.providers.teams import sync_teams
-
-        config_file = tmp_path / "teams.yaml"
-        config_file.write_text(
-            yaml.dump({"teams": [{"team_id": "team-a", "team_name": "Team A"}]})
-        )
-
-        run_with_store_called = []
-
-        async def _spy_run_with_store(
-            _db_uri: str, _db_type: str, handler: Any, org_id: Any = None
-        ) -> int:
-            run_with_store_called.append(org_id)
-            return 1
-
-        with (
-            patch(
-                "dev_health_ops.providers.teams._bridge_teams_to_postgres",
-                return_value=1,
-            ),
-            patch(
-                "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
-                return_value=1,
-            ),
-            patch(
-                "dev_health_ops.storage.run_with_store",
-                side_effect=_spy_run_with_store,
-            ),
-        ):
-            ns = _make_ns(org="org-1", path=str(config_file))
-            result = sync_teams(ns)
-
-        assert result == 0
-        assert run_with_store_called == [], (
-            "run_with_store must not be called on the org-scoped path"
-        )
-
-    def test_org_scoped_calls_bridge_to_postgres(self, tmp_path: Any) -> None:
-        """_bridge_teams_to_postgres must be called for org-scoped syncs."""
-        import yaml
-
-        from dev_health_ops.providers.teams import sync_teams
-
-        config_file = tmp_path / "teams.yaml"
-        config_file.write_text(
-            yaml.dump({"teams": [{"team_id": "team-a", "team_name": "Team A"}]})
-        )
-
-        pg_calls: list[Any] = []
-
-        def _spy_pg(teams_data: list, ns: Any) -> int:
-            pg_calls.append((teams_data, ns))
-            return len(teams_data)
-
-        with (
-            patch(
-                "dev_health_ops.providers.teams._bridge_teams_to_postgres",
-                side_effect=_spy_pg,
-            ),
-            patch(
-                "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
-                return_value=1,
-            ),
-        ):
-            ns = _make_ns(org="org-1", path=str(config_file))
-            result = sync_teams(ns)
-
-        assert result == 0
-        assert len(pg_calls) == 1, "_bridge_teams_to_postgres must be called once"
-
-    def test_org_scoped_calls_bridge_to_clickhouse_with_org_id_and_db_url(
+    def test_org_scoped_projects_then_bridges_without_run_with_store(
         self, tmp_path: Any
     ) -> None:
-        """bridge_teams_to_clickhouse must receive org_id and requested DB URL."""
         import yaml
 
         from dev_health_ops.providers.teams import sync_teams
@@ -152,40 +39,117 @@ class TestOrgScopedRouting:
             yaml.dump({"teams": [{"team_id": "team-a", "team_name": "Team A"}]})
         )
 
-        captured_calls: list[tuple[str | None, str | None, str | None]] = []
+        projected_calls: list[tuple[str, list[Any]]] = []
+        ch_calls: list[tuple[str | None, str | None, str | None]] = []
+
+        class _FakeProjectionService:
+            def __init__(self, _session: Any, org_id: str) -> None:
+                self.org_id = org_id
+
+            async def project_provider_teams(
+                self,
+                provider: str,
+                teams_data: list[Any],
+                *,
+                replace_empty_provider_values: bool = False,
+            ) -> dict[str, Any]:
+                projected_calls.append((provider, teams_data))
+                return {"projected": len(teams_data)}
+
+        class _FakeSession:
+            async def __aenter__(self) -> _FakeSession:
+                return self
+
+            async def __aexit__(self, *args: Any) -> None:
+                pass
+
+            async def commit(self) -> None:
+                pass
+
+        class _FakeFactory:
+            def __call__(self) -> _FakeSession:
+                return _FakeSession()
+
+        class _FakeEngine:
+            async def dispose(self) -> None:
+                pass
 
         def _spy_ch(
             org_id: str | None = None,
             db_url: str | None = None,
             postgres_db_url: str | None = None,
         ) -> int:
-            captured_calls.append((org_id, db_url, postgres_db_url))
+            ch_calls.append((org_id, db_url, postgres_db_url))
             return 1
 
         with (
             patch(
-                "dev_health_ops.providers.teams._bridge_teams_to_postgres",
-                return_value=1,
+                "dev_health_ops.api.services.configuration.team_drift_sync.TeamDriftSyncService",
+                _FakeProjectionService,
             ),
             patch(
                 "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
                 side_effect=_spy_ch,
             ),
+            patch(
+                "dev_health_ops.storage.run_with_store",
+            ),
+            patch(
+                "dev_health_ops.providers.teams.create_async_engine",
+                return_value=_FakeEngine(),
+            ),
+            patch(
+                "dev_health_ops.providers.teams.async_sessionmaker",
+                return_value=_FakeFactory(),
+            ),
         ):
-            ns = _make_ns(org="org-42", path=str(config_file))
+            ns = _make_ns(org="org-1", path=str(config_file))
             result = sync_teams(ns)
 
         assert result == 0
-        assert captured_calls == [
+        assert len(projected_calls) == 1
+        provider, teams_arg = projected_calls[0]
+        assert provider == "config"
+        assert {getattr(team, "id", None) for team in teams_arg} == {"team-a"}
+        assert ch_calls == [
             (
-                "org-42",
+                "org-1",
                 "clickhouse://example.test:8123/default",
                 "sqlite+aiosqlite:///:memory:",
             )
-        ], "bridge_teams_to_clickhouse must receive the org_id and requested db URL"
+        ]
 
-    def test_org_scoped_postgres_bridge_failure_exits_one(self, tmp_path: Any) -> None:
-        """If _bridge_teams_to_postgres raises, exit code must be 1."""
+    def test_org_scoped_never_calls_run_with_store(self, tmp_path: Any) -> None:
+        import yaml
+
+        from dev_health_ops.providers.teams import sync_teams
+
+        config_file = tmp_path / "teams.yaml"
+        config_file.write_text(
+            yaml.dump({"teams": [{"team_id": "team-a", "team_name": "Team A"}]})
+        )
+
+        async def _projection(teams_data: list, ns: Any) -> dict[str, Any]:
+            return {"projected": len(teams_data)}
+
+        with (
+            patch(
+                "dev_health_ops.providers.teams._project_teams_to_postgres",
+                side_effect=_projection,
+            ),
+            patch(
+                "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
+                return_value=1,
+            ),
+            patch("dev_health_ops.storage.run_with_store") as mock_run_with_store,
+        ):
+            ns = _make_ns(org="org-1", path=str(config_file))
+            result = sync_teams(ns)
+
+        assert result == 0
+        mock_run_with_store.assert_not_called()
+
+    def test_org_scoped_projection_failure_exits_one(self, tmp_path: Any) -> None:
         import yaml
 
         from dev_health_ops.providers.teams import sync_teams
@@ -196,7 +160,7 @@ class TestOrgScopedRouting:
         )
 
         with patch(
-            "dev_health_ops.providers.teams._bridge_teams_to_postgres",
+            "dev_health_ops.providers.teams._project_teams_to_postgres",
             side_effect=RuntimeError("pg down"),
         ):
             ns = _make_ns(org="org-1", path=str(config_file))
@@ -204,10 +168,7 @@ class TestOrgScopedRouting:
 
         assert result == 1
 
-    def test_org_scoped_postgres_bridge_zero_count_exits_one(
-        self, tmp_path: Any
-    ) -> None:
-        """If _bridge_teams_to_postgres returns 0, exit code must be 1."""
+    def test_org_scoped_projection_zero_count_exits_one(self, tmp_path: Any) -> None:
         import yaml
 
         from dev_health_ops.providers.teams import sync_teams
@@ -218,8 +179,8 @@ class TestOrgScopedRouting:
         )
 
         with patch(
-            "dev_health_ops.providers.teams._bridge_teams_to_postgres",
-            return_value=0,
+            "dev_health_ops.providers.teams._project_teams_to_postgres",
+            return_value={"projected": 0},
         ):
             ns = _make_ns(org="org-1", path=str(config_file))
             result = sync_teams(ns)
@@ -240,8 +201,8 @@ class TestOrgScopedRouting:
 
         with (
             patch(
-                "dev_health_ops.providers.teams._bridge_teams_to_postgres",
-                return_value=1,
+                "dev_health_ops.providers.teams._project_teams_to_postgres",
+                return_value={"projected": 1},
             ),
             patch(
                 "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
@@ -253,10 +214,7 @@ class TestOrgScopedRouting:
 
         assert result == 1
 
-    def test_org_scoped_postgres_bridge_receives_provider_teams(
-        self, tmp_path: Any
-    ) -> None:
-        """_bridge_teams_to_postgres must receive the provider-built teams list."""
+    def test_org_scoped_projection_receives_provider_teams(self, tmp_path: Any) -> None:
         import yaml
 
         from dev_health_ops.providers.teams import sync_teams
@@ -275,14 +233,14 @@ class TestOrgScopedRouting:
 
         captured: list[Any] = []
 
-        def _spy_pg(teams_data: list, ns: Any) -> int:
+        async def _spy_projection(teams_data: list, ns: Any) -> dict[str, Any]:
             captured.extend(teams_data)
-            return len(teams_data)
+            return {"projected": len(teams_data)}
 
         with (
             patch(
-                "dev_health_ops.providers.teams._bridge_teams_to_postgres",
-                side_effect=_spy_pg,
+                "dev_health_ops.providers.teams._project_teams_to_postgres",
+                side_effect=_spy_projection,
             ),
             patch(
                 "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
@@ -297,16 +255,8 @@ class TestOrgScopedRouting:
         assert "ops" in team_ids
 
 
-# ---------------------------------------------------------------------------
-# No-org routing invariants
-# ---------------------------------------------------------------------------
-
-
 class TestNoOrgRouting:
-    """No-org sync must write directly to ClickHouse via run_with_store."""
-
-    def test_no_org_does_not_call_postgres_bridge(self, tmp_path: Any) -> None:
-        """_bridge_teams_to_postgres must NOT be called when org is absent."""
+    def test_no_org_calls_run_with_store_and_insert_teams(self, tmp_path: Any) -> None:
         import yaml
 
         from dev_health_ops.providers.teams import sync_teams
@@ -315,6 +265,7 @@ class TestNoOrgRouting:
         config_file.write_text(
             yaml.dump({"teams": [{"team_id": "team-a", "team_name": "Team A"}]})
         )
+        inserted: list[Any] = []
 
         async def _fake_run_with_store(
             _db_uri: str, _db_type: str, handler: Any, org_id: Any = None
@@ -324,7 +275,7 @@ class TestNoOrgRouting:
                     pass
 
                 async def insert_teams(self, teams: list) -> None:
-                    pass
+                    inserted.extend(teams)
 
                 async def get_all_teams(self) -> list:
                     return [SimpleNamespace(id="team-a", org_id=None)]
@@ -333,8 +284,8 @@ class TestNoOrgRouting:
 
         with (
             patch(
-                "dev_health_ops.providers.teams._bridge_teams_to_postgres"
-            ) as mock_pg,
+                "dev_health_ops.providers.teams._project_teams_to_postgres"
+            ) as mock_projection,
             patch(
                 "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse"
             ) as mock_ch,
@@ -356,11 +307,11 @@ class TestNoOrgRouting:
             result = sync_teams(ns)
 
         assert result == 0
-        mock_pg.assert_not_called()
+        assert [getattr(team, "id", None) for team in inserted] == ["team-a"]
+        mock_projection.assert_not_called()
         mock_ch.assert_not_called()
 
     def test_no_org_run_with_store_receives_org_id_none(self, tmp_path: Any) -> None:
-        """run_with_store must be called with org_id=None on the no-org path."""
         import yaml
 
         from dev_health_ops.providers.teams import sync_teams
@@ -403,7 +354,7 @@ class TestNoOrgRouting:
                 "dev_health_ops.providers.teams.detect_db_type",
                 return_value="clickhouse",
             ),
-            patch("dev_health_ops.providers.teams._bridge_teams_to_postgres"),
+            patch("dev_health_ops.providers.teams._project_teams_to_postgres"),
         ):
             ns = _make_ns(org=None, path=str(config_file))
             sync_teams(ns)
@@ -411,11 +362,6 @@ class TestNoOrgRouting:
         assert captured_org_ids == [None], (
             "run_with_store must be called with org_id=None on the no-org path"
         )
-
-
-# ---------------------------------------------------------------------------
-# bridge_teams_to_clickhouse membership invariants
-# ---------------------------------------------------------------------------
 
 
 class TestBridgeTeamsToClickhouseMembership:

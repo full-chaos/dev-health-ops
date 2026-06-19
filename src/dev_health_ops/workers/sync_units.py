@@ -56,6 +56,7 @@ from dev_health_ops.models import (
 from dev_health_ops.sync.dispatch_policy import route
 from dev_health_ops.sync.guard import DispatchGuard
 from dev_health_ops.sync.planner import map_datasets_to_legacy_targets
+from dev_health_ops.sync.trigger_routing import stamp_sync_run_canonical_config
 from dev_health_ops.sync.watermarks import set_watermark
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.queues import _cost_class_queues_enabled
@@ -413,6 +414,20 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
             run.error = "No sync units planned"
             result_payload["reason"] = "no_sync_units_planned"
         run.result = result_payload
+        run_success = run.status == SyncRunStatus.SUCCESS.value
+        run_error = (
+            None
+            if run_success
+            else (run.error or "Sync run completed with failed units")
+        )
+        stamp_sync_run_canonical_config(
+            session,
+            run,
+            completed_at=run.completed_at,
+            success=run_success,
+            error=run_error,
+            stats=result_payload,
+        )
         session.flush()
 
         nested = session.begin_nested()
@@ -571,6 +586,14 @@ def _mark_dispatch_enqueue_failed(sync_run_id: str, error: str) -> None:
         )
         run.failed_units = sum(
             1 for unit in units if unit.status == SyncRunUnitStatus.FAILED.value
+        )
+        stamp_sync_run_canonical_config(
+            session,
+            run,
+            completed_at=completed_at,
+            success=False,
+            error=error,
+            stats={"error": error, "phase": "dispatch_enqueue"},
         )
         session.flush()
 

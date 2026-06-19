@@ -223,6 +223,8 @@ def test_resolve_provider_name_uses_org_settings_in_auto(monkeypatch):
     # only configured BYO settings must resolve its provider via org_id. Hermetic:
     # clear ALL env provider signals (env detection precedes org settings) and
     # mock the org-settings loader so this is order-independent in the full suite.
+    # CHAOS-2550: org BYO must be COMPLETE (anthropic requires a key) to win;
+    # an incomplete org config warns and falls back to the platform default.
     from dev_health_ops.llm import LLMAuthError
     from dev_health_ops.llm import credentials as creds
     from dev_health_ops.llm.providers import resolve_provider_name
@@ -245,7 +247,11 @@ def test_resolve_provider_name_uses_org_settings_in_auto(monkeypatch):
     monkeypatch.setattr(
         creds,
         "_load_org_llm_settings",
-        lambda org_id: {"provider": "anthropic"} if org_id == "org-xyz" else {},
+        lambda org_id: (
+            {"provider": "anthropic", "api_key": "sk-org-ant"}
+            if org_id == "org-xyz"
+            else {}
+        ),
     )
 
     # auto + org_id resolves the org's configured provider

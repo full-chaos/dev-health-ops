@@ -6,7 +6,7 @@ import os
 from dev_health_ops.llm.credentials import (
     resolve_llm_credentials,
     resolve_llm_org_settings_model,
-    resolve_llm_org_settings_provider,
+    resolve_usable_org_llm_provider,
 )
 from dev_health_ops.llm.errors import LLMAuthError
 
@@ -73,7 +73,7 @@ def _lmstudio_validate_model_on_startup() -> bool:
     return _env_flag("LLM_VALIDATE_MODEL_ON_STARTUP")
 
 
-def _configured_provider(*, org_id: str | None = None) -> str | None:
+def _configured_provider() -> str | None:
     if os.getenv("OPENAI_API_KEY"):
         return "openai"
     if os.getenv("ANTHROPIC_API_KEY"):
@@ -88,9 +88,6 @@ def _configured_provider(*, org_id: str | None = None) -> str | None:
         return "ollama"
     if os.getenv("LMSTUDIO_MODEL") or os.getenv("LMSTUDIO_BASE_URL"):
         return "lmstudio"
-    org_provider = resolve_llm_org_settings_provider(org_id=org_id)
-    if org_provider:
-        return _normalize_provider_name(org_provider)
     return None
 
 
@@ -157,11 +154,20 @@ def resolve_provider_name(name: str = "auto", *, org_id: str | None = None) -> s
     if requested != "auto":
         return requested
 
+    # Org BYO wins when present and usable (CHAOS-2550): a tenant that
+    # configured its own provider must not be overridden by the platform
+    # default env. An incomplete org config logs a warning and falls through
+    # so the platform default is used instead of crashing.
+    org_provider = resolve_usable_org_llm_provider(org_id=org_id)
+    if org_provider:
+        return org_provider
+
+    # Platform default: explicit LLM_PROVIDER, then env auto-detection.
     env_name = _normalize_provider_name(os.getenv("LLM_PROVIDER", "auto"))
     if env_name != "auto":
         return env_name
 
-    detected = _configured_provider(org_id=org_id)
+    detected = _configured_provider()
     if detected:
         return detected
     raise _missing_provider_error("auto")

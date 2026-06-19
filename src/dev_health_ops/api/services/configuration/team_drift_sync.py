@@ -7,9 +7,11 @@ for review (``sync_policy == 1``).
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.models.settings import TeamMapping
@@ -19,6 +21,18 @@ from .team_mapping import TeamMappingService
 if TYPE_CHECKING:
     from dev_health_ops.api.admin.schemas import DiscoveredTeam
 
+PROVIDER_MANAGED_FIELDS = ["name", "description", "repo_patterns", "project_keys"]
+
+
+@dataclass
+class _ProviderDiscoveredTeam:
+    provider_type: str
+    provider_team_id: str
+    name: str
+    description: str | None = None
+    member_count: int | None = None
+    associations: dict[str, Any] = field(default_factory=dict)
+
 
 class TeamDriftSyncService:
     """Compares discovered teams against stored TeamMappings and flags/merges changes."""
@@ -27,10 +41,97 @@ class TeamDriftSyncService:
         self.session = session
         self.org_id = org_id
 
+    async def project_provider_teams(
+        self,
+        provider: str,
+        teams_data: list[Any],
+        *,
+        replace_empty_provider_values: bool = False,
+    ) -> dict[str, Any]:
+        normalized_provider = str(provider or "config").lower()
+        discovered_teams = [
+            self._provider_team_to_discovered(normalized_provider, team)
+            for team in teams_data
+        ]
+        discovered_teams = [
+            team for team in discovered_teams if team.associations.get("team_id")
+        ]
+        if not discovered_teams:
+            return {
+                "provider": normalized_provider,
+                "projected": 0,
+                "created": 0,
+                "auto_applied": 0,
+                "flagged": 0,
+                "new_available": 0,
+                "provider_removed": 0,
+            }
+
+        team_svc = TeamMappingService(self.session, self.org_id)
+        existing_teams = await team_svc.list_all(active_only=True)
+        provider_lookup: dict[str, Any] = {}
+        team_lookup: dict[str, Any] = {}
+        for team in existing_teams:
+            ed = dict(team.extra_data or {})
+            if ed.get("provider_type") == normalized_provider:
+                provider_lookup[ed.get("provider_team_id", "")] = team
+            team_lookup[str(team.team_id)] = team
+
+        now = datetime.now(timezone.utc)
+        created = 0
+        for discovered in discovered_teams:
+            team_id = str(discovered.associations.get("team_id", "")).strip()
+            existing = provider_lookup.get(
+                discovered.provider_team_id
+            ) or team_lookup.get(team_id)
+            extra_data = self._provider_extra_data(
+                existing,
+                provider=normalized_provider,
+                provider_team_id=discovered.provider_team_id,
+                now=now,
+            )
+            if existing is None:
+                associations = discovered.associations or {}
+                self.session.add(
+                    TeamMapping(
+                        team_id=team_id,
+                        name=discovered.name,
+                        org_id=self.org_id,
+                        description=discovered.description,
+                        repo_patterns=list(associations.get("repo_patterns", [])),
+                        project_keys=list(associations.get("project_keys", [])),
+                        extra_data=extra_data,
+                        managed_fields=list(PROVIDER_MANAGED_FIELDS),
+                        is_active=True,
+                    )
+                )
+                created += 1
+                continue
+            existing.extra_data = extra_data
+            existing.is_active = True
+            existing.last_drift_sync_at = now
+
+        await self.session.flush()
+        result = await self.run_drift_sync(
+            normalized_provider,
+            discovered_teams,
+            replace_empty_provider_values=replace_empty_provider_values,
+        )
+        result["created"] = created
+        result["projected"] = await self._count_projected_team_ids(
+            [
+                str(team.associations.get("team_id", "")).strip()
+                for team in discovered_teams
+            ]
+        )
+        return result
+
     async def run_drift_sync(
         self,
         provider: str,
         discovered_teams: list[DiscoveredTeam],
+        *,
+        replace_empty_provider_values: bool = False,
     ) -> dict[str, Any]:
         team_svc = TeamMappingService(self.session, self.org_id)
         existing_teams: list[Any] = await team_svc.list_all(active_only=True)
@@ -57,7 +158,11 @@ class TeamDriftSyncService:
                 new_available += 1
                 continue
 
-            changes = self._compute_field_diffs(existing, disc_team)
+            changes = self._compute_field_diffs(
+                existing,
+                disc_team,
+                replace_empty_provider_values=replace_empty_provider_values,
+            )
             if not changes:
                 existing.last_drift_sync_at = now
                 continue
@@ -104,6 +209,8 @@ class TeamDriftSyncService:
         self,
         existing: TeamMapping,
         discovered: DiscoveredTeam,
+        *,
+        replace_empty_provider_values: bool = False,
     ) -> list[dict[str, Any]]:
         changes: list[dict[str, Any]] = []
         managed: list[str] = list(existing.managed_fields or [])
@@ -122,6 +229,16 @@ class TeamDriftSyncService:
             new_val = field_map[field_name]
             old_val = getattr(existing, field_name, None)
 
+            if (
+                field_name in {"repo_patterns", "project_keys"}
+                and not replace_empty_provider_values
+                and isinstance(old_val, list)
+                and old_val
+                and isinstance(new_val, list)
+                and not new_val
+            ):
+                continue
+
             if isinstance(old_val, list) and isinstance(new_val, list):
                 if sorted(old_val) == sorted(new_val):
                     continue
@@ -138,6 +255,92 @@ class TeamDriftSyncService:
             )
 
         return changes
+
+    async def _count_projected_team_ids(self, team_ids: list[str]) -> int:
+        expected_ids = {team_id for team_id in team_ids if team_id}
+        if not expected_ids:
+            return 0
+        result = await self.session.execute(
+            select(TeamMapping.team_id).where(
+                TeamMapping.org_id == self.org_id,
+                TeamMapping.team_id.in_(expected_ids),
+            )
+        )
+        return len(set(result.scalars()))
+
+    def _provider_team_to_discovered(self, provider: str, team: Any) -> Any:
+        team_id = str(self._team_value(team, "id", "") or "").strip()
+        team_name = str(self._team_value(team, "name", team_id) or team_id)
+        associations = {
+            "team_id": team_id,
+            "repo_patterns": self._team_string_list(team, "repo_patterns"),
+            "project_keys": self._project_keys_for_team(team_id, provider, team),
+        }
+        members = self._team_value(team, "members", []) or []
+        member_count = len(members) if isinstance(members, list) else None
+        return _ProviderDiscoveredTeam(
+            provider_type=provider,
+            provider_team_id=self._provider_team_id(team_id, provider),
+            name=team_name,
+            description=self._team_value(team, "description", None),
+            member_count=member_count,
+            associations=associations,
+        )
+
+    def _provider_extra_data(
+        self,
+        existing: Any | None,
+        *,
+        provider: str,
+        provider_team_id: str,
+        now: datetime,
+    ) -> dict[str, Any]:
+        extra_data = dict(getattr(existing, "extra_data", {}) or {})
+        extra_data.update(
+            {
+                "provider_type": provider,
+                "provider_team_id": provider_team_id,
+                "last_discovered_at": now.isoformat(),
+                "sync_source": "provider-projection",
+            }
+        )
+        return extra_data
+
+    @staticmethod
+    def _team_value(team: Any, field: str, default: Any = None) -> Any:
+        if isinstance(team, dict):
+            return team.get(field, default)
+        return getattr(team, field, default)
+
+    def _team_string_list(self, team: Any, field: str) -> list[str]:
+        value = self._team_value(team, field, [])
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in value if item]
+
+    def _project_keys_for_team(
+        self, team_id: str, provider: str, team: Any
+    ) -> list[str]:
+        configured = self._team_string_list(team, "project_keys")
+        if configured:
+            return configured
+        if provider == "jira":
+            return [team_id]
+        if provider == "linear" and team_id.startswith("linear:"):
+            return [team_id.removeprefix("linear:")]
+        return []
+
+    @staticmethod
+    def _provider_team_id(team_id: str, provider: str) -> str:
+        if provider == "github" and team_id.startswith("gh:"):
+            return team_id.removeprefix("gh:")
+        if provider == "gitlab" and team_id.startswith("gl:"):
+            return team_id.removeprefix("gl:")
+        if provider == "linear" and team_id.startswith("linear:"):
+            return team_id.removeprefix("linear:")
+        if provider == "ms-teams" and team_id.startswith("ms-teams:"):
+            return team_id.removeprefix("ms-teams:")
+        return team_id
 
     def _apply_changes(
         self,

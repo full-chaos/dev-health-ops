@@ -6,6 +6,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dev_health_ops.api.admin.llm_settings import (
+    delete_llm_settings as delete_llm_settings_values,
+)
+from dev_health_ops.api.admin.llm_settings import (
+    get_llm_settings_response,
+)
+from dev_health_ops.api.admin.llm_settings import (
+    upsert_llm_settings as upsert_llm_settings_values,
+)
 from dev_health_ops.api.admin.middleware import get_admin_org_id
 from dev_health_ops.api.admin.schemas import (
     LLMSettingsResponse,
@@ -24,7 +33,6 @@ from dev_health_ops.models.settings import SettingCategory
 from .common import get_session
 
 router = APIRouter()
-_LLM_SETTING_KEYS = ("provider", "model", "api_key", "base_url")
 _BYO_LLM_MIN_TIER = LicenseTier.TEAM
 
 
@@ -33,14 +41,6 @@ def _setting_response(setting: object) -> SettingResponse:
     if response.is_encrypted:
         return response.model_copy(update={"value": "[ENCRYPTED]"})
     return response
-
-
-def _mask_api_key(value: str | None) -> str | None:
-    if not value:
-        return None
-    if len(value) <= 8:
-        return "********"
-    return f"{value[:4]}…{value[-4:]}"
 
 
 def _reject_llm_category(category: str) -> None:
@@ -84,19 +84,6 @@ async def _require_byo_llm_tier(session: AsyncSession, org_id: str) -> None:
         )
 
 
-async def _llm_settings_response(svc: SettingsService) -> LLMSettingsResponse:
-    provider = await svc.get("provider", SettingCategory.LLM.value)
-    model = await svc.get("model", SettingCategory.LLM.value)
-    api_key = await svc.get("api_key", SettingCategory.LLM.value)
-    base_url = await svc.get("base_url", SettingCategory.LLM.value)
-    return LLMSettingsResponse(
-        provider=provider,
-        model=model,
-        api_key=_mask_api_key(api_key),
-        base_url=base_url,
-    )
-
-
 @router.get("/settings/categories")
 async def list_setting_categories() -> list[str]:
     return [c.value for c in SettingCategory]
@@ -124,7 +111,7 @@ async def get_llm_settings(
 ) -> LLMSettingsResponse:
     await _require_byo_llm_tier(session, org_id)
     svc = SettingsService(session, org_id)
-    return await _llm_settings_response(svc)
+    return await get_llm_settings_response(svc)
 
 
 @router.put("/llm-settings", response_model=LLMSettingsResponse)
@@ -135,33 +122,7 @@ async def upsert_llm_settings(
 ) -> LLMSettingsResponse:
     await _require_byo_llm_tier(session, org_id)
     svc = SettingsService(session, org_id)
-    await svc.set(
-        "provider",
-        payload.provider.strip().lower(),
-        SettingCategory.LLM.value,
-        description="BYO LLM provider for this organization",
-    )
-    await svc.set(
-        "model",
-        payload.model,
-        SettingCategory.LLM.value,
-        description="BYO LLM model for this organization",
-    )
-    if payload.api_key is not None:
-        await svc.set(
-            "api_key",
-            payload.api_key,
-            SettingCategory.LLM.value,
-            encrypt=True,
-            description="Encrypted BYO LLM API key for this organization",
-        )
-    await svc.set(
-        "base_url",
-        payload.base_url,
-        SettingCategory.LLM.value,
-        description="BYO LLM base URL for this organization",
-    )
-    return await _llm_settings_response(svc)
+    return await upsert_llm_settings_values(svc, payload)
 
 
 @router.delete("/llm-settings")
@@ -171,9 +132,7 @@ async def delete_llm_settings(
 ) -> dict[str, bool]:
     await _require_byo_llm_tier(session, org_id)
     svc = SettingsService(session, org_id)
-    deleted = False
-    for key in _LLM_SETTING_KEYS:
-        deleted = (await svc.delete(key, SettingCategory.LLM.value)) or deleted
+    deleted = await delete_llm_settings_values(svc)
     if not deleted:
         raise HTTPException(status_code=404, detail="LLM settings not found")
     return {"deleted": True}

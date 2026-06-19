@@ -269,7 +269,8 @@ async def test_org_deletion_dry_run_returns_contract_without_deleting(session_ma
         assert payload["postgres"]["tables"]["organizations"] == 1
         assert payload["postgres"]["tables"]["settings"] == 1
         assert payload["postgres"]["tables"]["scheduled_jobs"] == 2
-        assert payload["clickhouse"] == {"total": 0, "tables": {}}
+        assert payload["clickhouse"]["total"] == 0
+        assert all(count == 0 for count in payload["clickhouse"]["tables"].values())
         assert payload["disabled_jobs"] == 2
         assert payload["credentials_deleted"] == 3
         # Warnings depend on whether ClickHouse is reachable in the environment

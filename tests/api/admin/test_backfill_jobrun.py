@@ -34,9 +34,11 @@ from dev_health_ops.models.settings import (
     JobRunStatus,
     ScheduledJob,
     Setting,
+    SettingCategory,
     SyncConfiguration,
 )
 from dev_health_ops.models.users import Organization, User
+from dev_health_ops.sync.trigger_routing import MIGRATED_TRIGGER_ROUTING_SETTING_KEY
 from tests._helpers import tables_of
 
 admin_router_module = importlib.import_module("dev_health_ops.api.admin")
@@ -158,6 +160,19 @@ async def _seed_source(session_maker, org_id: str, integration_id: uuid.UUID) ->
         await session.commit()
 
 
+async def _seed_planner_flag(session_maker, org_id: str) -> None:
+    async with session_maker() as session:
+        session.add(
+            Setting(
+                key=MIGRATED_TRIGGER_ROUTING_SETTING_KEY,
+                category=SettingCategory.SYNC.value,
+                value="true",
+                org_id=org_id,
+            )
+        )
+        await session.commit()
+
+
 # ---------------------------------------------------------------------------
 # Endpoint tests — legacy path (fanout disabled)
 # ---------------------------------------------------------------------------
@@ -273,6 +288,7 @@ async def test_backfill_fanout_does_not_create_job_run(
         setattr(cfg, "migrated_integration_id", integration_id)
         await session.commit()
     await _seed_source(session_maker, seeded_state["org_id"], integration_id)
+    await _seed_planner_flag(session_maker, seeded_state["org_id"])
 
     mock_task = MagicMock(id="bf-fanout-task-id")
     mock_run_backfill = MagicMock()
@@ -280,7 +296,7 @@ async def test_backfill_fanout_does_not_create_job_run(
 
     with (
         patch("dev_health_ops.workers.sync_tasks.run_backfill", mock_run_backfill),
-        patch.dict("os.environ", {"SYNC_FANOUT_BACKFILL": "true"}),
+        patch.dict("os.environ", {"SYNC_FANOUT_BACKFILL": ""}),
     ):
         resp = await ac.post(
             f"/api/v1/admin/sync-configs/{config_id}/backfill",
@@ -323,6 +339,7 @@ async def test_backfill_planner_managed_config_routes_to_fanout_without_flag(
         cfg = result.scalar_one()
         integration_id = uuid.uuid4()
         setattr(cfg, "migrated_integration_id", integration_id)
+        cfg.planner_managed = True
         await session.commit()
     await _seed_source(session_maker, seeded_state["org_id"], integration_id)
 

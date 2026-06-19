@@ -4,8 +4,7 @@ Covers:
 - HIDE_MIGRATED_CHILD_CONFIGS flag hides migrated children from default list
 - ?include_migrated=true bypasses the filter (support/rollback)
 - Flag OFF → legacy list unchanged
-- Planner flag ON → batch endpoint creates zero child SyncConfiguration rows
-- Planner flag OFF → batch endpoint creates children (legacy path)
+- Batch endpoint creates one planner-managed parent plus Integration rows
 - Legacy single-config endpoints (get/create/update/delete) still work
 """
 
@@ -25,6 +24,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.git import Base
+from dev_health_ops.models.integrations import (
+    Integration,
+    IntegrationDataset,
+    IntegrationSource,
+)
 from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.settings import (
     IntegrationCredential,
@@ -50,6 +54,9 @@ _TABLES = tables_of(
     ScheduledJob,
     JobRun,
     Setting,
+    Integration,
+    IntegrationSource,
+    IntegrationDataset,
 )
 
 
@@ -270,13 +277,10 @@ async def test_list_include_migrated_false_with_flag_off_returns_all(
 
 
 # ---------------------------------------------------------------------------
-# Planner flag gates new child-config creation
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
-async def test_batch_rejects_with_409_when_planner_active(client, session_maker):
-    """When planner flag is ON, batch rejects with 409 (no inert legacy parent)."""
+async def test_batch_creates_planner_parent_when_planner_flag_active(
+    client, session_maker
+):
     ac, seeded_state = client
     org_id = seeded_state["org_id"]
     await _seed_planner_flag(session_maker, org_id, value="true")
@@ -292,9 +296,12 @@ async def test_batch_rejects_with_409_when_planner_active(client, session_maker)
         },
     )
 
-    assert resp.status_code == 409
-    # planner-active rejects the deprecated child-config batch BEFORE writing
-    # an inert legacy parent; nothing is created.
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["total_created"] == 0
+    assert data["children"] == []
+    assert data["parent"]["name"] == "planner-active-batch"
+
     async with session_maker() as session:
         result = await session.execute(
             select(SyncConfiguration).where(
@@ -302,16 +309,35 @@ async def test_batch_rejects_with_409_when_planner_active(client, session_maker)
                 SyncConfiguration.name == "planner-active-batch",
             )
         )
-        created = result.scalars().all()
-    assert created == []
+        parent = result.scalar_one()
+
+        child_result = await session.execute(
+            select(SyncConfiguration).where(SyncConfiguration.parent_id == parent.id)
+        )
+        children = child_result.scalars().all()
+
+        source_result = await session.execute(
+            select(IntegrationSource).where(
+                IntegrationSource.integration_id == parent.migrated_integration_id
+            )
+        )
+        sources = source_result.scalars().all()
+
+    assert parent.planner_managed is True
+    assert parent.migrated_integration_id is not None
+    assert children == []
+    assert {source.external_id for source in sources} == {
+        "myorg/repo-a",
+        "myorg/repo-b",
+    }
 
 
 @pytest.mark.asyncio
-async def test_batch_creates_children_when_planner_inactive(client, session_maker):
-    """When planner flag is OFF (no Setting row), batch creates children normally."""
+async def test_batch_creates_planner_parent_when_planner_flag_inactive(
+    client, session_maker
+):
     ac, seeded_state = client
     org_id = seeded_state["org_id"]
-    # No planner flag seeded → legacy path
 
     resp = await ac.post(
         "/api/v1/admin/sync-configs/batch",
@@ -326,19 +352,43 @@ async def test_batch_creates_children_when_planner_inactive(client, session_make
 
     assert resp.status_code == 201
     data = resp.json()
-    assert data["total_created"] == 2
-    assert len(data["children"]) == 2
+    assert data["total_created"] == 0
+    assert data["children"] == []
+    assert data["parent"]["name"] == "legacy-batch"
 
-    # Verify child rows in DB
     async with session_maker() as session:
         result = await session.execute(
             select(SyncConfiguration).where(
                 SyncConfiguration.org_id == org_id,
-                SyncConfiguration.parent_id.isnot(None),
+                SyncConfiguration.name == "legacy-batch",
             )
         )
-        children = result.scalars().all()
-    assert len(children) == 2
+        parent = result.scalar_one()
+
+        child_result = await session.execute(
+            select(SyncConfiguration).where(SyncConfiguration.parent_id == parent.id)
+        )
+        children = child_result.scalars().all()
+
+        integration = await session.get(Integration, parent.migrated_integration_id)
+
+        dataset_result = await session.execute(
+            select(IntegrationDataset).where(
+                IntegrationDataset.integration_id == parent.migrated_integration_id
+            )
+        )
+        datasets = dataset_result.scalars().all()
+
+    assert parent.planner_managed is True
+    assert parent.migrated_integration_id is not None
+    assert children == []
+    assert integration is not None
+    assert {dataset.dataset_key for dataset in datasets} == {
+        "commits",
+        "commit-stats",
+        "files",
+        "repo-metadata",
+    }
 
 
 # ---------------------------------------------------------------------------

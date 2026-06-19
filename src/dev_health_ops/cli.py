@@ -417,6 +417,7 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     ("sync", "tests"): frozenset({_REQ_CLICKHOUSE}),
     ("sync", "work-items"): frozenset({_REQ_CLICKHOUSE}),
     ("sync", "teams"): frozenset({_REQ_CLICKHOUSE}),
+    ("teams", "reconcile"): frozenset({_REQ_CLICKHOUSE, _REQ_POSTGRES, _REQ_ORG}),
     # --- audit (read ClickHouse analytics store) ---
     ("audit", "perf"): frozenset({_REQ_CLICKHOUSE}),
     ("audit", "schema"): frozenset({_REQ_CLICKHOUSE}),
@@ -599,6 +600,7 @@ def build_parser() -> argparse.ArgumentParser:
         job_work_items,
     )
     from dev_health_ops.processors import sync as sync_processor
+    from dev_health_ops.providers import team_reconcile
     from dev_health_ops.providers import teams as teams_provider
     from dev_health_ops.work_graph import runner as work_graph_runner
     from dev_health_ops.workers import runner as workers_runner
@@ -674,6 +676,8 @@ def build_parser() -> argparse.ArgumentParser:
     api_runner.register_commands(sub)
 
     billing_cli.register_commands(sub)
+
+    team_reconcile.register_commands(sub)
 
     # ---- admin (user/org management) ----
     admin_cli.register_commands(sub)

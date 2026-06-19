@@ -1,10 +1,82 @@
 from __future__ import annotations
 
+import uuid
+from dataclasses import dataclass
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from dev_health_ops.api.admin.schemas import LLMSettingsResponse, LLMSettingsUpsert
 from dev_health_ops.api.services.configuration import SettingsService
+from dev_health_ops.api.services.licensing import resolve_org_tier
+from dev_health_ops.licensing.types import TIER_ORDER, LicenseTier
+from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.settings import SettingCategory
+from dev_health_ops.models.users import Organization
 
 LLM_SETTING_KEYS = ("provider", "model", "api_key", "base_url")
+BYO_LLM_MIN_TIER = LicenseTier.TEAM
+
+
+@dataclass(frozen=True)
+class LLMSettingsAccessError(Exception):
+    status_code: int
+    detail: dict[str, str]
+
+    @property
+    def message(self) -> str:
+        if self.detail.get("error") == "feature_not_licensed":
+            return (
+                "BYO LLM settings require "
+                f"{self.detail['required_tier']} tier; "
+                f"current tier is {self.detail['current_tier']}"
+            )
+        return self.detail.get("message", "BYO LLM settings access denied")
+
+
+async def require_byo_llm_access(session: AsyncSession, org_id: str) -> None:
+    try:
+        org_uuid = uuid.UUID(org_id)
+    except ValueError as exc:
+        raise LLMSettingsAccessError(
+            status_code=404,
+            detail={
+                "error": "organization_not_found",
+                "message": "Organization not found",
+            },
+        ) from exc
+
+    org_result = await session.execute(
+        select(Organization.id).where(Organization.id == org_uuid)
+    )
+    if org_result.scalar_one_or_none() is None:
+        raise LLMSettingsAccessError(
+            status_code=404,
+            detail={
+                "error": "organization_not_found",
+                "message": "Organization not found",
+            },
+        )
+
+    license_result = await session.execute(
+        select(OrgLicense).where(OrgLicense.org_id == org_uuid)
+    )
+    org_license = license_result.scalar_one_or_none()
+
+    def _resolve(sync_session):
+        return resolve_org_tier(sync_session, org_uuid, org_license)
+
+    tier = await session.run_sync(_resolve)
+    if TIER_ORDER.index(tier) < TIER_ORDER.index(BYO_LLM_MIN_TIER):
+        raise LLMSettingsAccessError(
+            status_code=402,
+            detail={
+                "error": "feature_not_licensed",
+                "feature": "byo_llm",
+                "required_tier": BYO_LLM_MIN_TIER.value,
+                "current_tier": tier.value,
+            },
+        )
 
 
 def mask_api_key(value: str | None) -> str | None:

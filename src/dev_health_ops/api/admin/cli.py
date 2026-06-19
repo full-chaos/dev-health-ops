@@ -4,7 +4,7 @@ import argparse
 import asyncio
 import json
 import logging
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -12,6 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from dev_health_ops.db import resolve_db_uri
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from dev_health_ops.api.services.configuration import SettingsService
 
 
 class _PlanPrice(TypedDict):
@@ -149,10 +152,20 @@ def _llm_settings_payload_json(response: BaseModel) -> str:
     return json.dumps(response.model_dump(), indent=2, sort_keys=True)
 
 
-def _get_llm_settings_service(ns: argparse.Namespace, session: AsyncSession):
+def _get_llm_settings_service(
+    ns: argparse.Namespace, session: AsyncSession
+) -> SettingsService:
     from dev_health_ops.api.services.configuration import SettingsService
 
     return SettingsService(session, ns.org)
+
+
+async def _require_cli_byo_llm_access(
+    ns: argparse.Namespace, session: AsyncSession
+) -> None:
+    from dev_health_ops.api.admin.llm_settings import require_byo_llm_access
+
+    await require_byo_llm_access(session, ns.org)
 
 
 def _normalize_llm_provider(provider: str | None) -> str:
@@ -165,13 +178,21 @@ def _normalize_llm_provider(provider: str | None) -> str:
 
 
 async def _llm_settings_get_async(ns: argparse.Namespace) -> int:
-    from dev_health_ops.api.admin.llm_settings import get_llm_settings_response
+    from dev_health_ops.api.admin.llm_settings import (
+        LLMSettingsAccessError,
+        get_llm_settings_response,
+    )
 
     session = await _get_session(ns)
     try:
+        await _require_cli_byo_llm_access(ns, session)
         svc = _get_llm_settings_service(ns, session)
         print(_llm_settings_payload_json(await get_llm_settings_response(svc)))
         return 0
+    except LLMSettingsAccessError as exc:
+        await session.rollback()
+        print(f"Error: {exc.message}")
+        return 1
     finally:
         await session.close()
 
@@ -181,7 +202,10 @@ def llm_settings_get(ns: argparse.Namespace) -> int:
 
 
 async def _llm_settings_set_async(ns: argparse.Namespace) -> int:
-    from dev_health_ops.api.admin.llm_settings import upsert_llm_settings
+    from dev_health_ops.api.admin.llm_settings import (
+        LLMSettingsAccessError,
+        upsert_llm_settings,
+    )
     from dev_health_ops.api.admin.schemas import LLMSettingsUpsert
 
     try:
@@ -201,11 +225,16 @@ async def _llm_settings_set_async(ns: argparse.Namespace) -> int:
 
     session = await _get_session(ns)
     try:
+        await _require_cli_byo_llm_access(ns, session)
         svc = _get_llm_settings_service(ns, session)
         response = await upsert_llm_settings(svc, payload)
         await session.commit()
         print(_llm_settings_payload_json(response))
         return 0
+    except LLMSettingsAccessError as exc:
+        await session.rollback()
+        print(f"Error: {exc.message}")
+        return 1
     except Exception:
         await session.rollback()
         print("Error: failed to update LLM settings")
@@ -219,10 +248,14 @@ def llm_settings_set(ns: argparse.Namespace) -> int:
 
 
 async def _llm_settings_delete_async(ns: argparse.Namespace) -> int:
-    from dev_health_ops.api.admin.llm_settings import delete_llm_settings
+    from dev_health_ops.api.admin.llm_settings import (
+        LLMSettingsAccessError,
+        delete_llm_settings,
+    )
 
     session = await _get_session(ns)
     try:
+        await _require_cli_byo_llm_access(ns, session)
         svc = _get_llm_settings_service(ns, session)
         deleted = await delete_llm_settings(svc)
         if not deleted:
@@ -232,6 +265,10 @@ async def _llm_settings_delete_async(ns: argparse.Namespace) -> int:
         await session.commit()
         print(json.dumps({"deleted": True}, indent=2, sort_keys=True))
         return 0
+    except LLMSettingsAccessError as exc:
+        await session.rollback()
+        print(f"Error: {exc.message}")
+        return 1
     except Exception:
         await session.rollback()
         print("Error: failed to delete LLM settings")

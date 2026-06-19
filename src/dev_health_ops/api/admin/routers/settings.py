@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-import uuid
-
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.admin.llm_settings import (
-    delete_llm_settings as delete_llm_settings_values,
+    LLMSettingsAccessError,
+    get_llm_settings_response,
+    require_byo_llm_access,
 )
 from dev_health_ops.api.admin.llm_settings import (
-    get_llm_settings_response,
+    delete_llm_settings as delete_llm_settings_values,
 )
 from dev_health_ops.api.admin.llm_settings import (
     upsert_llm_settings as upsert_llm_settings_values,
@@ -25,15 +24,11 @@ from dev_health_ops.api.admin.schemas import (
     SettingUpdate,
 )
 from dev_health_ops.api.services.configuration import SettingsService
-from dev_health_ops.api.services.licensing import resolve_org_tier
-from dev_health_ops.licensing.types import TIER_ORDER, LicenseTier
-from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.settings import SettingCategory
 
 from .common import get_session
 
 router = APIRouter()
-_BYO_LLM_MIN_TIER = LicenseTier.TEAM
 
 
 def _setting_response(setting: object) -> SettingResponse:
@@ -62,26 +57,10 @@ def _reject_llm_category(category: str) -> None:
 
 
 async def _require_byo_llm_tier(session: AsyncSession, org_id: str) -> None:
-    org_uuid = uuid.UUID(org_id)
-    result = await session.execute(
-        select(OrgLicense).where(OrgLicense.org_id == org_uuid)
-    )
-    org_license = result.scalar_one_or_none()
-
-    def _resolve(sync_session):
-        return resolve_org_tier(sync_session, org_uuid, org_license)
-
-    tier = await session.run_sync(_resolve)
-    if TIER_ORDER.index(tier) < TIER_ORDER.index(_BYO_LLM_MIN_TIER):
-        raise HTTPException(
-            status_code=402,
-            detail={
-                "error": "feature_not_licensed",
-                "feature": "byo_llm",
-                "required_tier": _BYO_LLM_MIN_TIER.value,
-                "current_tier": tier.value,
-            },
-        )
+    try:
+        await require_byo_llm_access(session, org_id)
+    except LLMSettingsAccessError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @router.get("/settings/categories")

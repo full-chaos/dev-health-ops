@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import uuid
 from collections.abc import AsyncIterator
 
 import pytest
@@ -15,12 +16,14 @@ from dev_health_ops.api.admin import cli as admin_cli
 from dev_health_ops.cli import build_parser
 from dev_health_ops.core.encryption import decrypt_value
 from dev_health_ops.models.git import Base
+from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.settings import Setting, SettingCategory
+from dev_health_ops.models.users import Organization
 from tests._helpers import tables_of
 
 os.environ.setdefault("SETTINGS_ENCRYPTION_KEY", "test-encryption-key")
 
-_TABLES = tables_of(Setting)
+_TABLES = tables_of(Organization, OrgLicense, Setting)
 
 
 @pytest_asyncio.fixture
@@ -48,9 +51,45 @@ def cli_session(monkeypatch, settings_session_maker):
     monkeypatch.setattr(admin_cli, "_get_session", _get_session)
 
 
+@pytest_asyncio.fixture
+async def eligible_org(settings_session_maker) -> str:
+    return await _seed_org(settings_session_maker, "team")
+
+
+async def _seed_org(
+    settings_session_maker: async_sessionmaker[AsyncSession], tier: str
+) -> str:
+    org_id = uuid.uuid4()
+    async with settings_session_maker() as session:
+        session.add(
+            Organization(
+                id=org_id,
+                slug=f"{tier}-{org_id.hex[:8]}",
+                name="CLI Test Org",
+                tier=tier,
+            )
+        )
+        session.add(OrgLicense(org_id=org_id, tier=tier))
+        await session.commit()
+    return str(org_id)
+
+
+async def _llm_settings_count(
+    settings_session_maker: async_sessionmaker[AsyncSession], org_id: str
+) -> int:
+    async with settings_session_maker() as session:
+        result = await session.execute(
+            select(Setting).where(
+                Setting.org_id == org_id,
+                Setting.category == SettingCategory.LLM.value,
+            )
+        )
+        return len(result.scalars().all())
+
+
 def _ns(**kwargs) -> argparse.Namespace:
     defaults = {
-        "org": "org-cli-test",
+        "org": str(uuid.uuid4()),
         "provider": None,
         "model": None,
         "api_key": None,
@@ -87,10 +126,11 @@ def test_admin_llm_settings_cli_routes_get_set_delete_commands():
 
 @pytest.mark.asyncio
 async def test_admin_llm_settings_cli_set_get_delete_round_trip(
-    cli_session, settings_session_maker, capsys
+    cli_session, settings_session_maker, eligible_org, capsys
 ):
     set_result = await admin_cli._llm_settings_set_async(
         _ns(
+            org=eligible_org,
             provider="OpenAI",
             model="gpt-test",
             api_key="sk-secret-value",
@@ -106,7 +146,7 @@ async def test_admin_llm_settings_cli_set_get_delete_round_trip(
         "base_url": "https://api.example.test/v1",
     }
 
-    get_result = await admin_cli._llm_settings_get_async(_ns())
+    get_result = await admin_cli._llm_settings_get_async(_ns(org=eligible_org))
     assert get_result == 0
     get_body = json.loads(capsys.readouterr().out)
     assert get_body == set_body
@@ -114,7 +154,7 @@ async def test_admin_llm_settings_cli_set_get_delete_round_trip(
     async with settings_session_maker() as session:
         result = await session.execute(
             select(Setting).where(
-                Setting.org_id == "org-cli-test",
+                Setting.org_id == eligible_org,
                 Setting.category == SettingCategory.LLM.value,
                 Setting.key == "api_key",
             )
@@ -124,11 +164,13 @@ async def test_admin_llm_settings_cli_set_get_delete_round_trip(
         assert api_key.value != "sk-secret-value"
         assert decrypt_value(api_key.value or "") == "sk-secret-value"
 
-    delete_result = await admin_cli._llm_settings_delete_async(_ns())
+    delete_result = await admin_cli._llm_settings_delete_async(_ns(org=eligible_org))
     assert delete_result == 0
     assert json.loads(capsys.readouterr().out) == {"deleted": True}
 
-    get_after_delete_result = await admin_cli._llm_settings_get_async(_ns())
+    get_after_delete_result = await admin_cli._llm_settings_get_async(
+        _ns(org=eligible_org)
+    )
     assert get_after_delete_result == 0
     assert json.loads(capsys.readouterr().out) == {
         "provider": None,
@@ -152,8 +194,76 @@ async def test_admin_llm_settings_cli_invalid_input_returns_clear_error(
 
 
 @pytest.mark.asyncio
+async def test_admin_llm_settings_cli_rejects_community_org_without_writing(
+    cli_session, settings_session_maker, capsys
+):
+    org_id = await _seed_org(settings_session_maker, "community")
+
+    result = await admin_cli._llm_settings_set_async(
+        _ns(org=org_id, provider="openai", model="gpt-test", api_key="sk-secret")
+    )
+
+    assert result == 1
+    out = capsys.readouterr().out
+    assert "BYO LLM settings require team tier" in out
+    assert await _llm_settings_count(settings_session_maker, org_id) == 0
+
+
+@pytest.mark.asyncio
+async def test_admin_llm_settings_cli_rejects_nonexistent_org_without_writing(
+    cli_session, settings_session_maker, capsys
+):
+    missing_org_id = str(uuid.uuid4())
+
+    result = await admin_cli._llm_settings_set_async(
+        _ns(
+            org=missing_org_id,
+            provider="openai",
+            model="gpt-test",
+            api_key="sk-secret",
+        )
+    )
+
+    assert result == 1
+    out = capsys.readouterr().out
+    assert "Organization not found" in out
+    assert await _llm_settings_count(settings_session_maker, missing_org_id) == 0
+
+
+@pytest.mark.asyncio
+async def test_admin_llm_settings_cli_rejects_invalid_org_without_writing(
+    cli_session, settings_session_maker, capsys
+):
+    invalid_org_id = "not-a-uuid"
+
+    result = await admin_cli._llm_settings_set_async(
+        _ns(org=invalid_org_id, provider="openai", model="gpt-test")
+    )
+
+    assert result == 1
+    out = capsys.readouterr().out
+    assert "Organization not found" in out
+    assert await _llm_settings_count(settings_session_maker, invalid_org_id) == 0
+
+
+@pytest.mark.asyncio
+async def test_admin_llm_settings_cli_allows_eligible_org(
+    cli_session, settings_session_maker, capsys
+):
+    org_id = await _seed_org(settings_session_maker, "team")
+
+    result = await admin_cli._llm_settings_set_async(
+        _ns(org=org_id, provider="openai", model="gpt-test")
+    )
+
+    assert result == 0
+    assert json.loads(capsys.readouterr().out)["provider"] == "openai"
+    assert await _llm_settings_count(settings_session_maker, org_id) == 3
+
+
+@pytest.mark.asyncio
 async def test_admin_llm_settings_cli_write_error_redacts_secret(
-    cli_session, monkeypatch, capsys
+    cli_session, monkeypatch, eligible_org, capsys
 ):
     from dev_health_ops.api.admin import llm_settings
 
@@ -163,7 +273,12 @@ async def test_admin_llm_settings_cli_write_error_redacts_secret(
     monkeypatch.setattr(llm_settings, "upsert_llm_settings", _raise_secret_error)
 
     result = await admin_cli._llm_settings_set_async(
-        _ns(provider="openai", model="gpt-test", api_key="sk-secret-value")
+        _ns(
+            org=eligible_org,
+            provider="openai",
+            model="gpt-test",
+            api_key="sk-secret-value",
+        )
     )
 
     assert result == 1

@@ -202,4 +202,11 @@ STANDARD_FEATURES: list[STANDARD_FEATURE_ROW] = [
         LicenseTier.ENTERPRISE,
         "Priority support SLA",
     ),
+    (
+        "byo_llm",
+        "BYO LLM",
+        FeatureCategory.ANALYTICS,
+        LicenseTier.TEAM,
+        "Bring-your-own LLM provider credentials",
+    ),
 ]

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.admin.schemas import LLMSettingsResponse, LLMSettingsUpsert
 from dev_health_ops.api.services.configuration import SettingsService
-from dev_health_ops.api.services.licensing import resolve_org_tier
+from dev_health_ops.api.services.licensing import FeatureService, resolve_org_tier
 from dev_health_ops.licensing.types import TIER_ORDER, LicenseTier
 from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.settings import SettingCategory
@@ -77,6 +77,31 @@ async def require_byo_llm_access(session: AsyncSession, org_id: str) -> None:
                 "current_tier": tier.value,
             },
         )
+
+    # CHAOS-2551: in addition to the tier gate above, require the byo_llm
+    # feature flag to be enabled (global flag + per-org override). If the flag
+    # is not registered in this environment (pre-migration / minimal DB), skip
+    # this check so behavior matches the prior tier-only gate.
+    def _flag_access(sync_session):
+        return FeatureService(sync_session).check_feature_access(org_uuid, "byo_llm")
+
+    try:
+        access = await session.run_sync(_flag_access)
+    except Exception:
+        access = None
+    if access is not None and not access.allowed:
+        reason = access.reason or ""
+        # Tier already passed above, so a flag-registered denial here is a
+        # disabled global flag or a per-org override, not a tier shortfall.
+        if not reason.startswith("Unknown feature"):
+            raise LLMSettingsAccessError(
+                status_code=403,
+                detail={
+                    "error": "feature_not_enabled",
+                    "feature": "byo_llm",
+                    "message": "BYO LLM is not enabled for this organization",
+                },
+            )
 
 
 def mask_api_key(value: str | None) -> str | None:

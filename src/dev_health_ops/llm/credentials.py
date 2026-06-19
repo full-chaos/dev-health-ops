@@ -66,6 +66,31 @@ def _safe_log_value(value: str) -> str:
     return value.replace("\r", "").replace("\n", "")
 
 
+def _org_byo_llm_enabled(session: Any, org_id: str) -> bool:
+    """Whether the byo_llm feature flag is enabled for this org (CHAOS-2551).
+
+    Returns True (do NOT gate) when the flag is not registered in this
+    environment (pre-migration / minimal DB) so behavior matches the prior,
+    ungated resolver. Returns False only when the flag exists AND access is
+    denied for this org (global disable, per-org override, or insufficient
+    tier) -- in which case stored org BYO settings are ignored at runtime.
+    """
+    try:
+        import uuid as _uuid
+
+        from dev_health_ops.api.services.licensing import FeatureService
+
+        access = FeatureService(session).check_feature_access(
+            _uuid.UUID(org_id), "byo_llm"
+        )
+    except Exception:
+        return True
+    if access.allowed:
+        return True
+    # Unknown feature => flag not registered => do not gate.
+    return (access.reason or "").startswith("Unknown feature")
+
+
 def _load_org_llm_settings(org_id: str | None) -> dict[str, str]:
     if not org_id:
         return {}
@@ -81,6 +106,10 @@ def _load_org_llm_settings(org_id: str | None) -> dict[str, str]:
 
     try:
         with get_postgres_session_sync() as session:
+            if not _org_byo_llm_enabled(session, org_id):
+                # byo_llm disabled for this org: ignore stored BYO settings so
+                # the resolver falls back to the platform default (CHAOS-2551).
+                return {}
             result = session.execute(
                 select(Setting).where(
                     Setting.org_id == org_id,

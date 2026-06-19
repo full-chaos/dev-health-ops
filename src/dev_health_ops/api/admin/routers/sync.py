@@ -73,6 +73,63 @@ def _mark_job_run_failed(sync_session, run_id: str, error: str) -> None:
     sync_session.flush()
 
 
+def _ensure_pending_sync_job_run(
+    sync_session, config, org_id: str, triggered_by: str
+) -> str:
+    """Find-or-create the ScheduledJob anchor and create a PENDING JobRun.
+
+    Returns the new JobRun id as a string.  Used by both the regular
+    /trigger handler and the legacy backfill path so the sync-activity list
+    shows the run immediately.
+    """
+    import uuid as _uuid
+
+    config_uuid = _uuid.UUID(str(config.id))
+    job = (
+        sync_session.query(ScheduledJob)
+        .filter(
+            ScheduledJob.org_id == org_id,
+            ScheduledJob.sync_config_id == config_uuid,
+            ScheduledJob.job_type == "sync",
+        )
+        .one_or_none()
+    )
+    if job is None:
+        _sync_options = dict(config.sync_options or {})
+        _provider = str(config.provider or "")
+        _explicit_cron = _sync_options.get("schedule_cron")
+        job = ScheduledJob(
+            name=f"sync-config-{config_uuid}",
+            job_type="sync",
+            schedule_cron=str(_explicit_cron or "0 * * * *"),
+            org_id=org_id,
+            provider=_provider,
+            job_config={
+                "provider": _provider,
+                "sync_config_id": str(config_uuid),
+            },
+            sync_config_id=config_uuid,
+            tz=str(_sync_options.get("timezone") or "UTC"),
+            # Manual-only configs keep the job row for JobRun anchoring
+            # but must not be picked up by the scheduler (CHAOS-2297).
+            status=(
+                JobStatus.ACTIVE.value
+                if bool(config.is_active) and _explicit_cron
+                else JobStatus.PAUSED.value
+            ),
+        )
+        sync_session.add(job)
+        sync_session.flush()
+    run = JobRun(
+        job_id=_uuid.UUID(str(job.id)),
+        triggered_by=triggered_by,
+        status=JobRunStatus.PENDING.value,
+    )
+    sync_session.add(run)
+    sync_session.flush()
+    return str(run.id)
+
+
 async def _is_planner_active(session: AsyncSession, org_id: str) -> bool:
     """Return True when the integration planner is active for this org.
 
@@ -1122,55 +1179,11 @@ async def trigger_sync_config(
         # Create a PENDING JobRun synchronously so the UI shows status immediately.
         # Ensure the ScheduledJob row exists first (worker also does this, but we
         # need the job_id to create the JobRun).
-        def _create_pending_run(sync_session) -> str:
-            import uuid as _uuid
-
-            config_uuid = _uuid.UUID(str(config.id))
-            job = (
-                sync_session.query(ScheduledJob)
-                .filter(
-                    ScheduledJob.org_id == org_id,
-                    ScheduledJob.sync_config_id == config_uuid,
-                    ScheduledJob.job_type == "sync",
-                )
-                .one_or_none()
+        pending_run_id: str = await session.run_sync(
+            lambda sync_session: _ensure_pending_sync_job_run(
+                sync_session, config, org_id, "manual"
             )
-            if job is None:
-                _sync_options = dict(config.sync_options or {})
-                _provider = str(config.provider or "")
-                _explicit_cron = _sync_options.get("schedule_cron")
-                job = ScheduledJob(
-                    name=f"sync-config-{config_uuid}",
-                    job_type="sync",
-                    schedule_cron=str(_explicit_cron or "0 * * * *"),
-                    org_id=org_id,
-                    provider=_provider,
-                    job_config={
-                        "provider": _provider,
-                        "sync_config_id": str(config_uuid),
-                    },
-                    sync_config_id=config_uuid,
-                    tz=str(_sync_options.get("timezone") or "UTC"),
-                    # Manual-only configs keep the job row for JobRun anchoring
-                    # but must not be picked up by the scheduler (CHAOS-2297).
-                    status=(
-                        JobStatus.ACTIVE.value
-                        if bool(config.is_active) and _explicit_cron
-                        else JobStatus.PAUSED.value
-                    ),
-                )
-                sync_session.add(job)
-                sync_session.flush()
-            run = JobRun(
-                job_id=_uuid.UUID(str(job.id)),
-                triggered_by="manual",
-                status=JobRunStatus.PENDING.value,
-            )
-            sync_session.add(run)
-            sync_session.flush()
-            return str(run.id)
-
-        pending_run_id: str = await session.run_sync(_create_pending_run)
+        )
         await session.commit()
 
         is_batch = _is_batch_eligible(config)
@@ -1275,12 +1288,25 @@ async def trigger_sync_config_backfill(
     try:
         from dev_health_ops.workers.sync_tasks import run_backfill
 
+        # For the legacy path only: create a PENDING JobRun so the sync-activity
+        # list shows the backfill immediately (CHAOS-2536).  The fan-out path
+        # already produces a visible SyncRun, so we skip this there.
+        pending_run_id: str | None = None
+        if not fanout_backfill:
+            pending_run_id = await session.run_sync(
+                lambda sync_session: _ensure_pending_sync_job_run(
+                    sync_session, config, org_id, "backfill"
+                )
+            )
+            await session.commit()
+
         result = getattr(run_backfill, "delay")(
             sync_config_id=str(config.id),
             since=payload.since.isoformat(),
             before=payload.before.isoformat(),
             org_id=org_id,
             backfill_job_id=backfill_job_id,
+            pending_run_id=pending_run_id,
         )
         backfill_job.celery_task_id = result.id
         await session.flush()

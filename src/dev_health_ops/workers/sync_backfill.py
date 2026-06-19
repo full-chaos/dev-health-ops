@@ -87,6 +87,76 @@ def _fanout_backfill_task_id(celery_task_id: str | None, sync_run_id: str) -> st
     return f"sync_run:{sync_run_id}"
 
 
+def _mark_sync_job_run_running(
+    pending_run_id: str | None, started_at: datetime
+) -> None:
+    if pending_run_id is None:
+        return
+    try:
+        from dev_health_ops.db import get_postgres_session_sync
+        from dev_health_ops.models.settings import JobRun, JobRunStatus
+
+        with get_postgres_session_sync() as session:
+            run = (
+                session.query(JobRun)
+                .filter(JobRun.id == uuid.UUID(pending_run_id))
+                .one_or_none()
+            )
+            if run:
+                setattr(run, "status", JobRunStatus.RUNNING.value)
+                setattr(run, "started_at", started_at)
+                session.flush()
+    except Exception:
+        logger.debug("Failed to mark sync job run running: %s", pending_run_id)
+
+
+def _mark_sync_job_run_success(
+    pending_run_id: str | None, completed_at: datetime
+) -> None:
+    if pending_run_id is None:
+        return
+    try:
+        from dev_health_ops.db import get_postgres_session_sync
+        from dev_health_ops.models.settings import JobRun, JobRunStatus
+
+        with get_postgres_session_sync() as session:
+            run = (
+                session.query(JobRun)
+                .filter(JobRun.id == uuid.UUID(pending_run_id))
+                .one_or_none()
+            )
+            if run:
+                setattr(run, "status", JobRunStatus.SUCCESS.value)
+                setattr(run, "completed_at", completed_at)
+                session.flush()
+    except Exception:
+        logger.debug("Failed to mark sync job run success: %s", pending_run_id)
+
+
+def _mark_sync_job_run_failed(
+    pending_run_id: str | None, error: str, completed_at: datetime
+) -> None:
+    if pending_run_id is None:
+        return
+    try:
+        from dev_health_ops.db import get_postgres_session_sync
+        from dev_health_ops.models.settings import JobRun, JobRunStatus
+
+        with get_postgres_session_sync() as session:
+            run = (
+                session.query(JobRun)
+                .filter(JobRun.id == uuid.UUID(pending_run_id))
+                .one_or_none()
+            )
+            if run:
+                setattr(run, "status", JobRunStatus.FAILED.value)
+                setattr(run, "error", error)
+                setattr(run, "completed_at", completed_at)
+                session.flush()
+    except Exception:
+        logger.debug("Failed to mark sync job run failed: %s", pending_run_id)
+
+
 @celery_app.task(
     bind=True,
     max_retries=3,
@@ -100,6 +170,7 @@ def run_backfill(
     before: str,
     org_id: str,
     backfill_job_id: str | None = None,
+    pending_run_id: str | None = None,
 ) -> dict:
     from dev_health_ops.backfill.runner import (
         run_backfill_for_config,
@@ -171,6 +242,7 @@ def run_backfill(
 
         if backfill_job_id:
             _mark_backfill_job_running(backfill_job_id, started_at)
+        _mark_sync_job_run_running(pending_run_id, started_at)
 
         since_date = date.fromisoformat(since)
         before_date = date.fromisoformat(before)
@@ -266,6 +338,7 @@ def run_backfill(
                 logger.debug(
                     "Failed to mark backfill job completed: %s", backfill_job_id
                 )
+        _mark_sync_job_run_success(pending_run_id, completed_at)
 
         try:
             from dev_health_ops.workers.sync_runtime import _dispatch_post_sync_tasks
@@ -328,5 +401,6 @@ def run_backfill(
                         session.flush()
             except Exception:
                 logger.debug("Failed to mark backfill job failed: %s", backfill_job_id)
+        _mark_sync_job_run_failed(pending_run_id, str(exc), completed_at)
 
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))

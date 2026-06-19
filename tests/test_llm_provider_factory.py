@@ -10,6 +10,7 @@ import pytest
 import dev_health_ops.llm.providers as provider_factory
 from dev_health_ops.llm import LLMAuthError, get_provider, is_llm_available
 from dev_health_ops.llm.providers import resolve_model_name
+from dev_health_ops.llm.providers.local import LocalProvider
 from dev_health_ops.llm.providers.mock import MockProvider
 from dev_health_ops.llm.providers.none import NoneProvider
 from dev_health_ops.llm.providers.openai import OpenAIProvider
@@ -126,3 +127,33 @@ def test_resolved_provider_model_logged_once(caplog):
     ]
     assert len(matching) == 1
     assert "provider=openai model=openai-model" in matching[0].getMessage()
+
+
+def test_local_provider_failure_logs_redacted_url_and_error(caplog):
+    class _Completions:
+        async def create(self, **kwargs):
+            raise RuntimeError("401 invalid_api_key sk-secret-token query_token=abc123")
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        chat = _Chat()
+
+    provider = LocalProvider(
+        base_url="https://user:pass@llm.example.test/v1?api_key=secret&token=abc",
+        model="local-test",
+    )
+    provider._client = _Client()
+
+    with caplog.at_level(logging.ERROR, logger="dev_health_ops.llm.providers.local"):
+        with pytest.raises(LLMAuthError):
+            asyncio.run(provider.complete("hello"))
+
+    log_text = caplog.text
+    assert "https://llm.example.test/v1" in log_text
+    assert "LLMAuthError" in log_text
+    assert "user:pass" not in log_text
+    assert "api_key=secret" not in log_text
+    assert "sk-secret-token" not in log_text
+    assert "query_token=abc123" not in log_text

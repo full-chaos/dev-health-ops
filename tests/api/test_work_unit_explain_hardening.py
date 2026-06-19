@@ -21,6 +21,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 from dev_health_ops.api.auth.router import get_current_user  # noqa: E402
 from dev_health_ops.api.main import app  # noqa: E402
 from dev_health_ops.api.services.auth import AuthenticatedUser  # noqa: E402
+from dev_health_ops.llm.errors import LLMAuthError, LLMRateLimitError  # noqa: E402
+from tests.api.test_work_unit_explain import _sample_investment  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Shared auth override
@@ -33,6 +35,14 @@ _FAKE_USER = AuthenticatedUser(
     role="member",
     is_superuser=False,
 )
+
+
+class _FailingProvider:
+    def __init__(self, exc):
+        self.exc = exc
+
+    async def complete_text(self, prompt: str) -> str:
+        raise self.exc
 
 
 def _override_get_current_user():
@@ -167,6 +177,58 @@ def test_mock_provider_with_no_work_unit_returns_404():
         app.dependency_overrides.pop(get_current_user, None)
 
     assert resp.status_code == 404
+
+
+def test_runtime_invalid_key_returns_422_not_streaming_200():
+    app.dependency_overrides[get_current_user] = _override_get_current_user
+    try:
+        with (
+            patch(
+                "dev_health_ops.api.main.build_work_unit_investments",
+                new_callable=AsyncMock,
+                return_value=[_sample_investment()],
+            ),
+            patch(
+                "dev_health_ops.api.main.get_provider",
+                return_value=_FailingProvider(LLMAuthError("Invalid key")),
+            ),
+            TestClient(app, raise_server_exceptions=False) as client,
+        ):
+            resp = client.post(
+                "/api/v1/work-units/wu-runtime-auth/explain",
+                params={"llm_provider": "openai"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"]
+
+
+def test_runtime_rate_limit_returns_429_not_streaming_200():
+    app.dependency_overrides[get_current_user] = _override_get_current_user
+    try:
+        with (
+            patch(
+                "dev_health_ops.api.main.build_work_unit_investments",
+                new_callable=AsyncMock,
+                return_value=[_sample_investment()],
+            ),
+            patch(
+                "dev_health_ops.api.main.get_provider",
+                return_value=_FailingProvider(LLMRateLimitError("rate limit")),
+            ),
+            TestClient(app, raise_server_exceptions=False) as client,
+        ):
+            resp = client.post(
+                "/api/v1/work-units/wu-runtime-rate/explain",
+                params={"llm_provider": "openai"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert resp.status_code == 429
+    assert resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

@@ -219,6 +219,38 @@ flowchart LR
 
 **Key boundary differences**
 
+### Manual QA: auto-imported ownership coverage
+
+Use this check when validating CHAOS-2401/2547 against a real tenant. It proves
+the sync surface fills the ClickHouse ownership dimensions that the attribution
+resolver reads, then verifies the user-visible Investment → Allocation coverage
+does not collapse to `unassigned`.
+
+1. In Admin → Sync, create or edit a real Linear work-items sync and enable
+   **Auto-import teams, projects & members** (`sync_options.auto_import_teams=true`).
+2. Trigger the sync through the sync-config UI or worker-backed trigger endpoint
+   so the configured worker credentials are used.
+3. After the sync succeeds, run daily metrics with the same analytics database:
+
+   ```bash
+   CLICKHOUSE_URI=clickhouse://... dev-hops metrics daily
+   ```
+
+4. Open `dev-health-web` in a real browser (Playwright is preferred for evidence)
+   and navigate to **Investment → Allocation**.
+5. Verify team coverage is greater than 0% and the allocation view includes named
+   teams from the Linear import, not only `unassigned`.
+6. Optional SQL spot-checks against ClickHouse before opening the browser
+   (replace `<org_id>` with the tenant being verified):
+
+   ```sql
+   SELECT count() FROM projects WHERE org_id = '<org_id>' AND provider = 'linear';
+   SELECT count() FROM members WHERE org_id = '<org_id>';
+   SELECT count() FROM team_memberships WHERE org_id = '<org_id>' AND provider = 'linear';
+   SELECT count() FROM team_project_ownership WHERE org_id = '<org_id>' AND provider = 'linear';
+   SELECT team_id, count() FROM work_item_cycle_times WHERE org_id = '<org_id>' GROUP BY team_id;
+   ```
+
 | Aspect | `job_work_items` (sync) | `job_daily` (recompute) |
 |---|---|---|
 | Edge source | freshly extracted (authoritative) | persisted, `FINAL`, bounded by run-window source ids |

@@ -173,23 +173,49 @@ def org_byo_provider_matches(provider_name: str, org_id: str | None) -> bool:
     return _llm_credentials_complete(provider_name, org_credentials)
 
 
+def _is_known_llm_provider(provider_name: str) -> bool:
+    """Whether ``provider_name`` is a real provider this resolver can build.
+
+    Backed by the per-provider env-var maps (the canonical set of supported
+    real providers; excludes mock/none which are explicit-only).
+    """
+    return (
+        provider_name in _API_KEY_ENV_BY_PROVIDER
+        or provider_name in _BASE_URL_ENV_BY_PROVIDER
+    )
+
+
 def resolve_usable_org_llm_provider(*, org_id: str | None = None) -> str:
     """Return the org's BYO provider iff it is configured AND complete.
 
-    Returns "" when the org has no BYO provider, selects mock/none, or is
-    configured but missing required credentials. In the incomplete case a
-    warning is logged and "" is returned so callers transparently fall back
-    to the platform default instead of crashing (CHAOS-2550 decision #1:
-    "silent-but-missing > crashing").
+    Returns "" when the org has no BYO provider, names mock/none, names an
+    unrecognized provider, supplies no credential material, or is configured
+    but missing required credentials. In the not-usable cases a warning is
+    logged (where the config is non-trivial) and "" is returned so callers
+    transparently fall back to the platform default instead of crashing
+    (CHAOS-2550 decision #1: "silent-but-missing > crashing").
     """
     settings = _load_org_llm_settings(org_id)
     provider_name = _normalize_provider(settings.get(_LLM_PROVIDER_KEY, ""))
     if not provider_name or provider_name in {"auto", "mock", "none"}:
         return ""
+    if not _is_known_llm_provider(provider_name):
+        logger.warning(
+            "Org BYO LLM provider '%s' is not a recognized provider; "
+            "falling back to the platform default.",
+            provider_name,
+        )
+        return ""
     credentials = LLMCredentials(
         api_key=settings.get(_LLM_API_KEY_KEY, ""),
         base_url=settings.get(_LLM_BASE_URL_KEY, ""),
     )
+    if not (credentials.api_key or credentials.base_url):
+        # Provider named but no credential material: not an active BYO config.
+        # Treat as "not configured" so BOTH provider and credential resolution
+        # fall back to the platform default and stay in agreement (the
+        # _resolve_org_byo_credentials path returns None on empty material too).
+        return ""
     if not _llm_credentials_complete(provider_name, credentials):
         logger.warning(
             "Org BYO LLM provider '%s' is configured but incomplete "

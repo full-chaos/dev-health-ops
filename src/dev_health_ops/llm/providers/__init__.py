@@ -152,6 +152,10 @@ def _missing_provider_error(name: str) -> LLMAuthError:
 
 def resolve_provider_name(name: str = "auto", *, org_id: str | None = None) -> str:
     requested = _normalize_provider_name(name)
+    # An explicit provider request is deliberate caller intent and is honored as
+    # given; the LLM_PROVIDER=none/mock kill-switch below governs only the
+    # default 'auto' resolution path (so explicit mock/openai in CLI/tests is not
+    # silently overridden by a platform env value).
     if requested != "auto":
         return requested
 

@@ -288,3 +288,63 @@ def test_env_provider_disable_beats_org_byo(disable_value):
             if disable_value == "none":
                 # none is an explicit disable: not "available" for real work.
                 assert is_llm_available("auto", org_id="org-1") is False
+
+
+def test_unrecognized_org_provider_falls_back_not_crashes():
+    """Oracle finding (CHAOS-2550): an org that stored an unrecognized provider
+    name (e.g. a typo) must warn and fall back to the platform default, NOT
+    crash with an unknown-provider error (decision #1)."""
+    org = {"org-1": {"provider": "bogus-typo", "api_key": "sk-org"}}
+    with patch.dict(
+        os.environ,
+        {
+            "OPENAI_API_KEY": "sk-platform",
+            "OPENAI_BASE_URL": "https://platform.invalid/v1",
+        },
+        clear=True,
+    ):
+        with _patch_org(org):
+            assert creds.resolve_usable_org_llm_provider(org_id="org-1") == ""
+            # Falls back to the platform-detected provider, not the bogus org one.
+            assert resolve_provider_name("auto", org_id="org-1") == "openai"
+            provider = get_provider("auto", org_id="org-1")
+    assert isinstance(provider, OpenAIProvider)
+    assert provider._impl.cfg.api_key == "sk-platform"
+    assert provider._impl.cfg.base_url == "https://platform.invalid/v1"
+
+
+def test_unrecognized_org_provider_without_platform_fails_closed():
+    """Oracle finding (CHAOS-2550): unrecognized org provider with no platform
+    default is the no-usable-config-anywhere case -> fails closed / unavailable
+    (never resolves the bogus provider)."""
+    org = {"org-1": {"provider": "bogus-typo", "api_key": "sk-org"}}
+    with patch.dict(os.environ, {}, clear=True):
+        with _patch_org(org):
+            assert is_llm_available("auto", org_id="org-1") is False
+            with pytest.raises(LLMAuthError):
+                resolve_provider_name("auto", org_id="org-1")
+
+
+def test_org_provider_without_credential_material_falls_back_consistently():
+    """Oracle finding (CHAOS-2550): an org that names a no-key provider (ollama)
+    with NO api_key and NO base_url is not an active BYO config. Provider AND
+    credential resolution must BOTH fall back to platform and stay in agreement
+    (no provider-from-org / creds-from-platform split)."""
+    org = {"org-1": {"provider": "ollama"}}  # no api_key, no base_url
+    with patch.dict(
+        os.environ,
+        {
+            "OPENAI_API_KEY": "sk-platform",
+            "OPENAI_BASE_URL": "https://platform.invalid/v1",
+        },
+        clear=True,
+    ):
+        with _patch_org(org):
+            # Org provider selection declines (no material) ...
+            assert creds.resolve_usable_org_llm_provider(org_id="org-1") == ""
+            # ... so the platform default is used for BOTH provider and creds.
+            assert resolve_provider_name("auto", org_id="org-1") == "openai"
+            provider = get_provider("auto", org_id="org-1")
+    assert isinstance(provider, OpenAIProvider)
+    assert provider._impl.cfg.api_key == "sk-platform"
+    assert provider._impl.cfg.base_url == "https://platform.invalid/v1"

@@ -470,6 +470,64 @@ async def test_materialize_uses_org_llm_concurrency_override(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_materialize_clamps_excessive_org_llm_concurrency(monkeypatch, caplog):
+    repo_ids, edges, work_items, commits = _multi_component_data(40)
+    sink = FakeSink()
+    active = 0
+    max_active = 0
+
+    async def _fake_categorize(bundle, llm_provider, llm_model=None, provider=None):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        try:
+            await asyncio.sleep(0.02)
+            return CategorizationOutcome(
+                subcategories={"feature_delivery.roadmap": 1.0},
+                evidence_quotes=[],
+                uncertainty="Limited evidence.",
+                status="ok",
+                errors=[],
+            )
+        finally:
+            active -= 1
+
+    caplog.set_level(logging.WARNING)
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.llm.credentials.resolve_llm_org_settings_concurrency",
+        lambda *, org_id=None: 99 if org_id == "org-123" else None,
+    )
+    _patch_queries(monkeypatch, edges, work_items, commits)
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.categorize_text_bundle",
+        _fake_categorize,
+    )
+
+    now = datetime.now(timezone.utc)
+    stats = await materialize_investments(
+        MaterializeConfig(
+            dsn="clickhouse://localhost:8123/default",
+            from_ts=now - timedelta(days=5),
+            to_ts=now,
+            repo_ids=repo_ids,
+            llm_provider="mock",
+            persist_evidence_snippets=False,
+            llm_model="test-model",
+            llm_concurrency=3,
+            org_id="org-123",
+        )
+    )
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert stats["records"] == 40
+    assert max_active == 32
+    assert any("LLM concurrency 99 exceeds maximum 32" in msg for msg in messages)
+
+
+@pytest.mark.asyncio
 async def test_materialize_fatal_llm_error_cancels_and_writes_no_rows(monkeypatch):
     repo_one = str(uuid.uuid4())
     repo_two = str(uuid.uuid4())

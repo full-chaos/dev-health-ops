@@ -66,6 +66,8 @@ from dev_health_ops.work_graph.investment.utils import (
 
 logger = logging.getLogger(__name__)
 
+_MAX_LLM_CONCURRENCY = 32
+
 NodeKey = tuple[str, str]
 
 
@@ -698,10 +700,20 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
 
         from dev_health_ops.llm.credentials import resolve_llm_org_settings_concurrency
 
-        configured_concurrency = (
+        requested_concurrency = (
             resolve_llm_org_settings_concurrency(org_id=config.org_id or None)
             or config.llm_concurrency
         )
+        configured_concurrency = min(
+            max(1, requested_concurrency), _MAX_LLM_CONCURRENCY
+        )
+        if configured_concurrency != requested_concurrency:
+            logger.warning(
+                "LLM concurrency %d exceeds maximum %d; clamping to %d",
+                requested_concurrency,
+                _MAX_LLM_CONCURRENCY,
+                configured_concurrency,
+            )
 
         class _AdaptiveLLMConcurrency:
             def __init__(self, limit: int) -> None:

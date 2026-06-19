@@ -449,6 +449,7 @@ def _run_team_autoimport_for_sync_config(
     sync_targets: list[str],
     config_id: str,
     triggered_by: str,
+    analytics_db_url: str | None,
 ) -> dict[str, Any] | None:
     if not sync_options.get("auto_import_teams"):
         return None
@@ -463,6 +464,7 @@ def _run_team_autoimport_for_sync_config(
             "sync_options": dict(sync_options),
             "triggered_by": triggered_by,
         },
+        analytics_db_url=analytics_db_url,
     )
 
 
@@ -875,6 +877,7 @@ def run_sync_config(
             sync_targets=sync_targets,
             config_id=config_id,
             triggered_by=triggered_by,
+            analytics_db_url=db_url,
         )
         if team_autoimport is not None:
             result_payload["team_autoimport"] = team_autoimport

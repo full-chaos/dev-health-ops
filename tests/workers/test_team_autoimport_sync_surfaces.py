@@ -22,6 +22,7 @@ def test_sync_runtime_autoimport_false_or_absent_does_not_call(monkeypatch) -> N
             sync_targets=["work-items"],
             config_id="cfg-1",
             triggered_by="manual",
+            analytics_db_url=None,
         )
         is None
     )
@@ -34,6 +35,7 @@ def test_sync_runtime_autoimport_false_or_absent_does_not_call(monkeypatch) -> N
             sync_targets=["work-items"],
             config_id="cfg-1",
             triggered_by="manual",
+            analytics_db_url=None,
         )
         is None
     )
@@ -57,6 +59,7 @@ def test_sync_runtime_autoimport_true_calls_once(monkeypatch) -> None:
         sync_targets=["work-items"],
         config_id="cfg-1",
         triggered_by="schedule",
+        analytics_db_url="clickhouse://config-dsn",
     )
 
     assert result == {"status": "success"}
@@ -65,6 +68,7 @@ def test_sync_runtime_autoimport_true_calls_once(monkeypatch) -> None:
         "provider": "linear",
         "org_id": "org-1",
         "credentials": {"api_key": "secret"},
+        "analytics_db_url": "clickhouse://config-dsn",
         "scope": {
             "mode": "sync_config",
             "sync_config_id": "cfg-1",
@@ -91,6 +95,7 @@ def test_backfill_autoimport_false_or_absent_does_not_call(monkeypatch) -> None:
             since=date(2026, 1, 1),
             before=date(2026, 1, 7),
             window_count=1,
+            analytics_db_url=None,
         )
         is None
     )
@@ -104,6 +109,7 @@ def test_backfill_autoimport_false_or_absent_does_not_call(monkeypatch) -> None:
             since=date(2026, 1, 1),
             before=date(2026, 1, 7),
             window_count=1,
+            analytics_db_url=None,
         )
         is None
     )
@@ -130,6 +136,7 @@ def test_backfill_autoimport_true_calls_once(monkeypatch) -> None:
         since=date(2026, 1, 1),
         before=date(2026, 1, 7),
         window_count=1,
+        analytics_db_url="clickhouse://backfill-dsn",
     )
 
     assert result == {"status": "success"}
@@ -138,6 +145,7 @@ def test_backfill_autoimport_true_calls_once(monkeypatch) -> None:
         "provider": "jira",
         "org_id": "org-1",
         "credentials": {"email": "dev@example.com"},
+        "analytics_db_url": "clickhouse://backfill-dsn",
         "scope": {
             "mode": "backfill",
             "sync_config_id": "cfg-1",

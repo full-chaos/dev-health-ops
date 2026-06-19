@@ -400,7 +400,7 @@ async def test_hotspot_overlap_org_scopes_every_joined_table():
         "link.org_id = {org_id:String}",
         "hs.org_id = {org_id:String}",
         "pr.org_id = {org_id:String}",
-        "attr.org_id = {org_id:String}",
+        "toString(attr.org_id) = {org_id:String}",
     ):
         assert clause in query, f"missing org scope: {clause}"
     assert params["org_id"] == ORG_ID
@@ -418,7 +418,7 @@ async def test_complexity_overlap_org_scopes_every_joined_table():
         "link.org_id = {org_id:String}",
         "fc.org_id = {org_id:String}",
         "pr.org_id = {org_id:String}",
-        "attr.org_id = {org_id:String}",
+        "toString(attr.org_id) = {org_id:String}",
     ):
         assert clause in query, f"missing org scope: {clause}"
 
@@ -440,7 +440,7 @@ async def test_review_engagement_org_scoped_and_uses_event_day():
     assert "pr.created_at >= {start:DateTime} AND pr.created_at <" not in query
     for clause in (
         "pr.org_id = {org_id:String}",
-        "attr.org_id = {org_id:String}",
+        "toString(attr.org_id) = {org_id:String}",
         "link.org_id = {org_id:String}",
     ):
         assert clause in query, f"missing org scope: {clause}"

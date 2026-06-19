@@ -388,4 +388,4 @@ async def test_repetitive_changes_query_scopes_pull_requests_by_org(
     ]
     assert repetitive, "repetitive-changes query was not issued"
     assert "pr.org_id = {org_id:String}" in repetitive[0]
-    assert "attr.org_id = {org_id:String}" in repetitive[0]
+    assert "toString(attr.org_id) = {org_id:String}" in repetitive[0]

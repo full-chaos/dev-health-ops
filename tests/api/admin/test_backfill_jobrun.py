@@ -269,6 +269,47 @@ async def test_backfill_fanout_does_not_create_job_run(client, session_maker):
     assert runs == []
 
 
+@pytest.mark.asyncio
+async def test_backfill_planner_managed_config_routes_to_fanout_without_flag(
+    client, session_maker
+):
+    ac, _ = client
+
+    create_resp = await _create_sync_config(
+        ac, name="bf-planner-managed", provider="github"
+    )
+    assert create_resp.status_code == 201
+    config_id = create_resp.json()["id"]
+
+    async with session_maker() as session:
+        result = await session.execute(
+            select(SyncConfiguration).where(
+                SyncConfiguration.id == uuid.UUID(config_id)
+            )
+        )
+        cfg = result.scalar_one()
+        setattr(cfg, "migrated_integration_id", uuid.uuid4())
+        await session.commit()
+
+    mock_task = MagicMock(id="bf-planner-managed-task-id")
+    mock_run_backfill = MagicMock()
+    mock_run_backfill.delay.return_value = mock_task
+
+    with (
+        patch("dev_health_ops.workers.sync_tasks.run_backfill", mock_run_backfill),
+        patch.dict("os.environ", {"SYNC_FANOUT_BACKFILL": ""}),
+    ):
+        resp = await ac.post(
+            f"/api/v1/admin/sync-configs/{config_id}/backfill",
+            json={"since": "2026-01-01", "before": "2026-01-08"},
+        )
+
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["mode"] == "fanout"
+    call_kwargs = mock_run_backfill.delay.call_args.kwargs
+    assert call_kwargs.get("pending_run_id") is None
+
+
 # ---------------------------------------------------------------------------
 # Worker-level tests — JobRun state transitions
 # ---------------------------------------------------------------------------

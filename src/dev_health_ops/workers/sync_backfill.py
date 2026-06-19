@@ -179,8 +179,8 @@ def run_backfill(
     from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.models.settings import IntegrationCredential, SyncConfiguration
     from dev_health_ops.sync.trigger_routing import (
-        is_migrated_trigger_routing_enabled,
         plan_request_for_config,
+        planner_request_for_config_if_routed,
     )
 
     sync_config_uuid = uuid.UUID(sync_config_id)
@@ -227,14 +227,14 @@ def run_backfill(
                     )
                 credentials = _credential_mapping(credential)
 
-            plan_req = plan_request_for_config(
-                config, triggered_by="backfill", mode="backfill"
+            plan_req = planner_request_for_config_if_routed(
+                session, config, triggered_by="backfill", mode="backfill"
             )
-            fanout_requested = (
-                _sync_fanout_backfill_enabled()
-                or is_migrated_trigger_routing_enabled(session, org_id)
-            )
-            if plan_req is not None and fanout_requested:
+            if plan_req is None and _sync_fanout_backfill_enabled():
+                plan_req = plan_request_for_config(
+                    config, triggered_by="backfill", mode="backfill"
+                )
+            if plan_req is not None:
                 use_fanout = True
                 planner_integration_id = plan_req.integration_id
                 planner_source_ids = plan_req.source_ids

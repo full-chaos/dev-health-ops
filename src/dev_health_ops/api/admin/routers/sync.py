@@ -8,7 +8,7 @@ from typing import Any, Protocol, cast
 
 from croniter import croniter as Croniter
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.admin.middleware import get_admin_org_id
@@ -44,6 +44,7 @@ from dev_health_ops.sync.datasets import supported_datasets, supported_legacy_ta
 from dev_health_ops.sync.planner import plan_sync_run
 from dev_health_ops.sync.trigger_routing import (
     mark_sync_run_failed,
+    plan_request_for_config,
     planner_request_for_config_if_routed,
 )
 from dev_health_ops.workers.queues import sync_queue_for_provider
@@ -165,6 +166,51 @@ async def _is_planner_active(session: AsyncSession, org_id: str) -> bool:
         }
 
     return await session.run_sync(_check)
+
+
+async def _active_repo_count_for_batch_limit(
+    session: AsyncSession, org_id: str, provider: str
+) -> int:
+    provider_normalized = provider.lower()
+    active_configs = await session.execute(
+        select(SyncConfiguration).where(
+            SyncConfiguration.org_id == org_id,
+            SyncConfiguration.is_active.is_(True),
+        )
+    )
+    active_config_rows = list(active_configs.scalars().all())
+    parent_ids_with_children = {
+        config.parent_id
+        for config in active_config_rows
+        if config.parent_id is not None
+    }
+    planner_parent_ids = [
+        config.id
+        for config in active_config_rows
+        if str(config.provider or "").lower() == provider_normalized
+        and config.parent_id is None
+        and config.migrated_integration_id is not None
+        and config.id not in parent_ids_with_children
+    ]
+    legacy_count = sum(
+        1 for config in active_config_rows if config.id not in planner_parent_ids
+    )
+    if not planner_parent_ids:
+        return legacy_count
+
+    source_count = await session.scalar(
+        select(func.count(IntegrationSource.id)).where(
+            IntegrationSource.org_id == org_id,
+            func.lower(IntegrationSource.provider) == provider_normalized,
+            IntegrationSource.integration_id.in_(
+                select(SyncConfiguration.migrated_integration_id).where(
+                    SyncConfiguration.id.in_(planner_parent_ids)
+                )
+            ),
+            IntegrationSource.is_enabled.is_(True),
+        )
+    )
+    return legacy_count + int(source_count or 0)
 
 
 class _MutableSyncConfiguration(Protocol):
@@ -726,11 +772,9 @@ async def batch_create_sync_configs(
         This endpoint will create the parent config only (zero children) when
         the planner flag is enabled.
     """
-    svc = SyncConfigurationService(session, org_id)
-
-    # Enforce repo limit (existing + new repos)
-    existing_configs = await svc.list_all(active_only=True)
-    current_count = len(existing_configs)
+    current_count = await _active_repo_count_for_batch_limit(
+        session, org_id, payload.provider
+    )
     new_count = len(payload.repos)
 
     def _check_limit(sync_session) -> tuple[bool, str | None]:
@@ -1272,26 +1316,16 @@ async def trigger_sync_config_backfill(
         "yes",
         "on",
     }
-    # The worker only routes through the fan-out planner when the config was
-    # migrated to an Integration (config_migration.py) AND fan-out is enabled
-    # (global env override or the per-org migrated-routing flag). Mirror that
-    # decision here so the BackfillJob's initial chunk count and the response
-    # "mode" reflect the path the task will actually take.
-    migrated = getattr(config, "migrated_integration_id", None) is not None
-
-    def _routing_enabled(sync_session) -> bool:
-        from dev_health_ops.sync.trigger_routing import (
-            is_migrated_trigger_routing_enabled,
+    planner_backfill_request = await session.run_sync(
+        lambda sync_session: planner_request_for_config_if_routed(
+            sync_session, config, triggered_by="backfill", mode="backfill"
         )
-
-        return is_migrated_trigger_routing_enabled(sync_session, org_id)
-
-    if not migrated:
-        fanout_backfill = False
-    elif fanout_env:
-        fanout_backfill = True
-    else:
-        fanout_backfill = await session.run_sync(_routing_enabled)
+    )
+    if planner_backfill_request is None and fanout_env:
+        planner_backfill_request = plan_request_for_config(
+            config, triggered_by="backfill", mode="backfill"
+        )
+    fanout_backfill = planner_backfill_request is not None
     backfill_job = BackfillJobModel(
         org_id=org_id,
         sync_config_id=uuid.UUID(config_id),

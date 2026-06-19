@@ -6,6 +6,7 @@ import json
 import logging
 from typing import TypedDict
 
+from pydantic import BaseModel, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.db import resolve_db_uri
@@ -142,6 +143,105 @@ async def _delete_org_async(ns: argparse.Namespace) -> int:
 
 def delete_org(ns: argparse.Namespace) -> int:
     return asyncio.run(_delete_org_async(ns))
+
+
+def _llm_settings_payload_json(response: BaseModel) -> str:
+    return json.dumps(response.model_dump(), indent=2, sort_keys=True)
+
+
+def _get_llm_settings_service(ns: argparse.Namespace, session: AsyncSession):
+    from dev_health_ops.api.services.configuration import SettingsService
+
+    return SettingsService(session, ns.org)
+
+
+def _normalize_llm_provider(provider: str | None) -> str:
+    if provider is None:
+        raise ValueError("provider is required")
+    normalized = provider.strip()
+    if not normalized:
+        raise ValueError("provider must not be empty")
+    return normalized
+
+
+async def _llm_settings_get_async(ns: argparse.Namespace) -> int:
+    from dev_health_ops.api.admin.llm_settings import get_llm_settings_response
+
+    session = await _get_session(ns)
+    try:
+        svc = _get_llm_settings_service(ns, session)
+        print(_llm_settings_payload_json(await get_llm_settings_response(svc)))
+        return 0
+    finally:
+        await session.close()
+
+
+def llm_settings_get(ns: argparse.Namespace) -> int:
+    return asyncio.run(_llm_settings_get_async(ns))
+
+
+async def _llm_settings_set_async(ns: argparse.Namespace) -> int:
+    from dev_health_ops.api.admin.llm_settings import upsert_llm_settings
+    from dev_health_ops.api.admin.schemas import LLMSettingsUpsert
+
+    try:
+        provider = _normalize_llm_provider(ns.provider)
+        payload = LLMSettingsUpsert(
+            provider=provider,
+            model=ns.model,
+            api_key=ns.api_key,
+            base_url=ns.base_url,
+        )
+    except (ValidationError, ValueError) as exc:
+        detail = (
+            exc.errors()[0]["msg"] if isinstance(exc, ValidationError) else str(exc)
+        )
+        print(f"Error: invalid LLM settings input: {detail}")
+        return 1
+
+    session = await _get_session(ns)
+    try:
+        svc = _get_llm_settings_service(ns, session)
+        response = await upsert_llm_settings(svc, payload)
+        await session.commit()
+        print(_llm_settings_payload_json(response))
+        return 0
+    except Exception:
+        await session.rollback()
+        print("Error: failed to update LLM settings")
+        return 1
+    finally:
+        await session.close()
+
+
+def llm_settings_set(ns: argparse.Namespace) -> int:
+    return asyncio.run(_llm_settings_set_async(ns))
+
+
+async def _llm_settings_delete_async(ns: argparse.Namespace) -> int:
+    from dev_health_ops.api.admin.llm_settings import delete_llm_settings
+
+    session = await _get_session(ns)
+    try:
+        svc = _get_llm_settings_service(ns, session)
+        deleted = await delete_llm_settings(svc)
+        if not deleted:
+            await session.rollback()
+            print("Error: LLM settings not found")
+            return 1
+        await session.commit()
+        print(json.dumps({"deleted": True}, indent=2, sort_keys=True))
+        return 0
+    except Exception:
+        await session.rollback()
+        print("Error: failed to delete LLM settings")
+        return 1
+    finally:
+        await session.close()
+
+
+def llm_settings_delete(ns: argparse.Namespace) -> int:
+    return asyncio.run(_llm_settings_delete_async(ns))
 
 
 async def _list_users_async(ns: argparse.Namespace) -> int:
@@ -879,6 +979,38 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         help="Include inactive organizations.",
     )
     orgs_list.set_defaults(func=list_orgs)
+
+    llm_settings_parser = admin_sub.add_parser(
+        "llm-settings", help="Manage organization BYO LLM settings."
+    )
+    llm_settings_sub = llm_settings_parser.add_subparsers(
+        dest="llm_settings_command", required=True
+    )
+
+    llm_settings_get_parser = llm_settings_sub.add_parser(
+        "get", help="Get organization BYO LLM settings."
+    )
+    llm_settings_get_parser.set_defaults(func=llm_settings_get)
+
+    llm_settings_set_parser = llm_settings_sub.add_parser(
+        "set", help="Set organization BYO LLM settings."
+    )
+    llm_settings_set_parser.add_argument(
+        "--provider", required=True, help="BYO LLM provider."
+    )
+    llm_settings_set_parser.add_argument("--model", help="BYO LLM model.")
+    llm_settings_set_parser.add_argument(
+        "--api-key", dest="api_key", help="BYO LLM API key (encrypted at rest)."
+    )
+    llm_settings_set_parser.add_argument(
+        "--base-url", dest="base_url", help="Base URL."
+    )
+    llm_settings_set_parser.set_defaults(func=llm_settings_set)
+
+    llm_settings_delete_parser = llm_settings_sub.add_parser(
+        "delete", help="Delete organization BYO LLM settings."
+    )
+    llm_settings_delete_parser.set_defaults(func=llm_settings_delete)
 
     licenses_parser = admin_sub.add_parser("licenses", help="License key management.")
     licenses_sub = licenses_parser.add_subparsers(

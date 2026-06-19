@@ -258,30 +258,49 @@ class TestDistributedSleepSeconds:
 class TestDistributedWait:
     def test_wait_sync_sleeps(self):
         client = _make_redis_mock()
-        client.get.return_value = str(time.time() + 0.05)
+        # Freeze the module clock so the future-reset margin cannot be eroded by
+        # scheduler latency on a loaded runner. Real wall-clock here is a race:
+        # if >margin elapses before _sleep_seconds() reads the clock, the
+        # computed sleep is <=0 and sleep() is never called.
+        fixed_now = 1_000_000.0
+        client.get.return_value = str(fixed_now + 5.0)
         gate = DistributedRateLimitGate("gh", redis_client=client)
 
-        with patch(
-            "dev_health_ops.connectors.utils.rate_limit_queue.time.sleep"
-        ) as mock_sleep:
+        with (
+            patch(
+                "dev_health_ops.connectors.utils.rate_limit_queue.time.time",
+                return_value=fixed_now,
+            ),
+            patch(
+                "dev_health_ops.connectors.utils.rate_limit_queue.time.sleep"
+            ) as mock_sleep,
+        ):
             gate.wait_sync()
             mock_sleep.assert_called_once()
-            assert mock_sleep.call_args[0][0] > 0
+            assert mock_sleep.call_args[0][0] == pytest.approx(5.0)
 
     def test_wait_async_sleeps(self):
         client = _make_redis_mock()
-        client.get.return_value = str(time.time() + 0.05)
+        fixed_now = 1_000_000.0
+        client.get.return_value = str(fixed_now + 5.0)
         gate = DistributedRateLimitGate("gh", redis_client=client)
 
         async def _noop(*_args, **_kwargs):
             pass
 
-        with patch(
-            "dev_health_ops.connectors.utils.rate_limit_queue.asyncio.sleep",
-            side_effect=_noop,
-        ) as mock_sleep:
+        with (
+            patch(
+                "dev_health_ops.connectors.utils.rate_limit_queue.time.time",
+                return_value=fixed_now,
+            ),
+            patch(
+                "dev_health_ops.connectors.utils.rate_limit_queue.asyncio.sleep",
+                side_effect=_noop,
+            ) as mock_sleep,
+        ):
             asyncio.run(gate.wait_async())
             mock_sleep.assert_called_once()
+            assert mock_sleep.call_args[0][0] == pytest.approx(5.0)
 
 
 class TestDistributedReset:

@@ -9,6 +9,7 @@ from dev_health_ops.db import get_postgres_session_sync
 from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
 from dev_health_ops.models.settings import SyncConfiguration
 from dev_health_ops.workers.task_utils import _jira_query_options
+from dev_health_ops.workers.team_autoimport import run_team_autoimport
 
 from .chunker import chunk_date_range
 
@@ -68,6 +69,36 @@ def _as_utc_datetime(value: date | datetime, *, end_of_day: bool) -> datetime:
         return value.astimezone(timezone.utc)
     boundary = time.max if end_of_day else time.min
     return datetime.combine(value, boundary, tzinfo=timezone.utc)
+
+
+def _run_team_autoimport_for_backfill(
+    *,
+    provider: str,
+    org_id: str,
+    credentials: dict[str, Any] | None,
+    sync_options: dict[str, Any],
+    sync_config_id: str,
+    since: date,
+    before: date,
+    window_count: int,
+    analytics_db_url: str | None,
+) -> dict[str, Any] | None:
+    if not sync_options.get("auto_import_teams"):
+        return None
+    return run_team_autoimport(
+        provider=provider,
+        org_id=org_id,
+        credentials=credentials or {},
+        scope={
+            "mode": "backfill",
+            "sync_config_id": sync_config_id,
+            "sync_options": dict(sync_options),
+            "window_count": window_count,
+            "since": since.isoformat(),
+            "before": before.isoformat(),
+        },
+        analytics_db_url=analytics_db_url,
+    )
 
 
 def run_backfill_for_config(
@@ -131,7 +162,19 @@ def run_backfill_for_config(
             jira_fetch_all=jira_fetch_all if provider == "jira" else None,
         )
 
-    return {
+    team_autoimport = _run_team_autoimport_for_backfill(
+        provider=provider,
+        org_id=org_id,
+        credentials=credentials,
+        sync_options=sync_options,
+        sync_config_id=sync_config_id,
+        since=since,
+        before=before,
+        window_count=len(windows),
+        analytics_db_url=db_url,
+    )
+
+    result = {
         "status": "success",
         "provider": provider,
         "sync_config_id": sync_config_id,
@@ -140,3 +183,6 @@ def run_backfill_for_config(
         "since": since.isoformat(),
         "before": before.isoformat(),
     }
+    if team_autoimport is not None:
+        result["team_autoimport"] = team_autoimport
+    return result

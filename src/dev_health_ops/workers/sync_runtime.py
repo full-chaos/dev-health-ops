@@ -36,6 +36,7 @@ from dev_health_ops.workers.task_utils import (
     _normalize_sync_targets,
     _resolve_env_credentials,
 )
+from dev_health_ops.workers.team_autoimport import run_team_autoimport
 
 # DORA (deployment frequency, lead time, change-failure-rate, MTTR) is computed
 # from synced deployments/CI/incidents in ClickHouse. These targets can be
@@ -439,6 +440,34 @@ def _is_terminal_sync_error(exc: Exception) -> bool:
     return isinstance(exc, (_TerminalSyncError, ValueError))
 
 
+def _run_team_autoimport_for_sync_config(
+    *,
+    provider: str,
+    org_id: str,
+    credentials: dict[str, Any],
+    sync_options: dict[str, Any],
+    sync_targets: list[str],
+    config_id: str,
+    triggered_by: str,
+    analytics_db_url: str | None,
+) -> dict[str, Any] | None:
+    if not sync_options.get("auto_import_teams"):
+        return None
+    return run_team_autoimport(
+        provider=provider,
+        org_id=org_id,
+        credentials=credentials,
+        scope={
+            "mode": "sync_config",
+            "sync_config_id": config_id,
+            "sync_targets": sync_targets,
+            "sync_options": dict(sync_options),
+            "triggered_by": triggered_by,
+        },
+        analytics_db_url=analytics_db_url,
+    )
+
+
 @celery_app.task(bind=True, max_retries=3, queue="sync")
 def run_sync_config(
     self,
@@ -839,6 +868,19 @@ def run_sync_config(
 
         completed_at = datetime.now(timezone.utc)
         duration_seconds = int((completed_at - started_at).total_seconds())
+
+        team_autoimport = _run_team_autoimport_for_sync_config(
+            provider=provider,
+            org_id=org_id,
+            credentials=credentials,
+            sync_options=sync_options,
+            sync_targets=sync_targets,
+            config_id=config_id,
+            triggered_by=triggered_by,
+            analytics_db_url=db_url,
+        )
+        if team_autoimport is not None:
+            result_payload["team_autoimport"] = team_autoimport
 
         with get_postgres_session_sync() as session:
             run_record = session.query(JobRun).filter(JobRun.id == run_id).one_or_none()

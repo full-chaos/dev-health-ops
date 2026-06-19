@@ -142,6 +142,19 @@ async def _seed_config(
         return str(config.id)
 
 
+async def _seed_child(session_maker, org_id: str, parent_id: str) -> None:
+    async with session_maker() as session:
+        child = SyncConfiguration(
+            name="test-config/child",
+            provider="github",
+            org_id=org_id,
+            sync_targets=["git"],
+            parent_id=uuid.UUID(parent_id),
+        )
+        session.add(child)
+        await session.commit()
+
+
 async def _seed_planner_flag(session_maker, org_id: str, value: str = "true"):
     """Write the migrated_trigger_routing_enabled Setting row."""
     async with session_maker() as session:
@@ -232,6 +245,7 @@ async def test_flag_off_uses_legacy_path(client, session_maker):
     config_id = await _seed_config(
         session_maker, org_id, migrated_integration_id=integration_id
     )
+    await _seed_child(session_maker, org_id, config_id)
     # No flag seeded => flag is off
 
     fake_plan = MagicMock()
@@ -279,6 +293,52 @@ async def test_flag_off_uses_legacy_path(client, session_maker):
     # Planner was NOT called
     mock_plan.assert_not_called()
     fake_dispatch.apply_async.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_planner_managed_config_routes_without_flag(client, session_maker):
+    ac, seeded_state = client
+    org_id = seeded_state["org_id"]
+
+    integration_id = uuid.uuid4()
+    config_id = await _seed_config(
+        session_maker, org_id, migrated_integration_id=integration_id
+    )
+
+    fake_plan = MagicMock()
+    fake_plan.sync_run_id = str(uuid.uuid4())
+    fake_plan.total_units = 2
+    fake_dispatch = MagicMock()
+    fake_dispatch.apply_async = MagicMock(return_value=MagicMock(id="task-planner"))
+    fake_run_sync_config = MagicMock()
+    fake_dispatch_batch_sync = MagicMock()
+
+    with (
+        patch(
+            "dev_health_ops.api.admin.routers.sync.plan_sync_run",
+            return_value=fake_plan,
+        ) as mock_plan,
+        patch("dev_health_ops.api.admin.routers.sync.dispatch_sync_run", fake_dispatch),
+        patch.dict(
+            "sys.modules",
+            {
+                "dev_health_ops.workers.sync_tasks": MagicMock(
+                    run_sync_config=fake_run_sync_config,
+                    dispatch_batch_sync=fake_dispatch_batch_sync,
+                )
+            },
+        ),
+    ):
+        resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
+
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["sync_run_id"] == fake_plan.sync_run_id
+    mock_plan.assert_called_once()
+    fake_dispatch.apply_async.assert_called_once_with(
+        args=(fake_plan.sync_run_id,), queue="sync"
+    )
+    fake_run_sync_config.apply_async.assert_not_called()
+    fake_dispatch_batch_sync.apply_async.assert_not_called()
 
 
 @pytest.mark.asyncio

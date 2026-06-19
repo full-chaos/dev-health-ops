@@ -493,31 +493,34 @@ def dispatch_investment_materialize_partitioned(
     run_id = uuid.uuid4().hex
     computed_at = datetime.now(timezone.utc).isoformat()
 
-    header = [
-        celery_app.signature(
-            "dev_health_ops.workers.tasks.run_investment_materialize_chunk",
-            kwargs={
-                "db_url": db_url,
-                "from_date": from_date,
-                "to_date": to_date,
-                "window_days": window_days,
-                "repo_ids": repo_ids,
-                "team_ids": team_ids,
-                "llm_provider": llm_provider,
-                "llm_model": llm_model,
-                "llm_concurrency": llm_concurrency,
-                "force": force,
-                "org_id": org_id,
-                "allow_unscoped": allow_unscoped,
-                "run_id": run_id,
-                "computed_at": computed_at,
-                "component_indexes": chunk_indexes,
-                "chunk_index": chunk_index,
-            },
-            queue="metrics",
+    header = []
+    for chunk_index, chunk_indexes in enumerate(chunks):
+        chunk_kwargs = {
+            "db_url": db_url,
+            "from_date": from_date,
+            "to_date": to_date,
+            "window_days": window_days,
+            "repo_ids": repo_ids,
+            "team_ids": team_ids,
+            "llm_provider": llm_provider,
+            "llm_model": llm_model,
+            "llm_concurrency": llm_concurrency,
+            "force": force,
+            "org_id": org_id,
+            "run_id": run_id,
+            "computed_at": computed_at,
+            "component_indexes": chunk_indexes,
+            "chunk_index": chunk_index,
+        }
+        if allow_unscoped:
+            chunk_kwargs["allow_unscoped"] = True
+        header.append(
+            celery_app.signature(
+                "dev_health_ops.workers.tasks.run_investment_materialize_chunk",
+                kwargs=chunk_kwargs,
+                queue="metrics",
+            )
         )
-        for chunk_index, chunk_indexes in enumerate(chunks)
-    ]
     callback = celery_app.signature(
         "dev_health_ops.workers.tasks.finalize_investment_materialize_partitioned",
         kwargs={

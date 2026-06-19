@@ -25,7 +25,7 @@ def test_run_team_autoimport_skips_missing_populator(caplog) -> None:
     caplog.set_level(logging.INFO)
 
     result = team_autoimport.run_team_autoimport(
-        provider="github",
+        provider="ms-teams",
         org_id="org-1",
         credentials={"token": "secret"},
         scope={"sync_options": {"auto_import_teams": True}},

@@ -346,7 +346,7 @@ class AIOpportunityDetector:
             filters.append("pr.repo_id = {repo_id:UUID}")
         org_scope = OrgScopedQuery(org_id)
         params = org_scope.inject(params)
-        org_expr = org_scope.expression(alias="attr")
+        org_expr = org_scope.expression_uuid(alias="attr")
         if org_expr:
             filters.append(org_expr)
         # CHAOS-2396: scope the driving git_pull_requests side too. The

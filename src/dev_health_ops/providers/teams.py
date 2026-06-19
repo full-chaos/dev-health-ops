@@ -633,6 +633,29 @@ def sync_teams(ns: argparse.Namespace) -> int:
     org_id = getattr(ns, "org", None)
 
     if org_id is not None:
+        from dev_health_ops.providers.team_capabilities import (
+            org_drift_capable_providers,
+            team_provider_capabilities,
+        )
+
+        capabilities = {
+            capability.provider: capability
+            for capability in team_provider_capabilities()
+        }
+        capable_providers = set(org_drift_capable_providers())
+        if provider not in capable_providers:
+            capability = capabilities.get(provider)
+            reason = (
+                capability.unsupported_reason
+                if capability and capability.unsupported_reason
+                else "provider is not registered for org drift discovery"
+            )
+            logging.info(
+                "Provider %s is unsupported for org drift discovery: %s. "
+                "Continuing org-scoped projection path.",
+                provider,
+                reason,
+            )
         # Org-scoped path: provider -> Postgres TeamMapping -> bridge_teams_to_clickhouse.
         # Never write ClickHouse directly; the bridge reads from Postgres so the
         # semantic layer is always the source of truth for org-scoped teams.

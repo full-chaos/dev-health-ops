@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 
 import dev_health_ops.llm.providers as provider_factory
-from dev_health_ops.llm import LLMAuthError, get_provider, is_llm_available
+from dev_health_ops.llm import LLMAuthError, LLMError, get_provider, is_llm_available
 from dev_health_ops.llm.providers.local import LMStudioGPT5Provider, LocalProvider
 from dev_health_ops.llm.providers.mock import MockProvider
 from dev_health_ops.llm.providers.none import NoneProvider
@@ -153,24 +153,39 @@ def test_lmstudio_gpt5_validation_flag_on_passes_when_reachable():
     mock_client.close.assert_called_once_with()
 
 
-def test_lmstudio_gpt5_validation_flag_on_unreachable_fails_fast():
+def test_lmstudio_gpt5_validation_auth_failure_raises_classified_llm_error():
     with patch("openai.OpenAI") as mock_openai_class:
         mock_client = mock_openai_class.return_value
-        mock_client.models.list.side_effect = RuntimeError("connection refused")
+        mock_client.models.list.side_effect = RuntimeError("401 unauthorized")
 
-        with pytest.raises(
-            RuntimeError, match="startup model validation failed"
-        ) as exc:
+        with pytest.raises(LLMAuthError) as exc:
             LMStudioGPT5Provider(
                 model="openai/gpt-oss-20b",
                 api_key="sk-inline-lmstudio",
                 validate_model_on_startup=True,
             )
 
-    message = str(exc.value)
-    assert "provider 'lmstudio'" in message
-    assert "OpenAI-compatible /v1 endpoint" in message
-    assert "LMSTUDIO_VALIDATE_MODEL_ON_STARTUP=false" in message
+    assert not isinstance(exc.value, RuntimeError)
+    assert exc.value.provider == "lmstudio"
+    assert exc.value.model == "openai/gpt-oss-20b"
+    mock_client.close.assert_called_once_with()
+
+
+def test_lmstudio_gpt5_validation_connection_failure_raises_classified_llm_error():
+    with patch("openai.OpenAI") as mock_openai_class:
+        mock_client = mock_openai_class.return_value
+        mock_client.models.list.side_effect = RuntimeError("connection error")
+
+        with pytest.raises(LLMError) as exc:
+            LMStudioGPT5Provider(
+                model="openai/gpt-oss-20b",
+                api_key="sk-inline-lmstudio",
+                validate_model_on_startup=True,
+            )
+
+    assert not isinstance(exc.value, RuntimeError)
+    assert exc.value.provider == "lmstudio"
+    assert exc.value.model == "openai/gpt-oss-20b"
     mock_client.close.assert_called_once_with()
 
 

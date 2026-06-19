@@ -214,14 +214,21 @@ class _OpenAIProviderBase(LLMProviderBase):
         try:
             client.models.list()
         except Exception as exc:
-            raise RuntimeError(
-                f"LLM startup model validation failed for provider "
-                f"'{self.cfg.validation_provider_name}' model '{self.cfg.model}'. "
-                "Check that the provider is reachable, the base URL points to an "
-                "OpenAI-compatible /v1 endpoint, and the configured model is loaded. "
-                "Disable the startup ping with LLM_VALIDATE_MODEL_ON_STARTUP=false "
-                "or LMSTUDIO_VALIDATE_MODEL_ON_STARTUP=false."
-            ) from exc
+            llm_exc = classify_provider_error(
+                exc,
+                provider=self.cfg.validation_provider_name,
+                model=self.cfg.model,
+            )
+            logger.error(
+                "LLM startup model validation failed for provider '%s' model '%s'. "
+                "Check provider reachability, base URL, credentials, and loaded model. "
+                "Disable with LLM_VALIDATE_MODEL_ON_STARTUP=false or "
+                "LMSTUDIO_VALIDATE_MODEL_ON_STARTUP=false: %s",
+                self.cfg.validation_provider_name,
+                self.cfg.model,
+                llm_exc,
+            )
+            raise llm_exc from exc
         finally:
             client.close()
 

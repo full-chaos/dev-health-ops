@@ -141,6 +141,127 @@ def _patch_queries(monkeypatch, edges, work_items, commits):
     )
 
 
+async def _ok_categorize(bundle, llm_provider, llm_model=None, provider=None):
+    return CategorizationOutcome(
+        subcategories={"feature_delivery.roadmap": 1.0},
+        evidence_quotes=[],
+        uncertainty="Limited evidence.",
+        status="ok",
+        errors=[],
+    )
+
+
+def _patch_successful_materialize(monkeypatch, sink, edges, work_items, commits):
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.get_provider",
+        lambda *args, **kwargs: FakeProvider(),
+    )
+    _patch_queries(monkeypatch, edges, work_items, commits)
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.categorize_text_bundle",
+        _ok_categorize,
+    )
+
+
+@pytest.mark.asyncio
+async def test_materialize_requires_org_for_real_provider(monkeypatch):
+    sink = FakeSink()
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
+    )
+    now = datetime.now(timezone.utc)
+
+    with pytest.raises(ValueError, match=r"--org.*--allow-unscoped"):
+        await materialize_investments(
+            MaterializeConfig(
+                dsn="clickhouse://localhost:8123/default",
+                from_ts=now - timedelta(days=5),
+                to_ts=now,
+                repo_ids=None,
+                llm_provider="openai",
+                persist_evidence_snippets=False,
+                llm_model="test-model",
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_materialize_allow_unscoped_permits_empty_org_real_provider(monkeypatch):
+    repo_id, edges, work_items, commits = _sample_data()
+    work_items[0]["description"] = "Resolve authentication failures. " * 20
+    sink = FakeSink()
+    _patch_successful_materialize(monkeypatch, sink, edges, work_items, commits)
+    now = datetime.now(timezone.utc)
+
+    stats = await materialize_investments(
+        MaterializeConfig(
+            dsn="clickhouse://localhost:8123/default",
+            from_ts=now - timedelta(days=5),
+            to_ts=now,
+            repo_ids=[repo_id],
+            llm_provider="openai",
+            persist_evidence_snippets=False,
+            llm_model="test-model",
+            allow_unscoped=True,
+        )
+    )
+
+    assert stats["records"] == 1
+    assert sink.investment_rows[0].org_id == ""
+
+
+@pytest.mark.asyncio
+async def test_materialize_mock_provider_permits_empty_org(monkeypatch):
+    repo_id, edges, work_items, commits = _sample_data()
+    work_items[0]["description"] = "Resolve authentication failures. " * 20
+    sink = FakeSink()
+    _patch_successful_materialize(monkeypatch, sink, edges, work_items, commits)
+    now = datetime.now(timezone.utc)
+
+    stats = await materialize_investments(
+        MaterializeConfig(
+            dsn="clickhouse://localhost:8123/default",
+            from_ts=now - timedelta(days=5),
+            to_ts=now,
+            repo_ids=[repo_id],
+            llm_provider="mock",
+            persist_evidence_snippets=False,
+            llm_model="test-model",
+        )
+    )
+
+    assert stats["records"] == 1
+    assert sink.investment_rows[0].org_id == ""
+
+
+@pytest.mark.asyncio
+async def test_materialize_real_provider_with_org_unaffected(monkeypatch):
+    repo_id, edges, work_items, commits = _sample_data()
+    work_items[0]["description"] = "Resolve authentication failures. " * 20
+    sink = FakeSink()
+    _patch_successful_materialize(monkeypatch, sink, edges, work_items, commits)
+    now = datetime.now(timezone.utc)
+
+    stats = await materialize_investments(
+        MaterializeConfig(
+            dsn="clickhouse://localhost:8123/default",
+            from_ts=now - timedelta(days=5),
+            to_ts=now,
+            repo_ids=[repo_id],
+            llm_provider="openai",
+            persist_evidence_snippets=False,
+            llm_model="test-model",
+            org_id="org-123",
+        )
+    )
+
+    assert stats["records"] == 1
+    assert sink.investment_rows[0].org_id == "org-123"
+
+
 @pytest.mark.asyncio
 async def test_materialize_invokes_sink(monkeypatch):
     repo_id, edges, work_items, commits = _sample_data()
@@ -496,6 +617,7 @@ async def test_materialize_passes_configured_llm_credentials(monkeypatch):
         llm_model="gpt-4o-mini",
         llm_api_key="sk-inline-secret",
         llm_base_url="https://inline.invalid/v1",
+        allow_unscoped=True,
     )
 
     stats = await materialize_investments(config)

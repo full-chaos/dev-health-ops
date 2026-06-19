@@ -30,6 +30,7 @@ from dev_health_ops.workers.task_utils import (
     _normalize_sync_targets,
     _resolve_env_credentials,
 )
+from dev_health_ops.workers.team_autoimport import run_team_autoimport
 
 logger = logging.getLogger(__name__)
 
@@ -261,6 +262,74 @@ def _get_batch_size(sync_options: dict[str, Any]) -> int:
     return 5
 
 
+def _repo_sync_options(
+    *,
+    provider: str,
+    sync_targets: list[str],
+    sync_options: dict[str, Any],
+    repo_tuple: tuple[Any, ...],
+) -> dict[str, Any]:
+    per_repo_options = dict(sync_options)
+    per_repo_options.pop("discover", None)
+    per_repo_options.pop("all_repos", None)
+    per_repo_options.pop("batch_size", None)
+
+    if provider == "github":
+        owner, repo_name = repo_tuple[0], repo_tuple[1]
+        per_repo_options["owner"] = owner
+        per_repo_options["repo"] = repo_name
+        if "work-items" in sync_targets:
+            per_repo_options["search"] = f"{owner}/{repo_name}"
+        else:
+            per_repo_options.pop("search", None)
+    elif provider == "gitlab":
+        project_id = repo_tuple[0]
+        per_repo_options["project_id"] = int(project_id)
+        if "work-items" in sync_targets:
+            project_path = repo_tuple[1] if len(repo_tuple) > 1 else ""
+            if project_path:
+                per_repo_options["search"] = project_path
+            else:
+                logger.warning(
+                    "GitLab work-items child for project_id=%s has no "
+                    "project path; skipping work-items scope to avoid "
+                    "org-wide fanout",
+                    project_id,
+                )
+                per_repo_options["search"] = f"noscope-{project_id}"
+        else:
+            per_repo_options.pop("search", None)
+        per_repo_options.pop("group", None)
+
+    return per_repo_options
+
+
+def _run_team_autoimport_for_batch_child(
+    *,
+    provider: str,
+    org_id: str,
+    credentials: dict[str, Any],
+    sync_options: dict[str, Any],
+    sync_targets: list[str],
+    config_id: str,
+    triggered_by: str,
+) -> dict[str, Any] | None:
+    if not sync_options.get("auto_import_teams"):
+        return None
+    return run_team_autoimport(
+        provider=provider,
+        org_id=org_id,
+        credentials=credentials,
+        scope={
+            "mode": "batch_child",
+            "sync_config_id": config_id,
+            "sync_targets": sync_targets,
+            "sync_options": dict(sync_options),
+            "triggered_by": triggered_by,
+        },
+    )
+
+
 @celery_app.task(
     bind=True, queue="sync", name="dev_health_ops.workers.tasks._batch_sync_callback"
 )
@@ -433,45 +502,12 @@ def dispatch_batch_sync(
         child_tasks = []
 
         for repo_tuple in repos:
-            per_repo_options = dict(sync_options)
-            per_repo_options.pop("discover", None)
-            per_repo_options.pop("all_repos", None)
-            per_repo_options.pop("batch_size", None)
-
-            if provider == "github":
-                owner, repo_name = repo_tuple[0], repo_tuple[1]
-                per_repo_options["owner"] = owner
-                per_repo_options["repo"] = repo_name
-                if "work-items" in sync_targets:
-                    per_repo_options["search"] = f"{owner}/{repo_name}"
-                else:
-                    per_repo_options.pop("search", None)
-            elif provider == "gitlab":
-                project_id = repo_tuple[0]
-                per_repo_options["project_id"] = int(project_id)
-                if "work-items" in sync_targets:
-                    project_path = repo_tuple[1] if len(repo_tuple) > 1 else ""
-                    if project_path:
-                        per_repo_options["search"] = project_path
-                    else:
-                        # Never pass an empty/all-matching search to a
-                        # work-items child: match_pattern("", ...) treats an
-                        # empty pattern as "match every repo", re-opening the
-                        # org-wide work-items fanout (CHAOS-2450). Scope to a
-                        # sentinel that cannot match any GitLab
-                        # path_with_namespace (which always contains "/") so
-                        # this project's work-items are skipped rather than
-                        # fanning out to all repos.
-                        logger.warning(
-                            "GitLab work-items child for project_id=%s has no "
-                            "project path; skipping work-items scope to avoid "
-                            "org-wide fanout",
-                            project_id,
-                        )
-                        per_repo_options["search"] = f"noscope-{project_id}"
-                else:
-                    per_repo_options.pop("search", None)
-                per_repo_options.pop("group", None)
+            per_repo_options = _repo_sync_options(
+                provider=provider,
+                sync_targets=sync_targets,
+                sync_options=sync_options,
+                repo_tuple=repo_tuple,
+            )
 
             child_signature = getattr(_run_sync_for_repo, "s")(
                 config_id=config_id,
@@ -773,6 +809,18 @@ def _run_sync_for_repo(
                         session, org_id, repo_id_for_watermark, t, started_at
                     )
                 session.flush()
+
+        team_autoimport = _run_team_autoimport_for_batch_child(
+            provider=provider,
+            org_id=org_id,
+            credentials=credentials,
+            sync_options=sync_options_override,
+            sync_targets=sync_targets,
+            config_id=config_id,
+            triggered_by=triggered_by,
+        )
+        if team_autoimport is not None:
+            result_payload["team_autoimport"] = team_autoimport
 
         duration = int((datetime.now(timezone.utc) - started_at).total_seconds())
         return {

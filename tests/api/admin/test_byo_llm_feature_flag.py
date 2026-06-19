@@ -295,8 +295,8 @@ async def test_admin_gate_fails_closed_when_flag_lookup_errors(session_maker):
 @pytest.mark.asyncio
 async def test_admin_gate_allows_cleanup_when_flag_disabled(session_maker):
     # codex finding: a kill switch must stop reads/writes/runtime use but must
-    # NOT trap stored secrets. The DELETE path passes allow_disabled_flag=True
-    # so an admin can clean up BYO settings even when the flag is disabled.
+    # NOT trap stored secrets. The DELETE path passes for_cleanup=True so an
+    # admin can clean up BYO settings even when the flag is disabled.
     org_id = await _seed(session_maker, tier="team", flag_enabled=False)
     async with session_maker() as session:
         # Default (PUT/GET) still denied ...
@@ -305,4 +305,19 @@ async def test_admin_gate_allows_cleanup_when_flag_disabled(session_maker):
         assert exc.value.detail["error"] == "feature_not_enabled"
     async with session_maker() as session:
         # ... but cleanup (DELETE) is allowed.
-        await require_byo_llm_access(session, org_id, allow_disabled_flag=True)
+        await require_byo_llm_access(session, org_id, for_cleanup=True)
+
+
+@pytest.mark.asyncio
+async def test_admin_gate_allows_cleanup_for_downgraded_org(session_maker):
+    # codex finding: a license downgrade must not trap stored secrets either.
+    # A COMMUNITY-tier org (downgraded below the BYO tier) is denied PUT/GET
+    # (feature_not_licensed) but can still DELETE/clean up via for_cleanup.
+    org_id = await _seed(session_maker, tier="community", flag_enabled=True)
+    async with session_maker() as session:
+        with pytest.raises(LLMSettingsAccessError) as exc:
+            await require_byo_llm_access(session, org_id)
+        assert exc.value.detail["error"] == "feature_not_licensed"
+    async with session_maker() as session:
+        # Cleanup bypasses the tier gate too.
+        await require_byo_llm_access(session, org_id, for_cleanup=True)

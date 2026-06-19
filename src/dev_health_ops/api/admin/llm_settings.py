@@ -35,7 +35,7 @@ class LLMSettingsAccessError(Exception):
 
 
 async def require_byo_llm_access(
-    session: AsyncSession, org_id: str, *, allow_disabled_flag: bool = False
+    session: AsyncSession, org_id: str, *, for_cleanup: bool = False
 ) -> None:
     try:
         org_uuid = uuid.UUID(org_id)
@@ -59,6 +59,14 @@ async def require_byo_llm_access(
                 "message": "Organization not found",
             },
         )
+
+    # CHAOS-2551: DELETE/cleanup must always be able to remove previously
+    # stored BYO secrets once org/admin scope is validated. A disabled kill
+    # switch OR a license downgrade (sub-TEAM tier) must stop
+    # reads/writes/runtime use but must NOT trap stored credentials, so cleanup
+    # skips both the tier and feature-flag gates below.
+    if for_cleanup:
+        return
 
     license_result = await session.execute(
         select(OrgLicense).where(OrgLicense.org_id == org_uuid)
@@ -85,16 +93,13 @@ async def require_byo_llm_access(
     # table or an unseeded flag) report "unregistered" and fall back to the
     # prior tier-only gate. Genuine flag-lookup errors are NOT swallowed -- they
     # propagate so the gate fails CLOSED (request denied) rather than silently
-    # allowing BYO access while the licensing store is degraded.
-    #
-    # allow_disabled_flag is set by the DELETE path so an org admin can always
-    # clean up previously stored BYO secrets even after the flag is disabled (a
-    # kill switch must stop reads/writes/runtime use, not trap stored secrets).
+    # allowing BYO access while the licensing store is degraded. (Cleanup/DELETE
+    # returns above and never reaches this gate.)
     def _flag_state(sync_session):
         return byo_llm_flag_state(sync_session, org_uuid)
 
     state = await session.run_sync(_flag_state)
-    if state == "disabled" and not allow_disabled_flag:
+    if state == "disabled":
         raise LLMSettingsAccessError(
             status_code=403,
             detail={

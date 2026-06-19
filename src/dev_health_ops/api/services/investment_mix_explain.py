@@ -187,7 +187,7 @@ async def explain_investment_mix(
         )
         theme = theme_of(subcategory)
 
-    if not is_llm_available(llm_provider):
+    if not is_llm_available(llm_provider, org_id=org_id or None):
         return InvestmentMixExplanation(
             summary="",
             top_findings=[],
@@ -362,7 +362,7 @@ async def explain_investment_mix(
     full_prompt = build_prompt(base_prompt=prompt_text, payload=payload)
 
     resolved_llm_provider = resolve_provider_name(llm_provider, org_id=org_id)
-    provider = get_provider(llm_provider, model=llm_model)
+    provider = get_provider(llm_provider, model=llm_model, org_id=org_id or None)
     completion = await provider.complete(full_prompt)
     raw = completion.text
     if llm_provider != "mock":

@@ -305,3 +305,67 @@ async def test_explain_forwards_org_id_to_work_unit_evidence():
         assert build_call.kwargs["org_id"] == real_org
         # ...and so is the work-unit evidence reader (the bug: it defaulted to "").
         assert units_call.kwargs["org_id"] == real_org
+
+
+@pytest.mark.asyncio
+async def test_explain_forwards_org_id_to_provider_resolution():
+    """Regression (CHAOS-2549): the explanation path must forward the caller's
+    org_id into both is_llm_available and get_provider.
+
+    Org-scoped BYO-LLM resolution keys provider/credential selection on org_id.
+    If explain_investment_mix omits org_id, both the availability probe and the
+    provider build default to the global/platform context, so an org with a
+    configured BYO provider is silently ignored (wrong provider, wrong creds).
+    """
+    real_org = "org-7c2f1a9e"
+
+    with (
+        patch(
+            "dev_health_ops.api.services.investment_mix_explain.build_investment_response"
+        ) as mock_build,
+        patch(
+            "dev_health_ops.api.services.investment_mix_explain.build_work_unit_investments"
+        ) as mock_units,
+        patch(
+            "dev_health_ops.api.services.investment_mix_explain.is_llm_available"
+        ) as mock_is_available,
+        patch(
+            "dev_health_ops.api.services.investment_mix_explain.get_provider"
+        ) as mock_get_provider,
+    ):
+        mock_investment = MagicMock()
+        mock_investment.theme_distribution = {"feature_delivery": 1.0}
+        mock_investment.subcategory_distribution = {"feature_delivery.customer": 1.0}
+        mock_build.return_value = mock_investment
+
+        mock_units.return_value = []
+        mock_is_available.return_value = True
+
+        mock_provider = MagicMock()
+        mock_provider.complete = AsyncMock(
+            return_value=CompletionResult(
+                text='{"summary": "Test summary", "top_findings": [], "confidence": {"level": "moderate"}, "what_to_check_next": [], "anti_claims": []}',
+                input_tokens=10,
+                output_tokens=20,
+                model="mock",
+            )
+        )
+        mock_get_provider.return_value = mock_provider
+
+        class MockFilters:
+            def model_dump(self, mode=None):
+                return {"scope": {"level": "org"}}
+
+        await explain_investment_mix(
+            db_url="clickhouse://localhost:9000/test",
+            filters=MockFilters(),
+            org_id=real_org,
+            llm_provider="mock",
+        )
+
+        # Availability probe must be org-scoped (the bug: defaulted to global).
+        assert mock_is_available.call_args is not None
+        assert mock_is_available.call_args.kwargs["org_id"] == real_org
+        # Provider build must be org-scoped too, so BYO creds resolve correctly.
+        assert mock_get_provider.call_args is not None
+        assert mock_get_provider.call_args.kwargs["org_id"] == real_org

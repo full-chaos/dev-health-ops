@@ -157,7 +157,9 @@ def should_route_config_to_planner(session: Session, config: SyncConfiguration) 
     if not (parent_or_single_eligible or child_eligible):
         return False
 
-    if parent_or_single_eligible and not _config_has_children(session, config):
+    if parent_or_single_eligible and _integration_has_enabled_sources(
+        session, integration_id
+    ):
         return True
 
     return is_migrated_trigger_routing_enabled(session, str(config.org_id))
@@ -238,6 +240,23 @@ def _config_has_children(session: Session, config: SyncConfiguration) -> bool:
     return (
         session.query(SyncConfiguration.id)
         .filter(SyncConfiguration.parent_id == config_id)
+        .first()
+        is not None
+    )
+
+
+def _integration_has_enabled_sources(session: Session, integration_id: Any) -> bool:
+    import uuid
+
+    from dev_health_ops.models.integrations import IntegrationSource
+
+    integration_uuid = uuid.UUID(str(integration_id))
+    return (
+        session.query(IntegrationSource.id)
+        .filter(
+            IntegrationSource.integration_id == integration_uuid,
+            IntegrationSource.is_enabled.is_(True),
+        )
         .first()
         is not None
     )

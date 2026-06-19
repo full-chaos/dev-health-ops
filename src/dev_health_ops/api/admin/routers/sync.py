@@ -171,7 +171,7 @@ async def _is_planner_active(session: AsyncSession, org_id: str) -> bool:
 async def _active_repo_count_for_batch_limit(
     session: AsyncSession, org_id: str, provider: str
 ) -> int:
-    provider_normalized = provider.lower()
+    _ = provider
     active_configs = await session.execute(
         select(SyncConfiguration).where(
             SyncConfiguration.org_id == org_id,
@@ -187,26 +187,25 @@ async def _active_repo_count_for_batch_limit(
     planner_parent_ids = [
         config.id
         for config in active_config_rows
-        if str(config.provider or "").lower() == provider_normalized
-        and config.parent_id is None
+        if config.parent_id is None
         and config.migrated_integration_id is not None
         and config.id not in parent_ids_with_children
+    ]
+    planner_integration_ids = [
+        config.migrated_integration_id
+        for config in active_config_rows
+        if config.id in planner_parent_ids
     ]
     legacy_count = sum(
         1 for config in active_config_rows if config.id not in planner_parent_ids
     )
-    if not planner_parent_ids:
+    if not planner_integration_ids:
         return legacy_count
 
     source_count = await session.scalar(
         select(func.count(IntegrationSource.id)).where(
             IntegrationSource.org_id == org_id,
-            func.lower(IntegrationSource.provider) == provider_normalized,
-            IntegrationSource.integration_id.in_(
-                select(SyncConfiguration.migrated_integration_id).where(
-                    SyncConfiguration.id.in_(planner_parent_ids)
-                )
-            ),
+            IntegrationSource.integration_id.in_(planner_integration_ids),
             IntegrationSource.is_enabled.is_(True),
         )
     )

@@ -76,6 +76,7 @@ def _make_config(
     *,
     last_sync_at: datetime | None = None,
     migrated_integration_id: uuid.UUID | None = None,
+    planner_managed: bool = False,
 ) -> SyncConfiguration:
     config = SyncConfiguration(
         name="routing-test-config",
@@ -84,6 +85,7 @@ def _make_config(
         sync_targets=["git", "prs"],
         sync_options={"owner": "org", "repo": "repo", "schedule_cron": "0 * * * *"},
         is_active=True,
+        planner_managed=planner_managed,
     )
     if last_sync_at is not None:
         config.last_sync_at = last_sync_at
@@ -395,6 +397,52 @@ class TestPlannerFailureFallback:
         dispatch_sync_run_mock.apply_async.assert_not_called()
         run_sync_config_mock.apply_async.assert_called_once()
 
+    def test_planner_managed_planner_error_fails_closed_without_legacy_dispatch(
+        self, monkeypatch, db_session
+    ):
+        now = datetime.now(timezone.utc)
+        config = _make_config(
+            db_session,
+            last_sync_at=now - 2 * HOUR,
+            migrated_integration_id=uuid.uuid4(),
+            planner_managed=True,
+        )
+        job = _make_job(config)
+        db_session.add(job)
+        db_session.flush()
+        _enable_flag(db_session)
+
+        plan_sync_run_mock = MagicMock(
+            side_effect=ValueError("Integration not found for org")
+        )
+        dispatch_sync_run_mock = MagicMock()
+        run_sync_config_mock = MagicMock()
+        batch_sync_mock = MagicMock()
+
+        monkeypatch.setattr(
+            "dev_health_ops.workers.sync_scheduler.run_sync_config",
+            run_sync_config_mock,
+        )
+        monkeypatch.setattr(
+            "dev_health_ops.workers.sync_scheduler.dispatch_batch_sync",
+            batch_sync_mock,
+        )
+
+        with (
+            patch("dev_health_ops.sync.planner.plan_sync_run", plan_sync_run_mock),
+            patch(
+                "dev_health_ops.workers.sync_units.dispatch_sync_run",
+                dispatch_sync_run_mock,
+            ),
+        ):
+            result = _call_maybe_dispatch(monkeypatch, db_session, config, now)
+
+        assert result is False
+        plan_sync_run_mock.assert_called_once()
+        dispatch_sync_run_mock.apply_async.assert_not_called()
+        run_sync_config_mock.apply_async.assert_not_called()
+        batch_sync_mock.apply_async.assert_not_called()
+
 
 class TestDispatchEnqueueFailure:
     """Flag ON + migrated config, plan commits, but dispatch_sync_run.apply_async
@@ -480,6 +528,87 @@ class TestDispatchEnqueueFailure:
         dispatch_sync_run_mock.apply_async.assert_called_once()
         run_sync_config_mock.apply_async.assert_called_once()
         # The committed run must be marked FAILED, not left PLANNED.
+        run = db_session.get(SyncRun, uuid.UUID(captured["run_id"]))
+        assert run is not None
+        assert run.status == SyncRunStatus.FAILED.value
+
+    def test_planner_managed_enqueue_failure_marks_run_failed_without_legacy_dispatch(
+        self, monkeypatch, db_session
+    ):
+        from dev_health_ops.models.integrations import (
+            Base as IntegrationsBase,
+        )
+        from dev_health_ops.models.integrations import (
+            Integration,
+            SyncRun,
+            SyncRunStatus,
+        )
+
+        IntegrationsBase.metadata.create_all(db_session.get_bind())
+
+        now = datetime.now(timezone.utc)
+        integration = Integration(
+            org_id=ORG_ID,
+            provider="github",
+            name="acme-planner-managed",
+        )
+        db_session.add(integration)
+        db_session.flush()
+        config = _make_config(
+            db_session,
+            last_sync_at=now - 2 * HOUR,
+            migrated_integration_id=integration.id,
+            planner_managed=True,
+        )
+        job = _make_job(config)
+        db_session.add(job)
+        db_session.flush()
+        _enable_flag(db_session)
+
+        captured = {}
+
+        def _real_plan(session, request):
+            run = SyncRun(
+                org_id=ORG_ID,
+                integration_id=integration.id,
+                triggered_by=request.triggered_by,
+                mode=request.mode,
+                status=SyncRunStatus.PLANNED.value,
+                total_units=0,
+            )
+            session.add(run)
+            session.flush()
+            captured["run_id"] = str(run.id)
+            return SimpleNamespace(sync_run_id=str(run.id), total_units=0, unit_ids=())
+
+        plan_sync_run_mock = MagicMock(side_effect=_real_plan)
+        dispatch_sync_run_mock = MagicMock()
+        dispatch_sync_run_mock.apply_async.side_effect = RuntimeError("broker down")
+        run_sync_config_mock = MagicMock()
+        batch_sync_mock = MagicMock()
+
+        monkeypatch.setattr(
+            "dev_health_ops.workers.sync_scheduler.run_sync_config",
+            run_sync_config_mock,
+        )
+        monkeypatch.setattr(
+            "dev_health_ops.workers.sync_scheduler.dispatch_batch_sync",
+            batch_sync_mock,
+        )
+
+        with (
+            patch("dev_health_ops.sync.planner.plan_sync_run", plan_sync_run_mock),
+            patch(
+                "dev_health_ops.workers.sync_units.dispatch_sync_run",
+                dispatch_sync_run_mock,
+            ),
+        ):
+            result = _call_maybe_dispatch(monkeypatch, db_session, config, now)
+
+        assert result is False
+        dispatch_sync_run_mock.apply_async.assert_called_once()
+        run_sync_config_mock.apply_async.assert_not_called()
+        batch_sync_mock.apply_async.assert_not_called()
         run = db_session.get(SyncRun, uuid.UUID(captured["run_id"]))
         assert run is not None
         assert run.status == SyncRunStatus.FAILED.value

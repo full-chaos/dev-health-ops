@@ -270,6 +270,7 @@ def _maybe_dispatch_config(
         session, config, triggered_by="schedule", mode="incremental"
     )
     if request is not None:
+        planner_managed = bool(getattr(config, "planner_managed", False))
         logger.info(
             "Routing config %s through fan-out planner (migrated trigger routing)",
             config.id,
@@ -279,10 +280,12 @@ def _maybe_dispatch_config(
             session.commit()
         except Exception:
             logger.exception(
-                "Fan-out planner failed for config %s; falling back to legacy dispatch",
+                "Fan-out planner failed for config %s",
                 config.id,
             )
             session.rollback()
+            if planner_managed:
+                return False
         else:
             try:
                 getattr(dispatch_sync_run, "apply_async")(
@@ -291,13 +294,16 @@ def _maybe_dispatch_config(
             except Exception:
                 logger.exception(
                     "Fan-out dispatch enqueue failed for config %s "
-                    "(sync_run=%s); marking run failed and falling back",
+                    "(sync_run=%s); marking run failed",
                     config.id,
                     plan.sync_run_id,
                 )
                 mark_sync_run_failed(
                     session, plan.sync_run_id, "dispatch enqueue failed"
                 )
+                session.commit()
+                if planner_managed:
+                    return False
             else:
                 return True
 

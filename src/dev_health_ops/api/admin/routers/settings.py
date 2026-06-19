@@ -111,7 +111,11 @@ async def upsert_llm_settings(
 ) -> LLMSettingsResponse:
     await _require_byo_llm_tier(session, org_id)
     svc = SettingsService(session, org_id)
-    return await upsert_llm_settings_values(svc, payload)
+    try:
+        return await upsert_llm_settings_values(svc, payload)
+    except LLMSettingsAccessError as exc:
+        # Persist-time base_url allowlist rejection (CHAOS-2552) -> 400.
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @router.delete("/llm-settings")

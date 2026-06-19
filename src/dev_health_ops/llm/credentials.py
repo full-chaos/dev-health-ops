@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
+import socket
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
 
 from dev_health_ops.llm.errors import LLMAuthError
 
@@ -46,6 +50,155 @@ _LLM_MODEL_KEY = "model"
 _LLM_API_KEY_KEY = "api_key"
 _LLM_BASE_URL_KEY = "base_url"
 _LLM_CONCURRENCY_KEY = "concurrency"
+
+
+# CHAOS-2552: best-effort app-layer SSRF guard for BYO LLM base_url. Durable
+# protection belongs in network egress filtering, tracked separately.
+def _contains_control_or_space(value: str) -> bool:
+    return any(ord(char) <= 0x20 or ord(char) == 0x7F for char in value)
+
+
+def _normalize_url_host(host: str) -> tuple[str | None, str | None]:
+    stripped = host.rstrip(".")
+    if not stripped:
+        return None, "LLM base_url is missing a host"
+    lowered = stripped.lower()
+    if lowered == "localhost":
+        return lowered, None
+    try:
+        normalized = lowered.encode("idna").decode("ascii")
+    except UnicodeError:
+        return None, "LLM base_url host is not valid IDNA"
+    return normalized, None
+
+
+def _ip_is_safe_public_target(address: str) -> bool:
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    if isinstance(parsed, ipaddress.IPv6Address) and parsed.ipv4_mapped is not None:
+        parsed = parsed.ipv4_mapped
+    return bool(
+        parsed.is_global
+        and not parsed.is_loopback
+        and not parsed.is_private
+        and not parsed.is_link_local
+        and not parsed.is_multicast
+        and not parsed.is_unspecified
+        and not parsed.is_reserved
+    )
+
+
+def _resolved_addresses(host: str, port: int | None) -> set[str]:
+    try:
+        results = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError:
+        return set()
+
+    return {str(result[4][0]) for result in results if result[4]}
+
+
+def validate_llm_base_url(base_url: str | None) -> tuple[bool, str | None]:
+    """Validate a BYO LLM base_url against SSRF-shaped targets.
+
+    Returns ``(ok, error)``. An empty/None base_url is allowed (the provider
+    SDK default applies). Otherwise the URL must be http(s), must not contain
+    userinfo/control characters, and must resolve only to safe public targets
+    over https.
+    """
+    if not base_url:
+        return True, None
+    if _contains_control_or_space(base_url):
+        return False, "LLM base_url must not contain whitespace or control characters"
+    parsed = urlsplit(base_url)
+    if parsed.username is not None or parsed.password is not None:
+        return False, "LLM base_url must not include userinfo"
+    if parsed.scheme not in {"http", "https"}:
+        return False, "LLM base_url must use http or https"
+    try:
+        raw_host = parsed.hostname
+        port = parsed.port
+    except ValueError as exc:
+        return False, f"LLM base_url is invalid: {exc}"
+    if not raw_host:
+        return False, "LLM base_url is missing a host"
+    host, error = _normalize_url_host(raw_host)
+    if error or host is None:
+        return False, error
+    if parsed.scheme != "https":
+        return False, "LLM base_url must use https"
+
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None and not _ip_is_safe_public_target(host):
+        return False, "LLM base_url host resolves to a non-public address"
+
+    addresses = _resolved_addresses(host, port)
+    # Unresolvable names are not SSRF targets at persist-time. Runtime
+    # re-validation plus network egress filtering (CHAOS-2558) handle DNS TOCTOU.
+    if not addresses:
+        return True, None
+    unsafe_addresses = [
+        addr for addr in addresses if not _ip_is_safe_public_target(addr)
+    ]
+    if unsafe_addresses:
+        return False, "LLM base_url host resolves to a non-public address"
+    return True, None
+
+
+def _org_base_url_allowed(credentials: LLMCredentials) -> bool:
+    ok, _error = validate_llm_base_url(credentials.base_url)
+    return ok
+
+
+def _audit_org_byo_base_url_fallback(
+    *, org_id: str | None, provider_name: str, base_url: str, reason: str | None
+) -> None:
+    if not org_id:
+        return
+    try:
+        resolved_org_id = uuid.UUID(org_id)
+    except (TypeError, ValueError):
+        logger.debug(
+            "Skipping org BYO LLM base_url fallback audit for non-UUID org_id=%s",
+            _safe_log_value(str(org_id)),
+        )
+        return
+    try:
+        from dev_health_ops.db import get_postgres_session_sync
+        from dev_health_ops.models.audit import (
+            AuditAction,
+            AuditLog,
+            AuditResourceType,
+        )
+
+        with get_postgres_session_sync() as session:
+            session.add(
+                AuditLog(
+                    org_id=resolved_org_id,
+                    action=AuditAction.OTHER.value,
+                    resource_type=AuditResourceType.SETTING.value,
+                    resource_id="llm.base_url",
+                    description=(
+                        "Org BYO LLM base_url rejected by SSRF guard; falling back "
+                        "to platform default."
+                    ),
+                    changes={
+                        "provider": _safe_log_value(provider_name),
+                        "base_url": _safe_log_value(base_url),
+                        "reason": reason or "invalid_base_url",
+                    },
+                    request_metadata={"source": "llm_credentials_resolver"},
+                    status="failure",
+                    error_message=reason or "invalid_base_url",
+                )
+            )
+            session.flush()
+    except Exception as exc:
+        logger.debug("Failed to audit org BYO LLM base_url fallback: %s", exc)
 
 
 def _first_env(names: tuple[str, ...]) -> str:
@@ -223,7 +376,9 @@ def org_byo_provider_matches(provider_name: str, org_id: str | None) -> bool:
     org_credentials = resolve_llm_org_settings_credentials(provider_name, org_id=org_id)
     if not (org_credentials.api_key or org_credentials.base_url):
         return False
-    return _llm_credentials_complete(provider_name, org_credentials)
+    if not _llm_credentials_complete(provider_name, org_credentials):
+        return False
+    return _org_base_url_allowed(org_credentials)
 
 
 def _is_known_llm_provider(provider_name: str) -> bool:
@@ -276,6 +431,20 @@ def resolve_usable_org_llm_provider(*, org_id: str | None = None) -> str:
             _safe_log_value(provider_name),
         )
         return ""
+    ok, base_url_error = validate_llm_base_url(credentials.base_url)
+    if not ok:
+        logger.warning(
+            "Org BYO LLM base_url for provider '%s' failed SSRF validation; "
+            "falling back to the platform default.",
+            _safe_log_value(provider_name),
+        )
+        _audit_org_byo_base_url_fallback(
+            org_id=org_id,
+            provider_name=provider_name,
+            base_url=credentials.base_url,
+            reason=base_url_error,
+        )
+        return ""
     return provider_name
 
 
@@ -297,6 +466,20 @@ def _resolve_org_byo_credentials(
             "Org BYO LLM credentials for provider '%s' are incomplete; "
             "falling back to the platform default.",
             _safe_log_value(provider_name),
+        )
+        return None
+    ok, base_url_error = validate_llm_base_url(org_credentials.base_url)
+    if not ok:
+        logger.warning(
+            "Org BYO LLM base_url for provider '%s' failed SSRF validation; "
+            "falling back to the platform default.",
+            _safe_log_value(provider_name),
+        )
+        _audit_org_byo_base_url_fallback(
+            org_id=org_id,
+            provider_name=provider_name,
+            base_url=org_credentials.base_url,
+            reason=base_url_error,
         )
         return None
     return org_credentials

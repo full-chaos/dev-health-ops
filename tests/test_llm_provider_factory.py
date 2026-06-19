@@ -144,11 +144,13 @@ def test_lmstudio_gpt5_validation_flag_on_passes_when_reachable():
         )
 
     assert provider.cfg.validate_model_on_startup is True
-    mock_openai_class.assert_called_once_with(
-        api_key="sk-inline-lmstudio",
-        base_url="http://localhost:1234/v1",
-        max_retries=0,
-    )
+    mock_openai_class.assert_called_once()
+    _, client_kwargs = mock_openai_class.call_args
+    assert client_kwargs["api_key"] == "sk-inline-lmstudio"
+    assert client_kwargs["base_url"] == "http://localhost:1234/v1"
+    assert client_kwargs["max_retries"] == 0
+    assert client_kwargs["http_client"].follow_redirects is False
+    assert client_kwargs["http_client"].trust_env is False
     mock_client.models.list.assert_called_once_with()
     mock_client.close.assert_called_once_with()
 

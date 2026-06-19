@@ -18,6 +18,7 @@ from dev_health_ops.llm.errors import (
     retry_delay,
 )
 
+from ._http import make_hardened_async_httpx_client
 from .base import (
     DEFAULT_MODEL_BY_PROVIDER,
     CompletionResult,
@@ -153,6 +154,7 @@ class LocalProvider(LLMProviderBase):
                 self._client = AsyncOpenAI(
                     api_key=self.api_key,
                     base_url=self.base_url,
+                    http_client=make_hardened_async_httpx_client(),
                     max_retries=0,
                 )
             except ImportError:

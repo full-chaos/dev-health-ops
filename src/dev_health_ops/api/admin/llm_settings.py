@@ -10,6 +10,7 @@ from dev_health_ops.api.admin.schemas import LLMSettingsResponse, LLMSettingsUps
 from dev_health_ops.api.services.configuration import SettingsService
 from dev_health_ops.api.services.licensing import byo_llm_flag_state, resolve_org_tier
 from dev_health_ops.licensing.types import TIER_ORDER, LicenseTier
+from dev_health_ops.llm.credentials import validate_llm_base_url
 from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.settings import SettingCategory
 from dev_health_ops.models.users import Organization
@@ -137,6 +138,19 @@ async def upsert_llm_settings(
     svc: SettingsService,
     payload: LLMSettingsUpsert,
 ) -> LLMSettingsResponse:
+    # CHAOS-2552: reject a BYO base_url that is not in the approved gateway
+    # allowlist before persisting (anti-SSRF). Applies to every caller of this
+    # service function (admin API and admin CLI).
+    ok, error = validate_llm_base_url(payload.base_url)
+    if not ok:
+        raise LLMSettingsAccessError(
+            status_code=400,
+            detail={
+                "error": "invalid_base_url",
+                "feature": "byo_llm",
+                "message": error or "Invalid LLM base_url",
+            },
+        )
     await svc.set(
         "provider",
         payload.provider.strip().lower(),

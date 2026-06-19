@@ -465,7 +465,9 @@ async def test_materialize_passes_configured_llm_credentials(monkeypatch):
     sink = FakeSink()
     captured = {}
 
-    def _fake_get_provider(name, model=None, *, api_key=None, base_url=None):
+    def _fake_get_provider(
+        name, model=None, *, org_id=None, api_key=None, base_url=None
+    ):
         captured.update(
             {"name": name, "model": model, "api_key": api_key, "base_url": base_url}
         )

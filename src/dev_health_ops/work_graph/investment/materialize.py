@@ -498,9 +498,12 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
         sink.ensure_schema()
 
         # Initialize LLM provider once (reusing connection pool)
-        resolved_llm_provider = resolve_provider_name(config.llm_provider)
+        resolved_llm_provider = resolve_provider_name(
+            config.llm_provider, org_id=config.org_id or None
+        )
         provider_instance = get_provider(
             resolved_llm_provider,
+            org_id=config.org_id or None,
             model=config.llm_model,
             api_key=config.llm_api_key or None,
             base_url=config.llm_base_url or None,

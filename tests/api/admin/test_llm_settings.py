@@ -149,3 +149,92 @@ async def test_admin_llm_settings_requires_team_or_enterprise(session_maker):
 
     assert resp.status_code == 402
     assert resp.json()["detail"]["required_tier"] == "team"
+
+
+@pytest.mark.asyncio
+async def test_generic_settings_routes_reject_llm_category(session_maker):
+    # Review finding: the generic settings routes must NOT be a back door for
+    # category='llm' (would bypass the BYO-LLM tier gate + forced encryption).
+    state = await _seed_org(session_maker, "team")
+    app = _make_app(session_maker, state)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        put_resp = await ac.put(
+            "/api/v1/admin/settings/llm/api_key",
+            json={"value": "sk-leak", "encrypt": False},
+        )
+        assert put_resp.status_code == 403
+        assert put_resp.json()["detail"]["error"] == "use_llm_settings_endpoint"
+        post_resp = await ac.post(
+            "/api/v1/admin/settings",
+            json={"key": "api_key", "value": "sk-leak", "category": "llm"},
+        )
+        assert post_resp.status_code == 403
+        get_resp = await ac.get("/api/v1/admin/settings/llm/api_key")
+        assert get_resp.status_code == 403
+        del_resp = await ac.delete("/api/v1/admin/settings/llm/api_key")
+        assert del_resp.status_code == 403
+        list_resp = await ac.get("/api/v1/admin/settings/llm")
+        assert list_resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_generic_get_setting_masks_encrypted_value(session_maker):
+    # Review finding: the generic single-setting GET must not return decrypted
+    # secrets in plaintext.
+    state = await _seed_org(session_maker, "team")
+    app = _make_app(session_maker, state)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        post_resp = await ac.post(
+            "/api/v1/admin/settings",
+            json={
+                "key": "token",
+                "value": "ghp-secret-value",
+                "category": "github",
+                "encrypt": True,
+            },
+        )
+        assert post_resp.status_code == 200, post_resp.text
+        get_resp = await ac.get("/api/v1/admin/settings/github/token")
+        assert get_resp.status_code == 200
+        body = get_resp.json()
+        assert body["value"] == "[ENCRYPTED]"
+        assert "ghp-secret-value" not in body["value"]
+
+
+def test_resolve_provider_name_uses_org_settings_in_auto(monkeypatch):
+    # Review finding: default worker path uses llm_provider='auto'; an org that
+    # only configured BYO settings must resolve its provider via org_id. Hermetic:
+    # clear ALL env provider signals (env detection precedes org settings) and
+    # mock the org-settings loader so this is order-independent in the full suite.
+    import dev_health_ops.llm.credentials as creds
+    from dev_health_ops.llm import LLMAuthError
+    from dev_health_ops.llm.providers import resolve_provider_name
+
+    for var in (
+        "LLM_PROVIDER",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "LLM_API_KEY",
+        "DASHSCOPE_API_KEY",
+        "QWEN_API_KEY",
+        "LOCAL_LLM_BASE_URL",
+        "OLLAMA_MODEL",
+        "OLLAMA_BASE_URL",
+        "LMSTUDIO_MODEL",
+        "LMSTUDIO_BASE_URL",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(
+        creds,
+        "_load_org_llm_settings",
+        lambda org_id: {"provider": "anthropic"} if org_id == "org-xyz" else {},
+    )
+
+    # auto + org_id resolves the org's configured provider
+    assert resolve_provider_name("auto", org_id="org-xyz") == "anthropic"
+    # auto without org context (and no env) fails loud rather than guessing
+    with pytest.raises(LLMAuthError):
+        resolve_provider_name("auto", org_id=None)

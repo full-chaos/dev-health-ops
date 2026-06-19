@@ -43,6 +43,24 @@ def _mask_api_key(value: str | None) -> str | None:
     return f"{value[:4]}…{value[-4:]}"
 
 
+def _reject_llm_category(category: str) -> None:
+    # LLM settings are tier-gated, force-encrypted, and masked; they must only
+    # be managed via the dedicated /llm-settings endpoints. The generic settings
+    # routes would otherwise let any org admin write/read category='llm' rows
+    # (bypassing the BYO-LLM tier gate and exposing the raw api_key).
+    if category == SettingCategory.LLM.value:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "use_llm_settings_endpoint",
+                "message": (
+                    "LLM settings must be managed via /admin/llm-settings "
+                    "(tier-gated, encrypted, masked)."
+                ),
+            },
+        )
+
+
 async def _require_byo_llm_tier(session: AsyncSession, org_id: str) -> None:
     org_uuid = uuid.UUID(org_id)
     result = await session.execute(
@@ -90,6 +108,7 @@ async def list_settings_by_category(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SettingsListResponse:
+    _reject_llm_category(category)
     svc = SettingsService(session, org_id)
     settings = await svc.list_by_category(category)
     return SettingsListResponse(
@@ -167,12 +186,22 @@ async def get_setting(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SettingResponse:
+    _reject_llm_category(category)
     svc = SettingsService(session, org_id)
-    value = await svc.get(key, category)
-    if value is None:
+    rows = await svc.list_by_category(category)
+    row = next((s for s in rows if s.get("key") == key), None)
+    if row is None:
         raise HTTPException(status_code=404, detail="Setting not found")
-    return SettingResponse(
-        key=key, value=value, category=category, is_encrypted=False, description=None
+    # Never return decrypted values from the generic endpoint; _setting_response
+    # masks encrypted settings as [ENCRYPTED].
+    return _setting_response(
+        SettingResponse(
+            key=key,
+            value=row.get("value"),
+            category=category,
+            is_encrypted=bool(row.get("is_encrypted", False)),
+            description=row.get("description"),
+        )
     )
 
 
@@ -184,6 +213,7 @@ async def set_setting(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SettingResponse:
+    _reject_llm_category(category)
     svc = SettingsService(session, org_id)
     setting = await svc.set(
         key=key,
@@ -201,6 +231,7 @@ async def create_setting(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SettingResponse:
+    _reject_llm_category(payload.category)
     svc = SettingsService(session, org_id)
     setting = await svc.set(
         key=payload.key,
@@ -219,6 +250,7 @@ async def delete_setting(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> dict:
+    _reject_llm_category(category)
     svc = SettingsService(session, org_id)
     deleted = await svc.delete(key, category)
     if not deleted:

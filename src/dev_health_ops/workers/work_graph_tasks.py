@@ -212,7 +212,7 @@ def run_investment_materialize(
     )
 
     try:
-        resolved_provider = resolve_provider_name(llm_provider)
+        resolved_provider = resolve_provider_name(llm_provider, org_id=org_id or None)
         llm_credentials = resolve_llm_credentials(
             resolved_provider, org_id=org_id or None
         )
@@ -323,7 +323,7 @@ def run_investment_materialize_chunk(
             )
             checkpoint_id = uuid.UUID(str(checkpoint.id))
 
-        resolved_provider = resolve_provider_name(llm_provider)
+        resolved_provider = resolve_provider_name(llm_provider, org_id=org_id or None)
         llm_credentials = resolve_llm_credentials(
             resolved_provider, org_id=org_id or None
         )

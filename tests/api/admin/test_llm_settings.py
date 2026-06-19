@@ -136,6 +136,21 @@ async def test_admin_llm_settings_encrypts_and_masks_api_key(session_maker):
 
 
 @pytest.mark.asyncio
+async def test_admin_llm_settings_rejects_excessive_concurrency(session_maker):
+    state = await _seed_org(session_maker, "team")
+    app = _make_app(session_maker, state)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.put(
+            "/api/v1/admin/llm-settings",
+            json={"provider": "openai", "concurrency": 33},
+        )
+
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_admin_llm_settings_requires_team_or_enterprise(session_maker):
     state = await _seed_org(session_maker, "community")
     app = _make_app(session_maker, state)

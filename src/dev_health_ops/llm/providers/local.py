@@ -6,11 +6,17 @@ Supports Ollama, LMStudio, vLLM, and other OpenAI-compatible endpoints.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from urllib.parse import urlsplit, urlunsplit
 
-from dev_health_ops.llm.errors import classify_provider_error
+from dev_health_ops.llm.errors import (
+    LLMRateLimitError,
+    classify_provider_error,
+    is_retryable,
+    retry_delay,
+)
 
 from .base import (
     DEFAULT_MODEL_BY_PROVIDER,
@@ -107,6 +113,8 @@ class LocalProvider(LLMProviderBase):
     - LOCAL_LLM_API_KEY: API key if required (default: "not-needed")
     """
 
+    provider_name = "local"
+
     def __init__(
         self,
         base_url: str | None = None,
@@ -145,6 +153,7 @@ class LocalProvider(LLMProviderBase):
                 self._client = AsyncOpenAI(
                     api_key=self.api_key,
                     base_url=self.base_url,
+                    max_retries=0,
                 )
             except ImportError:
                 raise ImportError(
@@ -229,7 +238,24 @@ class LocalProvider(LLMProviderBase):
                     continue
 
                 model_name = self.model or "local-model"
-                llm_exc = classify_provider_error(e, provider="local", model=model_name)
+                llm_exc = classify_provider_error(
+                    e, provider=self.provider_name, model=model_name
+                )
+                if is_retryable(llm_exc) and retry_count < max_retries:
+                    delay = retry_delay(retry_count)
+                    if isinstance(llm_exc, LLMRateLimitError) and llm_exc.retry_after:
+                        delay = llm_exc.retry_after
+                    logger.warning(
+                        "%s LLM API transient error on attempt %d/%d; retrying in %.1fs: %s",
+                        self.provider_name,
+                        retry_count + 1,
+                        max_retries + 1,
+                        delay,
+                        llm_exc,
+                    )
+                    retry_count += 1
+                    await asyncio.sleep(delay)
+                    continue
                 logger.error(
                     "Local LLM API error url=%s error=%s classified=%s",
                     _redact_url(self.base_url or ""),

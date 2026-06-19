@@ -50,8 +50,11 @@ from dev_health_ops.workers.task_utils import (
     _resolve_env_credentials,
 )
 from dev_health_ops.workers.work_graph_tasks import (
+    dispatch_investment_materialize_partitioned,
     dispatch_membership_backfill,
+    finalize_investment_materialize_partitioned,
     run_investment_materialize,
+    run_investment_materialize_chunk,
     run_membership_backfill,
     run_work_graph_build,
 )
@@ -68,6 +71,7 @@ __all__ = [
     "_run_sync_for_repo",
     "dispatch_batch_sync",
     "dispatch_daily_metrics_partitioned",
+    "dispatch_investment_materialize_partitioned",
     "dispatch_release_impact",
     "dispatch_scheduled_metrics",
     "dispatch_scheduled_reports",
@@ -88,6 +92,8 @@ __all__ = [
     "run_dora_metrics",
     "run_ingest_consumer",
     "run_investment_materialize",
+    "run_investment_materialize_chunk",
+    "finalize_investment_materialize_partitioned",
     "run_membership_backfill",
     "run_product_telemetry_consumer",
     "run_recommendations_job",

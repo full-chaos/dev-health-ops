@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import json
 
+from .base import CompletionResult, LLMProviderBase
 
-class MockProvider:
+
+class MockProvider(LLMProviderBase):
     """
     Mock LLM provider that returns compliant explanation and categorization text.
 
@@ -17,19 +19,23 @@ class MockProvider:
     The mock responses follow the investment view language rules exactly.
     """
 
-    async def complete(self, prompt: str) -> str:
+    async def complete(self, prompt: str) -> CompletionResult:
         """
         Generate a mock response that follows Investment model rules.
 
         The response uses only approved language (appears, leans, suggests)
         and never uses forbidden language (is, was, detected, determined).
         """
+        text: str
         if (
             "Output schema" in prompt
             and '"subcategories"' in prompt
             and '"evidence_quotes"' in prompt
         ) or "matching the schema" in prompt:
-            return self._mock_categorization(prompt)
+            text = self._mock_categorization(prompt)
+            return CompletionResult(
+                text=text, input_tokens=None, output_tokens=None, model="mock"
+            )
 
         # Extract key info from prompt to make response contextual
         lines = prompt.split("\n")
@@ -79,7 +85,10 @@ class MockProvider:
             ],
             "confidence_note": confidence_note,
         }
-        return json.dumps(response_data)
+        text = json.dumps(response_data)
+        return CompletionResult(
+            text=text, input_tokens=None, output_tokens=None, model="mock"
+        )
 
     def _mock_categorization(self, prompt: str) -> str:
         # Extract the first available source block entry, which is formatted as:

@@ -4,7 +4,7 @@ import hashlib
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from dev_health_ops.api.utils.logging import sanitize_for_log
 from dev_health_ops.investment_taxonomy import SUBCATEGORIES, THEMES, theme_of
@@ -55,7 +55,7 @@ def _dominant_subcategory(subcategories: dict[str, float]) -> str | None:
 
 def _determine_confidence_level(
     quality_mean: float | None, quality_stddev: float | None
-) -> str:
+) -> Literal["high", "moderate", "low", "unknown"]:
     if quality_mean is None:
         return "unknown"
     if quality_mean >= 0.7 and (quality_stddev is None or quality_stddev < 0.15):
@@ -297,7 +297,7 @@ async def explain_investment_mix(
     full_prompt = build_prompt(base_prompt=prompt_text, payload=payload)
 
     provider = get_provider(llm_provider, model=llm_model)
-    raw = await provider.complete(full_prompt)
+    raw = await provider.complete_text(full_prompt)
     raw_len = len(raw) if raw is not None else 0
     if logger.isEnabledFor(logging.DEBUG):
         # Sanitize and truncate the LLM response before logging to avoid log injection.

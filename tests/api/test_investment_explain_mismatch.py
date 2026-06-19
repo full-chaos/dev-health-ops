@@ -31,7 +31,7 @@ async def test_explain_investment_mix_mismatch_warning():
         mock_units.return_value = []
 
         mock_provider = MagicMock()
-        mock_provider.complete = AsyncMock(
+        mock_provider.complete_text = AsyncMock(
             return_value='{"summary": "test", "top_findings": [], "confidence": {"level": "low"}, "what_to_check_next": [], "anti_claims": []}'
         )
         mock_get_provider.return_value = mock_provider

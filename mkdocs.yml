@@ -18,8 +18,8 @@ nav:
   - Home: index.md
   - Product:
       - PRD: product/prd.md
-      - Feature Flag and User Impact PRD: product/feature-flag-user-impact-prd.md
-      - Feature Flag PRD Review: product/feature-flag-prd-review.md
+      - Feature Flag and User Impact PRD: product/feature-flags/feature-flag-user-impact-prd.md
+      - Feature Flag PRD Review: product/feature-flags/feature-flag-prd-review.md
       - Product Brief: product/product-brief.md
       - Concepts: product/concepts.md
       - Investment Taxonomy: product/investment-taxonomy.md
@@ -50,6 +50,7 @@ nav:
       - Enterprise Overview: architecture/enterprise-overview.md
       - Licensing: architecture/licensing.md
       - ADR-001 Enterprise Edition: architecture/adr/001-enterprise-edition.md
+      - BYO-LLM Architecture: architecture/byo-llm-architecture.md
   - Operations:
       - Observability Tooling: ops/observability-tooling.md
       - Deployment Guide: ops/deployment-guide.md
@@ -109,7 +110,13 @@ nav:
       - Team Catalog Source of Truth: api/team-catalog-source-of-truth.md
       - Operating Review Aggregation: api/operating-review.md
   - Visualizations: visualizations/patterns.md
-  - LLM: llm/categorization-contract.md
+  - LLM:
+      - Categorization Contract: llm/categorization-contract.md
+      - Credential Resolution: llm/byo-llm-credentials.md
+      - Errors and Circuit-Breaker: llm/errors-circuit-breaker.md
+      - Materialize Fan-Out: llm/materialize-fanout.md
+      - Spend Observability: llm/spend-observability.md
+      - User Flows: llm/user-flow.md
   - Task Trackers: task_trackers.md
   - Roadmap: roadmap.md
   - Project Plan: project.md

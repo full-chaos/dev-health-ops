@@ -36,7 +36,8 @@ async def test_openai_legacy_truncation_retry_success():
     # Inject mock client
     provider._impl._client = mock_client
 
-    result_json = await provider.complete("explain legacy")
+    result = await provider.complete("explain legacy")
+    result_json = result.text
 
     # Verify parsing
     result = json.loads(result_json)

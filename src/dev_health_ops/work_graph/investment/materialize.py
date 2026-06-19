@@ -6,12 +6,25 @@ import asyncio
 import json
 import logging
 import uuid
+from collections import Counter
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from dev_health_ops.llm import get_provider
+from dev_health_ops.llm import (
+    LLMAuthError,
+    LLMContextLengthError,
+    LLMError,
+    LLMOutputError,
+    LLMRateLimitError,
+    LLMServerError,
+    classify_provider_error,
+    get_provider,
+    resolve_model_name,
+    resolve_provider_name,
+)
+from dev_health_ops.llm.providers.none import NoneProvider
 from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
@@ -20,6 +33,8 @@ from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.metrics.sinks.factory import create_sink
 from dev_health_ops.work_graph.ids import parse_commit_from_id, parse_pr_from_id
 from dev_health_ops.work_graph.investment.categorize import (
+    PROMPT_VERSION,
+    TAXONOMY_VERSION,
     categorize_text_bundle,
     fallback_outcome,
 )
@@ -52,6 +67,117 @@ from dev_health_ops.work_graph.investment.utils import (
 logger = logging.getLogger(__name__)
 
 NodeKey = tuple[str, str]
+
+
+def _classify_llm_exception(
+    exc: BaseException,
+    *,
+    provider: str,
+    model: str,
+) -> LLMError:
+    if isinstance(exc, LLMError):
+        return exc
+    return classify_provider_error(exc, provider=provider, model=model)
+
+
+def _llm_failure_class(exc: BaseException) -> str:
+    text = str(exc).lower()
+    if "insufficient_quota" in text or "quota exhausted" in text:
+        return "quota_exceeded"
+    if "model_not_found" in text or "model not found" in text:
+        return "model_not_found"
+    if "missing" in text and "api key" in text:
+        return "missing_key"
+    if "invalid" in text and "api key" in text:
+        return "invalid_api_key"
+    if isinstance(exc, LLMAuthError):
+        return "auth"
+    if isinstance(exc, LLMRateLimitError):
+        return "rate_limit"
+    if isinstance(exc, LLMServerError):
+        return "server_error"
+    if isinstance(exc, LLMContextLengthError):
+        return "context_length"
+    if isinstance(exc, LLMOutputError):
+        return "output_error"
+    return "llm_error"
+
+
+def _is_deterministic_llm_failure(exc: BaseException) -> bool:
+    if isinstance(exc, LLMAuthError):
+        return True
+    return _llm_failure_class(exc) in {
+        "invalid_api_key",
+        "missing_key",
+        "model_not_found",
+        "quota_exceeded",
+    }
+
+
+def _format_llm_summary(ok: int, failure_counts: Counter[str]) -> str:
+    parts = [f"{ok} ok"]
+    parts.extend(
+        f"{count} {failure_class}"
+        for failure_class, count in sorted(failure_counts.items())
+        if count
+    )
+    return "llm: " + ", ".join(parts)
+
+
+def _effective_model_version(provider: str, model: str | None) -> str:
+    resolved_model = resolve_model_name(provider, model) or model or provider
+    return (
+        f"provider={provider};model={resolved_model};"
+        f"taxonomy={TAXONOMY_VERSION};prompt={PROMPT_VERSION}"
+    )
+
+
+def _fetch_existing_investment_keys(
+    sink: BaseMetricsSink,
+    *,
+    org_id: str,
+    keys: Iterable[tuple[str, str]],
+    model_version: str,
+) -> set[tuple[str, str]]:
+    key_list = list(dict.fromkeys(keys))
+    if not key_list or not hasattr(sink, "query_dicts"):
+        return set()
+    work_unit_ids = sorted({work_unit_id for work_unit_id, _ in key_list})
+    input_hashes = sorted({input_hash for _, input_hash in key_list})
+    query = """
+        SELECT work_unit_id, categorization_input_hash
+        FROM (
+            SELECT
+                work_unit_id,
+                categorization_input_hash,
+                argMax(categorization_status, computed_at) AS latest_status
+            FROM work_unit_investments
+            WHERE org_id = %(org_id)s
+              AND work_unit_id IN %(work_unit_ids)s
+              AND categorization_input_hash IN %(input_hashes)s
+              AND categorization_model_version = %(model_version)s
+            GROUP BY work_unit_id, categorization_input_hash
+        )
+        WHERE latest_status IN %(valid_statuses)s
+    """
+    rows = sink.query_dicts(
+        query,
+        {
+            "org_id": org_id,
+            "work_unit_ids": work_unit_ids,
+            "input_hashes": input_hashes,
+            "model_version": model_version,
+            "valid_statuses": ["ok", "repaired"],
+        },
+    )
+    return {
+        (
+            str(row.get("work_unit_id") or ""),
+            str(row.get("categorization_input_hash") or ""),
+        )
+        for row in rows
+        if row.get("work_unit_id") and row.get("categorization_input_hash")
+    }
 
 
 @dataclass(frozen=True)
@@ -131,10 +257,15 @@ class MaterializeConfig:
     llm_provider: str
     persist_evidence_snippets: bool
     llm_model: str | None
+    llm_api_key: str = field(default="", repr=False)
+    llm_base_url: str = ""
     force: bool = False
     team_ids: list[str] | None = None
     llm_concurrency: int = 5
     org_id: str | None = None
+    run_id: str | None = None
+    computed_at: datetime | None = None
+    component_indexes: list[int] | None = None
 
 
 def _build_components(
@@ -360,14 +491,30 @@ def _resolve_repo_ids(
     return None
 
 
-async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
+async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
     sink = create_sink(config.dsn)
     provider_instance = None
     try:
         sink.ensure_schema()
 
         # Initialize LLM provider once (reusing connection pool)
-        provider_instance = get_provider(config.llm_provider, model=config.llm_model)
+        resolved_llm_provider = resolve_provider_name(
+            config.llm_provider, org_id=config.org_id or None
+        )
+        provider_instance = get_provider(
+            resolved_llm_provider,
+            org_id=config.org_id or None,
+            model=config.llm_model,
+            api_key=config.llm_api_key or None,
+            base_url=config.llm_base_url or None,
+        )
+        if isinstance(provider_instance, NoneProvider):
+            raise LLMAuthError(
+                "LLM provider 'none' cannot materialize investment categorizations; "
+                "configure a real LLM provider or use --llm-provider mock for tests.",
+                provider=resolved_llm_provider,
+                model="none",
+            )
 
         repo_ids = _resolve_repo_ids(
             sink, config.repo_ids, config.team_ids, config_org_id=config.org_id or ""
@@ -376,11 +523,19 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
             sink, repo_ids=repo_ids, org_id=config.org_id or ""
         )
         components = _build_components(edges)
+        total_components = len(components)
         if not components:
             logger.info(
                 "No work graph components found for investment materialization."
             )
             return {"components": 0, "records": 0, "quotes": 0}
+        if config.component_indexes is not None:
+            wanted_indexes = set(config.component_indexes)
+            components = [
+                component
+                for component_index, component in enumerate(components)
+                if component_index in wanted_indexes
+            ]
 
         issue_ids = {
             node_id
@@ -438,9 +593,11 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
 
         records: list[WorkUnitInvestmentRecord] = []
         quote_records: list[WorkUnitInvestmentEvidenceQuoteRecord] = []
-        run_id = uuid.uuid4().hex
-        computed_at = datetime.now(timezone.utc)
-        model_version = config.llm_model or config.llm_provider
+        run_id = config.run_id or uuid.uuid4().hex
+        computed_at = config.computed_at or datetime.now(timezone.utc)
+        model_version = _effective_model_version(
+            resolved_llm_provider, config.llm_model
+        )
 
         logger.info(
             "Materializing investments for %d components (run_id=%s)",
@@ -512,15 +669,43 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
             len(fallback_results),
         )
 
+        skipped_existing: set[int] = set()
+        if pending_llm and not config.force:
+            pending_keys = {
+                idx: (preprocessed[idx].unit_id, bundle.input_hash)
+                for idx, bundle in pending_llm
+            }
+            existing_keys = await asyncio.to_thread(
+                _fetch_existing_investment_keys,
+                sink,
+                org_id=config.org_id or "",
+                keys=pending_keys.values(),
+                model_version=model_version,
+            )
+            skipped_existing = {
+                idx for idx, key in pending_keys.items() if key in existing_keys
+            }
+            if skipped_existing:
+                pending_llm = [
+                    (idx, bundle)
+                    for idx, bundle in pending_llm
+                    if idx not in skipped_existing
+                ]
+                logger.info(
+                    "Skipping %d unchanged investment bundle(s) with fresh categorization",
+                    len(skipped_existing),
+                )
+
         # Parallel LLM categorization with concurrency limit
         semaphore = asyncio.Semaphore(config.llm_concurrency)
         llm_results: dict[int, Any] = {}
+        llm_failure_counts: Counter[str] = Counter()
 
         async def categorize_with_limit(idx: int, bundle: Any) -> tuple[int, Any]:
             async with semaphore:
                 outcome = await categorize_text_bundle(
                     bundle,
-                    llm_provider=config.llm_provider,
+                    llm_provider=resolved_llm_provider,
                     llm_model=config.llm_model,
                     provider=provider_instance,
                 )
@@ -532,25 +717,77 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
                 len(pending_llm),
                 config.llm_concurrency,
             )
-            tasks = [categorize_with_limit(idx, bundle) for idx, bundle in pending_llm]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for result in results:
-                if isinstance(result, Exception):
-                    logger.warning("LLM task failed: %s", result)
+            tasks = [
+                asyncio.create_task(categorize_with_limit(idx, bundle))
+                for idx, bundle in pending_llm
+            ]
+            for task in asyncio.as_completed(tasks):
+                try:
+                    result = await task
+                except Exception as exc:
+                    classified = _classify_llm_exception(
+                        exc,
+                        provider=config.llm_provider,
+                        model=config.llm_model or config.llm_provider,
+                    )
+                    failure_class = _llm_failure_class(classified)
+                    llm_failure_counts[failure_class] += 1
+                    if _is_deterministic_llm_failure(classified):
+                        for pending_task in tasks:
+                            if not pending_task.done():
+                                pending_task.cancel()
+                        await asyncio.gather(*tasks, return_exceptions=True)
+                        verdict = _format_llm_summary(
+                            len(llm_results), llm_failure_counts
+                        )
+                        logger.error(
+                            "Investment materialization stopped on fatal LLM failure: %s",
+                            verdict,
+                        )
+                        raise classified
+                    logger.warning(
+                        "LLM task failed (%s): %s", failure_class, classified
+                    )
                     continue
                 if not isinstance(result, tuple) or len(result) != 2:
                     logger.warning("Unexpected LLM task result: %r", result)
                     continue
                 idx, outcome = result
                 llm_results[idx] = outcome
-            logger.info("Completed %d LLM categorizations", len(llm_results))
+            logger.info(
+                "Completed LLM categorizations: %s",
+                _format_llm_summary(len(llm_results), llm_failure_counts),
+            )
 
         # Merge fallback results
         for idx, outcome in fallback_results:
             llm_results[idx] = outcome
 
+        llm_calls = sum(
+            int(getattr(outcome, "llm_calls", 0)) for outcome in llm_results.values()
+        )
+        llm_input_tokens = sum(
+            int(getattr(outcome, "input_tokens", 0)) for outcome in llm_results.values()
+        )
+        llm_output_tokens = sum(
+            int(getattr(outcome, "output_tokens", 0))
+            for outcome in llm_results.values()
+        )
+        if llm_calls or llm_failure_counts:
+            logger.info(
+                "LLM usage summary: calls=%d input_tokens=%d output_tokens=%d %s",
+                llm_calls,
+                llm_input_tokens,
+                llm_output_tokens,
+                _format_llm_summary(
+                    len(llm_results) - len(fallback_results), llm_failure_counts
+                ),
+            )
+
         # Post-process: create records from outcomes
         for idx, data in preprocessed.items():
+            if idx in skipped_existing:
+                continue
             outcome = llm_results.get(idx)
             if outcome is None:
                 outcome = fallback_outcome("llm_task_failed")
@@ -684,8 +921,15 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
 
         return {
             "components": len(components),
+            "total_components": total_components,
             "records": len(records),
             "quotes": len(quote_records),
+            "skipped_existing": len(skipped_existing),
+            "llm_calls": llm_calls,
+            "llm_input_tokens": llm_input_tokens,
+            "llm_output_tokens": llm_output_tokens,
+            "llm_failures": sum(llm_failure_counts.values()),
+            "llm_failure_counts": dict(llm_failure_counts),
         }
     finally:
         sink.close()

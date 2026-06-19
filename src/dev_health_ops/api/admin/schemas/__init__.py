@@ -51,6 +51,8 @@ from dev_health_ops.api.admin.schemas_flat import (  # noqa: F401
     IPCheckResponse,
     JiraActivityInferenceResponse,
     JobRunResponse,
+    LLMSettingsResponse,
+    LLMSettingsUpsert,
     MemberMatchResult,
     MembershipCreate,
     MembershipResponse,

@@ -40,6 +40,15 @@ def _component_count(edges: list[tuple[str, str, str, str]]) -> int:
     return count
 
 
+def _llm_concurrency(value: object | None = None) -> int:
+    raw = value if value is not None else os.getenv("INVESTMENT_LLM_CONCURRENCY", "5")
+    try:
+        concurrency = int(str(raw))
+    except (TypeError, ValueError):
+        concurrency = 5
+    return max(1, concurrency)
+
+
 def run_work_graph_build(ns: argparse.Namespace) -> int:
     # Parse dates
     from_date = None
@@ -181,6 +190,9 @@ def run_work_graph_build(ns: argparse.Namespace) -> int:
 
 
 def run_investment_materialization(ns: argparse.Namespace) -> int:
+    analytics_db = str(
+        getattr(ns, "analytics_db", None) or os.getenv("CLICKHOUSE_URI") or ""
+    )
     now = datetime.now(timezone.utc)
     if ns.to_date:
         to_day = date.fromisoformat(ns.to_date)
@@ -207,13 +219,16 @@ def run_investment_materialization(ns: argparse.Namespace) -> int:
     org_id = getattr(ns, "org", None) or None
 
     config = MaterializeConfig(
-        dsn=ns.db,
+        dsn=analytics_db,
         from_ts=from_ts,
         to_ts=to_ts,
         repo_ids=repo_ids or None,
         llm_provider=getattr(ns, "llm_provider", "auto") or "auto",
         persist_evidence_snippets=getattr(ns, "persist_evidence_snippets", True),
         llm_model=getattr(ns, "model", None),
+        llm_api_key=str(getattr(ns, "llm_api_key", None) or ""),
+        llm_base_url=str(getattr(ns, "llm_base_url", None) or ""),
+        llm_concurrency=_llm_concurrency(getattr(ns, "llm_concurrency", None)),
         team_ids=team_ids or None,
         force=getattr(ns, "force", False),
         org_id=org_id,
@@ -266,7 +281,7 @@ def run_investment_materialization(ns: argparse.Namespace) -> int:
         )
         try:
             mstats = backfill_memberships(
-                MembershipBackfillConfig(dsn=ns.db, org_id=org_id, repo_ids=None)
+                MembershipBackfillConfig(dsn=analytics_db, org_id=org_id, repo_ids=None)
             )
             logging.info(
                 "Membership projection complete. Components=%d Matched=%d "
@@ -384,9 +399,12 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         help="Materialize work unit investment categorization into sinks.",
     )
     investment_materialize.add_argument(
+        "--analytics-db",
         "--db",
-        default=os.getenv("CLICKHOUSE_URI"),
-        help="ClickHouse connection string (clickhouse://user:pass@host:port/db). Env: CLICKHOUSE_URI",
+        dest="analytics_db",
+        default=argparse.SUPPRESS,
+        help="ClickHouse connection string (clickhouse://user:pass@host:port/db). "
+        "Env: CLICKHOUSE_URI. Deprecated alias on this subcommand: --db.",
     )
     investment_materialize.add_argument(
         "--from",
@@ -423,7 +441,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     )
     from dev_health_ops.llm.cli import add_llm_arguments
 
-    add_llm_arguments(investment_materialize)
+    add_llm_arguments(investment_materialize, leaf_mode=True)
     investment_materialize.add_argument(
         "--persist-evidence-snippets",
         dest="persist_evidence_snippets",

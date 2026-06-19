@@ -29,6 +29,7 @@ late_ack_excluded_tasks = (
     "dev_health_ops.workers.tasks.dispatch_scheduled_syncs",
     "dev_health_ops.workers.tasks.dispatch_scheduled_metrics",
     "dev_health_ops.workers.tasks.dispatch_daily_metrics_partitioned",
+    "dev_health_ops.workers.tasks.dispatch_investment_materialize_partitioned",
     "dev_health_ops.workers.tasks.dispatch_release_impact",
     "dev_health_ops.workers.tasks.dispatch_membership_backfill",
     "dev_health_ops.workers.tasks.dispatch_scheduled_reports",

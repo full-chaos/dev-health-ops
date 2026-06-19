@@ -15,7 +15,12 @@ import logging
 import re
 from functools import lru_cache
 
-from dev_health_ops.llm import get_provider, is_llm_available
+from dev_health_ops.llm import (
+    LLMProvider,
+    get_provider,
+    is_llm_available,
+    resolve_provider_name,
+)
 from dev_health_ops.llm.explainers.work_unit_explainer import (
     build_explanation_prompt,
     extract_allowed_inputs,
@@ -43,6 +48,9 @@ async def explain_work_unit(
     investment: WorkUnitInvestment,
     llm_provider: str = "auto",
     llm_model: str | None = None,
+    *,
+    provider: LLMProvider | None = None,
+    org_id: str | None = None,
 ) -> WorkUnitExplanation:
     """
     Generate an LLM explanation for a work unit's precomputed investment view.
@@ -62,7 +70,11 @@ async def explain_work_unit(
     Returns:
         Structured WorkUnitExplanation with validated content
     """
-    if not is_llm_available(llm_provider):
+    if _should_return_non_ai_explanation(
+        llm_provider=llm_provider,
+        provider=provider,
+        org_id=org_id,
+    ):
         return WorkUnitExplanation(
             work_unit_id=investment.work_unit_id,
             ai_generated=False,
@@ -101,8 +113,12 @@ async def explain_work_unit(
     )
 
     # 3. Call LLM provider
-    provider = get_provider(llm_provider, model=llm_model)
-    raw_response = await provider.complete(prompt)
+    resolved_provider = (
+        provider
+        if provider is not None
+        else get_provider(llm_provider, model=llm_model, org_id=org_id)
+    )
+    raw_response = await resolved_provider.complete_text(prompt)
     logger.debug(
         "Received LLM response for work_unit_id=%s, length=%d",
         investment.work_unit_id,
@@ -121,6 +137,22 @@ async def explain_work_unit(
 
     # 5. Parse and structure the response
     return _parse_llm_response(investment.work_unit_id, raw_response, investment)
+
+
+def _should_return_non_ai_explanation(
+    *,
+    llm_provider: str,
+    provider: LLMProvider | None,
+    org_id: str | None,
+) -> bool:
+    if provider is not None:
+        return provider.__class__.__name__ == "NoneProvider"
+    try:
+        if resolve_provider_name(llm_provider, org_id=org_id) == "none":
+            return True
+    except Exception:
+        return not is_llm_available(llm_provider, org_id=org_id)
+    return not is_llm_available(llm_provider, org_id=org_id)
 
 
 def _parse_llm_response(

@@ -4,14 +4,74 @@ import logging
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from datetime import time as dt_time
+from typing import Any
 
-from celery import chain
+from celery import chain, chord
 
 from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.task_utils import _get_db_url
 
 logger = logging.getLogger(__name__)
+
+
+def _llm_concurrency(value: object | None = None) -> int:
+    import os
+
+    raw = value if value is not None else os.getenv("INVESTMENT_LLM_CONCURRENCY", "5")
+    try:
+        concurrency = int(str(raw))
+    except (TypeError, ValueError):
+        concurrency = 5
+    return max(1, concurrency)
+
+
+def _investment_chunk_size(value: object | None = None) -> int:
+    import os
+
+    raw = (
+        value
+        if value is not None
+        else os.getenv("INVESTMENT_MATERIALIZE_CHUNK_SIZE", "25")
+    )
+    try:
+        chunk_size = int(str(raw))
+    except (TypeError, ValueError):
+        chunk_size = 25
+    return max(1, chunk_size)
+
+
+def _parse_materialize_window(
+    *,
+    from_date: str | None,
+    to_date: str | None,
+    window_days: int,
+) -> tuple[datetime, datetime]:
+    now = datetime.now(timezone.utc)
+    if to_date:
+        parsed_to = datetime.combine(
+            date.fromisoformat(to_date) + timedelta(days=1),
+            dt_time.min,
+            tzinfo=timezone.utc,
+        )
+    else:
+        parsed_to = now
+
+    if from_date:
+        parsed_from = datetime.combine(
+            date.fromisoformat(from_date),
+            dt_time.min,
+            tzinfo=timezone.utc,
+        )
+    else:
+        parsed_from = parsed_to - timedelta(days=window_days)
+    return parsed_from, parsed_to
+
+
+def _investment_chunk_scope_id(run_id: str, chunk_index: int) -> uuid.UUID:
+    return uuid.uuid5(
+        uuid.NAMESPACE_URL, f"dev-health:investment:{run_id}:{chunk_index}"
+    )
 
 
 @celery_app.task(
@@ -106,6 +166,7 @@ def run_investment_materialize(
     team_ids: list[str] | None = None,
     llm_provider: str = "auto",
     llm_model: str | None = None,
+    llm_concurrency: int | None = None,
     force: bool = False,
     org_id: str = "",
 ) -> dict:
@@ -120,6 +181,7 @@ def run_investment_materialize(
         team_ids: Optional list of team IDs to filter
         llm_provider: LLM provider (auto|openai|anthropic)
         llm_model: Optional specific LLM model
+        llm_concurrency: Maximum concurrent LLM categorizations
         force: Force recomputation even if cached
         org_id: Organization scope for work-graph/investment queries
 
@@ -127,33 +189,19 @@ def run_investment_materialize(
         dict with materialization status and stats
     """
 
+    from dev_health_ops.llm import LLMAuthError, LLMError, resolve_provider_name
+    from dev_health_ops.llm.credentials import resolve_llm_credentials
     from dev_health_ops.work_graph.investment.materialize import (
         MaterializeConfig,
         materialize_investments,
     )
 
     db_url = db_url or _get_db_url()
-    now = datetime.now(timezone.utc)
-
-    # Parse to_date
-    if to_date:
-        parsed_to = datetime.combine(
-            date.fromisoformat(to_date) + timedelta(days=1),
-            dt_time.min,
-            tzinfo=timezone.utc,
-        )
-    else:
-        parsed_to = now
-
-    # Parse from_date
-    if from_date:
-        parsed_from = datetime.combine(
-            date.fromisoformat(from_date),
-            dt_time.min,
-            tzinfo=timezone.utc,
-        )
-    else:
-        parsed_from = parsed_to - timedelta(days=window_days)
+    parsed_from, parsed_to = _parse_materialize_window(
+        from_date=from_date,
+        to_date=to_date,
+        window_days=window_days,
+    )
 
     logger.info(
         "Starting investment materialize task: from=%s to=%s repos=%s teams=%s",
@@ -164,23 +212,324 @@ def run_investment_materialize(
     )
 
     try:
+        resolved_provider = resolve_provider_name(llm_provider, org_id=org_id or None)
+        llm_credentials = resolve_llm_credentials(
+            resolved_provider, org_id=org_id or None
+        )
         config = MaterializeConfig(
             dsn=db_url,
             from_ts=parsed_from,
             to_ts=parsed_to,
             repo_ids=repo_ids,
-            llm_provider=llm_provider,
+            llm_provider=resolved_provider,
             persist_evidence_snippets=True,
             llm_model=llm_model,
+            llm_api_key=llm_credentials.api_key,
+            llm_base_url=llm_credentials.base_url,
+            llm_concurrency=_llm_concurrency(llm_concurrency),
             team_ids=team_ids,
             force=force,
             org_id=org_id or None,
         )
         stats = run_async(materialize_investments(config))
         return {"status": "success", "stats": stats}
+    except LLMAuthError as exc:
+        logger.error("Investment materialize task failed with LLM auth error: %s", exc)
+        raise
+    except LLMError as exc:
+        logger.error(
+            "Investment materialize task failed with classified LLM error: %s", exc
+        )
+        raise
     except Exception as exc:
         logger.exception("Investment materialize task failed: %s", exc)
         raise self.retry(exc=exc, countdown=120 * (2**self.request.retries))
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    queue="metrics",
+    name="dev_health_ops.workers.tasks.run_investment_materialize_chunk",
+)
+def run_investment_materialize_chunk(
+    self,
+    db_url: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    window_days: int = 30,
+    repo_ids: list[str] | None = None,
+    team_ids: list[str] | None = None,
+    llm_provider: str = "auto",
+    llm_model: str | None = None,
+    llm_concurrency: int | None = None,
+    force: bool = False,
+    org_id: str = "",
+    run_id: str = "",
+    computed_at: str = "",
+    component_indexes: list[int] | None = None,
+    chunk_index: int = 0,
+) -> dict:
+    from dev_health_ops.db import get_postgres_session_sync
+    from dev_health_ops.llm import LLMAuthError, LLMError, resolve_provider_name
+    from dev_health_ops.llm.credentials import resolve_llm_credentials
+    from dev_health_ops.metrics.checkpoints import (
+        is_completed,
+        mark_completed,
+        mark_failed,
+        mark_running,
+    )
+    from dev_health_ops.work_graph.investment.materialize import (
+        MaterializeConfig,
+        materialize_investments,
+    )
+
+    db_url = db_url or _get_db_url()
+    parsed_from, parsed_to = _parse_materialize_window(
+        from_date=from_date,
+        to_date=to_date,
+        window_days=window_days,
+    )
+    shared_computed_at = datetime.fromisoformat(computed_at)
+    if shared_computed_at.tzinfo is None:
+        shared_computed_at = shared_computed_at.replace(tzinfo=timezone.utc)
+    run_id = run_id or uuid.uuid4().hex
+    checkpoint_scope = _investment_chunk_scope_id(run_id, chunk_index)
+    checkpoint_id: uuid.UUID | None = None
+
+    try:
+        with get_postgres_session_sync() as session:
+            if is_completed(
+                session,
+                org_id or "default",
+                checkpoint_scope,
+                "investment_materialize_chunk",
+                shared_computed_at,
+            ):
+                return {
+                    "status": "skipped",
+                    "reason": "already_completed",
+                    "chunk_index": chunk_index,
+                    "records": 0,
+                    "quotes": 0,
+                }
+            checkpoint = mark_running(
+                session,
+                org_id or "default",
+                checkpoint_scope,
+                "investment_materialize_chunk",
+                shared_computed_at,
+                str(self.request.id or "unknown"),
+            )
+            checkpoint_id = uuid.UUID(str(checkpoint.id))
+
+        resolved_provider = resolve_provider_name(llm_provider, org_id=org_id or None)
+        llm_credentials = resolve_llm_credentials(
+            resolved_provider, org_id=org_id or None
+        )
+        config = MaterializeConfig(
+            dsn=db_url,
+            from_ts=parsed_from,
+            to_ts=parsed_to,
+            repo_ids=repo_ids,
+            llm_provider=resolved_provider,
+            persist_evidence_snippets=True,
+            llm_model=llm_model,
+            llm_api_key=llm_credentials.api_key,
+            llm_base_url=llm_credentials.base_url,
+            llm_concurrency=_llm_concurrency(llm_concurrency),
+            team_ids=team_ids,
+            force=force,
+            org_id=org_id or None,
+            run_id=run_id,
+            computed_at=shared_computed_at,
+            component_indexes=component_indexes,
+        )
+        stats = run_async(materialize_investments(config))
+
+        if checkpoint_id is not None:
+            with get_postgres_session_sync() as session:
+                mark_completed(session, checkpoint_id)
+        return {"status": "success", "chunk_index": chunk_index, "stats": stats}
+    except (LLMAuthError, LLMError):
+        if checkpoint_id is not None:
+            try:
+                with get_postgres_session_sync() as session:
+                    mark_failed(session, checkpoint_id, "classified LLM failure")
+            except Exception:
+                logger.exception("Failed to mark investment chunk checkpoint failed")
+        raise
+    except Exception as exc:
+        if checkpoint_id is not None:
+            try:
+                with get_postgres_session_sync() as session:
+                    mark_failed(session, checkpoint_id, str(exc))
+            except Exception:
+                logger.exception("Failed to mark investment chunk checkpoint failed")
+        logger.exception("Investment materialize chunk failed: %s", exc)
+        raise self.retry(exc=exc, countdown=120 * (2**self.request.retries))
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    queue="metrics",
+    name="dev_health_ops.workers.tasks.finalize_investment_materialize_partitioned",
+)
+def finalize_investment_materialize_partitioned(
+    self,
+    chunk_results: list,
+    db_url: str | None = None,
+    org_id: str = "",
+    run_id: str = "",
+    run_membership_backfill_after: bool = False,
+) -> dict:
+    db_url = db_url or _get_db_url()
+    totals: dict[str, Any] = {
+        "status": "success",
+        "run_id": run_id,
+        "chunks": len(chunk_results or []),
+        "records": 0,
+        "quotes": 0,
+        "skipped_existing": 0,
+        "llm_calls": 0,
+        "llm_input_tokens": 0,
+        "llm_output_tokens": 0,
+        "llm_failures": 0,
+        "llm_failure_counts": {},
+    }
+    try:
+        for result in chunk_results or []:
+            stats = result.get("stats", {}) if isinstance(result, dict) else {}
+            for key in (
+                "records",
+                "quotes",
+                "skipped_existing",
+                "llm_calls",
+                "llm_input_tokens",
+                "llm_output_tokens",
+                "llm_failures",
+            ):
+                totals[key] += int(stats.get(key, 0) or 0)
+            for failure_class, count in dict(
+                stats.get("llm_failure_counts", {})
+            ).items():
+                current = totals["llm_failure_counts"].get(failure_class, 0)
+                totals["llm_failure_counts"][failure_class] = current + int(count or 0)
+
+        if run_membership_backfill_after:
+            from dev_health_ops.work_graph.investment.backfill import (
+                MembershipBackfillConfig,
+                backfill_memberships,
+            )
+
+            totals["membership"] = backfill_memberships(
+                MembershipBackfillConfig(
+                    dsn=db_url, org_id=org_id or None, repo_ids=None
+                )
+            )
+        return totals
+    except Exception as exc:
+        logger.exception("Investment materialize partition finalizer failed: %s", exc)
+        raise self.retry(exc=exc, countdown=120 * (2**self.request.retries))
+
+
+@celery_app.task(
+    bind=True,
+    queue="default",
+    name="dev_health_ops.workers.tasks.dispatch_investment_materialize_partitioned",
+)
+def dispatch_investment_materialize_partitioned(
+    self,
+    db_url: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    window_days: int = 30,
+    repo_ids: list[str] | None = None,
+    team_ids: list[str] | None = None,
+    llm_provider: str = "auto",
+    llm_model: str | None = None,
+    llm_concurrency: int | None = None,
+    force: bool = False,
+    org_id: str = "",
+    chunk_size: int | None = None,
+) -> dict:
+    from dev_health_ops.metrics.sinks.factory import create_sink
+    from dev_health_ops.work_graph.investment.materialize import (
+        _build_components,
+        _resolve_repo_ids,
+    )
+    from dev_health_ops.work_graph.investment.queries import fetch_work_graph_edges
+
+    # Hoisted to guarantee definite assignment on every return path (CodeQL).
+    run_membership = not (repo_ids or team_ids or from_date or to_date)
+
+    db_url = db_url or _get_db_url()
+    sink = create_sink(db_url)
+    try:
+        sink.ensure_schema()
+        resolved_repo_ids = _resolve_repo_ids(
+            sink, repo_ids, team_ids, config_org_id=org_id or ""
+        )
+        edges = fetch_work_graph_edges(
+            sink, repo_ids=resolved_repo_ids, org_id=org_id or ""
+        )
+        components = _build_components(edges)
+    finally:
+        sink.close()
+
+    if not components:
+        return {"status": "no_components", "dispatched": 0, "chunks": 0}
+
+    size = _investment_chunk_size(chunk_size)
+    indexes = list(range(len(components)))
+    chunks = [indexes[i : i + size] for i in range(0, len(indexes), size)]
+    run_id = uuid.uuid4().hex
+    computed_at = datetime.now(timezone.utc).isoformat()
+
+    header = [
+        celery_app.signature(
+            "dev_health_ops.workers.tasks.run_investment_materialize_chunk",
+            kwargs={
+                "db_url": db_url,
+                "from_date": from_date,
+                "to_date": to_date,
+                "window_days": window_days,
+                "repo_ids": repo_ids,
+                "team_ids": team_ids,
+                "llm_provider": llm_provider,
+                "llm_model": llm_model,
+                "llm_concurrency": llm_concurrency,
+                "force": force,
+                "org_id": org_id,
+                "run_id": run_id,
+                "computed_at": computed_at,
+                "component_indexes": chunk_indexes,
+                "chunk_index": chunk_index,
+            },
+            queue="metrics",
+        )
+        for chunk_index, chunk_indexes in enumerate(chunks)
+    ]
+    callback = celery_app.signature(
+        "dev_health_ops.workers.tasks.finalize_investment_materialize_partitioned",
+        kwargs={
+            "db_url": db_url,
+            "org_id": org_id,
+            "run_id": run_id,
+            "run_membership_backfill_after": run_membership,
+        },
+        queue="metrics",
+    )
+    chord(header, callback).apply_async()
+    return {
+        "status": "dispatched",
+        "components": len(components),
+        "chunks": len(chunks),
+        "run_id": run_id,
+        "computed_at": computed_at,
+        "membership_in_finalizer": run_membership,
+    }
 
 
 @celery_app.task(

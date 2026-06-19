@@ -1,0 +1,168 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any, cast
+from unittest.mock import MagicMock, patch
+
+from dev_health_ops.workers.work_graph_tasks import (
+    dispatch_investment_materialize_partitioned,
+    finalize_investment_materialize_partitioned,
+    run_investment_materialize_chunk,
+)
+
+
+class _FakeSink:
+    def ensure_schema(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+
+def _edge(component: int) -> dict[str, object]:
+    return {
+        "edge_id": f"edge-{component}",
+        "source_type": "issue",
+        "source_id": f"I-{component}",
+        "target_type": "commit",
+        "target_id": f"repo-{component}@abc{component}",
+        "repo_id": f"repo-{component}",
+    }
+
+
+def _signature_factory(name: str, **kwargs: Any) -> MagicMock:
+    sig = MagicMock(name=f"sig:{name}")
+    sig.task_name = name
+    sig.sig_kwargs = kwargs
+    return sig
+
+
+def test_dispatch_partitioned_materialize_chunks_components_with_shared_run() -> None:
+    with (
+        patch(
+            "dev_health_ops.metrics.sinks.factory.create_sink",
+            return_value=_FakeSink(),
+        ),
+        patch(
+            "dev_health_ops.work_graph.investment.queries.fetch_work_graph_edges",
+            return_value=[_edge(1), _edge(2), _edge(3)],
+        ),
+        patch(
+            "dev_health_ops.workers.work_graph_tasks.celery_app.signature",
+            side_effect=_signature_factory,
+        ) as mock_signature,
+        patch("dev_health_ops.workers.work_graph_tasks.chord") as mock_chord,
+    ):
+        chord_instance = MagicMock()
+        mock_chord.return_value = chord_instance
+        task = cast(Any, dispatch_investment_materialize_partitioned)
+        result = task.run(db_url="clickhouse://x", org_id="org-1", chunk_size=2)
+
+    assert result["status"] == "dispatched"
+    assert result["components"] == 3
+    assert result["chunks"] == 2
+    header, callback = mock_chord.call_args.args
+    assert len(header) == 2
+    first_kwargs = header[0].sig_kwargs["kwargs"]
+    second_kwargs = header[1].sig_kwargs["kwargs"]
+    assert first_kwargs["component_indexes"] == [0, 1]
+    assert second_kwargs["component_indexes"] == [2]
+    assert first_kwargs["run_id"] == second_kwargs["run_id"] == result["run_id"]
+    assert first_kwargs["computed_at"] == second_kwargs["computed_at"]
+    assert callback.task_name == (
+        "dev_health_ops.workers.tasks.finalize_investment_materialize_partitioned"
+    )
+    assert callback.sig_kwargs["kwargs"]["run_membership_backfill_after"] is True
+    chord_instance.apply_async.assert_called_once_with()
+    assert mock_signature.call_count == 3
+
+
+def test_dispatch_partitioned_materialize_skips_marker_for_windowed_run() -> None:
+    with (
+        patch(
+            "dev_health_ops.metrics.sinks.factory.create_sink",
+            return_value=_FakeSink(),
+        ),
+        patch(
+            "dev_health_ops.work_graph.investment.queries.fetch_work_graph_edges",
+            return_value=[_edge(1)],
+        ),
+        patch(
+            "dev_health_ops.workers.work_graph_tasks.celery_app.signature",
+            side_effect=_signature_factory,
+        ),
+        patch("dev_health_ops.workers.work_graph_tasks.chord") as mock_chord,
+    ):
+        mock_chord.return_value = MagicMock()
+        task = cast(Any, dispatch_investment_materialize_partitioned)
+        task.run(
+            db_url="clickhouse://x",
+            org_id="org-1",
+            from_date="2026-01-01",
+            to_date="2026-01-02",
+        )
+
+    callback = mock_chord.call_args.args[1]
+    assert callback.sig_kwargs["kwargs"]["run_membership_backfill_after"] is False
+
+
+def test_materialize_chunk_checkpoint_skips_completed_chunk() -> None:
+    session_cm = MagicMock()
+    session_cm.__enter__.return_value = MagicMock()
+    session_cm.__exit__.return_value = None
+    with (
+        patch("dev_health_ops.db.get_postgres_session_sync", return_value=session_cm),
+        patch("dev_health_ops.metrics.checkpoints.is_completed", return_value=True),
+        patch("dev_health_ops.metrics.checkpoints.mark_running") as mark_running,
+        patch("dev_health_ops.workers.work_graph_tasks.run_async") as run_async_mock,
+    ):
+        task = cast(Any, run_investment_materialize_chunk)
+        result = task.run(
+            db_url="clickhouse://x",
+            org_id="org-1",
+            run_id="run-1",
+            computed_at=datetime.now(timezone.utc).isoformat(),
+            component_indexes=[0],
+            chunk_index=0,
+            llm_provider="mock",
+        )
+
+    assert result["status"] == "skipped"
+    mark_running.assert_not_called()
+    run_async_mock.assert_not_called()
+
+
+def test_partitioned_finalizer_aggregates_and_runs_membership_once() -> None:
+    with patch(
+        "dev_health_ops.work_graph.investment.backfill.backfill_memberships",
+        return_value={"memberships": 4},
+    ) as backfill:
+        task = cast(Any, finalize_investment_materialize_partitioned)
+        result = task.run(
+            [
+                {
+                    "stats": {
+                        "records": 2,
+                        "quotes": 1,
+                        "skipped_existing": 3,
+                        "llm_calls": 4,
+                        "llm_input_tokens": 100,
+                        "llm_output_tokens": 20,
+                        "llm_failures": 1,
+                        "llm_failure_counts": {"rate_limit": 1},
+                    }
+                }
+            ],
+            db_url="clickhouse://x",
+            org_id="org-1",
+            run_id="run-1",
+            run_membership_backfill_after=True,
+        )
+
+    assert result["records"] == 2
+    assert result["quotes"] == 1
+    assert result["skipped_existing"] == 3
+    assert result["llm_calls"] == 4
+    assert result["llm_failure_counts"] == {"rate_limit": 1}
+    assert result["membership"] == {"memberships": 4}
+    backfill.assert_called_once()

@@ -29,7 +29,9 @@ from unittest.mock import MagicMock, patch
 import dev_health_ops.connectors  # noqa: F401
 from dev_health_ops.workers.sync_runtime import _dispatch_post_sync_tasks
 
-_INVESTMENT_TASK = "dev_health_ops.workers.tasks.run_investment_materialize"
+_INVESTMENT_TASK = (
+    "dev_health_ops.workers.tasks.dispatch_investment_materialize_partitioned"
+)
 _WORK_GRAPH_TASK = "dev_health_ops.workers.tasks.run_work_graph_build"
 _PROJECTION_TASK = "dev_health_ops.workers.tasks.run_membership_backfill"
 _DAILY_METRICS_TASK = "dev_health_ops.workers.tasks.run_daily_metrics"
@@ -77,19 +79,12 @@ def test_investment_chain_dispatched_with_git_and_work_items() -> None:
         org_id="org-123",
     )
 
-    # The chain must be built build FIRST, materialize SECOND, project THIRD.
     assert mock_chain.call_count == 1
-    team_sig, daily_sig, build_sig, materialize_sig, project_sig = (
-        mock_chain.call_args.args
-    )
+    team_sig, daily_sig, build_sig, materialize_sig = mock_chain.call_args.args
     assert team_sig.task_name == _TEAM_SYNC_TASK
     assert daily_sig.task_name == _DAILY_METRICS_TASK
     assert build_sig.task_name == _WORK_GRAPH_TASK
     assert materialize_sig.task_name == _INVESTMENT_TASK
-    assert project_sig.task_name == _PROJECTION_TASK, (
-        "the membership PROJECTION (no-LLM, full coverage) must run last as the "
-        "sole membership writer (CHAOS-2433 round-3 #2)"
-    )
 
     # All signatures are org-scoped onto the metrics queue.
     assert team_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
@@ -100,14 +95,11 @@ def test_investment_chain_dispatched_with_git_and_work_items() -> None:
     assert build_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
     assert build_sig.sig_kwargs["queue"] == "metrics"
     assert materialize_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
-    assert materialize_sig.sig_kwargs["queue"] == "metrics"
-    assert project_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
-    assert project_sig.sig_kwargs["queue"] == "metrics"
+    assert materialize_sig.sig_kwargs["queue"] == "default"
 
     # Downstream steps are linked IMMUTABLE so a parent's return dict is not
     # injected as a positional arg (which would break the next task).
     assert materialize_sig.sig_kwargs.get("immutable") is True
-    assert project_sig.sig_kwargs.get("immutable") is True
     assert build_sig.sig_kwargs.get("immutable") is True
 
     # The chain is actually dispatched (not just constructed).
@@ -128,10 +120,9 @@ def test_investment_chain_dispatched_with_git_only() -> None:
     )
 
     assert mock_chain.call_count == 1
-    build_sig, materialize_sig, project_sig = mock_chain.call_args.args
+    build_sig, materialize_sig = mock_chain.call_args.args
     assert build_sig.task_name == _WORK_GRAPH_TASK
     assert materialize_sig.task_name == _INVESTMENT_TASK
-    assert project_sig.task_name == _PROJECTION_TASK
     chain_instance.apply_async.assert_called_once_with()
 
 
@@ -148,19 +139,15 @@ def test_investment_chain_dispatched_with_work_items_only_jira() -> None:
     )
 
     assert mock_chain.call_count == 1
-    team_sig, daily_sig, build_sig, materialize_sig, project_sig = (
-        mock_chain.call_args.args
-    )
+    team_sig, daily_sig, build_sig, materialize_sig = mock_chain.call_args.args
     assert team_sig.task_name == _TEAM_SYNC_TASK
     assert daily_sig.task_name == _DAILY_METRICS_TASK
     assert build_sig.task_name == _WORK_GRAPH_TASK
     assert materialize_sig.task_name == _INVESTMENT_TASK
-    assert project_sig.task_name == _PROJECTION_TASK
     assert team_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
     assert daily_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
     assert daily_sig.sig_kwargs.get("immutable") is True
     assert materialize_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
-    assert project_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
     chain_instance.apply_async.assert_called_once_with()
 
 
@@ -214,7 +201,7 @@ def test_post_sync_dispatch_forwards_backfill_window() -> None:
         )
 
     window_send_task.assert_not_called()
-    team_sig, daily_sig, build_sig, materialize_sig, _ = window_chain.call_args.args
+    team_sig, daily_sig, build_sig, materialize_sig = window_chain.call_args.args
     assert team_sig.task_name == _TEAM_SYNC_TASK
     assert team_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
     assert daily_sig.task_name == _DAILY_METRICS_TASK
@@ -235,6 +222,26 @@ def test_post_sync_dispatch_forwards_backfill_window() -> None:
         "from_date": "2026-01-01",
         "to_date": "2026-01-14",
     }
+
+
+def test_post_sync_dispatch_does_not_serialize_llm_api_key(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "sk-worker-secret")
+
+    mock_signature, _, _, _ = _run_dispatch(
+        provider="github",
+        sync_targets=["git"],
+        org_id="org-123",
+    )
+
+    materialize_calls = [
+        call
+        for call in mock_signature.call_args_list
+        if call.args[0] == _INVESTMENT_TASK
+    ]
+    assert len(materialize_calls) == 1
+    kwargs = materialize_calls[0].kwargs["kwargs"]
+    assert "llm_api_key" not in kwargs
+    assert "sk-worker-secret" not in repr(kwargs)
 
 
 def test_no_investment_chain_for_feature_flags_only() -> None:
@@ -279,7 +286,9 @@ def test_run_investment_materialize_forwards_org_id_to_config() -> None:
         ),
     ):
         task = cast(Any, run_investment_materialize)
-        result = task.run(db_url="clickhouse://x", org_id="org-123")
+        result = task.run(
+            db_url="clickhouse://x", org_id="org-123", llm_provider="mock"
+        )
 
     assert result["status"] == "success"
     assert captured["org_id"] == "org-123"
@@ -312,6 +321,46 @@ def test_run_investment_materialize_empty_org_id_becomes_none() -> None:
         ),
     ):
         task = cast(Any, run_investment_materialize)
-        task.run(db_url="clickhouse://x")
+        task.run(db_url="clickhouse://x", llm_provider="mock")
 
     assert captured["org_id"] is None
+
+
+def test_run_investment_materialize_resolves_worker_llm_credentials(
+    monkeypatch,
+) -> None:
+    from typing import Any, cast
+
+    from dev_health_ops.workers.work_graph_tasks import run_investment_materialize
+
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_API_KEY", "sk-worker-secret")
+    monkeypatch.setenv("LLM_BASE_URL", "https://worker.invalid/v1")
+    captured: dict[str, Any] = {}
+
+    class _FakeConfig:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+    with (
+        patch(
+            "dev_health_ops.work_graph.investment.materialize.MaterializeConfig",
+            _FakeConfig,
+        ),
+        patch(
+            "dev_health_ops.work_graph.investment.materialize.materialize_investments",
+            return_value=None,
+        ),
+        patch(
+            "dev_health_ops.workers.work_graph_tasks.run_async",
+            return_value={"components": 0, "records": 0, "quotes": 0},
+        ),
+    ):
+        task = cast(Any, run_investment_materialize)
+        result = task.run(db_url="clickhouse://x", org_id="org-123", llm_concurrency=1)
+
+    assert result["status"] == "success"
+    assert captured["llm_provider"] == "openai"
+    assert captured["llm_api_key"] == "sk-worker-secret"
+    assert captured["llm_base_url"] == "https://worker.invalid/v1"
+    assert captured["llm_concurrency"] == 1

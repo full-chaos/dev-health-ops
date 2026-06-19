@@ -18,7 +18,20 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from dev_health_ops.llm.errors import (
+    LLMRateLimitError,
+    classify_provider_error,
+    is_retryable,
+    retry_delay,
+)
 from dev_health_ops.llm.json_utils import validate_json_or_empty
+
+from .base import (
+    DEFAULT_MODEL_BY_PROVIDER,
+    CompletionResult,
+    LLMProviderBase,
+    usage_token_count,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +135,7 @@ class OpenAIProviderConfig:
     temperature: float
 
 
-class OpenAIProvider:
+class OpenAIProvider(LLMProviderBase):
     """Public provider facade.
 
     Delegates to a model-specific implementation:
@@ -134,14 +147,14 @@ class OpenAIProvider:
         self,
         api_key: str,
         base_url: str | None = None,
-        model: str = "gpt-5-mini",
+        model: str | None = None,
         max_completion_tokens: int = 4096,
         temperature: float = 0.3,
     ) -> None:
         cfg = OpenAIProviderConfig(
             api_key=api_key,
             base_url=base_url,
-            model=model,
+            model=model or DEFAULT_MODEL_BY_PROVIDER["openai"],
             # keep param name stable at the facade; impl maps to correct API param
             max_output_tokens=max(4096, int(max_completion_tokens)),
             temperature=float(temperature),
@@ -149,7 +162,7 @@ class OpenAIProvider:
 
         self._impl = openai_provider_class_for(cfg.model)(cfg)
 
-    async def complete(self, prompt: str) -> str:
+    async def complete(self, prompt: str) -> CompletionResult:
         return await self._impl.complete(prompt)
 
     async def aclose(self) -> None:
@@ -170,7 +183,7 @@ def openai_provider_class_for(model: str) -> type[_OpenAIProviderBase]:
 # -----------------------------------------------------------------------------
 
 
-class _OpenAIProviderBase:
+class _OpenAIProviderBase(LLMProviderBase):
     def __init__(self, cfg: OpenAIProviderConfig) -> None:
         self.cfg = cfg
         self._client: Any | None = None
@@ -180,7 +193,9 @@ class _OpenAIProviderBase:
             from openai import AsyncOpenAI
 
             self._client = AsyncOpenAI(
-                api_key=self.cfg.api_key, base_url=self.cfg.base_url
+                api_key=self.cfg.api_key,
+                base_url=self.cfg.base_url,
+                max_retries=0,
             )
         return self._client
 
@@ -189,8 +204,46 @@ class _OpenAIProviderBase:
         m = (self.cfg.model or "").strip()
         return not m.startswith(("gpt-5", "o1", "o3"))
 
-    async def complete(self, prompt: str) -> str:
+    async def complete(self, prompt: str) -> CompletionResult:
         raise NotImplementedError
+
+    async def _retry_transient_error(
+        self,
+        exc: Exception,
+        *,
+        retry_count: int,
+        max_retries: int,
+        api_name: str,
+    ) -> bool:
+        llm_exc = classify_provider_error(exc, provider="openai", model=self.cfg.model)
+        if is_retryable(llm_exc) and retry_count < max_retries:
+            delay = retry_delay(retry_count)
+            if isinstance(llm_exc, LLMRateLimitError) and llm_exc.retry_after:
+                delay = llm_exc.retry_after
+            logger.warning(
+                "%s transient error on attempt %d/%d; retrying in %.1fs: %s",
+                api_name,
+                retry_count + 1,
+                max_retries + 1,
+                delay,
+                llm_exc,
+            )
+            await asyncio.sleep(delay)
+            return True
+        logger.error("%s error: %s", api_name, llm_exc)
+        raise llm_exc from exc
+
+    def _completion_result(
+        self, text: str, usage: object | None = None
+    ) -> CompletionResult:
+        return CompletionResult(
+            text=text,
+            input_tokens=usage_token_count(usage, "input_tokens", "prompt_tokens"),
+            output_tokens=usage_token_count(
+                usage, "output_tokens", "completion_tokens"
+            ),
+            model=self.cfg.model,
+        )
 
     async def aclose(self) -> None:
         if self._client:
@@ -204,7 +257,7 @@ class _OpenAIProviderBase:
 class OpenAIGPT5Provider(_OpenAIProviderBase):
     """GPT-5+ via Responses API."""
 
-    async def complete(self, prompt: str) -> str:
+    async def complete(self, prompt: str) -> CompletionResult:
         client = self._get_client()
 
         # Retry once on truncation / invalid JSON.
@@ -250,6 +303,7 @@ class OpenAIGPT5Provider(_OpenAIProviderBase):
                     kwargs["temperature"] = self.cfg.temperature
 
                 response = await client.responses.create(**kwargs)
+                usage = getattr(response, "usage", None)
 
                 # Best-effort extraction
                 content = getattr(response, "output_text", "") or ""
@@ -277,12 +331,9 @@ class OpenAIGPT5Provider(_OpenAIProviderBase):
                 )
 
                 if cleaned:
-                    return cleaned
+                    return self._completion_result(cleaned, usage)
 
-                # If invalid/empty, retry once with more tokens if it looks truncated.
-                should_retry = (finish_reason == "max_output_tokens") or (
-                    not content.strip()
-                )
+                should_retry = finish_reason == "max_output_tokens"
 
                 if retry_count < max_retries and should_retry:
                     retry_count += 1
@@ -304,18 +355,19 @@ class OpenAIGPT5Provider(_OpenAIProviderBase):
                     token_budget,
                     (content.strip()[:200] + "...") if content else "<empty>",
                 )
-                return ""
+                return self._completion_result("", usage)
 
             except Exception as e:
-                logger.error("OpenAI Responses API error: %s", e)
-                if retry_count < max_retries:
+                if await self._retry_transient_error(
+                    e,
+                    retry_count=retry_count,
+                    max_retries=max_retries,
+                    api_name="OpenAI Responses API",
+                ):
                     retry_count += 1
-                    max_tokens = min(8192, max_tokens * 2)
-                    await asyncio.sleep(0.5)
                     continue
-                raise
 
-        return ""
+        return self._completion_result("")
 
 
 # -----------------------------------------------------------------------------
@@ -326,7 +378,7 @@ class OpenAIGPT5Provider(_OpenAIProviderBase):
 class OpenAIGPTLegacyProvider(_OpenAIProviderBase):
     """<= GPT-4 via Chat Completions."""
 
-    async def complete(self, prompt: str) -> str:
+    async def complete(self, prompt: str) -> CompletionResult:
         client = self._get_client()
 
         retry_count = 0
@@ -351,6 +403,7 @@ class OpenAIGPTLegacyProvider(_OpenAIProviderBase):
                     kwargs["temperature"] = self.cfg.temperature
 
                 response = await client.chat.completions.create(**kwargs)
+                usage = getattr(response, "usage", None)
 
                 choice = response.choices[0]
                 content = choice.message.content or ""
@@ -367,10 +420,12 @@ class OpenAIGPTLegacyProvider(_OpenAIProviderBase):
                 )
 
                 if cleaned:
-                    return cleaned
+                    return self._completion_result(cleaned, usage)
 
-                should_retry = (finish_reason in ("length", "max_tokens")) or (
-                    not content.strip()
+                should_retry = finish_reason in (
+                    "length",
+                    "max_tokens",
+                    "max_output_tokens",
                 )
 
                 if retry_count < max_retries and should_retry:
@@ -393,15 +448,16 @@ class OpenAIGPTLegacyProvider(_OpenAIProviderBase):
                     max_tokens,
                     (content.strip()[:200] + "...") if content else "<empty>",
                 )
-                return ""
+                return self._completion_result("", usage)
 
             except Exception as e:
-                logger.error("OpenAI Chat Completions error: %s", e)
-                if retry_count < max_retries:
+                if await self._retry_transient_error(
+                    e,
+                    retry_count=retry_count,
+                    max_retries=max_retries,
+                    api_name="OpenAI Chat Completions",
+                ):
                     retry_count += 1
-                    max_tokens = min(8192, max_tokens * 2)
-                    await asyncio.sleep(0.5)
                     continue
-                raise
 
-        return ""
+        return self._completion_result("")

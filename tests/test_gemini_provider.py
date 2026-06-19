@@ -8,7 +8,8 @@ from dev_health_ops.llm.providers.gemini import DEFAULT_GEMINI_BASE_URL, GeminiP
 
 
 def test_gemini_provider_registration():
-    assert isinstance(get_provider("gemini"), GeminiProvider)
+    with patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}, clear=True):
+        assert isinstance(get_provider("gemini"), GeminiProvider)
 
 
 def test_gemini_provider_config():
@@ -52,12 +53,18 @@ async def test_gemini_provider_completion():
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = "Gemini response"
+        mock_response.usage = type(
+            "Usage", (), {"prompt_tokens": 5, "completion_tokens": 3}
+        )()
         mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
         p = GeminiProvider(api_key="sk-123")
         response = await p.complete("Hello")
 
-        assert response == "Gemini response"
+        assert response.text == "Gemini response"
+        assert response.model == "gemini-3"
+        assert response.input_tokens == 5
+        assert response.output_tokens == 3
         mock_openai_class.assert_called_once_with(
             api_key="sk-123", base_url=DEFAULT_GEMINI_BASE_URL
         )

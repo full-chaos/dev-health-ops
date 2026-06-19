@@ -8,9 +8,16 @@ from __future__ import annotations
 
 import logging
 import os
+from urllib.parse import urlsplit, urlunsplit
 
 from dev_health_ops.llm.errors import classify_provider_error
 
+from .base import (
+    DEFAULT_MODEL_BY_PROVIDER,
+    CompletionResult,
+    LLMProviderBase,
+    usage_token_count,
+)
 from .openai import (
     OpenAIGPT5Provider,
     OpenAIProviderConfig,
@@ -31,7 +38,31 @@ DEFAULT_ENDPOINTS = {
 }
 
 
-class LocalProvider:
+def _redact_url(url: str) -> str:
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return "[invalid-url]"
+    host = parsed.hostname or ""
+    if parsed.port is not None:
+        host = f"{host}:{parsed.port}"
+    return urlunsplit((parsed.scheme, host, parsed.path, "", ""))
+
+
+def _status_code(exc: BaseException) -> int | None:
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int):
+        return status_code
+    response = getattr(exc, "response", None)
+    response_status = getattr(response, "status_code", None)
+    return response_status if isinstance(response_status, int) else None
+
+
+def _error_metadata(exc: BaseException) -> dict[str, str | int | None]:
+    return {"type": type(exc).__name__, "status_code": _status_code(exc)}
+
+
+class LocalProvider(LLMProviderBase):
     """
     OpenAI-compatible provider for local LLM servers.
 
@@ -68,7 +99,9 @@ class LocalProvider:
         self.base_url = base_url or os.getenv(
             "LOCAL_LLM_BASE_URL", DEFAULT_ENDPOINTS["local"]
         )
-        self.model = model or os.getenv("LOCAL_LLM_MODEL", "llama3.2")
+        self.model: str = (
+            model or os.getenv("LOCAL_LLM_MODEL") or DEFAULT_MODEL_BY_PROVIDER["local"]
+        )
         self.api_key = api_key or os.getenv("LOCAL_LLM_API_KEY", "not-needed")
         self.max_completion_tokens = max_completion_tokens
         self.temperature = temperature
@@ -90,7 +123,7 @@ class LocalProvider:
                 )
         return self._client
 
-    async def complete(self, prompt: str) -> str:
+    async def complete(self, prompt: str) -> CompletionResult:
         """
         Generate a completion using the local LLM server.
 
@@ -140,15 +173,26 @@ class LocalProvider:
                 response = await client.chat.completions.create(**payload)  # type: ignore
 
                 content = response.choices[0].message.content or ""
-                return validate_json_or_empty(content) if is_schema_prompt else content
+                usage = getattr(response, "usage", None)
+                text = validate_json_or_empty(content) if is_schema_prompt else content
+                return CompletionResult(
+                    text=text,
+                    input_tokens=usage_token_count(
+                        usage, "prompt_tokens", "input_tokens"
+                    ),
+                    output_tokens=usage_token_count(
+                        usage, "completion_tokens", "output_tokens"
+                    ),
+                    model=self.model,
+                )
 
             except Exception as e:
                 # If we get a 400 error, it's likely that the server doesn't support
                 # the requested response_format (common with local OpenAI-compatible APIs).
                 if "400" in str(e) and response_format and retry_count < max_retries:
                     logger.warning(
-                        "Local LLM API error (likely unsupported response_format). Retrying with text format. Error: %s",
-                        e,
+                        "Local LLM API rejected response_format; retrying with text format: %s",
+                        _error_metadata(e),
                     )
                     # Fallback to plain text JSON request
                     response_format = {"type": "text"}
@@ -157,9 +201,16 @@ class LocalProvider:
 
                 model_name = self.model or "local-model"
                 llm_exc = classify_provider_error(e, provider="local", model=model_name)
-                logger.error("Local LLM API error (%s): %s", self.base_url, llm_exc)
+                logger.error(
+                    "Local LLM API error url=%s error=%s classified=%s",
+                    _redact_url(self.base_url or ""),
+                    _error_metadata(e),
+                    type(llm_exc).__name__,
+                )
                 raise llm_exc from e
-        return ""  # Should not be reachable
+        return CompletionResult(
+            text="", input_tokens=None, output_tokens=None, model=self.model
+        )
 
     async def aclose(self) -> None:
         if self._client:
@@ -178,7 +229,8 @@ class OllamaProvider(LocalProvider):
         super().__init__(
             base_url=base_url
             or os.getenv("OLLAMA_BASE_URL", DEFAULT_ENDPOINTS["ollama"]),
-            model=model or os.getenv("OLLAMA_MODEL", "llama3.2"),
+            model=model
+            or os.getenv("OLLAMA_MODEL", DEFAULT_MODEL_BY_PROVIDER["ollama"]),
             **kwargs,
         )
 
@@ -196,7 +248,8 @@ class LMStudioProvider(LocalProvider):
             base_url=base_url
             or os.getenv("LMSTUDIO_BASE_URL", DEFAULT_ENDPOINTS["lmstudio"]),
             # LMStudio typically serves whatever model is loaded
-            model=model or os.getenv("LMSTUDIO_MODEL", "local-model"),
+            model=model
+            or os.getenv("LMSTUDIO_MODEL", DEFAULT_MODEL_BY_PROVIDER["lmstudio"]),
             **kwargs,
         )
 

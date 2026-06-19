@@ -25,6 +25,13 @@ init_tracing()
 from dev_health_ops.api.middleware.rate_limit import limiter
 from dev_health_ops.api.product_telemetry import router as product_telemetry_router
 from dev_health_ops.api.telemetry.router import router as telemetry_router
+from dev_health_ops.llm import get_provider
+from dev_health_ops.llm.errors import (
+    LLMAuthError,
+    LLMError,
+    LLMRateLimitError,
+    LLMServerError,
+)
 
 from ._errors import (
     _generic_exception_handler as _generic_exception_handler,
@@ -310,6 +317,16 @@ async def keep_alive_wrapper(coro):
         )
 
 
+def _http_exception_from_llm_error(exc: LLMError) -> HTTPException:
+    if isinstance(exc, LLMAuthError):
+        return HTTPException(status_code=422, detail=str(exc))
+    if isinstance(exc, LLMRateLimitError):
+        return HTTPException(status_code=429, detail=str(exc))
+    if isinstance(exc, LLMServerError):
+        return HTTPException(status_code=503, detail=str(exc))
+    return HTTPException(status_code=422, detail=str(exc))
+
+
 @app.get("/api/v1/meta", response_model=MetaResponse)
 async def meta() -> MetaResponse | JSONResponse:
     """
@@ -572,7 +589,9 @@ async def work_units(
     "/api/v1/work-units/{work_unit_id}/explain",
     response_model=WorkUnitExplanation,
 )
+@limiter.limit("20/minute")
 async def work_unit_explain_endpoint(
+    request: Request,
     work_unit_id: str,
     scope_type: str = "org",
     scope_id: str = "",
@@ -606,6 +625,17 @@ async def work_unit_explain_endpoint(
         WorkUnitExplanation with summary, rationale, and uncertainty disclosure
     """
     try:
+        # Validate provider credentials before opening the stream so that a
+        # missing API key returns a 4xx JSON response instead of HTTP 200 +
+        # broken stream (the error would otherwise surface inside
+        # keep_alive_wrapper after headers are already sent).
+        try:
+            resolved_provider = get_provider(
+                llm_provider, model=llm_model, org_id=current_user.org_id
+            )
+        except (ValueError, LLMError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
         filters = _filters_from_query(
             scope_type, scope_id, range_days, range_days, start_date, end_date
         )
@@ -626,21 +656,20 @@ async def work_unit_explain_endpoint(
 
         target_investment = investments[0]
         logger.info(
-            "Generating streaming explanation for work_unit_id=%s",
+            "Generating explanation for work_unit_id=%s",
             sanitize_for_log(work_unit_id),
         )
 
-        # Return streaming response with keep-alive pings
-        return StreamingResponse(
-            keep_alive_wrapper(
-                explain_work_unit(
-                    investment=target_investment,
-                    llm_provider=llm_provider,
-                    llm_model=llm_model,
-                )
-            ),
-            media_type="application/json",
-        )
+        try:
+            return await explain_work_unit(
+                investment=target_investment,
+                llm_provider=llm_provider,
+                llm_model=llm_model,
+                provider=resolved_provider,
+                org_id=current_user.org_id,
+            )
+        except LLMError as exc:
+            raise _http_exception_from_llm_error(exc) from exc
 
     except HTTPException:
         raise

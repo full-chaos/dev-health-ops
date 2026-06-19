@@ -1,3 +1,8 @@
+from .credentials import (
+    LLMCredentials,
+    resolve_llm_credentials,
+    resolve_llm_org_settings_credentials,
+)
 from .errors import (
     LLMAuthError,
     LLMContextLengthError,
@@ -10,12 +15,25 @@ from .errors import (
     is_retryable,
     retry_delay,
 )
-from .providers import LLMProvider, get_provider, is_llm_available
+from .providers import (
+    CompletionResult,
+    LLMProvider,
+    get_provider,
+    is_llm_available,
+    resolve_model_name,
+    resolve_provider_name,
+)
 
 __all__ = [
     "LLMProvider",
+    "CompletionResult",
     "get_provider",
     "is_llm_available",
+    "resolve_model_name",
+    "resolve_provider_name",
+    "LLMCredentials",
+    "resolve_llm_credentials",
+    "resolve_llm_org_settings_credentials",
     # Error types
     "LLMError",
     "LLMAuthError",

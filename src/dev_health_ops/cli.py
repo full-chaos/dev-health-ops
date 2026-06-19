@@ -8,10 +8,14 @@ import inspect
 import io
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
+_DOTENV_INTERPOLATION_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-(.*?))?\}")
+_DOTENV_MALFORMED_INTERPOLATION_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)?")
 
 
 def resolve_org_id(ns: argparse.Namespace) -> str | None:
@@ -22,6 +26,30 @@ def resolve_org_id(ns: argparse.Namespace) -> str | None:
     follow-up tracked per-function.
     """
     return getattr(ns, "org", None) or None
+
+
+def _expand_dotenv_value(key: str, value: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        fallback = match.group(2)
+        env_value = os.environ.get(name)
+        if env_value is not None and env_value != "":
+            return env_value
+        if fallback is not None:
+            return fallback
+        if env_value == "":
+            return ""
+        raise ValueError(
+            f".env value for {key} references {name}, but {name} is not set"
+        )
+
+    expanded = _DOTENV_INTERPOLATION_RE.sub(replace, value)
+    malformed = _DOTENV_MALFORMED_INTERPOLATION_RE.search(expanded)
+    if malformed:
+        name = malformed.group(1)
+        detail = f" for {name}" if name else ""
+        raise ValueError(f".env value for {key} has malformed interpolation{detail}")
+    return expanded
 
 
 def _load_dotenv(path: Path) -> int:
@@ -47,6 +75,7 @@ def _load_dotenv(path: Path) -> int:
             continue
         if (len(value) >= 2) and ((value[0] == value[-1]) and value[0] in {"'", '"'}):
             value = value[1:-1]
+        value = _expand_dotenv_value(key, value)
         os.environ[key] = value
         loaded += 1
     return loaded
@@ -356,9 +385,6 @@ def _should_resolve_org(ns: argparse.Namespace) -> bool:
 _REQ_CLICKHOUSE = "clickhouse"
 _REQ_POSTGRES = "postgres"
 _REQ_ORG = "org"
-# ClickHouse supplied via a command's own ``--db`` flag (not the global
-# ``--analytics-db``). Used by commands like ``investment materialize`` whose
-# ``--db`` carries the ClickHouse DSN (default: CLICKHOUSE_URI).
 _REQ_SINK_DB = "sink_db"
 
 # Stable display order for messages/epilogs.
@@ -396,7 +422,7 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     ("audit", "schema"): frozenset({_REQ_CLICKHOUSE}),
     # --- other ClickHouse-backed commands ---
     ("recommendations", "compute"): frozenset({_REQ_CLICKHOUSE}),
-    ("investment", "materialize"): frozenset({_REQ_SINK_DB}),
+    ("investment", "materialize"): frozenset({_REQ_CLICKHOUSE}),
     ("ai", "allowlist", "list"): frozenset({_REQ_CLICKHOUSE, _REQ_ORG}),
     ("ai", "allowlist", "set"): frozenset({_REQ_CLICKHOUSE, _REQ_ORG}),
     # --- PostgreSQL semantic store ---
@@ -710,7 +736,11 @@ def main(argv: list[str] | None = None) -> int:
         "yes",
         "on",
     }:
-        _load_dotenv(REPO_ROOT / ".env")
+        try:
+            _load_dotenv(REPO_ROOT / ".env")
+        except ValueError as exc:
+            print(f"dotenv error: {exc}", file=sys.stderr)
+            return 2
 
     quiet_json_inspect = _is_workers_inspect_json_invocation(argv)
     previous_otel_enabled = os.environ.get("OTEL_ENABLED")

@@ -21,8 +21,9 @@ from dev_health_ops.api.models.schemas import (
     WorkUnitTimeRange,
 )
 from dev_health_ops.api.services.work_unit_explain import explain_work_unit
-from dev_health_ops.llm import get_provider, is_llm_available
+from dev_health_ops.llm import LLMAuthError, get_provider, is_llm_available
 from dev_health_ops.llm.providers.mock import MockProvider
+from dev_health_ops.llm.providers.none import NoneProvider
 
 
 def _sample_investment() -> WorkUnitInvestment:
@@ -72,7 +73,7 @@ def test_mock_provider_returns_response():
 
     async def run_test():
         prompt = "Test prompt for work unit explanation."
-        response = await provider.complete(prompt)
+        response = await provider.complete_text(prompt)
         assert response
         assert len(response) > 50  # Should be a meaningful response
 
@@ -91,7 +92,7 @@ def test_mock_provider_uses_approved_language():
           - feature_delivery: 48.00%
           - maintenance: 30.00%
         """
-        response = await provider.complete(prompt)
+        response = await provider.complete_text(prompt)
 
         # Check for approved words
         response_lower = response.lower()
@@ -112,7 +113,7 @@ def test_mock_provider_avoids_forbidden_language():
 
     async def run_test():
         prompt = "Evidence Quality: 0.72 (moderate)"
-        response = await provider.complete(prompt)
+        response = await provider.complete_text(prompt)
 
         # The response should not contain these as standalone "certainty" words
         # Note: "is" might appear in words like "this", so we check for patterns
@@ -128,11 +129,10 @@ def test_mock_provider_avoids_forbidden_language():
     asyncio.run(run_test())
 
 
-def test_get_provider_returns_mock_without_api_keys():
-    """Test that get_provider returns mock when no API keys are set."""
+def test_get_provider_auto_without_api_keys_raises_classified_error():
     with patch.dict(os.environ, {}, clear=True):
-        provider = get_provider("auto")
-        assert isinstance(provider, MockProvider)
+        with pytest.raises(LLMAuthError, match="OPENAI_API_KEY"):
+            get_provider("auto")
 
 
 def test_get_provider_explicit_mock():
@@ -206,8 +206,14 @@ def test_is_llm_available_returns_false_for_auto_without_keys():
         assert is_llm_available("auto") is False
 
 
-def test_is_llm_available_returns_true_for_openai():
-    assert is_llm_available("openai") is True
+def test_is_llm_available_returns_false_for_openai_without_key():
+    with patch.dict(os.environ, {}, clear=True):
+        assert is_llm_available("openai") is False
+
+
+def test_is_llm_available_returns_true_for_openai_with_key():
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=True):
+        assert is_llm_available("openai") is True
 
 
 def test_is_llm_available_returns_true_for_auto_with_key():
@@ -215,9 +221,9 @@ def test_is_llm_available_returns_true_for_auto_with_key():
         assert is_llm_available("auto") is True
 
 
-def test_get_provider_none_returns_mock_provider():
+def test_get_provider_none_returns_none_provider():
     provider = get_provider("none")
-    assert isinstance(provider, MockProvider)
+    assert isinstance(provider, NoneProvider)
 
 
 @pytest.mark.asyncio
@@ -232,3 +238,31 @@ async def test_explain_work_unit_returns_blank_when_no_llm():
     assert explanation.evidence_highlights == []
     assert explanation.uncertainty_disclosure == ""
     assert explanation.evidence_quality_limits == ""
+
+
+@pytest.mark.asyncio
+async def test_explain_work_unit_returns_blank_for_preresolved_none_provider():
+    investment = _sample_investment()
+    explanation = await explain_work_unit(
+        investment,
+        llm_provider="none",
+        provider=NoneProvider(),
+    )
+
+    assert explanation.work_unit_id == investment.work_unit_id
+    assert explanation.ai_generated is False
+    assert explanation.summary == ""
+    assert explanation.category_rationale == {}
+    assert explanation.evidence_highlights == []
+
+
+@pytest.mark.asyncio
+async def test_explain_work_unit_returns_blank_when_env_provider_none(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "none")
+    investment = _sample_investment()
+    explanation = await explain_work_unit(investment, llm_provider="auto")
+
+    assert explanation.work_unit_id == investment.work_unit_id
+    assert explanation.ai_generated is False
+    assert explanation.summary == ""
+    assert explanation.category_rationale == {}

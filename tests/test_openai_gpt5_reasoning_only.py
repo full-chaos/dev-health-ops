@@ -34,7 +34,7 @@ async def test_gpt5_reasoning_only_empty_result(caplog):
 
         # Should return empty string after retries (if it retries on empty)
         # Actually it retries once on empty content.
-        assert result == ""
+        assert result.text == ""
 
         # Should have log entry for invalid JSON/empty
         assert "Invalid JSON returned from responses API" in caplog.text

@@ -35,6 +35,20 @@ class SettingsListResponse(BaseModel):
     settings: list[SettingResponse]
 
 
+class LLMSettingsResponse(BaseModel):
+    provider: str | None = None
+    model: str | None = None
+    api_key: str | None = None
+    base_url: str | None = None
+
+
+class LLMSettingsUpsert(BaseModel):
+    provider: str = Field(..., min_length=1)
+    model: str | None = None
+    api_key: str | None = None
+    base_url: str | None = None
+
+
 class IntegrationCredentialResponse(BaseModel):
     id: str
     provider: str

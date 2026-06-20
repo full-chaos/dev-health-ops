@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+import re
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -76,6 +77,48 @@ def require_clickhouse_backend(sink: BaseMetricsSink) -> None:
         )
 
 
+# Matches ClickHouse server-side placeholders like {repo_id:UUID} or {n:UInt32}.
+_CH_SERVER_PLACEHOLDER_RE = re.compile(r"\{\w+:[^}]+\}")
+
+# Matches valid pyformat named conversions: %(name)s, %(name)d, %(name)f, etc.
+_PYFORMAT_NAMED_RE = re.compile(r"%\(\w+\)[sdifeEgGrxXoc%]")
+
+
+def _assert_pyformat_safe(query: str, params: object) -> None:
+    """Raise ValueError if *query* contains a bare '%' that pyformat will misread.
+
+    clickhouse-connect applies pyformat binding (``query % params``) when the
+    query has no server-side ``{name:Type}`` placeholders and *params* is a
+    mapping.  A literal ``%`` that is neither ``%%`` nor a ``%(name)s``
+    conversion is misread as a positional conversion, producing:
+
+        TypeError: not enough arguments for format string  (CHAOS-2566)
+
+    Rules:
+    - Only validates when *params* is a Mapping (the pyformat path).
+    - Skips entirely when the query contains a ``{name:Type}`` placeholder
+      (server-side binding path — literal ``%`` is fine there).
+    - Strips ``%%`` and valid ``%(name)X`` conversions from a scratch copy;
+      any remaining ``%`` is an error.
+    """
+    if not isinstance(params, Mapping):
+        return
+    if _CH_SERVER_PLACEHOLDER_RE.search(query):
+        # Server-side binding path: clickhouse-connect does NOT apply pyformat.
+        return
+    # Strip escaped %% and valid named conversions from a scratch copy.
+    scratch = _PYFORMAT_NAMED_RE.sub("", query.replace("%%", ""))
+    idx = scratch.find("%")
+    if idx == -1:
+        return
+    fragment = scratch[max(0, idx - 30) : idx + 31].replace("\n", " ")
+    raise ValueError(
+        "ClickHouse query contains an unescaped literal '%' — double it to '%%'."
+        " pyformat binding (query % params) is applied when the query has no"
+        f" {{name:Type}} placeholders. Offending fragment near: {fragment!r}"
+    )
+
+
 async def query_dicts(
     sink: Any, query: str, params: dict[str, Any]
 ) -> list[dict[str, Any]]:
@@ -106,6 +149,7 @@ async def query_dicts(
     # cheap because they share a global urllib3.PoolManager for HTTP connections.
     dsn = getattr(sink, "dsn", None)
     if isinstance(dsn, str) and dsn:
+        _assert_pyformat_safe(query, params)
 
         def _thread_query() -> list[dict[str, Any]]:
             client = clickhouse_connect.get_client(

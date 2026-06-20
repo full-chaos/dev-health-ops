@@ -820,14 +820,6 @@ def test_chord_capped_redispatch_failure_marks_run_terminal(db_session, monkeypa
 
     call_count = [0]
 
-    def fail_on_second(*args, **kwargs):
-        call_count[0] += 1
-        if call_count[0] == 1:
-            # First call is chord.apply_async — succeed.
-            return None
-        # Second call is redispatch apply_async — fail.
-        raise RuntimeError("broker down on redispatch")
-
     # Patch chord to call our counter on apply_async.
     class CountingChord:
         def __init__(self, header, callback):

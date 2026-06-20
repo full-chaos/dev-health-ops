@@ -34,6 +34,24 @@ def mock_analytics_db_url(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _reset_sync_db_engine():
+    """Reset the cached global sync Postgres engine around every test.
+
+    ``get_postgres_sync_engine()`` caches a process-global engine keyed off
+    POSTGRES_URI on first use. Without this, a test running earlier on an xdist
+    worker can leave a cached engine bound to its own database, so a later test
+    that monkeypatches POSTGRES_URI reads the wrong (empty) database and sees
+    missing rows (CHAOS-2586). Resetting before and after each test keeps every
+    test bound to its own env.
+    """
+    from dev_health_ops.db import reset_sync_engine
+
+    reset_sync_engine()
+    yield
+    reset_sync_engine()
+
+
 @pytest.fixture
 def repo_path():
     """Return the path to the current repository for testing."""

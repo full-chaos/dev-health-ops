@@ -11,13 +11,11 @@ from dev_health_ops.models import (
     Integration,
     IntegrationDataset,
     IntegrationSource,
-    OrgLicense,
     SyncRun,
     SyncRunMode,
     SyncRunStatus,
     SyncRunUnit,
     SyncRunUnitStatus,
-    SyncWatermark,
 )
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
 from dev_health_ops.sync.watermarks import set_watermark
@@ -523,9 +521,9 @@ def test_tier_limit_service_rolls_back_session_on_missing_table():
     When tier_limits is absent, the failed query aborts the transaction.
     _get_db_tier_limits must roll back so the caller's session stays usable.
     """
-    from dev_health_ops.models.git import Base as GitBase
     from dev_health_ops.api.services.licensing import TierLimitService
     from dev_health_ops.licensing.types import LicenseTier
+    from dev_health_ops.models.git import Base as GitBase
     from tests._helpers import tables_of
 
     # Schema with NO tier_limits table
@@ -536,9 +534,11 @@ def test_tier_limit_service_rolls_back_session_on_missing_table():
         svc = TierLimitService(session)
         # Must not raise; must return {} (fall through to hardcoded defaults)
         result = svc._get_db_tier_limits(LicenseTier.COMMUNITY.value)
-        assert result == {}, "Missing tier_limits must return empty dict (use hardcoded defaults)"
+        assert result == {}, (
+            "Missing tier_limits must return empty dict (use hardcoded defaults)"
+        )
         # Session must be usable after the rollback
-        session.execute(__import__('sqlalchemy').text("SELECT 1"))
+        session.execute(__import__("sqlalchemy").text("SELECT 1"))
 
     engine.dispose()
 

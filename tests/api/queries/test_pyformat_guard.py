@@ -13,6 +13,7 @@ Tests cover:
 4. No '%' at all → no raise
 5. Anti-false-positive: real investment pyformat query passes the guard
 6. Anti-false-positive: real ai_detector server-side query passes the guard
+7. ReDoS lock: _CH_SERVER_PLACEHOLDER_RE must not backtrack on pathological input
 """
 
 from __future__ import annotations
@@ -25,7 +26,6 @@ import pytest
 
 import dev_health_ops.api.queries.investment as investment_module
 from dev_health_ops.api.queries.client import _assert_pyformat_safe
-from dev_health_ops.api.queries.investment import fetch_investment_breakdown
 
 # ---------------------------------------------------------------------------
 # Unit tests for _assert_pyformat_safe
@@ -113,6 +113,31 @@ def test_only_valid_named_conversions_does_not_raise() -> None:
 
 
 # ---------------------------------------------------------------------------
+# ReDoS lock: possessive quantifiers in _CH_SERVER_PLACEHOLDER_RE
+# ---------------------------------------------------------------------------
+
+
+def test_server_placeholder_regex_no_redos_on_pathological_input() -> None:
+    """_CH_SERVER_PLACEHOLDER_RE must not backtrack polynomially.
+
+    A pathological input like '{0:{0:{0:...' with no closing '}' previously
+    caused polynomial backtracking with greedy quantifiers.  Possessive
+    quantifiers (\\w++ and [^}]++) prevent this.  The search must complete
+    well under 1 second and return None.
+    """
+    import time
+
+    from dev_health_ops.api.queries.client import _CH_SERVER_PLACEHOLDER_RE
+
+    evil = "{0:" * 20000  # no closing '}' — worst-case for greedy backtracking
+    start = time.monotonic()
+    result = _CH_SERVER_PLACEHOLDER_RE.search(evil)
+    elapsed = time.monotonic() - start
+    assert result is None, "Should not match pathological input"
+    assert elapsed < 1.0, f"ReDoS detected: search took {elapsed:.3f}s (limit 1.0s)"
+
+
+# ---------------------------------------------------------------------------
 # Anti-false-positive: real query builders must pass the guard
 # ---------------------------------------------------------------------------
 
@@ -137,7 +162,7 @@ def test_real_investment_breakdown_query_passes_guard(
     monkeypatch.setattr(investment_module, "query_dicts", _stub)
 
     asyncio.run(
-        fetch_investment_breakdown(
+        investment_module.fetch_investment_breakdown(
             sink=None,  # type: ignore[arg-type]
             start_ts=datetime(2024, 1, 1, tzinfo=timezone.utc),
             end_ts=datetime(2024, 2, 1, tzinfo=timezone.utc),

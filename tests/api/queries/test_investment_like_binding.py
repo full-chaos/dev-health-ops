@@ -21,9 +21,6 @@ import pytest
 from clickhouse_connect.driver.binding import finalize_query
 
 import dev_health_ops.api.queries.investment as investment_module
-from dev_health_ops.api.queries.investment import (
-    fetch_mock_fixture_investment_row_count,
-)
 
 
 def test_mock_fixture_like_patterns_survive_pyformat_binding(
@@ -46,7 +43,7 @@ def test_mock_fixture_like_patterns_survive_pyformat_binding(
     org_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 
     result = asyncio.run(
-        fetch_mock_fixture_investment_row_count(
+        investment_module.fetch_mock_fixture_investment_row_count(
             sink=None,  # type: ignore[arg-type]  # stub never touches sink
             start_ts=start_ts,
             end_ts=end_ts,

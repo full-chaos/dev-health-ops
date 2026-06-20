@@ -78,7 +78,9 @@ def require_clickhouse_backend(sink: BaseMetricsSink) -> None:
 
 
 # Matches ClickHouse server-side placeholders like {repo_id:UUID} or {n:UInt32}.
-_CH_SERVER_PLACEHOLDER_RE = re.compile(r"\{\w+:[^}]+\}")
+# Possessive quantifiers (\w++ and [^}]++) prevent polynomial backtracking on
+# pathological inputs like '{0:{0:{0:...' with no closing '}' (ReDoS guard).
+_CH_SERVER_PLACEHOLDER_RE = re.compile(r"\{\w++:[^}]++\}")
 
 # Matches valid pyformat named conversions: %(name)s, %(name)d, %(name)f, etc.
 _PYFORMAT_NAMED_RE = re.compile(r"%\(\w+\)[sdifeEgGrxXoc%]")

@@ -664,10 +664,13 @@ def test_dispatch_sync_run_redispatches_stale_dispatching_units(
     assert queued[0][0] == str(unit.id)
 
 
-def test_dispatch_sync_run_reclaims_stale_running_units(db_session, monkeypatch):
-    # Regression (Codex Wave 2): a worker that died after marking a unit
-    # RUNNING must not strand the run forever. Stale running units are
-    # reclaimed on redispatch.
+def test_dispatch_sync_run_does_not_reclaim_stale_running_units(
+    db_session, monkeypatch
+):
+    # F2 regression: a unit that is RUNNING (even stale) must NOT be reclaimed.
+    # run_sync_unit does not heartbeat during the provider call, so reclaiming
+    # a stale RUNNING unit would cause duplicate provider writes.  Durable
+    # dead-worker recovery is a separate follow-up (CHAOS-2577).
     from dev_health_ops.workers import sync_units
 
     run, unit = _seed_run(db_session)
@@ -675,19 +678,11 @@ def test_dispatch_sync_run_reclaims_stale_running_units(db_session, monkeypatch)
     unit.updated_at = datetime.now(timezone.utc) - timedelta(hours=2)
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
-    queued = []
 
-    class FakeSig:
-        def __init__(self, unit_id):
-            self.unit_id = unit_id
-
-        def set(self, *, queue):
-            queued.append((self.unit_id, queue))
-            return self
-
-    monkeypatch.setattr(sync_units.run_sync_unit, "s", lambda unit_id: FakeSig(unit_id))
+    monkeypatch.setattr(sync_units.run_sync_unit, "s", lambda unit_id: None)
+    monkeypatch.setattr(sync_units.finalize_sync_run, "si", lambda run_id: None)
     monkeypatch.setattr(
-        sync_units.finalize_sync_run, "si", lambda run_id: FakeSig(run_id)
+        sync_units.finalize_sync_run, "apply_async", lambda *a, **k: None
     )
     monkeypatch.setattr(sync_units, "group", lambda signatures: list(signatures))
     monkeypatch.setattr(
@@ -695,12 +690,16 @@ def test_dispatch_sync_run_reclaims_stale_running_units(db_session, monkeypatch)
         "chord",
         lambda header, callback: type("C", (), {"apply_async": lambda self: None})(),
     )
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run, "apply_async", lambda *a, **k: None
+    )
 
     result = sync_units.dispatch_sync_run(str(run.id))
-    assert result["queued_units"] == 1
-    assert queued[0][0] == str(unit.id)
+    # No units should be dispatched — stale RUNNING is not reclaimed.
+    assert result["queued_units"] == 0
     db_session.refresh(unit)
-    assert unit.status == SyncRunUnitStatus.DISPATCHING.value
+    # Unit must remain RUNNING, not flipped to DISPATCHING.
+    assert unit.status == SyncRunUnitStatus.RUNNING.value
 
 
 def test_dispatch_sync_run_does_not_reclaim_fresh_running_units(

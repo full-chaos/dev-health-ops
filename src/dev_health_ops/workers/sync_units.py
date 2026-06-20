@@ -679,13 +679,21 @@ def _claim_units(
 
     Fresh ``planned`` units are claimed with an atomic ``UPDATE ... RETURNING``
     so two concurrent ``dispatch_sync_run`` calls cannot both enqueue the same
-    unit (no double-queue / duplicate provider writes). Stale ``dispatching``
-    or ``running`` units (a worker died mid-flight) are reclaimed by age so a
-    crash cannot leave the run unfinishable.
+    unit (no double-queue / duplicate provider writes).  Stale ``dispatching``
+    units (a worker died before the unit started running) are reclaimed by age.
 
-    ``capped_ids`` is the set of unit IDs that the concurrency guard deferred
-    (D3).  Those units are left in PLANNED status so a later redispatch can
-    claim them once slots free up.
+    F2 fix: RUNNING units are NEVER reclaimed here.  ``run_sync_unit`` does not
+    heartbeat during the provider call, so a legitimately long-running unit past
+    SYNC_UNIT_RUNNING_STALE_SECONDS would be re-dispatched and run a second time
+    concurrently, causing duplicate provider writes.  Durable dead-worker
+    recovery (heartbeat + lease) is a separate follow-up (CHAOS-2577).
+
+    INTERIM: a capped run whose only blocker is a DEAD RUNNING unit may stall
+    — acceptable, preserves at-most-once provider execution.
+
+    ``capped_ids`` is the set of unit IDs that the concurrency guard deferred.
+    Those units are left in PLANNED status so a later redispatch can claim them
+    once slots free up.
     """
     now = datetime.now(timezone.utc)
     # Build the WHERE clause for the atomic claim, excluding capped units.
@@ -709,18 +717,16 @@ def _claim_units(
         .all()
     )
 
+    # Reclaim stale DISPATCHING units only (F2: RUNNING is never reclaimed).
+    # A DISPATCHING unit that is stale means the worker was enqueued but never
+    # picked up (e.g. broker restart).  It is safe to re-enqueue because the
+    # worker never started the provider call.
     stale_dispatch = now - timedelta(seconds=_stale_dispatch_seconds())
-    stale_running = now - timedelta(seconds=_stale_running_seconds())
     reclaim_candidates = (
         session.query(SyncRunUnit)
         .filter(
             SyncRunUnit.sync_run_id == run_uuid,
-            SyncRunUnit.status.in_(
-                {
-                    SyncRunUnitStatus.DISPATCHING.value,
-                    SyncRunUnitStatus.RUNNING.value,
-                }
-            ),
+            SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value,
         )
         .all()
     )
@@ -730,12 +736,7 @@ def _claim_units(
         # Never reclaim a unit that the concurrency guard deferred.
         if str(unit.id) in capped_ids:
             continue
-        threshold = (
-            stale_dispatch
-            if unit.status == SyncRunUnitStatus.DISPATCHING.value
-            else stale_running
-        )
-        if _as_aware(unit.updated_at) <= threshold:
+        if _as_aware(unit.updated_at) <= stale_dispatch:
             unit.status = SyncRunUnitStatus.DISPATCHING.value
             unit.updated_at = now
             claimed_ids.add(unit.id)

@@ -576,18 +576,23 @@ def test_same_run_running_units_count_against_cap(db_session, monkeypatch):
     assert str(units[2].id) in decision.capped_unit_ids
 
 
-def test_stale_other_run_blocker_does_not_cap_forever(db_session, monkeypatch):
-    """F2 regression (b): stale other-run RUNNING unit does not block capacity.
+def test_stale_other_run_running_always_consumes_cap(db_session, monkeypatch):
+    """F2 regression (b): RUNNING units always consume capacity regardless of age.
 
-    A unit from another run whose updated_at is older than the staleness
-    threshold must NOT count as an active slot — the guard must return full
-    capacity so the current run can proceed.
+    Under the new model RUNNING has no stale threshold — run_sync_unit does not
+    heartbeat, so a stale RUNNING unit may still be executing.  Reclaiming it
+    would cause duplicate provider writes.  Therefore a stale RUNNING unit from
+    another run MUST count as an active slot and cap the current run.
+
+    Durable dead-worker recovery (heartbeat + lease) is a separate follow-up
+    (CHAOS-2577).  Until then, a capped run whose only blocker is a dead RUNNING
+    unit may stall — acceptable, preserves at-most-once provider execution.
     """
     from datetime import timedelta
 
     monkeypatch.setenv("SYNC_RUN_MAX_UNITS", "10")
     monkeypatch.setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "1")
-    # Use a very short staleness window so we can set updated_at in the past.
+    # Even with a very short staleness window, RUNNING must still consume a slot.
     monkeypatch.setenv("SYNC_UNIT_RUNNING_STALE_SECONDS", "60")
 
     run, units, integration, source = _seed_run(db_session, unit_count=1)
@@ -626,13 +631,13 @@ def test_stale_other_run_blocker_does_not_cap_forever(db_session, monkeypatch):
 
     decision = DispatchGuard.authorize_run(db_session, str(run.id))
 
-    # Stale blocker must not consume a slot — full allow expected.
+    # Stale RUNNING must still consume a slot — cap expected.
+    # (INTERIM: run may stall until heartbeat/lease follow-up lands.)
     assert decision.allowed is True
-    assert decision.concurrency_capped is False, (
-        "stale other-run blocker must not cap the current run"
+    assert decision.concurrency_capped is True, (
+        "stale other-run RUNNING must still consume a slot (no heartbeat)"
     )
-    assert len(decision.capped_unit_ids) == 0
-
+    assert len(decision.capped_unit_ids) == 1
 
 def test_finalize_passes_full_datetime_work_graph_window(db_session, monkeypatch):
     """F3 regression (c): finalize_sync_run passes full ISO datetimes for
@@ -927,4 +932,119 @@ def test_fresh_same_run_dispatching_caps_planned_unit(db_session, monkeypatch):
     assert len(decision.capped_unit_ids) == 1
     assert str(units[1].id) in decision.capped_unit_ids, (
         "the PLANNED unit must be in capped_unit_ids"
+    )
+
+
+def test_advisory_lock_key_deterministic_and_unique(db_session, monkeypatch):
+    """F1 regression: advisory lock key is deterministic and bucket-unique.
+
+    On SQLite (tests) the lock is a no-op, but the key derivation must be
+    deterministic and produce distinct values for distinct buckets.
+    The PostgreSQL-only guarantee is documented in guard.py.
+    """
+    from dev_health_ops.sync.guard import _bucket_advisory_lock_key
+
+    key_a = _bucket_advisory_lock_key("org-1", "github", "medium")
+    key_b = _bucket_advisory_lock_key("org-1", "github", "high")
+    key_c = _bucket_advisory_lock_key("org-2", "github", "medium")
+    key_same = _bucket_advisory_lock_key("org-1", "github", "medium")
+
+    # Deterministic: same inputs → same key.
+    assert key_a == key_same
+    # Unique: different buckets → different keys.
+    assert key_a != key_b
+    assert key_a != key_c
+    assert key_b != key_c
+    # 63-bit range: fits in a PostgreSQL bigint (signed 64-bit).
+    for key in (key_a, key_b, key_c):
+        assert 0 <= key < (1 << 63)
+
+
+def test_long_running_unit_counts_against_cap_and_is_not_re_enqueued(
+    db_session, monkeypatch
+):
+    """F2 regression: a long-running RUNNING unit past the stale threshold
+    still counts against the cap AND is not re-enqueued.
+
+    cap=1, 1 RUNNING unit (updated_at past stale threshold) + 1 PLANNED unit.
+    Expected: RUNNING consumes the slot → PLANNED is capped → queued_units == 0.
+    RUNNING unit must remain RUNNING (not flipped to DISPATCHING).
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from dev_health_ops.workers import sync_units
+
+    monkeypatch.setenv("SYNC_RUN_MAX_UNITS", "10")
+    monkeypatch.setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "1")
+    monkeypatch.setenv("SYNC_UNIT_RUNNING_STALE_SECONDS", "60")
+
+    run, units, integration, source = _seed_run(db_session, unit_count=2)
+    # First unit: RUNNING, updated_at past the stale threshold.
+    units[0].status = SyncRunUnitStatus.RUNNING.value
+    units[0].updated_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    # Second unit: PLANNED (the one that should be capped).
+    # units[1] remains PLANNED.
+    db_session.flush()
+
+    from contextlib import contextmanager
+
+    import dev_health_ops.db as db
+
+    @contextmanager
+    def _fake_session_ctx(s):
+        yield s
+        s.commit()
+
+    monkeypatch.setattr(
+        db, "get_postgres_session_sync", lambda: _fake_session_ctx(db_session)
+    )
+
+    class FakeUnitSig:
+        def __init__(self, unit_id):
+            self.unit_id = unit_id
+
+        def set(self, *, queue):
+            return self
+
+    class FakeFinalizeSig:
+        def __init__(self, run_id):
+            pass
+
+        def set(self, *, queue):
+            return self
+
+    class FakeChord:
+        def __init__(self, header, callback):
+            pass
+
+        def apply_async(self):
+            return None
+
+    monkeypatch.setattr(
+        sync_units.run_sync_unit, "s", lambda unit_id: FakeUnitSig(unit_id)
+    )
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run, "si", lambda run_id: FakeFinalizeSig(run_id)
+    )
+    monkeypatch.setattr(sync_units, "group", list)
+    monkeypatch.setattr(
+        sync_units, "chord", lambda header, callback: FakeChord(header, callback)
+    )
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run, "apply_async", lambda *a, **k: None
+    )
+
+    result = sync_units.dispatch_sync_run(str(run.id))
+
+    # RUNNING consumes the slot → PLANNED is capped → nothing dispatched.
+    assert result["queued_units"] == 0
+    db_session.refresh(units[0])
+    db_session.refresh(units[1])
+    # RUNNING unit must NOT be re-enqueued.
+    assert units[0].status == SyncRunUnitStatus.RUNNING.value, (
+        "long-running RUNNING unit must not be reclaimed"
+    )
+    # PLANNED unit must remain PLANNED (deferred for redispatch).
+    assert units[1].status == SyncRunUnitStatus.PLANNED.value, (
+        "PLANNED unit must remain PLANNED when cap is consumed by RUNNING"
     )

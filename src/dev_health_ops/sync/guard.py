@@ -28,27 +28,47 @@ slot right now, across ALL runs (including the current run).  These reduce
 ``allowed_slots``:
 
 * status == DISPATCHING  AND  updated_at > stale_dispatch_cutoff  (fresh)
-* status in {RUNNING, RETRYING}  AND  updated_at > stale_running_cutoff  (fresh)
+* status == RUNNING  (any age — no heartbeat, so stale threshold is not safe)
+* status == RETRYING  AND  updated_at > stale_running_cutoff  (fresh)
 
-Stale units are excluded because ``_claim_units`` will reclaim them on the
-next pass; they must not permanently block capacity.
+RUNNING always counts regardless of updated_at because run_sync_unit does not
+heartbeat during the provider call.  Reclaiming a stale RUNNING unit would
+cause duplicate provider writes (F2).  Durable dead-worker recovery (heartbeat
++ lease) is a separate follow-up (CHAOS-2577).
 
 **Candidate set** — units from THIS run that ``_claim_units`` can enqueue this
 pass.  Mirrors ``_claim_units`` claim + reclaim logic exactly:
 
 * status == PLANNED  (any age — claimed via UPDATE…RETURNING)
 * status == DISPATCHING  AND  updated_at <= stale_dispatch_cutoff  (stale reclaim)
-* status == RUNNING  AND  updated_at <= stale_running_cutoff  (stale reclaim)
 
 Fresh DISPATCHING is NOT a candidate (it is a consumer).
+RUNNING is NOT a candidate (never reclaimed — F2 fix).
 Stale RETRYING is NOT a candidate (``_claim_units`` does not reclaim RETRYING).
 
 The two sets are disjoint by construction — no subtraction is needed or
 performed.
+
+Advisory locking (F1 TOCTOU fix)
+---------------------------------
+Before reading active_count for each bucket, ``authorize_run`` acquires a
+PostgreSQL transaction-scoped advisory lock keyed on the bucket.  Buckets are
+sorted deterministically before locking to prevent deadlocks when two
+dispatchers race on the same set of buckets.
+
+The lock is held until the surrounding ``get_postgres_session_sync()`` block
+commits (``dispatch_sync_run`` wraps authorize→claim in one session), so the
+active_count read and the subsequent ``_claim_units`` UPDATE are atomic with
+respect to other dispatchers in the same bucket.
+
+On SQLite (tests) the dialect check no-ops — advisory locks are
+PostgreSQL-only.  The lock key derivation is the same deterministic 63-bit
+integer pattern used in ``src/dev_health_ops/api/admin/routers/sync.py:224-239``.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 import uuid
 from collections import defaultdict
@@ -56,7 +76,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
-from sqlalchemy import func
+from sqlalchemy import func, text
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -131,7 +151,7 @@ class DispatchGuard:
         # _claim_units can enqueue this pass.  Mirrors _claim_units exactly:
         #   • PLANNED (any age) — claimed via UPDATE…RETURNING
         #   • stale DISPATCHING (updated_at <= stale_dispatch_cutoff) — reclaimed
-        #   • stale RUNNING (updated_at <= stale_running_cutoff) — reclaimed
+        # RUNNING is NOT a candidate (F2: never reclaim RUNNING — no heartbeat).
         # Fresh DISPATCHING is a capacity CONSUMER, not a candidate.
         # Stale RETRYING is neither (_claim_units does not reclaim RETRYING).
         candidates_by_bucket: dict[tuple[str, str, str], list[SyncRunUnit]] = (
@@ -145,28 +165,40 @@ class DispatchGuard:
                 if _as_aware_guard(unit.updated_at) <= stale_dispatch_cutoff:
                     # Stale DISPATCHING — _claim_units will reclaim it.
                     candidates_by_bucket[bucket].append(unit)
-            elif unit.status == SyncRunUnitStatus.RUNNING.value:
-                if _as_aware_guard(unit.updated_at) <= stale_running_cutoff:
-                    # Stale RUNNING — _claim_units will reclaim it.
-                    candidates_by_bucket[bucket].append(unit)
+            # RUNNING (any age) → capacity consumer only; never a candidate (F2).
             # Fresh DISPATCHING → consumer only (counted in active_count below).
             # RETRYING (any age) → neither candidate nor consumer for this run.
             # SUCCESS / FAILED → terminal, ignored.
+
+        # F1 TOCTOU fix: acquire a PostgreSQL transaction-scoped advisory lock
+        # per bucket BEFORE reading active_count.  Buckets are sorted
+        # deterministically to prevent deadlocks when two dispatchers race on
+        # the same set of buckets.  The lock is held until the surrounding
+        # session commits (dispatch_sync_run wraps authorize→claim in one
+        # get_postgres_session_sync() block), making the count+claim atomic.
+        # On SQLite (tests) the dialect check no-ops.
+        #
+        # Key derivation reuses the same deterministic 63-bit integer pattern
+        # as _bucket_advisory_lock_key() below (mirrors sync.py:224-239).
+        all_buckets = sorted(candidates_by_bucket.keys())
+        _acquire_bucket_advisory_locks(session, all_buckets)
 
         capped_unit_ids: list[str] = []
         for bucket, bucket_candidates in candidates_by_bucket.items():
             org_id, provider, cost_class = bucket
 
             # Count the CAPACITY-CONSUMER set across ALL runs (including this
-            # run) for this bucket.  Consumers are fresh active units:
+            # run) for this bucket.  Consumers are:
             #   • fresh DISPATCHING: updated_at > stale_dispatch_cutoff
-            #   • fresh RUNNING or RETRYING: updated_at > stale_running_cutoff
-            # Stale units are excluded — they will be reclaimed and must not
-            # permanently block capacity (F2 stale-blocker fix).
-            # Same-run fresh DISPATCHING IS included — it is a genuine consumer
-            # that reduces available slots (F1 same-run visibility fix).
+            #   • ALL RUNNING (any age) — no heartbeat, so stale threshold is
+            #     not safe to use; reclaiming would cause duplicate writes (F2)
+            #   • fresh RETRYING: updated_at > stale_running_cutoff
             # No subtraction is performed; the consumer and candidate sets are
             # disjoint by construction.
+            #
+            # INTERIM: a capped run whose only blocker is a DEAD RUNNING unit
+            # may stall — acceptable, preserves at-most-once provider execution.
+            # The heartbeat/lease follow-up (CHAOS-2577) adds safe recovery.
             active_count = (
                 session.query(func.count(SyncRunUnit.id))
                 .filter(
@@ -178,13 +210,9 @@ class DispatchGuard:
                             (SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value)
                             & (SyncRunUnit.updated_at > stale_dispatch_cutoff)
                         )
+                        | (SyncRunUnit.status == SyncRunUnitStatus.RUNNING.value)
                         | (
-                            SyncRunUnit.status.in_(
-                                {
-                                    SyncRunUnitStatus.RUNNING.value,
-                                    SyncRunUnitStatus.RETRYING.value,
-                                }
-                            )
+                            (SyncRunUnit.status == SyncRunUnitStatus.RETRYING.value)
                             & (SyncRunUnit.updated_at > stale_running_cutoff)
                         )
                     ),
@@ -208,6 +236,40 @@ class DispatchGuard:
             )
 
         return GuardDecision(True)
+
+
+def _bucket_advisory_lock_key(org_id: str, provider: str, cost_class: str) -> int:
+    """Deterministic 63-bit advisory lock key for a (org_id, provider, cost_class) bucket.
+
+    Uses SHA-256 of the canonical bucket string, truncated to 63 bits so it
+    fits in a PostgreSQL bigint (signed 64-bit).  Mirrors the pattern in
+    ``src/dev_health_ops/api/admin/routers/sync.py:224-229``.
+    """
+    raw = f"{org_id}:{provider}:{cost_class}".encode()
+    digest = hashlib.sha256(raw).digest()
+    # Take first 8 bytes as big-endian unsigned int, then mask to 63 bits.
+    key_int = int.from_bytes(digest[:8], "big")
+    return key_int & ((1 << 63) - 1)
+
+
+def _acquire_bucket_advisory_locks(
+    session: Session,
+    buckets: list[tuple[str, str, str]],
+) -> None:
+    """Acquire PostgreSQL transaction-scoped advisory locks for each bucket.
+
+    Buckets must be pre-sorted by the caller to prevent deadlocks.
+    No-ops on non-PostgreSQL dialects (e.g. SQLite in tests).
+    """
+    bind = session.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
+    for org_id, provider, cost_class in buckets:
+        lock_key = _bucket_advisory_lock_key(org_id, provider, cost_class)
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {"lock_key": lock_key},
+        )
 
 
 def _resolve_total_unit_cap(session: Session, org_id: str) -> int:

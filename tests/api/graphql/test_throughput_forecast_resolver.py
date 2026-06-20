@@ -543,3 +543,35 @@ async def test_empty_history_negative_backlog_rejected(ctx):
         pytest.raises(ValueError, match="backlog_size"),
     ):
         await resolve_throughput_forecast(ctx, ThroughputForecastInput(backlog_size=-1))
+
+
+# ---------------------------------------------------------------------------
+# Finding #3 — history_weeks validation must fire before empty-history branch
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_weeks", [0, -1])
+@pytest.mark.asyncio
+async def test_empty_history_invalid_history_weeks_rejected(ctx, bad_weeks):
+    """history_weeks <= 0 must raise ValueError regardless of whether rows exist."""
+    from dev_health_ops.api.graphql.models.inputs import ThroughputForecastInput
+    from dev_health_ops.api.graphql.resolvers.forecast import (
+        resolve_throughput_forecast,
+    )
+
+    with pytest.raises(ValueError, match="history_weeks must be positive"):
+        await resolve_throughput_forecast(
+            ctx, ThroughputForecastInput(history_weeks=bad_weeks)
+        )
+
+
+@pytest.mark.asyncio
+async def test_rows_exist_invalid_history_weeks_same_error(ctx):
+    """history_weeks <= 0 raises the same ValueError when rows exist (parity check)."""
+    from dev_health_ops.api.graphql.models.inputs import ThroughputForecastInput
+    from dev_health_ops.api.graphql.resolvers.forecast import (
+        resolve_throughput_forecast,
+    )
+
+    with pytest.raises(ValueError, match="history_weeks must be positive"):
+        await resolve_throughput_forecast(ctx, ThroughputForecastInput(history_weeks=0))

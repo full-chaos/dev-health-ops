@@ -293,6 +293,8 @@ async def resolve_throughput_forecast(
     require_org_id(context)
     if context.client is None:
         raise RuntimeError("Database client not available")
+    if input.history_weeks <= 0:
+        raise ValueError("history_weeks must be positive")
 
     # Single-team scopes still set team_id on the result so the UI can
     # display the scope; multi-team and all-teams scopes leave it None.

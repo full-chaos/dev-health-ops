@@ -151,9 +151,22 @@ def compute_rolling_windows(
     return tuple(rolling_weekly_throughput(history, weeks) for weeks in windows_weeks)
 
 
+MIN_SAMPLES_FOR_ESTIMATE = 2
+
+
 def _select_percentile_distribution(
     windows: tuple[RollingWindowThroughput, ...], history_weeks: int
 ) -> tuple[float, ...]:
+    """Return the sample distribution to use for percentile estimates.
+
+    Selects the window whose ``window_weeks`` matches ``history_weeks``
+    (falling back to the longest available window). When the selected
+    window has fewer than ``MIN_SAMPLES_FOR_ESTIMATE`` samples the function
+    tries to fall back to the longest shorter window that meets the
+    minimum. If no window meets the minimum, an empty tuple is returned so
+    that callers produce no-estimate (None) outputs rather than emitting
+    percentiles derived from a single data point.
+    """
     if not windows:
         return ()
 
@@ -161,14 +174,17 @@ def _select_percentile_distribution(
         (window for window in windows if window.window_weeks == history_weeks),
         windows[-1],
     )
-    if len(selected.samples) > 1:
+    if len(selected.samples) >= MIN_SAMPLES_FOR_ESTIMATE:
         return selected.samples
 
+    # Selected window has 0 or 1 sample — try the longest shorter window
+    # that meets the minimum sample threshold.
     shorter_windows = sorted(
         (
             window
             for window in windows
-            if window.window_weeks < selected.window_weeks and len(window.samples) > 1
+            if window.window_weeks < selected.window_weeks
+            and len(window.samples) >= MIN_SAMPLES_FOR_ESTIMATE
         ),
         key=lambda window: window.window_weeks,
         reverse=True,
@@ -176,7 +192,8 @@ def _select_percentile_distribution(
     if shorter_windows:
         return shorter_windows[0].samples
 
-    return selected.samples
+    # No window meets the minimum — emit no estimate.
+    return ()
 
 
 def _weeks_to_complete(backlog_size: int, weekly_throughput: float) -> int | None:

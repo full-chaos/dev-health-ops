@@ -11,6 +11,7 @@ Covers:
 from __future__ import annotations
 
 import importlib
+import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.backfill import BackfillJob
 from dev_health_ops.models.git import Base
+from dev_health_ops.models.integrations import Integration, IntegrationSource, SyncRun
 from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.settings import (
     IntegrationCredential,
@@ -33,9 +35,11 @@ from dev_health_ops.models.settings import (
     JobRunStatus,
     ScheduledJob,
     Setting,
+    SettingCategory,
     SyncConfiguration,
 )
 from dev_health_ops.models.users import Organization, User
+from dev_health_ops.sync.trigger_routing import MIGRATED_TRIGGER_ROUTING_SETTING_KEY
 from tests._helpers import tables_of
 
 admin_router_module = importlib.import_module("dev_health_ops.api.admin")
@@ -51,6 +55,9 @@ _TABLES = tables_of(
     ScheduledJob,
     JobRun,
     Setting,
+    Integration,
+    IntegrationSource,
+    SyncRun,
     BackfillJob,
 )
 
@@ -129,6 +136,45 @@ async def _create_sync_config(ac, name: str = "my-sync", provider: str = "github
     )
 
 
+async def _seed_source(session_maker, org_id: str, integration_id: uuid.UUID) -> None:
+    async with session_maker() as session:
+        session.add(
+            Integration(
+                id=integration_id,
+                org_id=org_id,
+                provider="github",
+                name="github-integration",
+                config={},
+            )
+        )
+        session.add(
+            IntegrationSource(
+                org_id=org_id,
+                integration_id=integration_id,
+                provider="github",
+                source_type="repository",
+                external_id="full-chaos/dev-health",
+                name="dev-health",
+                full_name="full-chaos/dev-health",
+                is_enabled=True,
+            )
+        )
+        await session.commit()
+
+
+async def _seed_planner_flag(session_maker, org_id: str) -> None:
+    async with session_maker() as session:
+        session.add(
+            Setting(
+                key=MIGRATED_TRIGGER_ROUTING_SETTING_KEY,
+                category=SettingCategory.SYNC.value,
+                value="true",
+                org_id=org_id,
+            )
+        )
+        await session.commit()
+
+
 # ---------------------------------------------------------------------------
 # Endpoint tests — legacy path (fanout disabled)
 # ---------------------------------------------------------------------------
@@ -137,7 +183,7 @@ async def _create_sync_config(ac, name: str = "my-sync", provider: str = "github
 @pytest.mark.asyncio
 async def test_backfill_legacy_creates_pending_job_run(client, session_maker):
     """Legacy backfill must persist a PENDING JobRun before dispatching."""
-    ac, _ = client
+    ac, seeded_state = client
 
     create_resp = await _create_sync_config(ac, name="bf-legacy-run", provider="github")
     assert create_resp.status_code == 201
@@ -220,7 +266,59 @@ async def test_backfill_legacy_passes_pending_run_id_to_task(client):
 
 
 @pytest.mark.asyncio
-async def test_backfill_fanout_does_not_create_job_run(client, session_maker):
+async def test_backfill_legacy_enqueue_failure_marks_committed_records_failed(
+    client, session_maker
+):
+    ac, _ = client
+
+    create_resp = await _create_sync_config(
+        ac, name="bf-legacy-enqueue-fails", provider="github"
+    )
+    assert create_resp.status_code == 201
+    config_id = create_resp.json()["id"]
+
+    mock_run_backfill = MagicMock()
+    mock_run_backfill.delay.side_effect = RuntimeError("broker down")
+
+    with (
+        patch("dev_health_ops.workers.sync_tasks.run_backfill", mock_run_backfill),
+        patch.dict("os.environ", {"SYNC_FANOUT_BACKFILL": ""}),
+    ):
+        resp = await ac.post(
+            f"/api/v1/admin/sync-configs/{config_id}/backfill",
+            json={"since": "2026-01-01", "before": "2026-01-08"},
+        )
+
+    assert resp.status_code == 503
+    assert "Task queue unavailable: broker down" in resp.json()["detail"]
+
+    async with session_maker() as session:
+        backfill_job = (await session.execute(select(BackfillJob))).scalar_one()
+        sched_job = (
+            await session.execute(
+                select(ScheduledJob).where(
+                    ScheduledJob.sync_config_id == uuid.UUID(config_id),
+                    ScheduledJob.job_type == "sync",
+                )
+            )
+        ).scalar_one()
+        job_run = (
+            await session.execute(select(JobRun).where(JobRun.job_id == sched_job.id))
+        ).scalar_one()
+
+    assert backfill_job.status == "failed"
+    assert backfill_job.error_message == "enqueue failed: broker down"
+    assert backfill_job.completed_at is not None
+    assert backfill_job.celery_task_id is None
+    assert job_run.status == JobRunStatus.FAILED.value
+    assert job_run.error == "enqueue failed: broker down"
+    assert job_run.completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_backfill_fanout_does_not_create_job_run(
+    client, session_maker, seeded_state
+):
     """Fan-out backfill must NOT create a JobRun (passes pending_run_id=None)."""
     ac, _ = client
 
@@ -238,8 +336,11 @@ async def test_backfill_fanout_does_not_create_job_run(client, session_maker):
             )
         )
         cfg = result.scalar_one()
-        setattr(cfg, "migrated_integration_id", uuid.uuid4())
+        integration_id = uuid.uuid4()
+        setattr(cfg, "migrated_integration_id", integration_id)
         await session.commit()
+    await _seed_source(session_maker, seeded_state["org_id"], integration_id)
+    await _seed_planner_flag(session_maker, seeded_state["org_id"])
 
     mock_task = MagicMock(id="bf-fanout-task-id")
     mock_run_backfill = MagicMock()
@@ -247,7 +348,7 @@ async def test_backfill_fanout_does_not_create_job_run(client, session_maker):
 
     with (
         patch("dev_health_ops.workers.sync_tasks.run_backfill", mock_run_backfill),
-        patch.dict("os.environ", {"SYNC_FANOUT_BACKFILL": "true"}),
+        patch.dict("os.environ", {"SYNC_FANOUT_BACKFILL": ""}),
     ):
         resp = await ac.post(
             f"/api/v1/admin/sync-configs/{config_id}/backfill",
@@ -267,6 +368,250 @@ async def test_backfill_fanout_does_not_create_job_run(client, session_maker):
         jr_result = await session.execute(select(JobRun))
         runs = list(jr_result.scalars().all())
     assert runs == []
+
+
+@pytest.mark.asyncio
+async def test_backfill_fanout_commits_backfill_job_before_dispatch(
+    client, session_maker, seeded_state
+):
+    ac, _ = client
+
+    create_resp = await _create_sync_config(
+        ac, name="bf-fanout-committed-before-dispatch", provider="github"
+    )
+    assert create_resp.status_code == 201
+    config_id = create_resp.json()["id"]
+
+    async with session_maker() as session:
+        result = await session.execute(
+            select(SyncConfiguration).where(
+                SyncConfiguration.id == uuid.UUID(config_id)
+            )
+        )
+        cfg = result.scalar_one()
+        integration_id = uuid.uuid4()
+        setattr(cfg, "migrated_integration_id", integration_id)
+        cfg.planner_managed = True
+        await session.commit()
+    await _seed_source(session_maker, seeded_state["org_id"], integration_id)
+
+    db_path = session_maker.kw["bind"].url.database
+    visible_at_dispatch: list[tuple[str, int, str | None]] = []
+
+    def _delay_side_effect(**kwargs):
+        backfill_job_id = uuid.UUID(kwargs["backfill_job_id"])
+        assert db_path is not None
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT status, total_chunks, celery_task_id
+                FROM backfill_jobs
+                WHERE id = ?
+                """,
+                (backfill_job_id.hex,),
+            ).fetchone()
+        assert row is not None, "BackfillJob must be committed before dispatch"
+        visible_at_dispatch.append(row)
+        return MagicMock(id="bf-fanout-visible-task-id")
+
+    mock_run_backfill = MagicMock()
+    mock_run_backfill.delay.side_effect = _delay_side_effect
+
+    with (
+        patch("dev_health_ops.workers.sync_tasks.run_backfill", mock_run_backfill),
+        patch.dict("os.environ", {"SYNC_FANOUT_BACKFILL": ""}),
+    ):
+        resp = await ac.post(
+            f"/api/v1/admin/sync-configs/{config_id}/backfill",
+            json={"since": "2026-01-01", "before": "2026-01-08"},
+        )
+
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["mode"] == "fanout"
+    assert visible_at_dispatch == [("pending", 0, None)]
+
+    async with session_maker() as session:
+        result = await session.execute(select(BackfillJob))
+        backfill_job = result.scalar_one()
+    assert backfill_job.celery_task_id == "bf-fanout-visible-task-id"
+
+
+@pytest.mark.asyncio
+async def test_backfill_fanout_enqueue_failure_marks_backfill_job_failed(
+    client, session_maker, seeded_state
+):
+    ac, _ = client
+
+    create_resp = await _create_sync_config(
+        ac, name="bf-fanout-enqueue-fails", provider="github"
+    )
+    assert create_resp.status_code == 201
+    config_id = create_resp.json()["id"]
+
+    async with session_maker() as session:
+        result = await session.execute(
+            select(SyncConfiguration).where(
+                SyncConfiguration.id == uuid.UUID(config_id)
+            )
+        )
+        cfg = result.scalar_one()
+        integration_id = uuid.uuid4()
+        setattr(cfg, "migrated_integration_id", integration_id)
+        cfg.planner_managed = True
+        await session.commit()
+    await _seed_source(session_maker, seeded_state["org_id"], integration_id)
+
+    mock_run_backfill = MagicMock()
+    mock_run_backfill.delay.side_effect = RuntimeError("broker down")
+
+    with (
+        patch("dev_health_ops.workers.sync_tasks.run_backfill", mock_run_backfill),
+        patch.dict("os.environ", {"SYNC_FANOUT_BACKFILL": ""}),
+    ):
+        resp = await ac.post(
+            f"/api/v1/admin/sync-configs/{config_id}/backfill",
+            json={"since": "2026-01-01", "before": "2026-01-08"},
+        )
+
+    assert resp.status_code == 503
+    assert "Task queue unavailable: broker down" in resp.json()["detail"]
+
+    async with session_maker() as session:
+        backfill_job = (await session.execute(select(BackfillJob))).scalar_one()
+        job_runs = list((await session.execute(select(JobRun))).scalars().all())
+        sync_runs = list((await session.execute(select(SyncRun))).scalars().all())
+
+    assert backfill_job.status == "failed"
+    assert backfill_job.error_message == "enqueue failed: broker down"
+    assert backfill_job.completed_at is not None
+    assert backfill_job.celery_task_id is None
+    assert job_runs == []
+    assert sync_runs == []
+
+
+@pytest.mark.asyncio
+async def test_backfill_planner_managed_config_routes_to_fanout_without_flag(
+    client, session_maker, seeded_state
+):
+    ac, _ = client
+
+    create_resp = await _create_sync_config(
+        ac, name="bf-planner-managed", provider="github"
+    )
+    assert create_resp.status_code == 201
+    config_id = create_resp.json()["id"]
+
+    async with session_maker() as session:
+        result = await session.execute(
+            select(SyncConfiguration).where(
+                SyncConfiguration.id == uuid.UUID(config_id)
+            )
+        )
+        cfg = result.scalar_one()
+        integration_id = uuid.uuid4()
+        setattr(cfg, "migrated_integration_id", integration_id)
+        cfg.planner_managed = True
+        await session.commit()
+    await _seed_source(session_maker, seeded_state["org_id"], integration_id)
+
+    mock_task = MagicMock(id="bf-planner-managed-task-id")
+    mock_run_backfill = MagicMock()
+    mock_run_backfill.delay.return_value = mock_task
+
+    with (
+        patch("dev_health_ops.workers.sync_tasks.run_backfill", mock_run_backfill),
+        patch.dict("os.environ", {"SYNC_FANOUT_BACKFILL": ""}),
+    ):
+        resp = await ac.post(
+            f"/api/v1/admin/sync-configs/{config_id}/backfill",
+            json={"since": "2026-01-01", "before": "2026-01-08"},
+        )
+
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["mode"] == "fanout"
+    call_kwargs = mock_run_backfill.delay.call_args.kwargs
+    assert call_kwargs.get("pending_run_id") is None
+
+
+@pytest.mark.asyncio
+async def test_backfill_sourceless_migrated_config_without_flag_uses_legacy_path(
+    client, session_maker
+):
+    ac, _ = client
+
+    create_resp = await _create_sync_config(
+        ac, name="bf-sourceless-migrated", provider="github"
+    )
+    assert create_resp.status_code == 201
+    config_id = create_resp.json()["id"]
+
+    async with session_maker() as session:
+        result = await session.execute(
+            select(SyncConfiguration).where(
+                SyncConfiguration.id == uuid.UUID(config_id)
+            )
+        )
+        cfg = result.scalar_one()
+        setattr(cfg, "migrated_integration_id", uuid.uuid4())
+        await session.commit()
+
+    mock_task = MagicMock(id="bf-sourceless-task-id")
+    mock_run_backfill = MagicMock()
+    mock_run_backfill.delay.return_value = mock_task
+
+    with (
+        patch("dev_health_ops.workers.sync_tasks.run_backfill", mock_run_backfill),
+        patch.dict("os.environ", {"SYNC_FANOUT_BACKFILL": ""}),
+    ):
+        resp = await ac.post(
+            f"/api/v1/admin/sync-configs/{config_id}/backfill",
+            json={"since": "2026-01-01", "before": "2026-01-08"},
+        )
+
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["mode"] == "legacy"
+    call_kwargs = mock_run_backfill.delay.call_args.kwargs
+    assert call_kwargs.get("pending_run_id") is not None
+
+
+@pytest.mark.asyncio
+async def test_backfill_paused_config_returns_409_without_dispatch(
+    client, session_maker
+):
+    ac, _ = client
+
+    create_resp = await _create_sync_config(
+        ac, name="bf-paused-rejected", provider="github"
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = create_resp.json()["id"]
+
+    async with session_maker() as session:
+        result = await session.execute(
+            select(SyncConfiguration).where(
+                SyncConfiguration.id == uuid.UUID(config_id)
+            )
+        )
+        cfg = result.scalar_one()
+        cfg.is_active = False
+        await session.commit()
+
+    mock_run_backfill = MagicMock()
+    with patch("dev_health_ops.workers.sync_tasks.run_backfill", mock_run_backfill):
+        resp = await ac.post(
+            f"/api/v1/admin/sync-configs/{config_id}/backfill",
+            json={"since": "2026-01-01", "before": "2026-01-08"},
+        )
+
+    assert resp.status_code == 409
+    assert "paused" in resp.json()["detail"]
+    mock_run_backfill.delay.assert_not_called()
+
+    async with session_maker() as session:
+        job_runs = (await session.execute(select(JobRun))).scalars().all()
+        backfill_jobs = (await session.execute(select(BackfillJob))).scalars().all()
+    assert job_runs == []
+    assert backfill_jobs == []
 
 
 # ---------------------------------------------------------------------------
@@ -434,6 +779,7 @@ async def test_run_backfill_worker_transitions_job_run_running_then_failed(
 def test_run_backfill_helpers_noop_on_none():
     """All three JobRun helpers must silently no-op when pending_run_id is None."""
     from dev_health_ops.workers.sync_backfill import (
+        _mark_sync_job_run_cancelled,
         _mark_sync_job_run_failed,
         _mark_sync_job_run_running,
         _mark_sync_job_run_success,
@@ -445,6 +791,7 @@ def test_run_backfill_helpers_noop_on_none():
         _mark_sync_job_run_running(None, now)
         _mark_sync_job_run_success(None, now)
         _mark_sync_job_run_failed(None, "err", now)
+        _mark_sync_job_run_cancelled(None, "err", now)
     mock_pg.assert_not_called()
 
 
@@ -454,7 +801,7 @@ def test_run_backfill_signature_has_pending_run_id():
 
     from dev_health_ops.workers.sync_backfill import run_backfill
 
-    params = inspect.signature(run_backfill.run).parameters
+    params = inspect.signature(getattr(run_backfill, "run")).parameters
     assert "pending_run_id" in params, (
         "run_backfill is missing pending_run_id parameter"
     )

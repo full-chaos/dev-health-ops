@@ -530,6 +530,19 @@ def run_sync_config(
             )
             if config is None:
                 raise _TerminalSyncError(f"Sync configuration not found: {config_id}")
+            if not bool(config.is_active):
+                if pending_run_id is not None:
+                    run_record = (
+                        session.query(JobRun)
+                        .filter(JobRun.id == uuid.UUID(pending_run_id))
+                        .one_or_none()
+                    )
+                    if run_record is not None:
+                        run_record.status = JobRunStatus.CANCELLED.value
+                        run_record.completed_at = datetime.now(timezone.utc)
+                        run_record.error = "Sync configuration is paused"
+                session.flush()
+                return {"status": "skipped", "reason": "sync_config_inactive"}
 
             provider = _as_str(config.provider).lower()
             config_name = _as_str(config.name)

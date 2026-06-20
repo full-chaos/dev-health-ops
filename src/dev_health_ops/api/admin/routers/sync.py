@@ -8,7 +8,7 @@ from typing import Any, Protocol, cast
 
 from croniter import croniter as Croniter
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.admin.middleware import get_admin_org_id
@@ -28,6 +28,11 @@ from dev_health_ops.api.services.configuration import (
 )
 from dev_health_ops.api.services.licensing import TierLimitService
 from dev_health_ops.models import SyncRun
+from dev_health_ops.models.integrations import (
+    Integration,
+    IntegrationDataset,
+    IntegrationSource,
+)
 from dev_health_ops.models.settings import (
     JobRun,
     JobRunStatus,
@@ -35,12 +40,11 @@ from dev_health_ops.models.settings import (
     ScheduledJob,
     SyncConfiguration,
 )
-from dev_health_ops.sync.datasets import supported_legacy_targets
+from dev_health_ops.sync.datasets import supported_datasets, supported_legacy_targets
 from dev_health_ops.sync.planner import plan_sync_run
 from dev_health_ops.sync.trigger_routing import (
-    is_migrated_trigger_routing_enabled,
     mark_sync_run_failed,
-    plan_request_for_config,
+    planner_request_for_config_if_routed,
 )
 from dev_health_ops.workers.queues import sync_queue_for_provider
 from dev_health_ops.workers.sync_batch import _is_batch_eligible
@@ -70,6 +74,24 @@ def _mark_job_run_failed(sync_session, run_id: str, error: str) -> None:
         if started_at.tzinfo is None:
             started_at = started_at.replace(tzinfo=timezone.utc)
         run.duration_seconds = max(0, int((completed_at - started_at).total_seconds()))
+    sync_session.flush()
+
+
+def _mark_backfill_job_failed(
+    sync_session, backfill_job_id: str, error: str, completed_at: datetime
+) -> None:
+    from dev_health_ops.models.backfill import BackfillJob as BackfillJobModel
+
+    bf_job = (
+        sync_session.query(BackfillJobModel)
+        .filter(BackfillJobModel.id == uuid.UUID(str(backfill_job_id)))
+        .one_or_none()
+    )
+    if bf_job is None:
+        return
+    bf_job.status = "failed"
+    bf_job.error_message = error
+    bf_job.completed_at = completed_at
     sync_session.flush()
 
 
@@ -161,6 +183,60 @@ async def _is_planner_active(session: AsyncSession, org_id: str) -> bool:
         }
 
     return await session.run_sync(_check)
+
+
+async def _active_repo_usage_count_for_limit(session: AsyncSession, org_id: str) -> int:
+    active_configs = await session.execute(
+        select(SyncConfiguration).where(
+            SyncConfiguration.org_id == org_id,
+            SyncConfiguration.is_active.is_(True),
+        )
+    )
+    active_config_rows = list(active_configs.scalars().all())
+    planner_parent_ids = [
+        config.id
+        for config in active_config_rows
+        if config.parent_id is None
+        and bool(config.planner_managed)
+        and config.migrated_integration_id is not None
+    ]
+    planner_integration_ids = [
+        config.migrated_integration_id
+        for config in active_config_rows
+        if config.id in planner_parent_ids
+    ]
+    legacy_count = sum(
+        1 for config in active_config_rows if config.id not in planner_parent_ids
+    )
+    if not planner_integration_ids:
+        return legacy_count
+
+    source_count = await session.scalar(
+        select(func.count(IntegrationSource.id)).where(
+            IntegrationSource.org_id == org_id,
+            IntegrationSource.integration_id.in_(planner_integration_ids),
+            IntegrationSource.is_enabled.is_(True),
+        )
+    )
+    return legacy_count + int(source_count or 0)
+
+
+def _repo_limit_advisory_lock_key(org_id: str) -> int:
+    try:
+        org_int = uuid.UUID(org_id).int
+    except ValueError:
+        org_int = uuid.uuid5(uuid.NAMESPACE_URL, org_id).int
+    return org_int & ((1 << 63) - 1)
+
+
+async def _acquire_repo_limit_create_lock(session: AsyncSession, org_id: str) -> None:
+    bind = session.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(:lock_key)"),
+        {"lock_key": _repo_limit_advisory_lock_key(org_id)},
+    )
 
 
 class _MutableSyncConfiguration(Protocol):
@@ -370,6 +446,66 @@ async def _upsert_scheduled_job(
     job.timezone = tz
     job.job_config = job_config
     job.status = status
+
+
+def _planner_dataset_keys(provider: str, sync_targets: list[str]) -> list[str]:
+    targets = {str(target) for target in sync_targets if target is not None}
+    return [
+        spec.dataset_key
+        for spec in supported_datasets(provider)
+        if targets.intersection(spec.legacy_targets)
+    ]
+
+
+def _planner_source_rows(
+    payload: SyncConfigBatchCreate,
+    parent_options: dict[str, Any],
+    gitlab_projects: dict[str, tuple[int, str]],
+    org_id: str,
+    integration_id: uuid.UUID,
+    config_id: uuid.UUID,
+) -> list[IntegrationSource]:
+    provider = payload.provider.lower()
+    rows: list[IntegrationSource] = []
+    owner = str(
+        payload.sync_options.get("owner")
+        or payload.sync_options.get("group")
+        or payload.name
+    )
+    for repo_name in payload.repos:
+        if provider == "gitlab":
+            project_id, full_name = gitlab_projects[repo_name]
+            source_type = "project"
+            external_id = str(project_id)
+            source_name = full_name.rsplit("/", 1)[-1] if full_name else str(project_id)
+            metadata = {
+                "path_with_namespace": full_name,
+                "planner_managed_sync_config_id": str(config_id),
+            }
+        else:
+            source_type = "repository" if provider == "github" else "source"
+            full_name = f"{owner}/{repo_name}" if provider == "github" else repo_name
+            external_id = full_name
+            source_name = repo_name
+            metadata = {
+                "planner_managed_sync_config_id": str(config_id),
+            }
+            if provider == "github":
+                metadata["owner"] = owner
+        rows.append(
+            IntegrationSource(
+                org_id=org_id,
+                integration_id=integration_id,
+                provider=payload.provider,
+                source_type=source_type,
+                external_id=external_id,
+                name=source_name,
+                full_name=full_name,
+                metadata_=metadata,
+                is_enabled=True,
+            )
+        )
+    return rows
 
 
 @router.get("/sync-targets")
@@ -662,11 +798,8 @@ async def batch_create_sync_configs(
         This endpoint will create the parent config only (zero children) when
         the planner flag is enabled.
     """
-    svc = SyncConfigurationService(session, org_id)
-
-    # Enforce repo limit (existing + new repos)
-    existing_configs = await svc.list_all(active_only=True)
-    current_count = len(existing_configs)
+    await _acquire_repo_limit_create_lock(session, org_id)
+    current_count = await _active_repo_usage_count_for_limit(session, org_id)
     new_count = len(payload.repos)
 
     def _check_limit(sync_session) -> tuple[bool, str | None]:
@@ -681,21 +814,6 @@ async def batch_create_sync_configs(
         )
 
     provider = payload.provider.lower()
-    parent_is_active = provider in NON_REPO_SYNC_PROVIDERS
-
-    # Child sync configs are deprecated. When the integration planner is active
-    # for this org, reject batch child creation BEFORE writing an inert legacy
-    # parent (which would return 201 with zero syncable repos and block the
-    # name on retry) and direct the caller to the integration admin API.
-    if await _is_planner_active(session, org_id):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Child sync configs are deprecated for this organization. "
-                "Use the integration admin API: POST /admin/integrations, then "
-                "POST /admin/integrations/{id}/discover and /sync."
-            ),
-        )
 
     parent_options = dict(payload.sync_options)
     parent_options.pop("repo", None)  # parent has no single repo
@@ -718,6 +836,21 @@ async def batch_create_sync_configs(
         if effective_gitlab_url != DEFAULT_GITLAB_URL:
             parent_options["gitlab_url"] = effective_gitlab_url
 
+    integration = Integration(
+        org_id=org_id,
+        provider=payload.provider,
+        credential_id=uuid.UUID(payload.credential_id)
+        if payload.credential_id
+        else None,
+        name=payload.name,
+        config=parent_options,
+        is_active=True,
+        schedule_cron=payload.schedule_cron,
+        timezone=payload.timezone,
+    )
+    session.add(integration)
+    await session.flush()
+
     parent = SyncConfiguration(
         name=payload.name,
         provider=payload.provider,
@@ -727,79 +860,40 @@ async def batch_create_sync_configs(
         else None,
         sync_targets=payload.sync_targets,
         sync_options=parent_options,
-        is_active=parent_is_active,
+        is_active=True,
+        migrated_integration_id=integration.id,
+        planner_managed=True,
     )
     session.add(parent)
-    await session.flush()  # need parent.id for children
+    await session.flush()
 
-    # Child-config creation is the legacy (rollback) path. Planner-active
-    # requests were already rejected with 409 above, so children are always
-    # created here.
-    _planner_active = False
+    source_rows = _planner_source_rows(
+        payload,
+        parent_options,
+        gitlab_projects,
+        org_id,
+        integration.id,
+        parent.id,
+    )
+    dataset_rows = [
+        IntegrationDataset(
+            org_id=org_id,
+            integration_id=integration.id,
+            dataset_key=dataset_key,
+            is_enabled=True,
+            options={"legacy_targets": list(payload.sync_targets)},
+        )
+        for dataset_key in _planner_dataset_keys(payload.provider, payload.sync_targets)
+    ]
+    session.add_all([*source_rows, *dataset_rows])
 
-    # Create child configs (one per repo) — skipped when planner is active.
-    children = []
-    if not _planner_active:
-        for repo_name in payload.repos:
-            child_options = dict(parent_options)
-            if provider == "gitlab":
-                project_id, child_name = gitlab_projects[repo_name]
-                # GitLab children are keyed by integer project_id (what the sync
-                # runtime dispatches on), not by GitHub-shaped owner/repo keys.
-                child_options.pop("owner", None)
-                child_options.pop("repo", None)
-                child_options.pop("search", None)
-                child_options["project_id"] = project_id
-                group = _gitlab_group_from_options(payload.sync_options)
-                if group:
-                    child_options["group"] = group
-                # gitlab_url passes through via the dict(parent_options) copy
-                # above — including the credential-derived URL persisted into
-                # parent_options before parent creation.
-            else:
-                child_options["repo"] = repo_name
-                owner = (
-                    payload.sync_options.get("owner")
-                    or payload.sync_options.get("group")
-                    or payload.name
-                )
-                child_name = f"{owner}/{repo_name}"
-            if payload.initial_sync_depth is not None:
-                child_options["initial_sync_depth"] = payload.initial_sync_depth
-            if payload.schedule_cron is not None:
-                child_options["schedule_cron"] = payload.schedule_cron
-            if payload.timezone is not None:
-                child_options["timezone"] = payload.timezone
-
-            child = SyncConfiguration(
-                name=child_name,
-                provider=payload.provider,
-                org_id=org_id,
-                credential_id=uuid.UUID(payload.credential_id)
-                if payload.credential_id
-                else None,
-                sync_targets=payload.sync_targets,
-                sync_options=child_options,
-                is_active=True,
-                parent_id=getattr(parent, "id"),
-            )
-            children.append(child)
-
-    if children:
-        session.add_all(children)
-        await session.flush()
-
-    if parent_is_active:
-        await _upsert_scheduled_job(session, parent, org_id)
-    for child in children:
-        await _upsert_scheduled_job(session, child, org_id)
-    if children or parent_is_active:
-        await session.flush()
+    await _upsert_scheduled_job(session, parent, org_id)
+    await session.flush()
 
     return SyncConfigBatchResponse(
-        parent=_sync_config_to_response(parent, children_count=len(children)),
-        children=[_sync_config_to_response(c) for c in children],
-        total_created=len(children),
+        parent=_sync_config_to_response(parent, children_count=0),
+        children=[],
+        total_created=0,
     )
 
 
@@ -812,8 +906,8 @@ async def create_sync_config(
     svc = SyncConfigurationService(session, org_id)
 
     # Fix 1 (HIGH): Enforce repo limit before creating a new sync config.
-    existing_configs = await svc.list_all(active_only=True)
-    current_count = len(existing_configs)
+    await _acquire_repo_limit_create_lock(session, org_id)
+    current_count = await _active_repo_usage_count_for_limit(session, org_id)
 
     def _check_repo_limit(sync_session) -> tuple[bool, str | None]:
         tier_svc = TierLimitService(sync_session)
@@ -1085,6 +1179,11 @@ async def trigger_sync_config(
         raise HTTPException(status_code=404, detail="Sync configuration not found")
     if str(getattr(config, "org_id", "")) != org_id:
         raise HTTPException(status_code=404, detail="Sync configuration not found")
+    if not bool(getattr(config, "is_active", False)):
+        raise HTTPException(
+            status_code=409,
+            detail="Sync configuration is paused and cannot be triggered",
+        )
 
     # Fix 6 (LOW-MEDIUM): Check work items count against tier limit before triggering.
     if "work-items" in (config.sync_targets or []):
@@ -1127,48 +1226,38 @@ async def trigger_sync_config(
                 # ClickHouse unavailable — allow the sync to proceed rather than block it.
                 pass
 
-    # --- Migrated-trigger routing (CHAOS-2516) -----------------------------------
-    # After tier checks, before legacy dispatch: if the planner flag is on AND
-    # the config was migrated, route through the fan-out planner instead.
-    use_planner = await session.run_sync(
-        lambda s: is_migrated_trigger_routing_enabled(s, org_id)
-    )
-    if use_planner:
-        plan_request = plan_request_for_config(
-            config, triggered_by="manual", mode="incremental"
+    plan_request = await session.run_sync(
+        lambda sync_session: planner_request_for_config_if_routed(
+            sync_session, config, triggered_by="manual", mode="incremental"
         )
-        if plan_request is not None:
-            try:
-                plan = await session.run_sync(
-                    lambda sync_session: plan_sync_run(sync_session, plan_request)
+    )
+    if plan_request is not None:
+        try:
+            plan = await session.run_sync(
+                lambda sync_session: plan_sync_run(sync_session, plan_request)
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        await session.commit()
+        try:
+            getattr(dispatch_sync_run, "apply_async")(
+                args=(plan.sync_run_id,), queue="sync"
+            )
+        except Exception as exc:
+            await session.run_sync(
+                lambda s: mark_sync_run_failed(
+                    s, plan.sync_run_id, "dispatch enqueue failed"
                 )
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc))
-            await session.commit()
-            try:
-                getattr(dispatch_sync_run, "apply_async")(
-                    args=(plan.sync_run_id,), queue="sync"
-                )
-            except Exception as exc:
-                # The run + units are committed but never dispatched. Mark the
-                # run FAILED so it is not stranded PLANNED with no queued
-                # dispatcher (there is no periodic reconciler for such runs),
-                # then surface the queue outage to the caller.
-                await session.run_sync(
-                    lambda s: mark_sync_run_failed(
-                        s, plan.sync_run_id, "dispatch enqueue failed"
-                    )
-                )
-                raise HTTPException(
-                    status_code=503, detail=f"Task queue unavailable: {exc}"
-                )
-            return {
-                "status": "triggered",
-                "config_id": str(config.id),
-                "sync_run_id": plan.sync_run_id,
-                "total_units": plan.total_units,
-            }
-    # --- End migrated-trigger routing -------------------------------------------
+            )
+            raise HTTPException(
+                status_code=503, detail=f"Task queue unavailable: {exc}"
+            )
+        return {
+            "status": "triggered",
+            "config_id": str(config.id),
+            "sync_run_id": plan.sync_run_id,
+            "total_units": plan.total_units,
+        }
 
     try:
         from dev_health_ops.workers.sync_tasks import (
@@ -1232,6 +1321,11 @@ async def trigger_sync_config_backfill(
     config = await svc.get_by_id(config_id)
     if config is None:
         raise HTTPException(status_code=404, detail="Sync configuration not found")
+    if not bool(getattr(config, "is_active", False)):
+        raise HTTPException(
+            status_code=409,
+            detail="Sync configuration is paused and cannot be backfilled",
+        )
 
     requested_days = (payload.before - payload.since).days
 
@@ -1247,32 +1341,12 @@ async def trigger_sync_config_backfill(
     from dev_health_ops.models.backfill import BackfillJob as BackfillJobModel
 
     windows = chunk_date_range(since=payload.since, before=payload.before, chunk_days=7)
-    fanout_env = os.getenv("SYNC_FANOUT_BACKFILL", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    # The worker only routes through the fan-out planner when the config was
-    # migrated to an Integration (config_migration.py) AND fan-out is enabled
-    # (global env override or the per-org migrated-routing flag). Mirror that
-    # decision here so the BackfillJob's initial chunk count and the response
-    # "mode" reflect the path the task will actually take.
-    migrated = getattr(config, "migrated_integration_id", None) is not None
-
-    def _routing_enabled(sync_session) -> bool:
-        from dev_health_ops.sync.trigger_routing import (
-            is_migrated_trigger_routing_enabled,
+    planner_backfill_request = await session.run_sync(
+        lambda sync_session: planner_request_for_config_if_routed(
+            sync_session, config, triggered_by="backfill", mode="backfill"
         )
-
-        return is_migrated_trigger_routing_enabled(sync_session, org_id)
-
-    if not migrated:
-        fanout_backfill = False
-    elif fanout_env:
-        fanout_backfill = True
-    else:
-        fanout_backfill = await session.run_sync(_routing_enabled)
+    )
+    fanout_backfill = planner_backfill_request is not None
     backfill_job = BackfillJobModel(
         org_id=org_id,
         sync_config_id=uuid.UUID(config_id),
@@ -1298,18 +1372,36 @@ async def trigger_sync_config_backfill(
                     sync_session, config, org_id, "backfill"
                 )
             )
-            await session.commit()
 
-        result = getattr(run_backfill, "delay")(
-            sync_config_id=str(config.id),
-            since=payload.since.isoformat(),
-            before=payload.before.isoformat(),
-            org_id=org_id,
-            backfill_job_id=backfill_job_id,
-            pending_run_id=pending_run_id,
-        )
+        await session.commit()
+
+        try:
+            result = getattr(run_backfill, "delay")(
+                sync_config_id=str(config.id),
+                since=payload.since.isoformat(),
+                before=payload.before.isoformat(),
+                org_id=org_id,
+                backfill_job_id=backfill_job_id,
+                pending_run_id=pending_run_id,
+            )
+        except Exception as e:
+            error_message = f"enqueue failed: {e}"
+            completed_at = datetime.now(timezone.utc)
+            await session.run_sync(
+                lambda sync_session: _mark_backfill_job_failed(
+                    sync_session, backfill_job_id, error_message, completed_at
+                )
+            )
+            if pending_run_id is not None:
+                await session.run_sync(
+                    lambda sync_session: _mark_job_run_failed(
+                        sync_session, pending_run_id, error_message
+                    )
+                )
+            await session.commit()
+            raise HTTPException(status_code=503, detail=f"Task queue unavailable: {e}")
         backfill_job.celery_task_id = result.id
-        await session.flush()
+        await session.commit()
         return {
             "status": "accepted",
             "config_id": str(config.id),
@@ -1319,6 +1411,8 @@ async def trigger_sync_config_backfill(
             "since": payload.since.isoformat(),
             "before": payload.before.isoformat(),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Task queue unavailable: {e}")
 

@@ -14,6 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.git import Base
+from dev_health_ops.models.integrations import (
+    Integration,
+    IntegrationDataset,
+    IntegrationSource,
+    SyncRun,
+)
 from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.settings import (
     IntegrationCredential,
@@ -39,6 +45,10 @@ _TABLES = tables_of(
     ScheduledJob,
     JobRun,
     Setting,
+    Integration,
+    IntegrationSource,
+    IntegrationDataset,
+    SyncRun,
 )
 
 
@@ -290,6 +300,193 @@ async def test_batch_create_linear_without_repos_creates_active_config_and_job(
     assert config.sync_options["schedule_cron"] == "15 * * * *"
     assert job is not None
     assert job.schedule_cron == "15 * * * *"
+
+
+@pytest.mark.asyncio
+async def test_batch_create_counts_cross_provider_planner_sources_for_repo_limit(
+    client, monkeypatch
+):
+    ac, _ = client
+    requested_counts = []
+
+    class TierLimitStub:
+        def __init__(self, _session):
+            pass
+
+        def check_repo_limit(self, _org_id, requested_count):
+            requested_counts.append(requested_count)
+            if requested_count > 3:
+                return False, "Repo limit exceeded"
+            return True, None
+
+    monkeypatch.setattr(sync_router_module, "TierLimitService", TierLimitStub)
+
+    first = await ac.post(
+        "/api/v1/admin/sync-configs/batch",
+        json={
+            "name": "repo-cap-one",
+            "provider": "github",
+            "sync_targets": ["git"],
+            "sync_options": {"owner": "full-chaos"},
+            "repos": ["one", "two"],
+        },
+    )
+    second = await ac.post(
+        "/api/v1/admin/sync-configs/batch",
+        json={
+            "name": "repo-cap-gitlab",
+            "provider": "gitlab",
+            "sync_targets": ["git"],
+            "sync_options": {"group": "full-chaos"},
+            "repos": ["3", "4"],
+        },
+    )
+
+    assert first.status_code == 201, first.text
+    assert second.status_code == 403, second.text
+    assert requested_counts == [2, 4]
+
+
+@pytest.mark.asyncio
+async def test_single_create_counts_existing_planner_sources_for_repo_limit(
+    client, monkeypatch
+):
+    ac, _ = client
+    requested_counts = []
+
+    class TierLimitStub:
+        def __init__(self, _session):
+            pass
+
+        def check_repo_limit(self, _org_id, requested_count):
+            requested_counts.append(requested_count)
+            if requested_count > 2:
+                return False, "Repo limit exceeded"
+            return True, None
+
+    monkeypatch.setattr(sync_router_module, "TierLimitService", TierLimitStub)
+
+    batch = await ac.post(
+        "/api/v1/admin/sync-configs/batch",
+        json={
+            "name": "repo-cap-batch",
+            "provider": "github",
+            "sync_targets": ["git"],
+            "sync_options": {"owner": "full-chaos"},
+            "repos": ["one", "two"],
+        },
+    )
+    single = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": "repo-cap-single",
+            "provider": "github",
+            "sync_targets": ["git"],
+            "sync_options": {"owner": "full-chaos", "repo": "three"},
+        },
+    )
+
+    assert batch.status_code == 201, batch.text
+    assert single.status_code == 403, single.text
+    assert requested_counts == [2, 3]
+
+
+@pytest.mark.asyncio
+async def test_create_sync_config_acquires_repo_limit_lock_before_count(
+    client, monkeypatch
+):
+    ac, _ = client
+    calls: list[str] = []
+
+    async def acquire_lock(_session, _org_id):
+        calls.append("lock")
+
+    async def count_repos(_session, _org_id):
+        calls.append("count")
+        return 0
+
+    monkeypatch.setattr(
+        sync_router_module, "_acquire_repo_limit_create_lock", acquire_lock
+    )
+    monkeypatch.setattr(
+        sync_router_module, "_active_repo_usage_count_for_limit", count_repos
+    )
+
+    resp = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": "lock-before-count-single",
+            "provider": "github",
+            "sync_targets": ["git"],
+            "sync_options": {"owner": "full-chaos", "repo": "dev-health"},
+        },
+    )
+
+    assert resp.status_code == 201, resp.text
+    assert calls[:2] == ["lock", "count"]
+
+
+@pytest.mark.asyncio
+async def test_batch_create_sync_configs_acquires_repo_limit_lock_before_count(
+    client, monkeypatch
+):
+    ac, _ = client
+    calls: list[str] = []
+
+    async def acquire_lock(_session, _org_id):
+        calls.append("lock")
+
+    async def count_repos(_session, _org_id):
+        calls.append("count")
+        return 0
+
+    monkeypatch.setattr(
+        sync_router_module, "_acquire_repo_limit_create_lock", acquire_lock
+    )
+    monkeypatch.setattr(
+        sync_router_module, "_active_repo_usage_count_for_limit", count_repos
+    )
+
+    resp = await ac.post(
+        "/api/v1/admin/sync-configs/batch",
+        json={
+            "name": "lock-before-count-batch",
+            "provider": "github",
+            "sync_targets": ["git"],
+            "sync_options": {"owner": "full-chaos"},
+            "repos": ["dev-health"],
+        },
+    )
+
+    assert resp.status_code == 201, resp.text
+    assert calls[:2] == ["lock", "count"]
+
+
+@pytest.mark.asyncio
+async def test_repo_limit_advisory_lock_key_is_deterministic_and_sqlite_noops(
+    session_maker,
+):
+    org_uuid = str(uuid.uuid4())
+    slug = "full-chaos/test-org"
+
+    assert sync_router_module._repo_limit_advisory_lock_key(
+        org_uuid
+    ) == sync_router_module._repo_limit_advisory_lock_key(org_uuid)
+    assert sync_router_module._repo_limit_advisory_lock_key(
+        slug
+    ) == sync_router_module._repo_limit_advisory_lock_key(slug)
+    assert 0 <= sync_router_module._repo_limit_advisory_lock_key(slug) < 2**63
+    assert sync_router_module._repo_limit_advisory_lock_key(
+        org_uuid
+    ) != sync_router_module._repo_limit_advisory_lock_key(slug)
+
+    async with session_maker() as session:
+        execute = AsyncMock()
+        session.execute = execute
+
+        await sync_router_module._acquire_repo_limit_create_lock(session, org_uuid)
+
+    execute.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1012,6 +1209,63 @@ async def test_trigger_marks_pending_job_run_failed_when_enqueue_fails(
     assert run.error == "dispatch enqueue failed: broker down"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("trigger_child", [False, True])
+async def test_trigger_inactive_config_returns_409_without_execution(
+    client, session_maker, trigger_child
+):
+    ac, seeded_state = client
+    org_id = seeded_state["org_id"]
+
+    async with session_maker() as session:
+        parent = SyncConfiguration(
+            name="paused-parent",
+            provider="github",
+            org_id=org_id,
+            sync_targets=["git"],
+            is_active=False,
+        )
+        session.add(parent)
+        await session.flush()
+        target_id = parent.id
+        if trigger_child:
+            child = SyncConfiguration(
+                name="paused-parent/repo",
+                provider="github",
+                org_id=org_id,
+                sync_targets=["git"],
+                sync_options={"owner": "paused-parent", "repo": "repo"},
+                is_active=False,
+                parent_id=parent.id,
+            )
+            session.add(child)
+            await session.flush()
+            target_id = child.id
+        await session.commit()
+
+    mock_run = MagicMock()
+    mock_batch = MagicMock()
+    mock_dispatch = MagicMock()
+    with (
+        patch("dev_health_ops.workers.sync_tasks.run_sync_config", mock_run),
+        patch("dev_health_ops.workers.sync_tasks.dispatch_batch_sync", mock_batch),
+        patch("dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch),
+    ):
+        resp = await ac.post(f"/api/v1/admin/sync-configs/{target_id}/trigger")
+
+    assert resp.status_code == 409
+    assert "paused" in resp.json()["detail"]
+    mock_run.apply_async.assert_not_called()
+    mock_batch.apply_async.assert_not_called()
+    mock_dispatch.apply_async.assert_not_called()
+
+    async with session_maker() as session:
+        job_runs = (await session.execute(select(JobRun))).scalars().all()
+        sync_runs = (await session.execute(select(SyncRun))).scalars().all()
+    assert job_runs == []
+    assert sync_runs == []
+
+
 def test_sync_tasks_accept_pending_run_id_kwarg():
     """The dispatched Celery tasks must accept every kwarg the trigger endpoint
     passes. Celery validates kwargs against the task signature at dispatch time,
@@ -1099,9 +1353,10 @@ def _gitlab_project(project_id: int, name: str, full_name: str):
 
 
 @pytest.mark.asyncio
-async def test_batch_create_github_children_keep_owner_repo_options(client):
-    """Regression: GitHub child options remain owner/repo-shaped, unchanged."""
-    ac, _ = client
+async def test_batch_create_github_creates_planner_config_without_children(
+    client, session_maker
+):
+    ac, seeded_state = client
 
     resp = await ac.post(
         "/api/v1/admin/sync-configs/batch",
@@ -1117,18 +1372,56 @@ async def test_batch_create_github_children_keep_owner_repo_options(client):
 
     assert resp.status_code == 201, resp.text
     data = resp.json()
-    assert data["total_created"] == 2
-    assert [c["name"] for c in data["children"]] == ["acme/alpha", "acme/beta"]
-    for child, repo in zip(data["children"], ["alpha", "beta"]):
-        assert child["sync_options"] == {
-            "owner": "acme",
-            "schedule_cron": "0 3 * * *",
-            "repo": repo,
-        }
+    assert data["total_created"] == 0
+    assert data["children"] == []
+    assert data["parent"]["is_active"] is True
+
+    async with session_maker() as session:
+        config_id = uuid.UUID(data["parent"]["id"])
+        children = (
+            (
+                await session.execute(
+                    select(SyncConfiguration).where(
+                        SyncConfiguration.parent_id == config_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        integrations = (
+            (
+                await session.execute(
+                    select(Integration).where(
+                        Integration.org_id == seeded_state["org_id"]
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        sources = (await session.execute(select(IntegrationSource))).scalars().all()
+        datasets = (await session.execute(select(IntegrationDataset))).scalars().all()
+        jobs = (await session.execute(select(ScheduledJob))).scalars().all()
+
+    assert children == []
+    assert len(integrations) == 1
+    assert str(data["parent"]["id"])
+    assert len(sources) == 2
+    assert {source.external_id for source in sources} == {"acme/alpha", "acme/beta"}
+    assert {dataset.dataset_key for dataset in datasets} >= {
+        "repo-metadata",
+        "commits",
+        "prs",
+    }
+    assert len(jobs) == 1
+    assert jobs[0].status == JobStatus.ACTIVE.value
 
 
 @pytest.mark.asyncio
-async def test_batch_create_gitlab_children_get_project_id_and_group(client):
+async def test_batch_create_gitlab_children_get_project_id_and_group(
+    client, session_maker
+):
     """GitLab children carry int project_id + group (+ gitlab_url), not repo."""
     ac, _ = client
     credential_id = str(uuid.uuid4())
@@ -1173,28 +1466,21 @@ async def test_batch_create_gitlab_children_get_project_id_and_group(client):
 
     assert resp.status_code == 201, resp.text
     data = resp.json()
-    assert data["total_created"] == 2
+    assert data["total_created"] == 0
+    assert data["children"] == []
 
     mock_connector_cls.assert_called_once_with(
         url="https://gitlab.example.com", private_token="glpat-test"
     )
     mock_connector.list_repositories.assert_called_once_with(org_name="acme-group")
 
-    # Child names use path_with_namespace.
-    assert [c["name"] for c in data["children"]] == [
+    async with session_maker() as session:
+        sources = (await session.execute(select(IntegrationSource))).scalars().all()
+    assert {source.external_id for source in sources} == {"101", "202"}
+    assert {source.full_name for source in sources} == {
         "acme-group/alpha",
         "acme-group/sub/beta",
-    ]
-    for child, project_id in zip(data["children"], [101, 202]):
-        assert child["sync_options"] == {
-            "gitlab_url": "https://gitlab.example.com",
-            "schedule_cron": "0 3 * * *",
-            "project_id": project_id,
-            "group": "acme-group",
-        }
-        assert isinstance(child["sync_options"]["project_id"], int)
-        assert "repo" not in child["sync_options"]
-        assert "owner" not in child["sync_options"]
+    }
 
 
 @pytest.mark.asyncio
@@ -1215,16 +1501,8 @@ async def test_batch_create_gitlab_numeric_ids_skip_resolution(client):
 
     assert resp.status_code == 201, resp.text
     data = resp.json()
-    assert data["total_created"] == 2
-    assert [c["name"] for c in data["children"]] == [
-        "acme-group/123",
-        "acme-group/456",
-    ]
-    for child, project_id in zip(data["children"], [123, 456]):
-        assert child["sync_options"] == {
-            "group": "acme-group",
-            "project_id": project_id,
-        }
+    assert data["total_created"] == 0
+    assert data["children"] == []
 
 
 @pytest.mark.asyncio
@@ -1287,7 +1565,9 @@ async def test_batch_create_gitlab_names_without_credential_returns_400(client):
 
 
 @pytest.mark.asyncio
-async def test_batch_create_gitlab_credential_url_persisted_into_children(client):
+async def test_batch_create_gitlab_credential_url_persisted_into_children(
+    client, session_maker
+):
     """Self-hosted URL from the credential lands in parent + child options.
 
     Regression: name resolution used the credential's self-hosted URL but
@@ -1345,17 +1625,16 @@ async def test_batch_create_gitlab_credential_url_persisted_into_children(client
         data["parent"]["sync_options"]["gitlab_url"]
         == "https://gitlab.internal.example.com"
     )
-    child = data["children"][0]
-    assert child["sync_options"] == {
-        "gitlab_url": "https://gitlab.internal.example.com",
-        "project_id": 101,
-        "group": "acme-group",
-    }
+    assert data["children"] == []
+    async with session_maker() as session:
+        source = (await session.execute(select(IntegrationSource))).scalar_one()
+    assert source.external_id == "101"
+    assert source.full_name == "acme-group/alpha"
 
 
 @pytest.mark.asyncio
 async def test_batch_create_gitlab_numeric_entry_matching_name_resolves_as_name(
-    client,
+    client, session_maker
 ):
     """A numeric entry that matches a listed project NAME is a name, not an id."""
     ac, _ = client
@@ -1398,14 +1677,17 @@ async def test_batch_create_gitlab_numeric_entry_matching_name_resolves_as_name(
     data = resp.json()
     mock_connector.list_repositories.assert_called_once_with(org_name="acme-group")
 
-    child = data["children"][0]
-    # Resolved via the listing as the project named "007" — NOT project id 7.
-    assert child["name"] == "acme-group/007"
-    assert child["sync_options"]["project_id"] == 7007
+    assert data["children"] == []
+    async with session_maker() as session:
+        source = (await session.execute(select(IntegrationSource))).scalar_one()
+    assert source.full_name == "acme-group/007"
+    assert source.external_id == "7007"
 
 
 @pytest.mark.asyncio
-async def test_batch_create_gitlab_numeric_entry_not_in_listing_used_as_id(client):
+async def test_batch_create_gitlab_numeric_entry_not_in_listing_used_as_id(
+    client, session_maker
+):
     """A numeric entry matching no listed name keeps project-id semantics."""
     ac, _ = client
     credential_id = str(uuid.uuid4())
@@ -1447,7 +1729,8 @@ async def test_batch_create_gitlab_numeric_entry_not_in_listing_used_as_id(clien
     # The listing WAS consulted (credential + group present)...
     mock_connector.list_repositories.assert_called_once_with(org_name="acme-group")
 
-    child = data["children"][0]
-    # ...but "12345" matched no listed name, so it stays an id.
-    assert child["sync_options"]["project_id"] == 12345
-    assert child["name"] == "acme-group/12345"
+    assert data["children"] == []
+    async with session_maker() as session:
+        source = (await session.execute(select(IntegrationSource))).scalar_one()
+    assert source.external_id == "12345"
+    assert source.full_name == "acme-group/12345"

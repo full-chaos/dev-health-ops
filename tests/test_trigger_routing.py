@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import create_engine
@@ -12,11 +13,15 @@ from dev_health_ops.models import (
     SettingCategory,
     SyncConfiguration,
 )
+from dev_health_ops.models.integrations import Integration, IntegrationSource
+from dev_health_ops.sync.config_migration import migrate_configs_to_integrations
 from dev_health_ops.sync.trigger_routing import (
     MIGRATED_TRIGGER_ROUTING_SETTING_KEY,
     is_migrated_trigger_routing_enabled,
     mark_sync_run_failed,
     plan_request_for_config,
+    planner_request_for_config_if_routed,
+    should_route_config_to_planner,
 )
 
 ORG_ID = "routing-org"
@@ -38,15 +43,19 @@ def _config(
     sync_targets: list[str] | None = None,
     migrated_integration_id: uuid.UUID | None = None,
     migrated_source_id: uuid.UUID | None = None,
+    parent_id: uuid.UUID | None = None,
+    planner_managed: bool = False,
 ) -> SyncConfiguration:
     config = SyncConfiguration(
         org_id=ORG_ID,
-        name=f"{provider}-config",
+        name=f"{provider}-config-{uuid.uuid4()}",
         provider=provider,
         sync_targets=sync_targets if sync_targets is not None else ["git"],
         sync_options={},
         migrated_integration_id=migrated_integration_id,
         migrated_source_id=migrated_source_id,
+        parent_id=parent_id,
+        planner_managed=planner_managed,
     )
     session.add(config)
     session.flush()
@@ -63,6 +72,31 @@ def _set_flag(session: Session, value: str) -> None:
         )
     )
     session.flush()
+
+
+def _source(session: Session, integration_id: uuid.UUID) -> IntegrationSource:
+    session.add(
+        Integration(
+            id=integration_id,
+            org_id=ORG_ID,
+            provider="github",
+            name="github-integration",
+            config={},
+        )
+    )
+    source = IntegrationSource(
+        org_id=ORG_ID,
+        integration_id=integration_id,
+        provider="github",
+        source_type="repository",
+        external_id="full-chaos/dev-health",
+        name="dev-health",
+        full_name="full-chaos/dev-health",
+        is_enabled=True,
+    )
+    session.add(source)
+    session.flush()
+    return source
 
 
 # --- flag reader -----------------------------------------------------------
@@ -163,6 +197,107 @@ def test_mode_override(db_session):
     assert req.mode == "backfill"
 
 
+def test_planner_managed_parent_routes_without_flag(db_session):
+    integration_id = uuid.uuid4()
+    config = _config(
+        db_session, migrated_integration_id=integration_id, planner_managed=True
+    )
+    _source(db_session, integration_id)
+
+    req = planner_request_for_config_if_routed(
+        db_session, config, triggered_by="manual"
+    )
+
+    assert req is not None
+    assert req.integration_id == str(integration_id)
+
+
+def test_migrated_single_with_source_needs_flag_without_planner_marker(db_session):
+    integration_id = uuid.uuid4()
+    config = _config(db_session, migrated_integration_id=integration_id)
+    _source(db_session, integration_id)
+
+    assert (
+        planner_request_for_config_if_routed(db_session, config, triggered_by="manual")
+        is None
+    )
+    _set_flag(db_session, "true")
+    assert planner_request_for_config_if_routed(
+        db_session, config, triggered_by="manual"
+    )
+
+
+def test_migrated_parent_with_children_needs_flag(db_session):
+    integration_id = uuid.uuid4()
+    parent = _config(db_session, migrated_integration_id=integration_id)
+    _config(
+        db_session,
+        migrated_integration_id=integration_id,
+        migrated_source_id=uuid.uuid4(),
+        parent_id=parent.id,
+    )
+
+    assert (
+        planner_request_for_config_if_routed(db_session, parent, triggered_by="manual")
+        is None
+    )
+    _set_flag(db_session, "true")
+    assert planner_request_for_config_if_routed(
+        db_session, parent, triggered_by="manual"
+    )
+
+
+def test_migrated_parent_with_sources_stays_legacy_for_all_triggers(db_session):
+    _set_flag(db_session, "false")
+
+    parent = SyncConfiguration(
+        org_id=ORG_ID,
+        name="legacy parent",
+        provider="github",
+        sync_targets=["git"],
+        sync_options={"owner": "full-chaos"},
+        is_active=True,
+    )
+    db_session.add(parent)
+    db_session.flush()
+    child = SyncConfiguration(
+        org_id=ORG_ID,
+        name="full-chaos/dev-health",
+        provider="github",
+        sync_targets=["git"],
+        sync_options={"owner": "full-chaos", "repo": "dev-health"},
+        parent_id=parent.id,
+        is_active=True,
+    )
+    db_session.add(child)
+    db_session.flush()
+
+    migrate_configs_to_integrations(db_session)
+    db_session.flush()
+
+    assert parent.planner_managed is False
+    assert child.planner_managed is False
+    assert parent.migrated_integration_id is not None
+    assert child.migrated_source_id is not None
+    assert should_route_config_to_planner(db_session, parent) is False
+    assert (
+        planner_request_for_config_if_routed(db_session, parent, triggered_by="manual")
+        is None
+    )
+    assert (
+        planner_request_for_config_if_routed(
+            db_session, parent, triggered_by="schedule"
+        )
+        is None
+    )
+    assert (
+        planner_request_for_config_if_routed(
+            db_session, parent, triggered_by="backfill", mode="backfill"
+        )
+        is None
+    )
+
+
 def test_operational_error_rolls_back_and_disables(monkeypatch, db_session):
     """A failed flag read (e.g. missing settings table on PG) must roll back
     the aborted transaction and return False so the caller's legacy path runs
@@ -241,6 +376,67 @@ def test_mark_sync_run_failed_marks_planned_run_and_units(db_session):
     assert run.completed_at is not None
     # The still-PLANNED unit is failed so a late dispatcher claims nothing.
     assert unit.status == SyncRunUnitStatus.FAILED.value
+
+
+def test_mark_sync_run_failed_stamps_canonical_config(db_session):
+    from dev_health_ops.models import SyncRunStatus
+
+    run = _make_sync_run(db_session, SyncRunStatus.PLANNED.value)
+    config = SyncConfiguration(
+        org_id=ORG_ID,
+        name="canonical",
+        provider="github",
+        sync_targets=["git"],
+        migrated_integration_id=run.integration_id,
+    )
+    db_session.add(config)
+    db_session.commit()
+
+    mark_sync_run_failed(db_session, str(run.id), "dispatch enqueue failed")
+
+    db_session.refresh(config)
+    assert config.last_sync_at is not None
+    assert config.last_sync_success is False
+    assert config.last_sync_error == "dispatch enqueue failed"
+    assert config.last_sync_stats == {
+        "error": "dispatch enqueue failed",
+        "phase": "dispatch_enqueue",
+    }
+
+
+def test_mark_sync_run_failed_stamps_oldest_duplicate_parent_config(db_session):
+    from dev_health_ops.models import SyncRunStatus
+
+    run = _make_sync_run(db_session, SyncRunStatus.PLANNED.value)
+    older = SyncConfiguration(
+        org_id=ORG_ID,
+        name="canonical-older",
+        provider="github",
+        sync_targets=["git"],
+        migrated_integration_id=run.integration_id,
+    )
+    newer = SyncConfiguration(
+        org_id=ORG_ID,
+        name="canonical-newer",
+        provider="github",
+        sync_targets=["git"],
+        migrated_integration_id=run.integration_id,
+    )
+    older.created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    newer.created_at = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    db_session.add_all([newer, older])
+    db_session.commit()
+
+    mark_sync_run_failed(db_session, str(run.id), "dispatch enqueue failed")
+
+    db_session.refresh(older)
+    db_session.refresh(newer)
+    assert older.last_sync_at is not None
+    assert older.last_sync_success is False
+    assert older.last_sync_error == "dispatch enqueue failed"
+    assert newer.last_sync_at is None
+    assert newer.last_sync_success is None
+    assert newer.last_sync_error is None
 
 
 def test_mark_sync_run_failed_noop_when_run_already_advanced(db_session):

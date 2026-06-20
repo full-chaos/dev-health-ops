@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
@@ -15,15 +14,6 @@ from dev_health_ops.workers.task_utils import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _sync_fanout_backfill_enabled() -> bool:
-    return os.getenv("SYNC_FANOUT_BACKFILL", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
 
 
 def _mark_backfill_job_running(backfill_job_id: str, started_at: datetime) -> None:
@@ -157,6 +147,30 @@ def _mark_sync_job_run_failed(
         logger.debug("Failed to mark sync job run failed: %s", pending_run_id)
 
 
+def _mark_sync_job_run_cancelled(
+    pending_run_id: str | None, error: str, completed_at: datetime
+) -> None:
+    if pending_run_id is None:
+        return
+    try:
+        from dev_health_ops.db import get_postgres_session_sync
+        from dev_health_ops.models.settings import JobRun, JobRunStatus
+
+        with get_postgres_session_sync() as session:
+            run = (
+                session.query(JobRun)
+                .filter(JobRun.id == uuid.UUID(pending_run_id))
+                .one_or_none()
+            )
+            if run:
+                setattr(run, "status", JobRunStatus.CANCELLED.value)
+                setattr(run, "error", error)
+                setattr(run, "completed_at", completed_at)
+                session.flush()
+    except Exception:
+        logger.debug("Failed to mark sync job run cancelled: %s", pending_run_id)
+
+
 @celery_app.task(
     bind=True,
     max_retries=3,
@@ -178,10 +192,7 @@ def run_backfill(
     )
     from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.models.settings import IntegrationCredential, SyncConfiguration
-    from dev_health_ops.sync.trigger_routing import (
-        is_migrated_trigger_routing_enabled,
-        plan_request_for_config,
-    )
+    from dev_health_ops.sync.trigger_routing import planner_request_for_config_if_routed
 
     sync_config_uuid = uuid.UUID(sync_config_id)
     started_at = datetime.now(timezone.utc)
@@ -204,6 +215,19 @@ def run_backfill(
             )
             if config is None:
                 raise ValueError(f"Sync configuration not found: {sync_config_id}")
+            if not bool(config.is_active):
+                completed_at = datetime.now(timezone.utc)
+                if backfill_job_id:
+                    _update_backfill_job_counts(
+                        backfill_job_id,
+                        status="cancelled",
+                        completed_at=completed_at,
+                        error_message="Sync configuration is paused",
+                    )
+                _mark_sync_job_run_cancelled(
+                    pending_run_id, "Sync configuration is paused", completed_at
+                )
+                return {"status": "skipped", "reason": "sync_config_inactive"}
 
             provider = str(config.provider or "").strip().lower()
             sync_targets = _normalize_sync_targets(
@@ -227,14 +251,10 @@ def run_backfill(
                     )
                 credentials = _credential_mapping(credential)
 
-            plan_req = plan_request_for_config(
-                config, triggered_by="backfill", mode="backfill"
+            plan_req = planner_request_for_config_if_routed(
+                session, config, triggered_by="backfill", mode="backfill"
             )
-            fanout_requested = (
-                _sync_fanout_backfill_enabled()
-                or is_migrated_trigger_routing_enabled(session, org_id)
-            )
-            if plan_req is not None and fanout_requested:
+            if plan_req is not None:
                 use_fanout = True
                 planner_integration_id = plan_req.integration_id
                 planner_source_ids = plan_req.source_ids

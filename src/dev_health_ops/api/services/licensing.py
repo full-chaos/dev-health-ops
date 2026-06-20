@@ -431,13 +431,12 @@ class TierLimitService:
             rows = self.session.query(TierLimit).filter(TierLimit.tier == tier).all()
             return {str(row.limit_key): row.typed_value for row in rows}
         except Exception:
-            # Table may not exist yet (pre-migration). Roll back the aborted
-            # transaction so the caller's session remains usable, then fall
-            # through to hardcoded defaults.
-            try:
-                self.session.rollback()
-            except Exception:
-                pass
+            # Table may not exist yet (pre-migration) — fall through to
+            # hardcoded defaults. Must NOT call session.rollback() here: this
+            # service is invoked from async callers via run_sync, and a sync
+            # rollback in that path breaks the greenlet context
+            # (sqlalchemy MissingGreenlet). Pre-migration planner transaction
+            # recovery is handled in the planner's own sync context.
             return {}
 
     def _resolve_tier_limits(

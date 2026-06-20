@@ -515,11 +515,14 @@ def test_tier_cap_unlimited_tier_does_not_cap_depth(db_session, monkeypatch):
     assert cap is None, "Unlimited tier must return None (no cap), not a default value"
 
 
-def test_tier_limit_service_rolls_back_session_on_missing_table():
-    """TierLimitService._get_db_tier_limits rolls back the session on OperationalError.
+def test_tier_limit_service_returns_empty_on_missing_table():
+    """TierLimitService._get_db_tier_limits returns {} when tier_limits is absent.
 
-    When tier_limits is absent, the failed query aborts the transaction.
-    _get_db_tier_limits must roll back so the caller's session stays usable.
+    When the table is missing the query raises; the service swallows it and
+    falls through to hardcoded defaults. It must NOT call session.rollback()
+    here — the service is invoked from async callers via run_sync and a sync
+    rollback there breaks the greenlet context (MissingGreenlet). The caller's
+    session must remain usable.
     """
     from dev_health_ops.api.services.licensing import TierLimitService
     from dev_health_ops.licensing.types import LicenseTier
@@ -537,7 +540,7 @@ def test_tier_limit_service_rolls_back_session_on_missing_table():
         assert result == {}, (
             "Missing tier_limits must return empty dict (use hardcoded defaults)"
         )
-        # Session must be usable after the rollback
+        # Session must remain usable (no rollback needed on this backend)
         session.execute(__import__("sqlalchemy").text("SELECT 1"))
 
     engine.dispose()

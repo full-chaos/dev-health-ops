@@ -605,36 +605,32 @@ class TestSetWatermarkIsMonotonic:
 
 class TestLegacyTargetAliasWarmsPlanner:
     def test_legacy_target_alias_warms_planner_dataset(self, db_session):
-        """Write via legacy target='git'; planner read for the resolved dataset_key finds the row (CHAOS-2571).
+        """Write via legacy target='git'; planner reads for ALL sibling datasets find the row.
 
-        The alias map resolves 'git' to the primary dataset_key in DatasetKey enum order.
-        Writing via the legacy target path and reading via the resolved canonical key
-        must return the same watermark, proving the alias warms the planner.
+        Under Option B, set_legacy_repo_watermark writes a raw row (target='git',
+        dataset_key='git').  get_watermark uses the reverse-legacy fallback to warm
+        planner reads for 'commits', 'commit-stats', and 'files' from that single row.
         """
-        from dev_health_ops.sync.watermarks import (
-            dataset_key_for_legacy_target,
-            set_legacy_repo_watermark,
-        )
+        from dev_health_ops.sync.watermarks import set_legacy_repo_watermark
 
         ts = datetime(2025, 7, 1, 8, 0, 0, tzinfo=timezone.utc)
 
-        # Write via legacy target path.
+        # Write via legacy target path — stores raw row (target='git', dataset_key='git').
         set_legacy_repo_watermark(db_session, ORG_ID, REPO_ID, "git", ts)
 
-        # The alias must resolve 'git' to a dataset_key.
-        resolved_key = dataset_key_for_legacy_target("git")
-        assert resolved_key is not None, (
-            "'git' must resolve to a dataset_key via the registry alias"
-        )
+        # Planner reads for ALL incremental siblings must find the row via reverse fallback.
+        for dataset_key in ("commits", "commit-stats", "files"):
+            stored = get_watermark(db_session, ORG_ID, REPO_ID, dataset_key)
+            assert stored is not None, (
+                f"Planner read for dataset_key={dataset_key!r} must find the raw legacy row"
+            )
+            assert stored.replace(tzinfo=timezone.utc) == ts
 
-        # Planner read via canonical dataset_key must find the row.
-        # set_legacy_repo_watermark delegates to set_watermark(dataset_key=resolved_key),
-        # so the canonical row is stored under resolved_key.
-        stored = get_watermark(db_session, ORG_ID, REPO_ID, resolved_key)
-        assert stored is not None, (
-            f"Planner read for dataset_key={resolved_key!r} must find the row written via legacy target='git'"
+        # repo-metadata (WatermarkBehavior.NONE) must NOT be warmed by the raw git row.
+        stored_meta = get_watermark(db_session, ORG_ID, REPO_ID, "repo-metadata")
+        assert stored_meta is None, (
+            "repo-metadata must not be warmed by the raw legacy git row (WatermarkBehavior.NONE)"
         )
-        assert stored.replace(tzinfo=timezone.utc) == ts
 
     def test_legacy_read_after_canonical_write(self, db_session):
         """Write via canonical dataset_key; legacy read via target must find the row.
@@ -795,85 +791,93 @@ class TestIncrementalReadAppliesOverlap:
 # ---------------------------------------------------------------------------
 
 
-class TestFinding1LegacyGitAliasWarmsIncrementalDatasets:
-    """FINDING 1 [HIGH]: legacy target='git' must resolve to an INCREMENTAL dataset.
+class TestFinding1ReverseLegacyFallbackWarmsAllSiblings:
+    """FINDING 1 (Option B): raw legacy row warms ALL sibling datasets via reverse fallback.
 
-    Before the fix, _build_legacy_target_to_dataset_key() picked the first key in
-    DatasetKey enum order, which is 'repo-metadata' (WatermarkBehavior.NONE).  That
-    meant planner reads for 'commits'/'commit-stats'/'files' never found the row and
-    migrated syncs cold-started.  After the fix the primary is the first INCREMENTAL
-    key, which is 'commits'.
+    Under Option B, set_legacy_repo_watermark writes a raw row
+    (target='git', dataset_key='git').  get_watermark uses the reverse-legacy
+    fallback to warm planner reads for 'commits', 'commit-stats', AND 'files'
+    from that single row.  repo-metadata (WatermarkBehavior.NONE) is excluded.
     """
 
-    def test_git_alias_resolves_to_incremental_dataset(self):
-        """dataset_key_for_legacy_target('git') must NOT return 'repo-metadata'.
-
-        'repo-metadata' has WatermarkBehavior.NONE so the planner never writes a
-        watermark row for it.  The alias must resolve to an INCREMENTAL dataset so
-        that migrated legacy syncs warm the planner correctly.
-        """
-        from dev_health_ops.sync.datasets import WatermarkBehavior, _watermark_behavior
-        from dev_health_ops.sync.watermarks import dataset_key_for_legacy_target
-
-        resolved = dataset_key_for_legacy_target("git")
-        assert resolved is not None, "'git' must resolve to a dataset_key"
-        assert resolved != "repo-metadata", (
-            f"'git' resolved to 'repo-metadata' (WatermarkBehavior.NONE) — migrated syncs will cold-start; got {resolved!r}"
-        )
-        assert _watermark_behavior(resolved) == WatermarkBehavior.INCREMENTAL, (
-            f"'git' resolved to {resolved!r} which has WatermarkBehavior.NONE — must be INCREMENTAL"
-        )
-
-    def test_git_alias_warms_commits_dataset(self, db_session):
-        """Write via legacy target='git'; planner read for 'commits' finds the row.
-
-        This is the core regression: after the fix, set_legacy_repo_watermark('git')
-        stores the row under dataset_key='commits' (the first INCREMENTAL key for
-        'git'), so get_watermark(..., 'commits') returns the stored timestamp.
-        """
-        from dev_health_ops.sync.watermarks import (
-            dataset_key_for_legacy_target,
-            set_legacy_repo_watermark,
-        )
+    def test_raw_git_row_warms_commits(self, db_session):
+        """get_watermark(..., 'commits') finds the raw legacy git row."""
+        from dev_health_ops.sync.watermarks import set_legacy_repo_watermark
 
         ts = datetime(2025, 10, 1, 8, 0, 0, tzinfo=timezone.utc)
         set_legacy_repo_watermark(db_session, ORG_ID, REPO_ID, "git", ts)
 
-        resolved = dataset_key_for_legacy_target("git")
-        assert resolved is not None
-
-        # Planner read for the resolved (INCREMENTAL) key must find the row.
-        stored = get_watermark(db_session, ORG_ID, REPO_ID, resolved)
+        stored = get_watermark(db_session, ORG_ID, REPO_ID, "commits")
         assert stored is not None, (
-            f"Planner read for dataset_key={resolved!r} must find the row written via legacy target='git'"
+            "get_watermark(..., 'commits') must find the raw legacy git row via reverse fallback"
         )
         assert stored.replace(tzinfo=timezone.utc) == ts
 
-    def test_git_alias_warms_commits_not_repo_metadata(self, db_session):
-        """Write via legacy target='git'; planner read for 'repo-metadata' must NOT find the row.
+    def test_raw_git_row_warms_commit_stats(self, db_session):
+        """get_watermark(..., 'commit-stats') finds the raw legacy git row."""
+        from dev_health_ops.sync.watermarks import set_legacy_repo_watermark
 
-        'repo-metadata' has WatermarkBehavior.NONE — the planner never reads it for
-        incremental windows.  The row must be stored under an INCREMENTAL key.
+        ts = datetime(2025, 10, 3, 8, 0, 0, tzinfo=timezone.utc)
+        set_legacy_repo_watermark(db_session, ORG_ID, REPO_ID, "git", ts)
+
+        stored = get_watermark(db_session, ORG_ID, REPO_ID, "commit-stats")
+        assert stored is not None, (
+            "get_watermark(..., 'commit-stats') must find the raw legacy git row via reverse fallback"
+        )
+        assert stored.replace(tzinfo=timezone.utc) == ts
+
+    def test_raw_git_row_warms_files(self, db_session):
+        """get_watermark(..., 'files') finds the raw legacy git row."""
+        from dev_health_ops.sync.watermarks import set_legacy_repo_watermark
+
+        ts = datetime(2025, 10, 4, 8, 0, 0, tzinfo=timezone.utc)
+        set_legacy_repo_watermark(db_session, ORG_ID, REPO_ID, "git", ts)
+
+        stored = get_watermark(db_session, ORG_ID, REPO_ID, "files")
+        assert stored is not None, (
+            "get_watermark(..., 'files') must find the raw legacy git row via reverse fallback"
+        )
+        assert stored.replace(tzinfo=timezone.utc) == ts
+
+    def test_repo_metadata_not_warmed_by_raw_git_row(self, db_session):
+        """repo-metadata (WatermarkBehavior.NONE) must NOT be warmed by the raw git row."""
+        from dev_health_ops.sync.watermarks import set_legacy_repo_watermark
+
+        ts = datetime(2025, 10, 5, 8, 0, 0, tzinfo=timezone.utc)
+        set_legacy_repo_watermark(db_session, ORG_ID, REPO_ID, "git", ts)
+
+        stored = get_watermark(db_session, ORG_ID, REPO_ID, "repo-metadata")
+        assert stored is None, (
+            "repo-metadata must not be warmed by the raw legacy git row (WatermarkBehavior.NONE excluded)"
+        )
+
+    def test_canonical_row_takes_precedence_over_raw_legacy(self, db_session):
+        """Exact canonical row wins over the reverse-legacy fallback.
+
+        Seed a raw legacy git row (t_legacy) and a canonical commits row (t_canonical).
+        get_watermark(..., 'commits') must return t_canonical (exact match wins).
+        get_watermark(..., 'commit-stats') and 'files' still fall back to t_legacy.
         """
         from dev_health_ops.sync.watermarks import set_legacy_repo_watermark
 
-        ts = datetime(2025, 10, 2, 9, 0, 0, tzinfo=timezone.utc)
-        set_legacy_repo_watermark(db_session, ORG_ID, REPO_ID, "git", ts)
+        t_legacy = datetime(2025, 10, 6, 8, 0, 0, tzinfo=timezone.utc)
+        t_canonical = datetime(2025, 10, 6, 12, 0, 0, tzinfo=timezone.utc)
 
-        # 'repo-metadata' is WatermarkBehavior.NONE — the planner never stores
-        # watermarks under it, so a legacy write must NOT land there.
-        # We only assert the alias resolves to a non-NONE key; we do not need
-        # to inspect the repo-metadata row itself.
-        get_watermark(
-            db_session, ORG_ID, REPO_ID, "repo-metadata"
-        )  # side-effect check only
-        # The row may or may not exist under repo-metadata depending on the legacy
-        # target column, but the canonical dataset_key must NOT be repo-metadata.
-        from dev_health_ops.sync.watermarks import dataset_key_for_legacy_target
+        set_legacy_repo_watermark(db_session, ORG_ID, REPO_ID, "git", t_legacy)
+        set_watermark(db_session, ORG_ID, REPO_ID, "commits", t_canonical)
 
-        resolved = dataset_key_for_legacy_target("git")
-        assert resolved != "repo-metadata", (
-            "Legacy 'git' alias must not resolve to 'repo-metadata' (WatermarkBehavior.NONE)"
+        # Exact canonical row wins for 'commits'.
+        stored_commits = get_watermark(db_session, ORG_ID, REPO_ID, "commits")
+        assert stored_commits is not None
+        assert stored_commits.replace(tzinfo=timezone.utc) == t_canonical, (
+            f"Canonical row must win over reverse fallback: got {stored_commits}, expected {t_canonical}"
+        )
+
+        # Siblings without canonical rows still fall back to the raw legacy row.
+        stored_stats = get_watermark(db_session, ORG_ID, REPO_ID, "commit-stats")
+        assert stored_stats is not None
+        assert stored_stats.replace(tzinfo=timezone.utc) == t_legacy, (
+            f"commit-stats must still fall back to raw legacy row: got {stored_stats}, expected {t_legacy}"
         )
 
 
@@ -1005,65 +1009,42 @@ class TestFinding3LegacyIncrementalAppliesOverlap:
 # ---------------------------------------------------------------------------
 
 
-class TestLegacyWriteReconcilesToCanonicalKey:
-    """FINDING 1 [HIGH]: set_legacy_repo_watermark must reconcile dataset_key.
+class TestLegacyWriteRawRowPreserved:
+    """Option B: set_legacy_repo_watermark writes a raw row (target=target, dataset_key=target).
 
-    A pre-existing legacy row with dataset_key='git' (the raw target string)
-    must have its dataset_key updated to the canonical INCREMENTAL key (e.g.
-    'commits') when set_legacy_repo_watermark is called.  Without this,
-    get_watermark(..., 'commits') cannot find the row and migrated incremental
-    syncs cold-start.
+    The raw row is the D4 bridge for ALL sibling datasets.  It must be preserved
+    so that get_watermark reverse-fallback can warm commits, commit-stats, and
+    files from a single row.  No collapse to canonical key; no collision-delete.
     """
 
-    def test_preexisting_legacy_row_reconciled_to_canonical_key(self, db_session):
-        """Seed a pre-existing SyncWatermark(target='git', dataset_key='git'),
-        call set_legacy_repo_watermark(..., 'git'), then assert a planner read
-        get_watermark(..., 'commits') finds the reconciled row.
-        """
-        from dev_health_ops.sync.watermarks import (
-            dataset_key_for_legacy_target,
-            set_legacy_repo_watermark,
+    def test_new_row_has_raw_dataset_key(self, db_session):
+        (
+            """set_legacy_repo_watermark creates a row with dataset_key == target (raw).""",
+        )
+        from dev_health_ops.sync.watermarks import set_legacy_repo_watermark
+
+        ts = datetime(2025, 1, 1, 8, 0, 0, tzinfo=timezone.utc)
+        set_legacy_repo_watermark(db_session, ORG_ID, REPO_ID, "git", ts)
+
+        row = (
+            db_session.query(SyncWatermark)
+            .filter(
+                SyncWatermark.org_id == ORG_ID,
+                SyncWatermark.repo_id == REPO_ID,
+                SyncWatermark.target == "git",
+            )
+            .one_or_none()
+        )
+        assert row is not None, "Raw legacy row must be created"
+        assert row.dataset_key == "git", (
+            f"Raw row must have dataset_key='git', got {row.dataset_key!r}"
         )
 
-        # Seed the pre-existing legacy row exactly as the old runtime wrote it:
-        # target='git', dataset_key='git' (raw target string, not canonical).
-        old_ts = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
-        legacy_row = SyncWatermark(
-            repo_id=REPO_ID,
-            target="git",
-            org_id=ORG_ID,
-            source_id=REPO_ID,
-            dataset_key="git",  # pre-migration: raw target string
-            last_synced_at=old_ts,
-        )
-        db_session.add(legacy_row)
-        db_session.flush()
+    def test_preexisting_raw_row_updated_monotonically(self, db_session):
+        """Pre-existing raw row (target='git', dataset_key='git') is updated in-place.
 
-        # Confirm the row exists with the old dataset_key.
-        assert legacy_row.dataset_key == "git"
-
-        # Now call set_legacy_repo_watermark — this is what the runtime calls.
-        new_ts = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
-        set_legacy_repo_watermark(db_session, ORG_ID, REPO_ID, "git", new_ts)
-
-        # The alias must resolve 'git' to an INCREMENTAL canonical key.
-        canonical_key = dataset_key_for_legacy_target("git")
-        assert canonical_key is not None
-        assert canonical_key != "git", "canonical_key must not be the raw target string"
-
-        # Planner read via canonical dataset_key must now find the row.
-        stored = get_watermark(db_session, ORG_ID, REPO_ID, canonical_key)
-        assert stored is not None, (
-            f"Planner read for dataset_key={canonical_key!r} must find the row after reconciliation; "
-            f"pre-existing legacy row with dataset_key='git' was not reconciled"
-        )
-        assert stored.replace(tzinfo=timezone.utc) == new_ts
-
-    def test_preexisting_legacy_row_dataset_key_updated_in_place(self, db_session):
-        """After set_legacy_repo_watermark, the row's dataset_key column is the canonical key.
-
-        Verifies the reconciliation mutates the existing row rather than creating
-        a duplicate (which would violate the unique constraint).
+        Under Option B, set_legacy_repo_watermark finds the existing raw row and
+        updates it monotonically.  The raw row is preserved (not deleted/renamed).
         """
         from dev_health_ops.sync.watermarks import set_legacy_repo_watermark
 
@@ -1078,12 +1059,11 @@ class TestLegacyWriteReconcilesToCanonicalKey:
         )
         db_session.add(legacy_row)
         db_session.flush()
-        row_id = legacy_row.id
 
-        new_ts = datetime(2025, 7, 1, 8, 0, 0, tzinfo=timezone.utc)
+        new_ts = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
         set_legacy_repo_watermark(db_session, ORG_ID, REPO_ID, "git", new_ts)
 
-        # Must still be exactly one row (no duplicate created).
+        # Exactly one raw row must remain.
         count = (
             db_session.query(SyncWatermark)
             .filter(
@@ -1093,43 +1073,129 @@ class TestLegacyWriteReconcilesToCanonicalKey:
             )
             .count()
         )
-        assert count == 1, (
-            f"Expected 1 row, got {count} — reconciliation must not create duplicates"
-        )
+        assert count == 1, f"Expected 1 raw row, got {count}"
 
-        # The same row must now carry the canonical dataset_key.
+        # The raw row must carry the new timestamp.
         db_session.expire(legacy_row)
-        updated_row = (
-            db_session.query(SyncWatermark).filter(SyncWatermark.id == row_id).one()
+        updated = (
+            db_session.query(SyncWatermark)
+            .filter(
+                SyncWatermark.org_id == ORG_ID,
+                SyncWatermark.repo_id == REPO_ID,
+                SyncWatermark.target == "git",
+            )
+            .one()
         )
-        from dev_health_ops.sync.watermarks import dataset_key_for_legacy_target
+        assert updated.dataset_key == "git", "Raw row must keep dataset_key='git'"
+        assert updated.last_synced_at is not None
+        assert updated.last_synced_at.replace(tzinfo=timezone.utc) == new_ts
 
-        canonical_key = dataset_key_for_legacy_target("git")
-        assert updated_row.dataset_key == canonical_key, (
-            f"Row dataset_key not reconciled: got {updated_row.dataset_key!r}, expected {canonical_key!r}"
-        )
+    def test_raw_row_warms_all_siblings_via_reverse_fallback(self, db_session):
+        """Seed raw git row; get_watermark for commits, commit-stats, files all find it.
 
-    def test_new_row_created_with_canonical_key(self, db_session):
-        """When no pre-existing row exists, set_legacy_repo_watermark creates one
-        with dataset_key set to the canonical key (not the raw target string).
+        This is the core Option B regression: a single raw row (target='git',
+        dataset_key='git') warms ALL incremental siblings via the reverse-legacy
+        fallback in get_watermark.  repo-metadata is excluded (WatermarkBehavior.NONE).
         """
-        from dev_health_ops.sync.watermarks import (
-            dataset_key_for_legacy_target,
-            set_legacy_repo_watermark,
-        )
+        from dev_health_ops.sync.watermarks import set_legacy_repo_watermark
 
-        ts = datetime(2025, 8, 1, 10, 0, 0, tzinfo=timezone.utc)
+        ts = datetime(2025, 3, 1, 10, 0, 0, tzinfo=timezone.utc)
         set_legacy_repo_watermark(db_session, ORG_ID, REPO_ID, "git", ts)
 
-        canonical_key = dataset_key_for_legacy_target("git")
-        assert canonical_key is not None
+        for dataset_key in ("commits", "commit-stats", "files"):
+            stored = get_watermark(db_session, ORG_ID, REPO_ID, dataset_key)
+            assert stored is not None, (
+                f"get_watermark(..., {dataset_key!r}) must find the raw legacy git row"
+            )
+            assert stored.replace(tzinfo=timezone.utc) == ts, (
+                f"Wrong timestamp for {dataset_key!r}: got {stored}, expected {ts}"
+            )
 
-        # Planner read must find the new row.
-        stored = get_watermark(db_session, ORG_ID, REPO_ID, canonical_key)
-        assert stored is not None, (
-            f"New row must be findable via canonical dataset_key={canonical_key!r}"
+        # repo-metadata must NOT be warmed.
+        stored_meta = get_watermark(db_session, ORG_ID, REPO_ID, "repo-metadata")
+        assert stored_meta is None, (
+            "repo-metadata must not be warmed by the raw legacy git row"
         )
-        assert stored.replace(tzinfo=timezone.utc) == ts
+
+    def test_both_rows_coexist_no_integrity_error(self, db_session):
+        """Raw legacy row and canonical row coexist safely under Option B.
+
+        Under Option B, set_legacy_repo_watermark only touches the raw legacy row
+        (target='git', dataset_key='git').  A coexisting canonical row
+        (target='commits', dataset_key='commits') is left untouched.  No
+        IntegrityError, no collision-delete.
+        """
+        from dev_health_ops.sync.watermarks import set_legacy_repo_watermark
+
+        t_legacy = datetime(2025, 4, 1, 8, 0, 0, tzinfo=timezone.utc)
+        t_canonical = datetime(2025, 4, 1, 10, 0, 0, tzinfo=timezone.utc)
+        t_new = datetime(2025, 4, 1, 9, 0, 0, tzinfo=timezone.utc)
+
+        # Seed the raw legacy row.
+        legacy_row = SyncWatermark(
+            repo_id=REPO_ID,
+            target="git",
+            org_id=ORG_ID,
+            source_id=REPO_ID,
+            dataset_key="git",
+            last_synced_at=t_legacy,
+        )
+        db_session.add(legacy_row)
+        db_session.flush()
+
+        # Seed the canonical commits row (planner-written).
+        canonical_row = SyncWatermark(
+            repo_id=REPO_ID,
+            target="commits",
+            org_id=ORG_ID,
+            source_id=REPO_ID,
+            dataset_key="commits",
+            last_synced_at=t_canonical,
+        )
+        db_session.add(canonical_row)
+        db_session.flush()
+
+        # Must not raise IntegrityError.
+        set_legacy_repo_watermark(db_session, ORG_ID, REPO_ID, "git", t_new)
+
+        # Raw legacy row must still exist (NOT deleted).
+        remaining_raw = (
+            db_session.query(SyncWatermark)
+            .filter(
+                SyncWatermark.org_id == ORG_ID,
+                SyncWatermark.repo_id == REPO_ID,
+                SyncWatermark.dataset_key == "git",
+            )
+            .one_or_none()
+        )
+        assert remaining_raw is not None, (
+            "Raw legacy row (dataset_key='git') must be PRESERVED under Option B"
+        )
+
+        # Canonical row must also still exist.
+        remaining_canonical = (
+            db_session.query(SyncWatermark)
+            .filter(
+                SyncWatermark.org_id == ORG_ID,
+                SyncWatermark.repo_id == REPO_ID,
+                SyncWatermark.dataset_key == "commits",
+            )
+            .one_or_none()
+        )
+        assert remaining_canonical is not None, (
+            "Canonical commits row must be preserved"
+        )
+
+        # get_watermark('commits') returns the canonical row's timestamp (exact match wins).
+        stored_commits = get_watermark(db_session, ORG_ID, REPO_ID, "commits")
+        assert stored_commits is not None
+        assert stored_commits.replace(tzinfo=timezone.utc) == t_canonical, (
+            f"Canonical row must win for 'commits': got {stored_commits}, expected {t_canonical}"
+        )
+
+        # get_watermark('commit-stats') falls back to the raw legacy row (t_new after update).
+        stored_stats = get_watermark(db_session, ORG_ID, REPO_ID, "commit-stats")
+        assert stored_stats is not None, "commit-stats must fall back to raw legacy row"
 
 
 class TestLegacyWriteMonotonicAtDBLevel:
@@ -1183,15 +1249,14 @@ class TestLegacyWriteMonotonicAtDBLevel:
         assert stored is not None
         assert stored.replace(tzinfo=timezone.utc) == t_second
 
-    def test_legacy_preexisting_row_out_of_order_does_not_roll_back(self, db_session):
-        """Pre-existing legacy row (dataset_key='git') + out-of-order write stays monotonic.
+    def test_legacy_preexisting_raw_row_out_of_order_stays_monotonic(self, db_session):
+        """Pre-existing raw row (target='git', dataset_key='git') + out-of-order write.
 
-        Combines Finding 1 (pre-existing legacy row) with Finding 2 (monotonic):
-        seed a row with t_high, call set_legacy_repo_watermark with t_low, assert
-        the stored value is still t_high after reconciliation.
+        Under Option B, the raw row is updated in-place.  A late-arriving lower
+        timestamp must not roll back the watermark.  The raw row must be preserved
+        so that sibling reverse-fallback reads still work.
         """
         from dev_health_ops.sync.watermarks import (
-            dataset_key_for_legacy_target,
             get_legacy_repo_watermark,
             set_legacy_repo_watermark,
         )
@@ -1199,7 +1264,7 @@ class TestLegacyWriteMonotonicAtDBLevel:
         t_high = datetime(2025, 11, 1, 14, 0, 0, tzinfo=timezone.utc)
         t_low = datetime(2025, 11, 1, 9, 0, 0, tzinfo=timezone.utc)
 
-        # Seed pre-existing legacy row with t_high.
+        # Seed pre-existing raw row with t_high.
         legacy_row = SyncWatermark(
             repo_id=REPO_ID,
             target="git",
@@ -1218,211 +1283,15 @@ class TestLegacyWriteMonotonicAtDBLevel:
         stored_legacy = get_legacy_repo_watermark(db_session, ORG_ID, REPO_ID, "git")
         assert stored_legacy is not None
         assert stored_legacy.replace(tzinfo=timezone.utc) == t_high, (
-            f"Legacy monotonic violated after reconciliation: got {stored_legacy}, expected {t_high}"
+            f"Legacy monotonic violated: got {stored_legacy}, expected {t_high}"
         )
 
-        # Canonical planner read must also return t_high (row was reconciled).
-        canonical_key = dataset_key_for_legacy_target("git")
-        assert canonical_key is not None
-        stored_canonical = get_watermark(db_session, ORG_ID, REPO_ID, canonical_key)
-        assert stored_canonical is not None, (
-            f"Planner read for {canonical_key!r} must find the reconciled row"
-        )
-        assert stored_canonical.replace(tzinfo=timezone.utc) == t_high, (
-            f"Canonical read returned wrong value: got {stored_canonical}, expected {t_high}"
-        )
-
-
-class TestLegacyWriteCollisionMerge:
-    """Regression: set_legacy_repo_watermark must not raise IntegrityError when
-    a legacy row (target='git', dataset_key='git') and a canonical row
-    (target='commits', dataset_key='commits') coexist.
-
-    Before the fix, mutating the legacy row's dataset_key in-place violated the
-    uq_sync_watermark_org_source_dataset unique constraint.  The fix detects the
-    collision, merges into the canonical row (max of all timestamps), and deletes
-    the legacy row in the same transaction.
-    """
-
-    def test_no_integrity_error_when_both_rows_exist(self, db_session):
-        """Seed both rows, call set_legacy_repo_watermark, assert no IntegrityError.
-
-        Mandatory regression from codex round-3: seed
-        SyncWatermark(target='git', dataset_key='git') AND
-        SyncWatermark(target='commits', dataset_key='commits') with different
-        timestamps, then call set_legacy_repo_watermark(..., 'git').  Assert:
-        - No IntegrityError raised.
-        - Surviving canonical row's last_synced_at == max(all three timestamps).
-        - No duplicate (org_id, source_id, dataset_key='commits') rows.
-        - get_watermark(..., 'commits') returns the merged value.
-        """
-        from dev_health_ops.sync.watermarks import (
-            dataset_key_for_legacy_target,
-            set_legacy_repo_watermark,
-        )
-
-        canonical_key = dataset_key_for_legacy_target("git")
-        assert canonical_key is not None
-        assert canonical_key != "git"
-
-        t_legacy = datetime(2025, 3, 1, 8, 0, 0, tzinfo=timezone.utc)
-        t_canonical = datetime(2025, 3, 1, 10, 0, 0, tzinfo=timezone.utc)
-        t_new = datetime(2025, 3, 1, 9, 0, 0, tzinfo=timezone.utc)  # between the two
-        t_expected = t_canonical  # max of all three
-
-        # Seed the legacy row: target='git', dataset_key='git' (old runtime style).
-        legacy_row = SyncWatermark(
-            repo_id=REPO_ID,
-            target="git",
-            org_id=ORG_ID,
-            source_id=REPO_ID,
-            dataset_key="git",
-            last_synced_at=t_legacy,
-        )
-        db_session.add(legacy_row)
-        db_session.flush()
-
-        # Seed the canonical row: target='commits', dataset_key='commits' (planner style).
-        canonical_row = SyncWatermark(
-            repo_id=REPO_ID,
-            target=canonical_key,
-            org_id=ORG_ID,
-            source_id=REPO_ID,
-            dataset_key=canonical_key,
-            last_synced_at=t_canonical,
-        )
-        db_session.add(canonical_row)
-        db_session.flush()
-
-        # Both rows exist — this is the collision scenario.
-        count_before = (
-            db_session.query(SyncWatermark)
-            .filter(
-                SyncWatermark.org_id == ORG_ID,
-                SyncWatermark.repo_id == REPO_ID,
+        # Reverse-fallback reads for siblings must also return t_high.
+        for dataset_key in ("commits", "commit-stats", "files"):
+            stored = get_watermark(db_session, ORG_ID, REPO_ID, dataset_key)
+            assert stored is not None, (
+                f"Sibling {dataset_key!r} must find the raw legacy row after monotonic update"
             )
-            .count()
-        )
-        assert count_before == 2, f"Expected 2 rows before merge, got {count_before}"
-
-        # Must not raise IntegrityError.
-        set_legacy_repo_watermark(db_session, ORG_ID, REPO_ID, "git", t_new)
-
-        # After merge: exactly one row with dataset_key=canonical_key.
-        count_after = (
-            db_session.query(SyncWatermark)
-            .filter(
-                SyncWatermark.org_id == ORG_ID,
-                SyncWatermark.source_id == REPO_ID,
-                SyncWatermark.dataset_key == canonical_key,
+            assert stored.replace(tzinfo=timezone.utc) == t_high, (
+                f"Sibling {dataset_key!r} got wrong timestamp: {stored}, expected {t_high}"
             )
-            .count()
-        )
-        assert count_after == 1, (
-            f"Expected 1 canonical row after merge, got {count_after} — duplicate or missing"
-        )
-
-        # Surviving row must carry the max timestamp.
-        stored = get_watermark(db_session, ORG_ID, REPO_ID, canonical_key)
-        assert stored is not None, (
-            f"get_watermark(..., {canonical_key!r}) must find the merged row"
-        )
-        assert stored.replace(tzinfo=timezone.utc) == t_expected, (
-            f"Merged timestamp wrong: got {stored}, expected {t_expected} (max of all three)"
-        )
-
-    def test_collision_max_is_new_timestamp(self, db_session):
-        """When the new timestamp is the largest, the merged row carries it."""
-        from dev_health_ops.sync.watermarks import (
-            dataset_key_for_legacy_target,
-            set_legacy_repo_watermark,
-        )
-
-        canonical_key = dataset_key_for_legacy_target("git")
-        assert canonical_key is not None
-
-        t_legacy = datetime(2025, 4, 1, 8, 0, 0, tzinfo=timezone.utc)
-        t_canonical = datetime(2025, 4, 1, 9, 0, 0, tzinfo=timezone.utc)
-        t_new = datetime(2025, 4, 1, 12, 0, 0, tzinfo=timezone.utc)  # largest
-
-        legacy_row = SyncWatermark(
-            repo_id=REPO_ID,
-            target="git",
-            org_id=ORG_ID,
-            source_id=REPO_ID,
-            dataset_key="git",
-            last_synced_at=t_legacy,
-        )
-        db_session.add(legacy_row)
-        db_session.flush()
-
-        canonical_row = SyncWatermark(
-            repo_id=REPO_ID,
-            target=canonical_key,
-            org_id=ORG_ID,
-            source_id=REPO_ID,
-            dataset_key=canonical_key,
-            last_synced_at=t_canonical,
-        )
-        db_session.add(canonical_row)
-        db_session.flush()
-
-        set_legacy_repo_watermark(db_session, ORG_ID, REPO_ID, "git", t_new)
-
-        stored = get_watermark(db_session, ORG_ID, REPO_ID, canonical_key)
-        assert stored is not None
-        assert stored.replace(tzinfo=timezone.utc) == t_new, (
-            f"Expected t_new={t_new} as max, got {stored}"
-        )
-
-    def test_collision_legacy_row_deleted_after_merge(self, db_session):
-        """After merge, the legacy row (target='git', dataset_key='git') is gone."""
-        from dev_health_ops.sync.watermarks import (
-            dataset_key_for_legacy_target,
-            set_legacy_repo_watermark,
-        )
-
-        canonical_key = dataset_key_for_legacy_target("git")
-        assert canonical_key is not None
-
-        t_legacy = datetime(2025, 5, 1, 8, 0, 0, tzinfo=timezone.utc)
-        t_canonical = datetime(2025, 5, 1, 10, 0, 0, tzinfo=timezone.utc)
-        t_new = datetime(2025, 5, 1, 9, 0, 0, tzinfo=timezone.utc)
-
-        legacy_row = SyncWatermark(
-            repo_id=REPO_ID,
-            target="git",
-            org_id=ORG_ID,
-            source_id=REPO_ID,
-            dataset_key="git",
-            last_synced_at=t_legacy,
-        )
-        db_session.add(legacy_row)
-        db_session.flush()
-
-        canonical_row = SyncWatermark(
-            repo_id=REPO_ID,
-            target=canonical_key,
-            org_id=ORG_ID,
-            source_id=REPO_ID,
-            dataset_key=canonical_key,
-            last_synced_at=t_canonical,
-        )
-        db_session.add(canonical_row)
-        db_session.flush()
-
-        set_legacy_repo_watermark(db_session, ORG_ID, REPO_ID, "git", t_new)
-
-        # The legacy row (dataset_key='git') must be gone.
-        remaining_legacy = (
-            db_session.query(SyncWatermark)
-            .filter(
-                SyncWatermark.org_id == ORG_ID,
-                SyncWatermark.repo_id == REPO_ID,
-                SyncWatermark.dataset_key == "git",
-            )
-            .one_or_none()
-        )
-        assert remaining_legacy is None, (
-            "Legacy row with dataset_key='git' must be deleted after merge"
-        )

@@ -7,26 +7,31 @@ matches the ``uq_sync_watermark_org_source_dataset`` unique constraint on
 ``SyncWatermark`` and the key used by the planner when it calls
 :func:`get_watermark`.
 
-Legacy ``target`` alias (D4 — one-way toward canonical)
----------------------------------------------------------
+Legacy ``target`` bridge (D4 — reverse-map reads, raw-row writes)
+------------------------------------------------------------------
 The legacy ``SyncConfiguration.sync_targets`` vocabulary uses coarse target
 strings (``"git"``, ``"prs"``, …) that map to one or more ``dataset_key``
-values.  :func:`dataset_key_for_legacy_target` resolves a legacy target to
-the *primary* dataset key so that legacy read paths can locate the canonical
-row.  The mapping is derived at import time from
-:data:`dev_health_ops.sync.datasets._LEGACY_TARGETS_BY_DATASET` (the
-registry-owned source of truth) — it is **not** hardcoded here.
+values.  A single raw legacy row ``(target='git', dataset_key='git')`` acts
+as the D4 compatibility bridge for ALL of git's incremental datasets
+(``commits``, ``commit-stats``, ``files``) until each gets its own canonical
+row written by the planner.
 
-Legacy read/write compat (D4):
+Read path (:func:`get_watermark`):
+  1. Canonical lookup by ``(org_id, source_id, dataset_key)`` — exact rows
+     always win.
+  2. Legacy-target lookup by ``(org_id, repo_id=source_id, target=dataset_key)``
+     — covers rows where ``target == dataset_key`` (old runtime style).
+  3. Reverse-legacy fallback — for a canonical ``dataset_key`` that has no
+     exact row, reverse-map it to its legacy target(s) and look up the raw
+     legacy row ``(target=legacy_target, dataset_key=legacy_target)``.  This
+     lets ``get_watermark(..., 'commits')`` warm from a raw ``target='git'``
+     row without collapsing git→commits.  Only INCREMENTAL datasets
+     participate; ``repo-metadata`` (WatermarkBehavior.NONE) is excluded.
 
-* :func:`get_legacy_repo_watermark` reads by ``(org_id, repo_id, target)``
-  using the ``target`` column (legacy unique constraint).  Falls back to the
-  canonical ``dataset_key`` lookup via the alias map so that rows written by
-  the new planner path are also visible to legacy readers.
-* :func:`set_legacy_repo_watermark` delegates to :func:`set_watermark`.
-* The legacy ``sync_runtime`` path continues to call ``set_watermark`` with
-  ``dataset_key=target`` (e.g. ``"git"``).  These rows have
-  ``target == dataset_key`` and satisfy the legacy constraint.
+Write path (:func:`set_legacy_repo_watermark`):
+  Upserts the RAW legacy row: ``target=target, dataset_key=target``.  Does
+  NOT collapse git→commits.  The raw row is the shared bridge for all sibling
+  datasets; deleting it would break the reverse-read fallback for siblings.
 
 Lookback overlap (CHAOS-2572)
 ------------------------------
@@ -39,10 +44,9 @@ create gaps in incremental coverage.
 
 Monotonic writes (CHAOS-2578)
 ------------------------------
-:func:`set_watermark` enforces ``last_synced_at = max(existing, new)`` so
-that a late-arriving or out-of-order unit result can never roll the watermark
-backwards.  Both incremental and full-resync runs call this on success and
-benefit from this guarantee automatically.
+:func:`set_watermark` and :func:`set_legacy_repo_watermark` enforce
+``last_synced_at = max(existing, new)`` so that a late-arriving or
+out-of-order unit result can never roll the watermark backwards.
 """
 
 from __future__ import annotations
@@ -56,61 +60,39 @@ from sqlalchemy.orm import Session
 from dev_health_ops.models.settings import SyncWatermark
 
 # ---------------------------------------------------------------------------
-# Legacy target → dataset_key alias (built from the registry, not hardcoded)
+# Reverse map: dataset_key → frozenset[legacy_target] (INCREMENTAL only)
 # ---------------------------------------------------------------------------
+# Built by iterating _LEGACY_TARGETS_BY_DATASET.items() (dict iteration —
+# NOT `for key in DatasetKey` which triggers a CodeQL false-positive).
+# Only datasets with WatermarkBehavior.INCREMENTAL are included so that
+# repo-metadata (WatermarkBehavior.NONE) never appears watermarked via the
+# reverse fallback.
 
 
-def _build_legacy_target_to_dataset_key() -> dict[str, str]:
-    """Return a mapping of legacy target string → primary dataset_key.
+def _build_dataset_key_to_legacy_targets() -> dict[str, frozenset[str]]:
+    """Return dataset_key → frozenset[legacy_target] for INCREMENTAL datasets.
 
-    Derived from ``_LEGACY_TARGETS_BY_DATASET`` at import time.  When
-    multiple dataset keys share the same legacy target (e.g. ``"git"`` covers
-    ``repo-metadata``, ``commits``, ``commit-stats``, ``files``), the
-    *first* dataset key in ``DatasetKey`` enum order that has
-    ``WatermarkBehavior.INCREMENTAL`` is chosen as the primary representative.
-    Datasets with ``WatermarkBehavior.NONE`` (e.g. ``repo-metadata``) are
-    excluded so that legacy ``target='git'`` resolves to a key that the
-    planner actually stores watermarks under (CHAOS-2573/D4).
+    Derived from ``_LEGACY_TARGETS_BY_DATASET`` at import time.  Built by
+    iterating the dict directly (not ``for key in DatasetKey``) to avoid the
+    CodeQL false-positive on enum iteration.
     """
     from dev_health_ops.sync.datasets import (
         _LEGACY_TARGETS_BY_DATASET,
-        DatasetKey,
         WatermarkBehavior,
         _watermark_behavior,
     )
 
-    # Build target → [dataset_keys] in DatasetKey enum order for determinism.
-    target_to_keys: dict[str, list[str]] = {}
-    for key in DatasetKey:
-        targets = _LEGACY_TARGETS_BY_DATASET.get(key.value, frozenset())
-        for target in targets:
-            target_to_keys.setdefault(target, []).append(key.value)
-
-    # Primary representative = first dataset_key in enum order that has
-    # WatermarkBehavior.INCREMENTAL.  Skip NONE datasets so that legacy
-    # target='git' does not resolve to 'repo-metadata' (which has no
-    # watermark row) and leave planner reads for commits/commit-stats/files
-    # cold-starting (CHAOS-2573/D4).
-    result: dict[str, str] = {}
-    for target, keys in target_to_keys.items():
-        for k in keys:
-            if _watermark_behavior(k) == WatermarkBehavior.INCREMENTAL:
-                result[target] = k
-                break
+    result: dict[str, frozenset[str]] = {}
+    for dataset_key, legacy_targets in _LEGACY_TARGETS_BY_DATASET.items():
+        if _watermark_behavior(dataset_key) == WatermarkBehavior.INCREMENTAL:
+            result[dataset_key] = legacy_targets
     return result
 
 
 # Module-level cache — built once on first import.
-_LEGACY_TARGET_TO_DATASET_KEY: dict[str, str] = _build_legacy_target_to_dataset_key()
-
-
-def dataset_key_for_legacy_target(target: str) -> str | None:
-    """Return the primary dataset_key for a legacy sync target string.
-
-    Returns ``None`` if the target is not recognised.  Callers that need a
-    fallback should use ``dataset_key_for_legacy_target(t) or t``.
-    """
-    return _LEGACY_TARGET_TO_DATASET_KEY.get(target)
+_DATASET_KEY_TO_LEGACY_TARGETS: dict[str, frozenset[str]] = (
+    _build_dataset_key_to_legacy_targets()
+)
 
 
 # ---------------------------------------------------------------------------
@@ -145,101 +127,8 @@ def apply_watermark_overlap(ts: datetime) -> datetime:
 
 
 # ---------------------------------------------------------------------------
-# Core read/write API
+# Internal monotonic-update helper
 # ---------------------------------------------------------------------------
-
-
-def get_watermark(
-    session: Session, org_id: str, source_id: str, dataset_key: str
-) -> datetime | None:
-    """Return the stored watermark for ``(org_id, source_id, dataset_key)``.
-
-    Lookup order (D4 compat):
-
-    1. Canonical: ``(org_id, source_id, dataset_key)`` via the
-       ``uq_sync_watermark_org_source_dataset`` constraint.
-    2. Legacy target column: ``(org_id, repo_id=source_id, target=dataset_key)``
-       — covers rows written by the old ``sync_runtime`` path where
-       ``target == dataset_key`` (e.g. ``target="git"``, ``dataset_key="git"``).
-    3. Canonical alias: if ``dataset_key`` is a legacy target string (e.g.
-       ``"git"``), look up the canonical dataset_key via the alias map and
-       retry step 1.  This covers rows written by :func:`set_legacy_repo_watermark`
-       which resolves the target to the canonical key before writing.
-
-    Returns ``None`` when no row exists yet (cold-start).  Does **not** apply
-    the lookback overlap — use :func:`get_watermark_with_overlap` for
-    incremental planner reads.
-    """
-    # 1. Canonical lookup by (org_id, source_id, dataset_key).
-    row = (
-        session.query(SyncWatermark)
-        .filter(
-            SyncWatermark.org_id == org_id,
-            SyncWatermark.source_id == source_id,
-            SyncWatermark.dataset_key == dataset_key,
-        )
-        .one_or_none()
-    )
-    if row is not None:
-        return row.last_synced_at
-
-    # 2. Legacy fallback: look up by (org_id, repo_id, target) where
-    #    repo_id == source_id and target == dataset_key (old path stored
-    #    target == dataset_key, e.g. target="git", dataset_key="git").
-    legacy_row = (
-        session.query(SyncWatermark)
-        .filter(
-            SyncWatermark.org_id == org_id,
-            SyncWatermark.repo_id == source_id,
-            SyncWatermark.target == dataset_key,
-        )
-        .one_or_none()
-    )
-    if legacy_row is not None:
-        return legacy_row.last_synced_at
-
-    # 3. Canonical alias fallback: if dataset_key is a legacy target string,
-    #    resolve it to the canonical dataset_key and retry the canonical lookup.
-    #    Covers rows written by set_legacy_repo_watermark (which resolves
-    #    target → canonical key before writing).
-    canonical_key = dataset_key_for_legacy_target(dataset_key)
-    if canonical_key is not None and canonical_key != dataset_key:
-        alias_row = (
-            session.query(SyncWatermark)
-            .filter(
-                SyncWatermark.org_id == org_id,
-                SyncWatermark.source_id == source_id,
-                SyncWatermark.dataset_key == canonical_key,
-            )
-            .one_or_none()
-        )
-        if alias_row is not None:
-            return alias_row.last_synced_at
-
-    return None
-
-
-def get_watermark_with_overlap(
-    session: Session, org_id: str, source_id: str, dataset_key: str
-) -> datetime | None:
-    """Return the watermark adjusted by the configured lookback overlap.
-
-    Intended for use by the planner's incremental READ path only.  Subtracts
-    ``SYNC_WATERMARK_OVERLAP`` seconds from the stored timestamp so that
-    brief provider-side indexing delays do not create gaps.
-
-    Semantics:
-    - If no watermark exists (cold-start), returns ``None`` unchanged.
-    - The overlap is applied only here, never to persisted writes.
-    - Backfill coverage uses :func:`get_watermark` directly (no overlap).
-    """
-    raw = get_watermark(session, org_id, source_id, dataset_key)
-    if raw is None:
-        return None
-    overlap = _watermark_overlap_seconds()
-    if overlap <= 0:
-        return raw
-    return raw - timedelta(seconds=overlap)
 
 
 def _monotonic_update(
@@ -282,6 +171,110 @@ def _monotonic_update(
                 return
         row.last_synced_at = timestamp
         row.updated_at = datetime.now(timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# Core read/write API
+# ---------------------------------------------------------------------------
+
+
+def get_watermark(
+    session: Session, org_id: str, source_id: str, dataset_key: str
+) -> datetime | None:
+    """Return the stored watermark for ``(org_id, source_id, dataset_key)``.
+
+    Lookup order (D4 compat):
+
+    1. Canonical: ``(org_id, source_id, dataset_key)`` via the
+       ``uq_sync_watermark_org_source_dataset`` constraint.
+    2. Legacy target column: ``(org_id, repo_id=source_id, target=dataset_key)``
+       — covers rows written by the old ``sync_runtime`` path where
+       ``target == dataset_key`` (e.g. ``target="git"``, ``dataset_key="git"``).
+    3. Reverse-legacy fallback: for a canonical ``dataset_key`` that has no
+       exact row, reverse-map it to its legacy target(s) and look up the raw
+       legacy row ``(target=legacy_target, dataset_key=legacy_target)``.  This
+       lets ``get_watermark(..., 'commits')`` warm from a raw ``target='git'``
+       row.  Only INCREMENTAL datasets participate (repo-metadata excluded).
+
+    Returns ``None`` when no row exists yet (cold-start).  Does **not** apply
+    the lookback overlap — use :func:`get_watermark_with_overlap` for
+    incremental planner reads.
+    """
+    # 1. Canonical lookup by (org_id, source_id, dataset_key).
+    row = (
+        session.query(SyncWatermark)
+        .filter(
+            SyncWatermark.org_id == org_id,
+            SyncWatermark.source_id == source_id,
+            SyncWatermark.dataset_key == dataset_key,
+        )
+        .one_or_none()
+    )
+    if row is not None:
+        return row.last_synced_at
+
+    # 2. Legacy fallback: look up by (org_id, repo_id, target) where
+    #    repo_id == source_id and target == dataset_key (old path stored
+    #    target == dataset_key, e.g. target="git", dataset_key="git").
+    legacy_row = (
+        session.query(SyncWatermark)
+        .filter(
+            SyncWatermark.org_id == org_id,
+            SyncWatermark.repo_id == source_id,
+            SyncWatermark.target == dataset_key,
+        )
+        .one_or_none()
+    )
+    if legacy_row is not None:
+        return legacy_row.last_synced_at
+
+    # 3. Reverse-legacy fallback: dataset_key is a canonical key (e.g.
+    #    'commits') that has no exact row yet.  Reverse-map it to its legacy
+    #    target(s) (e.g. 'git') and look up the raw legacy row
+    #    (target='git', dataset_key='git').  This warms the planner for ALL
+    #    sibling datasets (commits, commit-stats, files) from a single raw
+    #    legacy row without collapsing git→commits.
+    #    Only INCREMENTAL datasets are in the reverse map; repo-metadata is
+    #    excluded so it never appears watermarked via this path.
+    legacy_targets = _DATASET_KEY_TO_LEGACY_TARGETS.get(dataset_key, frozenset())
+    for legacy_target in legacy_targets:
+        raw_row = (
+            session.query(SyncWatermark)
+            .filter(
+                SyncWatermark.org_id == org_id,
+                SyncWatermark.repo_id == source_id,
+                SyncWatermark.target == legacy_target,
+                SyncWatermark.dataset_key == legacy_target,
+            )
+            .one_or_none()
+        )
+        if raw_row is not None:
+            return raw_row.last_synced_at
+
+    return None
+
+
+def get_watermark_with_overlap(
+    session: Session, org_id: str, source_id: str, dataset_key: str
+) -> datetime | None:
+    """Return the watermark adjusted by the configured lookback overlap.
+
+    Intended for use by the planner's incremental READ path only.  Subtracts
+    ``SYNC_WATERMARK_OVERLAP`` seconds from the stored timestamp so that
+    brief provider-side indexing delays do not create gaps.
+
+    Semantics:
+    - If no watermark exists (cold-start), returns ``None`` unchanged.
+    - The overlap is applied only here, never to persisted writes.
+    - Backfill coverage uses :func:`get_watermark` directly (no overlap).
+    """
+    raw = get_watermark(session, org_id, source_id, dataset_key)
+    if raw is None:
+        return None
+    overlap = _watermark_overlap_seconds()
+    if overlap <= 0:
+        return raw
+    return raw - timedelta(seconds=overlap)
 
 
 def set_watermark(
@@ -351,8 +344,8 @@ def get_legacy_repo_watermark(
     """Legacy shim: read watermark by (org_id, repo_id, target).
 
     Reads by the legacy ``target`` column first (D4 compat), then falls back
-    to the canonical ``dataset_key`` lookup via the alias map so that rows
-    written by the new planner path are also visible to legacy readers.
+    to the canonical ``dataset_key`` lookup via :func:`get_watermark` so that
+    rows written by the new planner path are also visible to legacy readers.
     """
     # Direct legacy lookup: target column == target string.
     row = (
@@ -367,12 +360,9 @@ def get_legacy_repo_watermark(
     if row is not None:
         return row.last_synced_at
 
-    # Alias fallback: resolve legacy target to canonical dataset_key.
-    canonical_key = dataset_key_for_legacy_target(target)
-    if canonical_key is not None and canonical_key != target:
-        return get_watermark(session, org_id, repo_id, canonical_key)
-
-    return None
+    # Canonical fallback: the planner may have written a per-dataset row.
+    # Use get_watermark so the reverse-legacy fallback also applies.
+    return get_watermark(session, org_id, repo_id, target)
 
 
 def set_legacy_repo_watermark(
@@ -382,39 +372,25 @@ def set_legacy_repo_watermark(
     target: str,
     timestamp: datetime,
 ) -> None:
-    """Legacy shim: write watermark by (org_id, repo_id, target).
+    """Legacy shim: upsert the RAW legacy watermark row (target=target, dataset_key=target).
 
-    Writes the row with ``target`` preserved as the legacy string (so the
-    ``uq_sync_watermark_org_repo_target`` constraint is satisfied and existing
-    readers that filter on ``target`` continue to find the row) while also
-    populating ``dataset_key`` with the canonical key resolved via the alias
-    map (D4 one-way toward canonical).
+    Writes the row with ``target`` AND ``dataset_key`` both set to the raw
+    legacy target string (e.g. ``'git'``).  This is the D4 compatibility
+    bridge: a single raw row serves as the shared watermark for ALL of the
+    target's incremental sibling datasets (commits, commit-stats, files) via
+    the reverse-legacy fallback in :func:`get_watermark`.
 
-    Mixed-deployment collision handling (CHAOS-2573/D4):
-    In a mixed deployment a legacy row (``target='git', dataset_key='git'``)
-    can coexist with a planner-created canonical row
-    (``target='commits', dataset_key='commits'``).  Mutating the legacy row's
-    ``dataset_key`` in-place would violate the
-    ``uq_sync_watermark_org_source_dataset`` unique constraint.  Instead:
-    - Both rows are fetched upfront.
-    - If both exist: the canonical row is updated to
-      ``max(legacy_ts, canonical_ts, new_ts)`` and the legacy row is deleted
-      in the same transaction (merge).
-    - If only the legacy row exists with a stale ``dataset_key``: reconcile
-      in-place (safe — no collision possible).
-    - If only the canonical row exists: update it monotonically.
-    - If neither exists: create a new row with the canonical key.
+    Do NOT collapse target→canonical here.  The raw row must be preserved so
+    that sibling dataset reads (e.g. ``get_watermark(..., 'commit-stats')``)
+    can fall back to it.  Deleting or renaming it would cold-start siblings.
 
     Monotonic advance is enforced at the DB level on PostgreSQL using
     ``GREATEST(COALESCE(last_synced_at, :ts), :ts)`` so that two concurrent
     legacy completions cannot race and roll the watermark backwards
     (CHAOS-2578).  SQLite (tests only) falls back to Python-level comparison.
     """
-    canonical_key = dataset_key_for_legacy_target(target) or target
-
-    # Fetch both the legacy row and the canonical row upfront so we can detect
-    # the collision case before touching anything.
-    legacy_row = (
+    # Look up the raw legacy row by (org_id, repo_id, target).
+    row = (
         session.query(SyncWatermark)
         .filter(
             SyncWatermark.org_id == org_id,
@@ -423,80 +399,18 @@ def set_legacy_repo_watermark(
         )
         .one_or_none()
     )
-    canonical_row = (
-        session.query(SyncWatermark)
-        .filter(
-            SyncWatermark.org_id == org_id,
-            SyncWatermark.source_id == repo_id,
-            SyncWatermark.dataset_key == canonical_key,
+
+    if row is None:
+        # Create the raw legacy row: target=target, dataset_key=target.
+        row = SyncWatermark(
+            repo_id=repo_id,
+            target=target,
+            org_id=org_id,
+            source_id=repo_id,
+            dataset_key=target,  # raw — NOT the canonical key
+            last_synced_at=timestamp,
         )
-        .one_or_none()
-    )
-
-    # Determine which row to update and whether a merge is needed.
-    if legacy_row is not None and canonical_row is not None:
-        if legacy_row.id == canonical_row.id:
-            # Same physical row matched both queries (already reconciled in a
-            # prior call: target='git', dataset_key='commits').  Treat as a
-            # single-row update — no collision, no delete needed.
-            _monotonic_update(session, legacy_row, timestamp)
-            session.flush()
-            return
-        # TRUE COLLISION: two distinct rows exist — a legacy row
-        # (target='git', dataset_key='git') and a planner-created canonical row
-        # (target='commits', dataset_key='commits').  Mutating the legacy row's
-        # dataset_key in-place would violate uq_sync_watermark_org_source_dataset.
-        # Merge: update the canonical row to max(all timestamps), delete the
-        # legacy row in the same transaction.
-        legacy_ts = legacy_row.last_synced_at
-        canonical_ts = canonical_row.last_synced_at
-        candidates = [
-            ts for ts in (legacy_ts, canonical_ts, timestamp) if ts is not None
-        ]
-        if candidates:
-
-            def _to_utc(t: datetime) -> datetime:
-                return (
-                    t.replace(tzinfo=timezone.utc)
-                    if t.tzinfo is None
-                    else t.astimezone(timezone.utc)
-                )
-
-            merged_ts = max(candidates, key=_to_utc)
-        else:
-            merged_ts = timestamp
-        _monotonic_update(session, canonical_row, merged_ts)
-        session.delete(legacy_row)
-        session.flush()
-        return
-
-    if legacy_row is not None:
-        # Only the legacy row exists.  Reconcile dataset_key in-place when it
-        # still carries the raw target string (safe — no canonical row to collide
-        # with).  Then apply the monotonic timestamp update.
-        if legacy_row.dataset_key != canonical_key:
-            legacy_row.dataset_key = canonical_key
-            if not legacy_row.source_id:
-                legacy_row.source_id = repo_id
-        _monotonic_update(session, legacy_row, timestamp)
-        session.flush()
-        return
-
-    if canonical_row is not None:
-        # Only the canonical row exists (planner already wrote it).  Update
-        # monotonically.
-        _monotonic_update(session, canonical_row, timestamp)
-        session.flush()
-        return
-
-    # Neither row exists — create a new canonical row.
-    row = SyncWatermark(
-        repo_id=repo_id,
-        target=target,  # preserve legacy target string
-        org_id=org_id,
-        source_id=repo_id,
-        dataset_key=canonical_key,
-        last_synced_at=timestamp,
-    )
-    session.add(row)
+        session.add(row)
+    else:
+        _monotonic_update(session, row, timestamp)
     session.flush()

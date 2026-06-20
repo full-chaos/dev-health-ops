@@ -77,6 +77,24 @@ def _mark_job_run_failed(sync_session, run_id: str, error: str) -> None:
     sync_session.flush()
 
 
+def _mark_backfill_job_failed(
+    sync_session, backfill_job_id: str, error: str, completed_at: datetime
+) -> None:
+    from dev_health_ops.models.backfill import BackfillJob as BackfillJobModel
+
+    bf_job = (
+        sync_session.query(BackfillJobModel)
+        .filter(BackfillJobModel.id == uuid.UUID(str(backfill_job_id)))
+        .one_or_none()
+    )
+    if bf_job is None:
+        return
+    bf_job.status = "failed"
+    bf_job.error_message = error
+    bf_job.completed_at = completed_at
+    sync_session.flush()
+
+
 def _ensure_pending_sync_job_run(
     sync_session, config, org_id: str, triggered_by: str
 ) -> str:
@@ -1357,14 +1375,31 @@ async def trigger_sync_config_backfill(
 
         await session.commit()
 
-        result = getattr(run_backfill, "delay")(
-            sync_config_id=str(config.id),
-            since=payload.since.isoformat(),
-            before=payload.before.isoformat(),
-            org_id=org_id,
-            backfill_job_id=backfill_job_id,
-            pending_run_id=pending_run_id,
-        )
+        try:
+            result = getattr(run_backfill, "delay")(
+                sync_config_id=str(config.id),
+                since=payload.since.isoformat(),
+                before=payload.before.isoformat(),
+                org_id=org_id,
+                backfill_job_id=backfill_job_id,
+                pending_run_id=pending_run_id,
+            )
+        except Exception as e:
+            error_message = f"enqueue failed: {e}"
+            completed_at = datetime.now(timezone.utc)
+            await session.run_sync(
+                lambda sync_session: _mark_backfill_job_failed(
+                    sync_session, backfill_job_id, error_message, completed_at
+                )
+            )
+            if pending_run_id is not None:
+                await session.run_sync(
+                    lambda sync_session: _mark_job_run_failed(
+                        sync_session, pending_run_id, error_message
+                    )
+                )
+            await session.commit()
+            raise HTTPException(status_code=503, detail=f"Task queue unavailable: {e}")
         backfill_job.celery_task_id = result.id
         await session.commit()
         return {
@@ -1376,6 +1411,8 @@ async def trigger_sync_config_backfill(
             "since": payload.since.isoformat(),
             "before": payload.before.isoformat(),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Task queue unavailable: {e}")
 

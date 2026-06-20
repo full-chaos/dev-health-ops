@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.backfill import BackfillJob
 from dev_health_ops.models.git import Base
-from dev_health_ops.models.integrations import Integration, IntegrationSource
+from dev_health_ops.models.integrations import Integration, IntegrationSource, SyncRun
 from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.settings import (
     IntegrationCredential,
@@ -57,6 +57,7 @@ _TABLES = tables_of(
     Setting,
     Integration,
     IntegrationSource,
+    SyncRun,
     BackfillJob,
 )
 
@@ -265,6 +266,56 @@ async def test_backfill_legacy_passes_pending_run_id_to_task(client):
 
 
 @pytest.mark.asyncio
+async def test_backfill_legacy_enqueue_failure_marks_committed_records_failed(
+    client, session_maker
+):
+    ac, _ = client
+
+    create_resp = await _create_sync_config(
+        ac, name="bf-legacy-enqueue-fails", provider="github"
+    )
+    assert create_resp.status_code == 201
+    config_id = create_resp.json()["id"]
+
+    mock_run_backfill = MagicMock()
+    mock_run_backfill.delay.side_effect = RuntimeError("broker down")
+
+    with (
+        patch("dev_health_ops.workers.sync_tasks.run_backfill", mock_run_backfill),
+        patch.dict("os.environ", {"SYNC_FANOUT_BACKFILL": ""}),
+    ):
+        resp = await ac.post(
+            f"/api/v1/admin/sync-configs/{config_id}/backfill",
+            json={"since": "2026-01-01", "before": "2026-01-08"},
+        )
+
+    assert resp.status_code == 503
+    assert "Task queue unavailable: broker down" in resp.json()["detail"]
+
+    async with session_maker() as session:
+        backfill_job = (await session.execute(select(BackfillJob))).scalar_one()
+        sched_job = (
+            await session.execute(
+                select(ScheduledJob).where(
+                    ScheduledJob.sync_config_id == uuid.UUID(config_id),
+                    ScheduledJob.job_type == "sync",
+                )
+            )
+        ).scalar_one()
+        job_run = (
+            await session.execute(select(JobRun).where(JobRun.job_id == sched_job.id))
+        ).scalar_one()
+
+    assert backfill_job.status == "failed"
+    assert backfill_job.error_message == "enqueue failed: broker down"
+    assert backfill_job.completed_at is not None
+    assert backfill_job.celery_task_id is None
+    assert job_run.status == JobRunStatus.FAILED.value
+    assert job_run.error == "enqueue failed: broker down"
+    assert job_run.completed_at is not None
+
+
+@pytest.mark.asyncio
 async def test_backfill_fanout_does_not_create_job_run(
     client, session_maker, seeded_state
 ):
@@ -383,6 +434,59 @@ async def test_backfill_fanout_commits_backfill_job_before_dispatch(
         result = await session.execute(select(BackfillJob))
         backfill_job = result.scalar_one()
     assert backfill_job.celery_task_id == "bf-fanout-visible-task-id"
+
+
+@pytest.mark.asyncio
+async def test_backfill_fanout_enqueue_failure_marks_backfill_job_failed(
+    client, session_maker, seeded_state
+):
+    ac, _ = client
+
+    create_resp = await _create_sync_config(
+        ac, name="bf-fanout-enqueue-fails", provider="github"
+    )
+    assert create_resp.status_code == 201
+    config_id = create_resp.json()["id"]
+
+    async with session_maker() as session:
+        result = await session.execute(
+            select(SyncConfiguration).where(
+                SyncConfiguration.id == uuid.UUID(config_id)
+            )
+        )
+        cfg = result.scalar_one()
+        integration_id = uuid.uuid4()
+        setattr(cfg, "migrated_integration_id", integration_id)
+        cfg.planner_managed = True
+        await session.commit()
+    await _seed_source(session_maker, seeded_state["org_id"], integration_id)
+
+    mock_run_backfill = MagicMock()
+    mock_run_backfill.delay.side_effect = RuntimeError("broker down")
+
+    with (
+        patch("dev_health_ops.workers.sync_tasks.run_backfill", mock_run_backfill),
+        patch.dict("os.environ", {"SYNC_FANOUT_BACKFILL": ""}),
+    ):
+        resp = await ac.post(
+            f"/api/v1/admin/sync-configs/{config_id}/backfill",
+            json={"since": "2026-01-01", "before": "2026-01-08"},
+        )
+
+    assert resp.status_code == 503
+    assert "Task queue unavailable: broker down" in resp.json()["detail"]
+
+    async with session_maker() as session:
+        backfill_job = (await session.execute(select(BackfillJob))).scalar_one()
+        job_runs = list((await session.execute(select(JobRun))).scalars().all())
+        sync_runs = list((await session.execute(select(SyncRun))).scalars().all())
+
+    assert backfill_job.status == "failed"
+    assert backfill_job.error_message == "enqueue failed: broker down"
+    assert backfill_job.completed_at is not None
+    assert backfill_job.celery_task_id is None
+    assert job_runs == []
+    assert sync_runs == []
 
 
 @pytest.mark.asyncio

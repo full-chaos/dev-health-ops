@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from dev_health_ops.api.queries.client import query_dicts
@@ -10,6 +10,8 @@ from dev_health_ops.metrics.compute_capacity import ThroughputHistory, Throughpu
 from dev_health_ops.metrics.forecast import (
     RiskOverlay,
     ThroughputForecastResult,
+    compute_risk_overlays,
+    compute_rolling_windows,
     forecast_throughput_capacity,
 )
 from dev_health_ops.utils.datetime import utc_today
@@ -305,7 +307,30 @@ async def resolve_throughput_forecast(
         history_weeks=input.history_weeks,
     )
     if not history.samples:
-        return None
+        # Empty scope / new team: return a structured no-estimate payload
+        # instead of null so callers can distinguish "no data yet" from a
+        # genuine error. All rolling windows are flagged insufficient_history;
+        # p50/p75/p90 are None; risk overlays are neutral.
+        empty_windows = compute_rolling_windows(history)
+        primary, wip, review, incident = compute_risk_overlays()
+        no_estimate = ThroughputForecastResult(
+            forecast_id="no-history",
+            computed_at=datetime.now(timezone.utc),
+            team_id=result_team_id,
+            work_scope_id=input.work_scope_id,
+            backlog_size=input.backlog_size or 0,
+            history_weeks=input.history_weeks,
+            p50_weeks=None,
+            p75_weeks=None,
+            p90_weeks=None,
+            rolling_windows=empty_windows,
+            primary_risk=primary,
+            wip_congestion=wip,
+            review_bottleneck=review,
+            incident_load=incident,
+            insufficient_history=True,
+        )
+        return _result_to_output(no_estimate)
 
     current_wip, average_wip = await _load_work_item_overlay(
         context,

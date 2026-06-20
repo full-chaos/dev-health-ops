@@ -440,3 +440,47 @@ async def test_resolver_surfaces_insufficient_history_and_sample_count(ctx):
     assert [w.window_weeks for w in result.rolling_windows] == [4, 8, 12]
     assert all(w.sample_count == 0 for w in result.rolling_windows)
     assert all(w.insufficient_history for w in result.rolling_windows)
+
+
+# ---------------------------------------------------------------------------
+# Finding #1 — empty-history GraphQL must not return null
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolver_returns_no_estimate_payload_for_zero_row_history(ctx):
+    """Zero-row history must return a structured no-estimate payload, NOT null.
+
+    An empty scope / new team previously short-circuited to ``return None``
+    which made the GraphQL field resolve to null. The contract requires a
+    structured ThroughputForecast with insufficientHistory=True and per-window
+    sampleCount=0 so the UI can render a "no data yet" state instead of
+    crashing on a null forecast.
+    """
+    from dev_health_ops.api.graphql.models.inputs import ThroughputForecastInput
+    from dev_health_ops.api.graphql.resolvers.forecast import (
+        resolve_throughput_forecast,
+    )
+    from dev_health_ops.metrics.compute_capacity import ThroughputHistory
+
+    empty_history = ThroughputHistory([])
+
+    with patch(
+        "dev_health_ops.api.graphql.resolvers.forecast._load_throughput_history",
+        new_callable=AsyncMock,
+        return_value=empty_history,
+    ):
+        result = await resolve_throughput_forecast(ctx, ThroughputForecastInput())
+
+    # Must NOT be null.
+    assert result is not None
+    # Top-level insufficient flag must be set.
+    assert result.insufficient_history is True
+    # No point estimates.
+    assert result.p50_weeks is None
+    assert result.p75_weeks is None
+    assert result.p90_weeks is None
+    # All three rolling windows present with sampleCount=0 and insufficient flag.
+    assert [w.window_weeks for w in result.rolling_windows] == [4, 8, 12]
+    assert all(w.sample_count == 0 for w in result.rolling_windows)
+    assert all(w.insufficient_history for w in result.rolling_windows)

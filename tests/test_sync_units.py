@@ -814,8 +814,6 @@ def test_post_sync_dispatch_none_window_unit_unbounds_lower(db_session, monkeypa
     The aggregate lower bound must be unbounded (from_date=None and
     work_graph_from_date=None), not the bounded unit's date (CHAOS-2577 fix).
     """
-    import uuid
-
     from dev_health_ops.workers import sync_units
 
     # Seed the run with the first unit (bounded).

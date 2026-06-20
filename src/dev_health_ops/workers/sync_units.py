@@ -588,11 +588,19 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
             any_unbounded_lower = any(u.since_at is None for u in successful_units)
             any_unbounded_upper = any(u.before_at is None for u in successful_units)
             if not any_unbounded_lower:
-                since_values = [_as_aware(u.since_at) for u in successful_units]
+                since_values = [
+                    _as_aware(u.since_at)
+                    for u in successful_units
+                    if u.since_at is not None
+                ]
                 covered_since = min(since_values)
             # else: covered_since stays None → unbounded lower
             if not any_unbounded_upper:
-                before_values = [_as_aware(u.before_at) for u in successful_units]
+                before_values = [
+                    _as_aware(u.before_at)
+                    for u in successful_units
+                    if u.before_at is not None
+                ]
                 covered_before = max(before_values)
             # else: covered_before stays None → unbounded upper
 

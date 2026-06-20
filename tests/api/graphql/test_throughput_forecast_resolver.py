@@ -484,3 +484,62 @@ async def test_resolver_returns_no_estimate_payload_for_zero_row_history(ctx):
     assert [w.window_weeks for w in result.rolling_windows] == [4, 8, 12]
     assert all(w.sample_count == 0 for w in result.rolling_windows)
     assert all(w.insufficient_history for w in result.rolling_windows)
+
+
+# ---------------------------------------------------------------------------
+# Finding #2 — empty-history payload must use resolved backlog, not hardcoded 0
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_empty_history_omitted_backlog_uses_load_backlog(ctx):
+    """Empty history + omitted backlog_size must call _load_backlog, not hardcode 0."""
+    from dev_health_ops.api.graphql.models.inputs import ThroughputForecastInput
+    from dev_health_ops.api.graphql.resolvers.forecast import (
+        resolve_throughput_forecast,
+    )
+    from dev_health_ops.metrics.compute_capacity import ThroughputHistory
+
+    empty_history = ThroughputHistory([])
+
+    with (
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_throughput_history",
+            new_callable=AsyncMock,
+            return_value=empty_history,
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_backlog",
+            new_callable=AsyncMock,
+            return_value=77,
+        ) as load_backlog,
+    ):
+        result = await resolve_throughput_forecast(ctx, ThroughputForecastInput())
+
+    assert result is not None
+    # backlog_size must reflect _load_backlog, NOT the hardcoded 0.
+    assert result.backlog_size == 77
+    assert result.insufficient_history is True
+    load_backlog.assert_awaited_once_with(ctx, team_ids=None, work_scope_id=None)
+
+
+@pytest.mark.asyncio
+async def test_empty_history_negative_backlog_rejected(ctx):
+    """Empty history + negative explicit backlog_size must raise ValueError."""
+    from dev_health_ops.api.graphql.models.inputs import ThroughputForecastInput
+    from dev_health_ops.api.graphql.resolvers.forecast import (
+        resolve_throughput_forecast,
+    )
+    from dev_health_ops.metrics.compute_capacity import ThroughputHistory
+
+    empty_history = ThroughputHistory([])
+
+    with (
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_throughput_history",
+            new_callable=AsyncMock,
+            return_value=empty_history,
+        ),
+        pytest.raises(ValueError, match="backlog_size"),
+    ):
+        await resolve_throughput_forecast(ctx, ThroughputForecastInput(backlog_size=-1))

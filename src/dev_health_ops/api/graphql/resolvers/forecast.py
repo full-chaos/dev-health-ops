@@ -306,6 +306,15 @@ async def resolve_throughput_forecast(
         work_scope_id=input.work_scope_id,
         history_weeks=input.history_weeks,
     )
+    backlog_size = input.backlog_size
+    if backlog_size is None:
+        backlog_size = await _load_backlog(
+            context,
+            team_ids=input.team_ids,
+            work_scope_id=input.work_scope_id,
+        )
+    if backlog_size < 0:
+        raise ValueError("backlog_size must be non-negative")
     if not history.samples:
         # Empty scope / new team: return a structured no-estimate payload
         # instead of null so callers can distinguish "no data yet" from a
@@ -318,7 +327,7 @@ async def resolve_throughput_forecast(
             computed_at=datetime.now(timezone.utc),
             team_id=result_team_id,
             work_scope_id=input.work_scope_id,
-            backlog_size=input.backlog_size or 0,
+            backlog_size=backlog_size,
             history_weeks=input.history_weeks,
             p50_weeks=None,
             p75_weeks=None,
@@ -346,13 +355,6 @@ async def resolve_throughput_forecast(
         context,
         history_weeks=input.history_weeks,
     )
-    backlog_size = input.backlog_size
-    if backlog_size is None:
-        backlog_size = await _load_backlog(
-            context,
-            team_ids=input.team_ids,
-            work_scope_id=input.work_scope_id,
-        )
     result = forecast_throughput_capacity(
         history=history,
         backlog_size=backlog_size,

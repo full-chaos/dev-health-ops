@@ -108,7 +108,9 @@ def test_dispatch_guard_denies_over_total_unit_cap(db_session, monkeypatch):
     assert set(decision.capped_unit_ids) <= {str(unit.id) for unit in units}
 
 
-def test_dispatch_guard_concurrency_cap_is_partial_allow_not_deny(db_session, monkeypatch):
+def test_dispatch_guard_concurrency_cap_is_partial_allow_not_deny(
+    db_session, monkeypatch
+):
     """Concurrency cap returns allowed=True, concurrency_capped=True (CHAOS-2576).
 
     The old behaviour returned allowed=False, which caused the whole run to be
@@ -197,7 +199,9 @@ def test_concurrency_cap_defers_not_fails(db_session, monkeypatch):
         yield s
         s.commit()
 
-    monkeypatch.setattr(db, "get_postgres_session_sync", lambda: _fake_session_ctx(db_session))
+    monkeypatch.setattr(
+        db, "get_postgres_session_sync", lambda: _fake_session_ctx(db_session)
+    )
 
     unit_queued = []
     redispatches = []
@@ -224,14 +228,22 @@ def test_concurrency_cap_defers_not_fails(db_session, monkeypatch):
         def apply_async(self):
             return None
 
-    monkeypatch.setattr(sync_units.run_sync_unit, "s", lambda unit_id: FakeUnitSig(unit_id))
-    monkeypatch.setattr(sync_units.finalize_sync_run, "si", lambda run_id: FakeFinalizeSig(run_id))
+    monkeypatch.setattr(
+        sync_units.run_sync_unit, "s", lambda unit_id: FakeUnitSig(unit_id)
+    )
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run, "si", lambda run_id: FakeFinalizeSig(run_id)
+    )
     monkeypatch.setattr(sync_units, "group", lambda sigs: list(sigs))
-    monkeypatch.setattr(sync_units, "chord", lambda header, callback: FakeChord(header, callback))
+    monkeypatch.setattr(
+        sync_units, "chord", lambda header, callback: FakeChord(header, callback)
+    )
     monkeypatch.setattr(
         sync_units.dispatch_sync_run,
         "apply_async",
-        lambda args=None, queue=None, countdown=None: redispatches.append((args, countdown)),
+        lambda args=None, queue=None, countdown=None: redispatches.append(
+            (args, countdown)
+        ),
     )
 
     result = sync_units.dispatch_sync_run(str(run.id))
@@ -250,6 +262,7 @@ def test_concurrency_cap_defers_not_fails(db_session, monkeypatch):
     # Dispatched path: no redispatch scheduled (chord handles finalize).
     assert result["status"] == "dispatched"
     assert len(redispatches) == 0
+
 
 def test_total_unit_cap_still_hard_denies(db_session, monkeypatch):
     """Total-cap hard-deny is unchanged: allowed=False, concurrency_capped=False (CHAOS-2576)."""

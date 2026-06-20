@@ -252,15 +252,14 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         callback.set(queue="sync")
         try:
             chord(group(signatures), callback).apply_async()
+            # F4: schedule redispatch for capped units INSIDE the try block so
+            # any broker failure marks the run terminal rather than leaving
+            # PLANNED units stranded with no chord/finalizer pending.
+            if capped_ids:
+                _schedule_redispatch(sync_run_id)
         except Exception as exc:
             _mark_dispatch_enqueue_failed(sync_run_id, str(exc))
             raise
-        # Fix 1: if some units were capped, schedule a delayed redispatch so
-        # those PLANNED units are eventually claimed once slots free up.
-        # The chord above only finalizes after the *dispatched* units complete;
-        # without this redispatch the capped units would stay PLANNED forever.
-        if capped_ids:
-            _schedule_redispatch(sync_run_id)
         return {"status": "dispatched", "queued_units": len(signatures)}
 
     # Fix 2: no units were claimable this pass.  Distinguish two cases:
@@ -287,7 +286,13 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         )
     if pending_count > 0:
         # Deferred units remain — schedule countdown redispatch.
-        _schedule_redispatch(sync_run_id)
+        # F5: wrap in try/except so a broker failure marks the run terminal
+        # rather than leaving PLANNED units stranded with no follow-up.
+        try:
+            _schedule_redispatch(sync_run_id)
+        except Exception as exc:
+            _mark_dispatch_enqueue_failed(sync_run_id, str(exc))
+            raise
         logger.info(
             "dispatch_sync_run.noop",
             extra={
@@ -621,12 +626,38 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
         to_date_str = (
             covered_before.date().isoformat() if covered_before is not None else None
         )
+        # F3: pass full ISO datetimes via work_graph_from/to_date so the
+        # work-graph build covers the full final day (not truncated to midnight).
+        # from_date/to_date remain date-only for _parse_materialize_window().
+        # Mirror the precedent in sync_backfill.py:374-383.
+        from datetime import time as _time
+
+        work_graph_from_date_str = (
+            datetime.combine(
+                covered_since.date(),
+                _time.min,
+                tzinfo=timezone.utc,
+            ).isoformat()
+            if covered_since is not None
+            else None
+        )
+        work_graph_to_date_str = (
+            datetime.combine(
+                covered_before.date() + timedelta(days=1),
+                _time.min,
+                tzinfo=timezone.utc,
+            ).isoformat()
+            if covered_before is not None
+            else None
+        )
         _dispatch_post_sync_tasks(
             provider=provider_for_dispatch,
             sync_targets=sorted(legacy_targets),
             org_id=run_org_id,
             from_date=from_date_str,
             to_date=to_date_str,
+            work_graph_from_date=work_graph_from_date_str,
+            work_graph_to_date=work_graph_to_date_str,
         )
 
     return {

@@ -26,6 +26,7 @@ import os
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from sqlalchemy import func
@@ -90,40 +91,101 @@ class DispatchGuard:
             )
 
         concurrency_cap = _env_int("SYNC_UNIT_CONCURRENCY_PER_BUCKET", 8)
-        planned_by_bucket: dict[tuple[str, str, str], list[SyncRunUnit]] = defaultdict(
-            list
-        )
-        eligible_statuses = {
+
+        # Units from THIS run that are candidates for dispatch this pass:
+        # only PLANNED and DISPATCHING (fresh DISPATCHING will be reclaimed by
+        # _claim_units; RUNNING/RETRYING from this run are already in-flight
+        # and must count against the cap, not be re-dispatched).
+        dispatch_candidate_statuses = {
             SyncRunUnitStatus.PLANNED.value,
             SyncRunUnitStatus.DISPATCHING.value,
         }
+        planned_by_bucket: dict[tuple[str, str, str], list[SyncRunUnit]] = defaultdict(
+            list
+        )
         for unit in units:
-            if unit.status in eligible_statuses:
+            if unit.status in dispatch_candidate_statuses:
                 planned_by_bucket[
                     (str(unit.org_id), unit.provider, unit.cost_class)
                 ].append(unit)
 
-        capped_unit_ids: list[str] = []
+        # Freshness cutoffs — same semantics as _stale_dispatch_seconds() /
+        # _stale_running_seconds() in sync_units.py.  We do NOT import
+        # sync_units here (circular: sync_units imports DispatchGuard).
+        now = datetime.now(timezone.utc)
+        stale_dispatch_cutoff = now - timedelta(seconds=_stale_dispatch_seconds_guard())
+        stale_running_cutoff = now - timedelta(seconds=_stale_running_seconds_guard())
+
+        # Active-slot statuses: units that are genuinely occupying a concurrency
+        # slot right now (across ALL runs, including the current run).
+        # DISPATCHING/RUNNING/RETRYING from the current run are already in-flight
+        # and must reduce available capacity — they must NOT be re-dispatched.
         active_statuses = {
             SyncRunUnitStatus.DISPATCHING.value,
             SyncRunUnitStatus.RUNNING.value,
             SyncRunUnitStatus.RETRYING.value,
         }
+
+        capped_unit_ids: list[str] = []
         for bucket, bucket_units in planned_by_bucket.items():
             org_id, provider, cost_class = bucket
+
+            # Count fresh active units across ALL runs (including this one).
+            # A unit is "fresh" if its updated_at is within the staleness window
+            # for its status — stale units will be reclaimed by _claim_units and
+            # should not permanently block capacity.
+            #
+            # F1: include same-run RUNNING/RETRYING/DISPATCHING so they reduce
+            #     available slots (previously excluded via != run_uuid).
+            # F2: apply freshness thresholds so dead-worker leftovers don't cap
+            #     forever (previously no updated_at filter).
             active_count = (
                 session.query(func.count(SyncRunUnit.id))
                 .filter(
-                    SyncRunUnit.sync_run_id != run_uuid,
                     SyncRunUnit.org_id == org_id,
                     SyncRunUnit.provider == provider,
                     SyncRunUnit.cost_class == cost_class,
                     SyncRunUnit.status.in_(active_statuses),
+                    # Exclude units that are stale (dead worker) — they will be
+                    # reclaimed and must not permanently block capacity.
+                    # DISPATCHING units stale after stale_dispatch_cutoff,
+                    # RUNNING/RETRYING units stale after stale_running_cutoff.
+                    # We use the more conservative (longer) running cutoff for
+                    # RETRYING since it shares the same semantics as RUNNING.
+                    (
+                        (SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value)
+                        & (SyncRunUnit.updated_at > stale_dispatch_cutoff)
+                        | (
+                            SyncRunUnit.status.in_(
+                                {
+                                    SyncRunUnitStatus.RUNNING.value,
+                                    SyncRunUnitStatus.RETRYING.value,
+                                }
+                            )
+                        )
+                        & (SyncRunUnit.updated_at > stale_running_cutoff)
+                    ),
                 )
                 .scalar()
                 or 0
             )
-            allowed_slots = max(0, concurrency_cap - int(active_count))
+
+            # Subtract same-run dispatch candidates that are DISPATCHING
+            # (they are already counted in active_count above but will be
+            # reclaimed by _claim_units, so they don't consume a net new slot).
+            # RUNNING/RETRYING from this run are genuinely in-flight and DO
+            # consume slots — do not subtract them.
+            same_run_fresh_dispatching = sum(
+                1
+                for u in bucket_units
+                if u.status == SyncRunUnitStatus.DISPATCHING.value
+                and _as_aware_guard(u.updated_at) > stale_dispatch_cutoff
+            )
+            # Net active slots consumed by OTHER units (not the candidates we
+            # are about to dispatch).
+            net_active = int(active_count) - same_run_fresh_dispatching
+            allowed_slots = max(0, concurrency_cap - net_active)
+
             if len(bucket_units) > allowed_slots:
                 capped_unit_ids.extend(
                     str(unit.id) for unit in bucket_units[allowed_slots:]
@@ -164,3 +226,37 @@ def _env_int(name: str, default: int) -> int:
     except ValueError:
         return default
     return max(1, value)
+
+
+# ---------------------------------------------------------------------------
+# Staleness helpers — mirrors sync_units._stale_dispatch_seconds() /
+# _stale_running_seconds() using the same env vars.  Defined here to avoid
+# a circular import (sync_units imports DispatchGuard from this module).
+# ---------------------------------------------------------------------------
+
+
+def _stale_dispatch_seconds_guard() -> int:
+    try:
+        return max(
+            1,
+            int(os.getenv("SYNC_UNIT_DISPATCH_STALE_SECONDS", "900")),
+        )
+    except ValueError:
+        return 900
+
+
+def _stale_running_seconds_guard() -> int:
+    try:
+        return max(
+            1,
+            int(os.getenv("SYNC_UNIT_RUNNING_STALE_SECONDS", "3600")),
+        )
+    except ValueError:
+        return 3600
+
+
+def _as_aware_guard(value: datetime) -> datetime:
+    """Return a timezone-aware UTC datetime (mirrors sync_units._as_aware)."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)

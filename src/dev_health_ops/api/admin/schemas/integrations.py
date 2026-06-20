@@ -120,6 +120,7 @@ class DiscoverResponse(BaseModel):
 class SyncTriggerRequest(BaseModel):
     source_ids: list[str] | None = None
     dataset_keys: list[str] | None = None
+    full_resync: bool = False
 
 
 class BackfillTriggerRequest(BaseModel):

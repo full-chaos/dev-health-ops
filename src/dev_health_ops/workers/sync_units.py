@@ -334,7 +334,10 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
             unit.duration_seconds = duration_seconds
             unit.result = dict(result or {})
             unit.error = None
-            if ctx.mode == SyncRunMode.INCREMENTAL.value:
+            if ctx.mode in {
+                SyncRunMode.INCREMENTAL.value,
+                SyncRunMode.FULL_RESYNC.value,  # full_resync stamps watermark on success
+            }:
                 set_watermark(
                     session,
                     ctx.org_id,

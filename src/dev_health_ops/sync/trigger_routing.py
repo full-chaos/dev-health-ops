@@ -25,6 +25,7 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from dev_health_ops.models import SyncRunMode
 from dev_health_ops.sync.datasets import supported_datasets
 from dev_health_ops.sync.planner import SyncPlanRequest
 
@@ -38,6 +39,32 @@ MIGRATED_TRIGGER_ROUTING_SETTING_KEY = "sync.migrated_trigger_routing_enabled"
 _TRUTHY = {"1", "true", "yes", "on"}
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# D5: full-resync intent mapping (CHAOS-2579)
+# ---------------------------------------------------------------------------
+
+_FULL_RESYNC_INTENT_ALIASES: frozenset[str] = frozenset(
+    {"full_resync", "full-resync", "resync", "full_sync", "full-sync"}
+)
+
+
+def map_sync_mode(intent: str) -> str:
+    """Map a caller-supplied sync intent string to a canonical ``SyncRunMode`` value.
+
+    Callers that want a full-resync pass any of the recognised aliases; all
+    other strings are returned unchanged so the planner's ``_validate_mode``
+    gate catches invalid values.
+
+    This is the single source of truth for full-resync intent mapping (D5,
+    CHAOS-2579).  Trigger surfaces (admin API, scheduler) MUST call this
+    before constructing a :class:`~dev_health_ops.sync.planner.SyncPlanRequest`
+    when the user requests a full resync.
+    """
+    if intent in _FULL_RESYNC_INTENT_ALIASES:
+        return SyncRunMode.FULL_RESYNC.value
+    return intent
 
 
 def is_migrated_trigger_routing_enabled(session: Session, org_id: str) -> bool:
@@ -121,6 +148,13 @@ def plan_request_for_config(
     * **Child config** (``migrated_source_id`` set): scope the run to that one
       source, and to the dataset keys derived from the child's legacy targets so
       the migrated trigger covers exactly what the child used to.
+
+    Mode resolution (D4 / D5 compat): if the caller passes the default
+    ``mode="incremental"`` and the config's ``sync_options`` carries a truthy
+    ``full_resync`` flag (legacy worker semantics), the mode is promoted to
+    ``SyncRunMode.FULL_RESYNC`` via :func:`map_sync_mode`. An explicit
+    ``mode="backfill"`` or ``mode="full_resync"`` from the caller is never
+    overridden.
     """
     integration_id = getattr(config, "migrated_integration_id", None)
     if integration_id is None:
@@ -134,6 +168,15 @@ def plan_request_for_config(
         child_dataset_keys = _dataset_keys_for_config(config)
         # Empty => fall back to all enabled datasets rather than an empty run.
         dataset_keys = child_dataset_keys or None
+
+    # Promote incremental -> full_resync when the config's sync_options carry
+    # the legacy full_resync flag (mirrors sync_runtime.py:656 / sync_batch.py:657).
+    # Only promote when the caller passed the default "incremental" mode; an
+    # explicit backfill or full_resync from the caller is never overridden.
+    if mode == SyncRunMode.INCREMENTAL.value:
+        sync_options = getattr(config, "sync_options", None) or {}
+        if bool(sync_options.get("full_resync")):
+            mode = map_sync_mode("full_resync")
 
     return SyncPlanRequest(
         integration_id=str(integration_id),
@@ -332,6 +375,7 @@ __all__ = [
     "MIGRATED_TRIGGER_ROUTING_SETTING_KEY",
     "canonical_sync_config_for_sync_run",
     "is_migrated_trigger_routing_enabled",
+    "map_sync_mode",
     "mark_sync_run_failed",
     "planner_request_for_config_if_routed",
     "plan_request_for_config",

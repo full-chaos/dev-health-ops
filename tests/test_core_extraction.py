@@ -59,6 +59,17 @@ class TestCoreEncryption:
 class TestCoreCache:
     """Tests for core/cache.py."""
 
+    @pytest.fixture(autouse=True)
+    def _pin_cache_clock(self, monkeypatch):
+        # Pin core.cache's wall clock so a neighboring module that leaks a
+        # forward time.time() jump onto the same xdist worker cannot expire the
+        # entries these tests set moments earlier (CHAOS-2586). This class
+        # exercises cache set/get/invalidate behavior, not TTL expiry, which is
+        # covered separately by TestCoreCacheInvalidation.
+        import dev_health_ops.core.cache as cache_mod
+
+        monkeypatch.setattr(cache_mod.time, "time", lambda: 1_000_000.0)
+
     def test_memory_cache_set_get(self):
         from dev_health_ops.core.cache import create_cache
 

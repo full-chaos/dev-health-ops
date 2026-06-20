@@ -86,7 +86,7 @@ variables:
 
 pipeline:validate:
   stage: lint
-  image: python:3.11
+  image: python:3.12
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_PIPELINE_SOURCE == "merge_train"
@@ -103,6 +103,7 @@ pipeline:validate:
           "lint",
           "typecheck:mypy",
           "test",
+          "coverage",
           "integration",
           "live-e2e",
           "security:pip-audit",
@@ -120,7 +121,7 @@ pipeline:validate:
 lint:
   extends: .python_job
   stage: lint
-  image: python:3.11
+  image: python:3.12
   rules: &code_rules
     - if: $CI_PIPELINE_SOURCE == "web"
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -148,7 +149,7 @@ lint:
 typecheck:mypy:
   extends: .python_job
   stage: lint
-  image: python:3.11
+  image: python:3.12
   rules: *code_rules
   script:
     - mypy --install-types --non-interactive .
@@ -161,7 +162,62 @@ test:
   rules: *code_rules
   parallel:
     matrix:
-      - PYTHON_VERSION: ["3.11", "3.12", "3.13", "3.14"]
+      - PYTHON_VERSION: ["3.12", "3.13", "3.14"]
+  services:
+    - name: postgres:17.4
+      alias: postgres
+    - name: clickhouse/clickhouse-server:25.1
+      alias: clickhouse
+  variables:
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: postgres
+    POSTGRES_DB: test_db
+    CLICKHOUSE_DB: default
+    CLICKHOUSE_USER: ch
+    CLICKHOUSE_PASSWORD: ch
+    DATABASE_URI: clickhouse://ch:ch@clickhouse:8123/default
+    CLICKHOUSE_URI: clickhouse://ch:ch@clickhouse:8123/default
+    CLICKHOUSE_HEALTH_URL: http://ch:ch@clickhouse:8123/?query=SELECT%201
+    POSTGRES_URI: postgresql+asyncpg://postgres:postgres@postgres:5432/test_db
+    SECONDARY_DATABASE_URI: mongodb://localhost:27017
+    OTEL_ENABLED: "false"
+    # Cap xdist workers so parallelism does not contend on the single
+    # postgres/clickhouse service container (CHAOS-2586).
+    PYTEST_XDIST_WORKERS: "4"
+  script:
+    - apt-get update -y
+    - apt-get install -y --no-install-recommends curl git build-essential
+    - pip install ruff
+    - *wait_test_services
+    - chmod +x ci/run_tests.sh
+    - mkdir -p test-results/logs
+    - |
+      set -o pipefail
+      ./ci/run_tests.sh unit 2>&1 | tee "test-results/logs/unit-${PYTHON_VERSION}.log"
+  artifacts:
+    when: always
+    expire_in: 14 days
+    paths:
+      - test-results/junit/*.xml
+      - test-results/logs/*.log
+    reports:
+      junit: test-results/junit/*.xml
+
+# Full coverage-gated suite (ruff/mypy gates + unit tests with coverage
+# threshold + integration/e2e). Kept OFF the per-MR critical path: runs on the
+# merge train (before code reaches the default branch) and on the default
+# branch (post-merge verification), never on a plain merge_request_event.
+# Reassigned from the retired 3.11 leg to 3.12 and parallelized (CHAOS-2586).
+coverage:
+  extends: .python_job
+  stage: test
+  image: python:3.12
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_PIPELINE_SOURCE == "merge_train"
+      changes: *code_changes
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes: *code_changes
   services:
     - name: postgres:17.4
       alias: postgres
@@ -180,6 +236,8 @@ test:
     POSTGRES_URI: postgresql+asyncpg://postgres:postgres@postgres:5432/test_db
     SECONDARY_DATABASE_URI: mongodb://localhost:27017
     COVERAGE_THRESHOLD: "70"
+    OTEL_ENABLED: "false"
+    PYTEST_XDIST_WORKERS: "4"
   script:
     - apt-get update -y
     - apt-get install -y --no-install-recommends curl git build-essential
@@ -189,11 +247,7 @@ test:
     - mkdir -p test-results/logs
     - |
       set -o pipefail
-      if [ "$PYTHON_VERSION" = "3.11" ]; then
-        ./ci/run_tests.sh ci 2>&1 | tee "test-results/logs/ci-${PYTHON_VERSION}.log"
-      else
-        ./ci/run_tests.sh unit 2>&1 | tee "test-results/logs/unit-${PYTHON_VERSION}.log"
-      fi
+      ./ci/run_tests.sh ci 2>&1 | tee "test-results/logs/ci-3.12.log"
   artifacts:
     when: always
     expire_in: 14 days

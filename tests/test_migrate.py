@@ -6,6 +6,12 @@ import argparse
 from pathlib import Path
 from unittest.mock import patch
 
+# Force-import the alembic.command submodule so `@patch("alembic.command")` in
+# TestCommandDispatch resolves regardless of test execution order. The submodule
+# is only lazily imported inside dev_health_ops.migrate functions, so without
+# this the patch target is missing when the module runs first on an xdist worker
+# or in isolation (CHAOS-2586).
+import alembic.command  # noqa: F401
 import pytest
 
 from dev_health_ops import migrate as migrate_mod

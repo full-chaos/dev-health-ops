@@ -13,14 +13,14 @@ classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
 ]
 keywords = ["metrics", "git", "analytics", "developer-experience"]
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
   "tqdm>=4.67.3",
   "sqlalchemy[asyncio]>=2.0.49",

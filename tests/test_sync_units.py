@@ -765,3 +765,45 @@ def test_run_sync_unit_success_stamps_watermark_for_full_resync(
     # full_resync must stamp the watermark so the next incremental doesn't cold-start
     watermark = db_session.query(SyncWatermark).one()
     assert watermark.dataset_key == "commits"
+
+
+def test_post_sync_dispatch_includes_window(db_session, monkeypatch):
+    """finalize_sync_run threads min(since_at)/max(before_at) of successful units
+    into _dispatch_post_sync_tasks (CHAOS-2577).
+    """
+    from datetime import date
+
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(db_session)
+    config = SyncConfiguration(
+        org_id=run.org_id,
+        name="canonical-window",
+        provider="github",
+        sync_targets=["git"],
+        migrated_integration_id=run.integration_id,
+    )
+    db_session.add(config)
+    # Give the unit explicit window bounds.
+    since = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    before = datetime(2026, 6, 7, 23, 59, tzinfo=timezone.utc)
+    unit.since_at = since
+    unit.before_at = before
+    unit.status = SyncRunUnitStatus.SUCCESS.value
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    dispatches = []
+    monkeypatch.setattr(
+        sync_units,
+        "_dispatch_post_sync_tasks",
+        lambda **kwargs: dispatches.append(kwargs),
+    )
+
+    result = sync_units.finalize_sync_run(str(run.id))
+
+    assert result["status"] == "finalized"
+    assert len(dispatches) == 1
+    kwargs = dispatches[0]
+    # The covered window must be threaded through.
+    assert kwargs.get("from_date") == date(2026, 6, 1).isoformat()
+    assert kwargs.get("to_date") == date(2026, 6, 7).isoformat()

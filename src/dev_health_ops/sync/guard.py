@@ -6,6 +6,18 @@ Today tier limits are enforced only at the API boundary; the scheduler and
 worker dispatch paths bypass them. :meth:`DispatchGuard.authorize_run` MUST be
 invoked at the TOP of ``dispatch_sync_run`` (after planning, before any unit is
 queued) so that API, scheduler, and backfill all pass through one guard.
+
+Decision shapes
+---------------
+* **Total-cap hard-deny** — ``GuardDecision(allowed=False,
+  concurrency_capped=False, capped_unit_ids=(...))`` — the whole run exceeds
+  the org's absolute unit ceiling.  The caller MUST mark the run FAILED.
+* **Concurrency partial-cap** — ``GuardDecision(allowed=True,
+  concurrency_capped=True, capped_unit_ids=(...))`` — some units cannot be
+  dispatched right now because another run is consuming the per-bucket
+  concurrency slots.  The caller MUST leave capped units PLANNED and schedule
+  a delayed redispatch; it MUST NOT mark the run FAILED.
+* **Full allow** — ``GuardDecision(allowed=True, concurrency_capped=False)``.
 """
 
 from __future__ import annotations
@@ -26,14 +38,22 @@ if TYPE_CHECKING:
 class GuardDecision:
     """Outcome of an authorize check.
 
-    ``capped_unit_ids`` lets the guard deny a subset (e.g. over a cost-class
-    concurrency cap) while letting the rest of the run proceed; an empty tuple
-    with ``allowed=True`` means the whole run is authorized.
+    Two distinct cap shapes (see module docstring):
+
+    * **Total-cap hard-deny**: ``allowed=False, concurrency_capped=False``.
+      The run exceeds the org's absolute unit ceiling; the caller must mark
+      the run FAILED and stop.
+    * **Concurrency partial-cap**: ``allowed=True, concurrency_capped=True``.
+      Some units cannot be dispatched right now; ``capped_unit_ids`` lists
+      them.  The caller must leave those units PLANNED and schedule a delayed
+      redispatch — it must NOT mark the run FAILED.
+    * **Full allow**: ``allowed=True, concurrency_capped=False``.
     """
 
     allowed: bool
     reason: str | None = None
     capped_unit_ids: tuple[str, ...] = field(default_factory=tuple)
+    concurrency_capped: bool = False
 
 
 class DispatchGuard:
@@ -111,9 +131,10 @@ class DispatchGuard:
 
         if capped_unit_ids:
             return GuardDecision(
-                False,
+                True,
                 f"sync unit concurrency cap exceeded: {len(capped_unit_ids)} capped",
                 tuple(capped_unit_ids),
+                concurrency_capped=True,
             )
 
         return GuardDecision(True)

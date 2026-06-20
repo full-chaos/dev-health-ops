@@ -639,6 +639,7 @@ def test_stale_other_run_running_always_consumes_cap(db_session, monkeypatch):
     )
     assert len(decision.capped_unit_ids) == 1
 
+
 def test_finalize_passes_full_datetime_work_graph_window(db_session, monkeypatch):
     """F3 regression (c): finalize_sync_run passes full ISO datetimes for
     work_graph_from/to_date so the covered final day is not truncated to midnight.

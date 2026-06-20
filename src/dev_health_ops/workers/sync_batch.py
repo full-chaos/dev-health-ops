@@ -622,6 +622,7 @@ def _run_sync_for_repo(
     from dev_health_ops.processors.gitlab import process_gitlab_project
     from dev_health_ops.storage import resolve_db_type, run_with_store
     from dev_health_ops.sync.watermarks import (
+        apply_watermark_overlap,
         get_legacy_repo_watermark,
         set_legacy_repo_watermark,
     )
@@ -680,7 +681,7 @@ def _run_sync_for_repo(
                 ]
                 valid = [w for w in watermarks if w is not None]
                 if valid and len(valid) == len(sync_targets):
-                    since_dt = min(valid)
+                    since_dt = apply_watermark_overlap(min(valid))
 
         if provider == "github" and code_sync_targets:
             owner = str(sync_options_override.get("owner", ""))

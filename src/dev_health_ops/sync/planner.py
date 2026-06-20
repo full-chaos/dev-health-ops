@@ -307,14 +307,14 @@ def resolve_initial_sync_depth(
     return max(depth, 1)
 
 
-def _get_tier_backfill_days_cap(session: Session, org_id: str) -> int:
-    """Return the tier backfill_days cap for the org.
+def _get_tier_backfill_days_cap(session: Session, org_id: str) -> int | None:
+    """Return the tier backfill_days cap for the org, or None if unlimited.
 
-    Fails CLOSED: on any lookup failure (missing table, non-UUID org_id,
-    transient DB error) returns the hardcoded community-tier default (30d)
-    rather than unlimited, so entitlement caps are never silently bypassed.
-    Rolls back the session on OperationalError so the caller's transaction
-    remains usable.
+    None means the tier is genuinely unlimited (enterprise) — do NOT cap.
+    Fails CLOSED only on actual lookup FAILURES:
+      - ValueError (non-UUID org_id) → return 30 (community default)
+      - OperationalError (missing tier_limits table) → rollback + return 30
+    All other exceptions propagate.
     """
     try:
         import uuid as _uuid
@@ -324,11 +324,12 @@ def _get_tier_backfill_days_cap(session: Session, org_id: str) -> int:
         org_uuid = _uuid.UUID(str(org_id))  # raises ValueError for non-UUID strings
         svc = TierLimitService(session)
         cap = svc.get_limit(org_uuid, "backfill_days")
+        # None is the SUCCESS value for unlimited/enterprise tiers — do not cap.
         if cap is None:
-            return _DEFAULT_INITIAL_SYNC_DEPTH_DAYS  # unlimited tier → use default
+            return None
         return int(cap)
     except ValueError:
-        # Non-UUID org_id (e.g. test fixtures): fail closed to default cap.
+        # Non-UUID org_id (e.g. test fixtures): fail closed to community default.
         return _DEFAULT_INITIAL_SYNC_DEPTH_DAYS
     except Exception as exc:  # noqa: BLE001
         from sqlalchemy.exc import OperationalError

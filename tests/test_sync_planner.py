@@ -518,3 +518,22 @@ def test_tier_cap_fails_closed_on_operational_error(db_session, monkeypatch):
     assert cap == _DEFAULT_INITIAL_SYNC_DEPTH_DAYS, (
         "OperationalError must fail closed to default cap, not unlimited"
     )
+
+
+def test_tier_cap_unlimited_tier_does_not_cap_depth(db_session, monkeypatch):
+    """get_limit returning None (unlimited/enterprise tier) must NOT cap depth.
+
+    An enterprise org with initial_sync_depth=90 must plan 90 days, not 30.
+    """
+    import uuid as _uuid
+
+    from dev_health_ops.sync.planner import _get_tier_backfill_days_cap
+
+    # Simulate get_limit returning None (unlimited tier success value)
+    monkeypatch.setattr(
+        "dev_health_ops.api.services.licensing.TierLimitService.get_limit",
+        lambda self, org_id, key: None,
+    )
+
+    cap = _get_tier_backfill_days_cap(db_session, str(_uuid.uuid4()))
+    assert cap is None, "Unlimited tier must return None (no cap), not a default value"

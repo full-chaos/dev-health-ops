@@ -135,11 +135,12 @@ def rolling_weekly_throughput(
         sum(throughputs[index : index + window_days]) / window_weeks
         for index in range(0, len(throughputs) - window_days + 1)
     ]
+    insufficient = len(rolling) < MIN_SAMPLES_FOR_ESTIMATE
     return RollingWindowThroughput(
         window_weeks=window_weeks,
         mean_weekly_throughput=fmean(rolling),
         samples=tuple(rolling),
-        insufficient_history=False,
+        insufficient_history=insufficient,
     )
 
 
@@ -302,6 +303,17 @@ def forecast_throughput_capacity(
 
     windows = compute_rolling_windows(history)
     distribution = list(_select_percentile_distribution(windows, history_weeks))
+    # Detect whether the requested window itself has too few rolling samples
+    # for a reliable percentile estimate (< MIN_SAMPLES_FOR_ESTIMATE). When
+    # true, _select_percentile_distribution fell back to a shorter window (or
+    # returned no estimate). Either way the provenance signal must be surfaced:
+    # the caller asked for history_weeks but the estimate came from less data.
+    requested_window = next(
+        (w for w in windows if w.window_weeks == history_weeks), windows[-1]
+    )
+    selected_window_insufficient = (
+        len(requested_window.samples) < MIN_SAMPLES_FOR_ESTIMATE
+    )
     p50_throughput = _percentile(distribution, 0.50)
     p75_throughput = _percentile(distribution, 0.25)
     p90_throughput = _percentile(distribution, 0.10)
@@ -330,5 +342,8 @@ def forecast_throughput_capacity(
         wip_congestion=wip,
         review_bottleneck=review,
         incident_load=incident,
-        insufficient_history=any(window.insufficient_history for window in windows),
+        insufficient_history=(
+            any(window.insufficient_history for window in windows)
+            or selected_window_insufficient
+        ),
     )

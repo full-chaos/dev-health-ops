@@ -26,7 +26,9 @@ def _history(daily: list[int]) -> ThroughputHistory:
 
 
 def test_rolling_forecast_is_deterministic_for_constant_throughput() -> None:
-    history = _history([2] * 84)
+    history = _history(
+        [2] * 85
+    )  # 85 days: 12w window gets 2 rolling samples (not boundary-exact)
 
     result = forecast_throughput_capacity(
         history=history,
@@ -250,12 +252,14 @@ def test_exactly_8_weeks_history_emits_no_estimate_for_8w_window() -> None:
 
 
 def test_exactly_12_weeks_history_emits_estimate_via_fallback() -> None:
-    # 12 weeks = 84 days. The 12w window produces exactly 1 rolling sample.
-    # The 8w window (56 days) produces 84-56+1 = 29 samples.
+    # 12 weeks = 84 days. The 12w window produces exactly 1 rolling sample
+    # (range(0, 84-84+1) = range(0,1)). With MIN_SAMPLES_FOR_ESTIMATE=2 that
+    # single sample is insufficient, so the 12w window is flagged insufficient.
+    # The 8w window (56 days) produces 84-56+1 = 29 samples — above the minimum.
     # The 4w window (28 days) produces 84-28+1 = 57 samples.
-    # _select_percentile_distribution with history_weeks=12 selects the 12w window
-    # (1 sample < MIN_SAMPLES_FOR_ESTIMATE), then falls back to the longest shorter
-    # window that meets the minimum — the 8w window (29 samples).
+    # _select_percentile_distribution falls back to the 8w window (29 samples),
+    # so estimates ARE produced. But the 12w window's insufficiency propagates
+    # to the top-level insufficient_history flag, preserving provenance.
     history = _history([3] * 84)
 
     result = forecast_throughput_capacity(
@@ -266,15 +270,17 @@ def test_exactly_12_weeks_history_emits_estimate_via_fallback() -> None:
 
     twelve_week = next(w for w in result.rolling_windows if w.window_weeks == 12)
     assert len(twelve_week.samples) == 1
-    # 12w has 1 sample (below min); falls back to 8w (29 samples) — estimates produced.
+    # 12w has 1 sample — below MIN_SAMPLES_FOR_ESTIMATE=2 — so it is insufficient.
+    assert twelve_week.insufficient_history is True
+    # Fallback to 8w (29 samples) produces estimates.
     assert result.p50_weeks is not None
     assert result.p75_weeks is not None
     assert result.p90_weeks is not None
-    # The 12w window itself is flagged insufficient (only 1 sample).
-    assert twelve_week.insufficient_history is False  # 84 days >= 84 days threshold
-    # But the overall result is NOT flagged insufficient because 8w/4w have data.
-    # (insufficient_history = any(window.insufficient_history for window in windows))
-    # 4w and 8w windows have sufficient history at 84 days.
+    # Top-level insufficient_history=True because the requested 12w window is
+    # insufficient, even though a fallback produced estimates. This preserves
+    # provenance: callers know the estimate came from a shorter window.
+    assert result.insufficient_history is True
+    # 8w and 4w windows have enough samples and are NOT insufficient.
     eight_week = next(w for w in result.rolling_windows if w.window_weeks == 8)
     four_week = next(w for w in result.rolling_windows if w.window_weeks == 4)
     assert eight_week.insufficient_history is False

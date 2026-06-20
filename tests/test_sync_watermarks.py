@@ -1018,9 +1018,7 @@ class TestLegacyWriteRawRowPreserved:
     """
 
     def test_new_row_has_raw_dataset_key(self, db_session):
-        (
-            """set_legacy_repo_watermark creates a row with dataset_key == target (raw).""",
-        )
+        """set_legacy_repo_watermark creates a row with dataset_key == target (raw)."""
         from dev_health_ops.sync.watermarks import set_legacy_repo_watermark
 
         ts = datetime(2025, 1, 1, 8, 0, 0, tzinfo=timezone.utc)

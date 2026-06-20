@@ -806,3 +806,74 @@ def test_post_sync_dispatch_includes_window(db_session, monkeypatch):
     # The covered window must be threaded through.
     assert kwargs.get("from_date") == date(2026, 6, 1).isoformat()
     assert kwargs.get("to_date") == date(2026, 6, 7).isoformat()
+
+
+def test_post_sync_dispatch_none_window_unit_unbounds_lower(db_session, monkeypatch):
+    """Mixed run: one NONE-window unit (since_at=None) + one bounded unit.
+
+    The aggregate lower bound must be unbounded (from_date=None and
+    work_graph_from_date=None), not the bounded unit's date (CHAOS-2577 fix).
+    """
+    import uuid
+
+    from dev_health_ops.workers import sync_units
+
+    # Seed the run with the first unit (bounded).
+    run, unit_bounded = _seed_run(db_session)
+    since_bounded = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    before_bounded = datetime(2026, 6, 7, 23, 59, tzinfo=timezone.utc)
+    unit_bounded.since_at = since_bounded
+    unit_bounded.before_at = before_bounded
+    unit_bounded.status = SyncRunUnitStatus.SUCCESS.value
+
+    # Add a second unit with since_at=None (NONE-window / unbounded lower).
+    unit_none = SyncRunUnit(
+        org_id=run.org_id,
+        sync_run_id=run.id,
+        integration_id=run.integration_id,
+        source_id=unit_bounded.source_id,
+        provider="github",
+        dataset_key="work-item-labels",
+        cost_class="low",
+        mode=run.mode,
+        since_at=None,  # NONE-window: unbounded lower
+        before_at=before_bounded,
+        status=SyncRunUnitStatus.SUCCESS.value,
+        attempts=1,
+        processor_flags={},
+    )
+    db_session.add(unit_none)
+
+    config = SyncConfiguration(
+        org_id=run.org_id,
+        name="mixed-window",
+        provider="github",
+        sync_targets=["git"],
+        migrated_integration_id=run.integration_id,
+    )
+    db_session.add(config)
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+
+    dispatches: list[dict] = []
+    monkeypatch.setattr(
+        sync_units,
+        "_dispatch_post_sync_tasks",
+        lambda **kwargs: dispatches.append(kwargs),
+    )
+
+    result = sync_units.finalize_sync_run(str(run.id))
+
+    assert result["status"] == "finalized"
+    assert len(dispatches) == 1
+    kwargs = dispatches[0]
+    # The NONE-window unit makes the lower bound unbounded.
+    assert kwargs.get("from_date") is None, (
+        f"expected from_date=None (unbounded), got {kwargs.get('from_date')!r}"
+    )
+    assert kwargs.get("work_graph_from_date") is None, (
+        f"expected work_graph_from_date=None (unbounded), got {kwargs.get('work_graph_from_date')!r}"
+    )
+    # Upper bound: both units have before_at set, so to_date must be non-None.
+    assert kwargs.get("to_date") is not None
+    assert kwargs.get("work_graph_to_date") is not None

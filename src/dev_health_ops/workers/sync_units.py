@@ -583,20 +583,18 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
         covered_since: datetime | None = None
         covered_before: datetime | None = None
         if successful_units:
-            since_values = [
-                _as_aware(u.since_at)
-                for u in successful_units
-                if u.since_at is not None
-            ]
-            before_values = [
-                _as_aware(u.before_at)
-                for u in successful_units
-                if u.before_at is not None
-            ]
-            if since_values:
+            # If ANY unit has since_at=None the lower bound is unbounded;
+            # only compute min when ALL units carry an explicit lower bound.
+            any_unbounded_lower = any(u.since_at is None for u in successful_units)
+            any_unbounded_upper = any(u.before_at is None for u in successful_units)
+            if not any_unbounded_lower:
+                since_values = [_as_aware(u.since_at) for u in successful_units]
                 covered_since = min(since_values)
-            if before_values:
+            # else: covered_since stays None → unbounded lower
+            if not any_unbounded_upper:
+                before_values = [_as_aware(u.before_at) for u in successful_units]
                 covered_before = max(before_values)
+            # else: covered_before stays None → unbounded upper
 
         provider_for_dispatch = next(iter(successful_by_provider), "unknown")
         run_org_id = str(run.org_id)

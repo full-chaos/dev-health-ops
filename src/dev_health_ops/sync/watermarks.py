@@ -50,6 +50,7 @@ from __future__ import annotations
 import os
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import func, update
 from sqlalchemy.orm import Session
 
 from dev_health_ops.models.settings import SyncWatermark
@@ -65,13 +66,17 @@ def _build_legacy_target_to_dataset_key() -> dict[str, str]:
     Derived from ``_LEGACY_TARGETS_BY_DATASET`` at import time.  When
     multiple dataset keys share the same legacy target (e.g. ``"git"`` covers
     ``repo-metadata``, ``commits``, ``commit-stats``, ``files``), the
-    *first* dataset key in ``DatasetKey`` enum order is chosen as the primary
-    representative.  This is used only for legacy read compat (D4) — the
-    canonical path always uses ``dataset_key`` directly.
+    *first* dataset key in ``DatasetKey`` enum order that has
+    ``WatermarkBehavior.INCREMENTAL`` is chosen as the primary representative.
+    Datasets with ``WatermarkBehavior.NONE`` (e.g. ``repo-metadata``) are
+    excluded so that legacy ``target='git'`` resolves to a key that the
+    planner actually stores watermarks under (CHAOS-2573/D4).
     """
     from dev_health_ops.sync.datasets import (
         _LEGACY_TARGETS_BY_DATASET,
         DatasetKey,
+        WatermarkBehavior,
+        _watermark_behavior,
     )
 
     # Build target → [dataset_keys] in DatasetKey enum order for determinism.
@@ -81,8 +86,18 @@ def _build_legacy_target_to_dataset_key() -> dict[str, str]:
         for target in targets:
             target_to_keys.setdefault(target, []).append(key.value)
 
-    # Primary representative = first dataset_key in enum order.
-    return {target: keys[0] for target, keys in target_to_keys.items() if keys}
+    # Primary representative = first dataset_key in enum order that has
+    # WatermarkBehavior.INCREMENTAL.  Skip NONE datasets so that legacy
+    # target='git' does not resolve to 'repo-metadata' (which has no
+    # watermark row) and leave planner reads for commits/commit-stats/files
+    # cold-starting (CHAOS-2573/D4).
+    result: dict[str, str] = {}
+    for target, keys in target_to_keys.items():
+        for k in keys:
+            if _watermark_behavior(k) == WatermarkBehavior.INCREMENTAL:
+                result[target] = k
+                break
+    return result
 
 
 # Module-level cache — built once on first import.
@@ -113,6 +128,20 @@ def _watermark_overlap_seconds() -> int:
         return max(0, int(os.getenv("SYNC_WATERMARK_OVERLAP", "0")))
     except ValueError:
         return 0
+
+
+def apply_watermark_overlap(ts: datetime) -> datetime:
+    """Subtract the configured lookback overlap from a raw watermark timestamp.
+
+    Intended for legacy incremental read paths that call
+    :func:`get_legacy_repo_watermark` directly and need to apply the same
+    overlap that :func:`get_watermark_with_overlap` applies for the planner.
+    Never call this on writes or backfill coverage.
+    """
+    overlap = _watermark_overlap_seconds()
+    if overlap <= 0:
+        return ts
+    return ts - timedelta(seconds=overlap)
 
 
 # ---------------------------------------------------------------------------
@@ -264,26 +293,48 @@ def set_watermark(
         )
         session.add(row)
     else:
-        # Monotonic: never roll back the watermark (CHAOS-2578).
-        existing = row.last_synced_at
-        if existing is not None:
-            # Normalise both to UTC for comparison.
-            existing_utc = (
-                existing.replace(tzinfo=timezone.utc)
-                if existing.tzinfo is None
-                else existing.astimezone(timezone.utc)
+        # Monotonic write (CHAOS-2578): never roll the watermark backwards.
+        #
+        # On PostgreSQL we use a DB-level GREATEST(COALESCE(...), :ts) UPDATE so
+        # that two concurrent sessions cannot both read the same value, both decide
+        # theirs is newer, and the later commit overwrite a higher timestamp with a
+        # lower one — the DB resolves the race atomically.
+        #
+        # On SQLite (tests only) GREATEST is not available; fall back to the
+        # Python-level comparison which is correct for single-session use.
+        dialect_name = session.bind.dialect.name if session.bind is not None else ""
+        if dialect_name == "postgresql":
+            session.execute(
+                update(SyncWatermark)
+                .where(SyncWatermark.id == row.id)
+                .values(
+                    last_synced_at=func.greatest(
+                        func.coalesce(SyncWatermark.last_synced_at, timestamp),
+                        timestamp,
+                    ),
+                    updated_at=datetime.now(timezone.utc),
+                )
             )
-            new_utc = (
-                timestamp.replace(tzinfo=timezone.utc)
-                if timestamp.tzinfo is None
-                else timestamp.astimezone(timezone.utc)
-            )
-            if new_utc <= existing_utc:
-                # New timestamp is not later — preserve existing value.
-                session.flush()
-                return
-        row.last_synced_at = timestamp
-        row.updated_at = datetime.now(timezone.utc)
+        else:
+            # SQLite / other dialects: Python-level monotonic check.
+            existing = row.last_synced_at
+            if existing is not None:
+                existing_utc = (
+                    existing.replace(tzinfo=timezone.utc)
+                    if existing.tzinfo is None
+                    else existing.astimezone(timezone.utc)
+                )
+                new_utc = (
+                    timestamp.replace(tzinfo=timezone.utc)
+                    if timestamp.tzinfo is None
+                    else timestamp.astimezone(timezone.utc)
+                )
+                if new_utc <= existing_utc:
+                    session.flush()
+                    return
+            row.last_synced_at = timestamp
+            row.updated_at = datetime.now(timezone.utc)
+        return
     session.flush()
 
 

@@ -719,9 +719,9 @@ class TestIncrementalReadAppliesOverlap:
 
         # Reload the module so the env var is picked up by _watermark_overlap_seconds().
         import importlib
+        import sys
 
-        import dev_health_ops.sync.watermarks as _wm_mod
-
+        _wm_mod = sys.modules["dev_health_ops.sync.watermarks"]
         importlib.reload(_wm_mod)
 
         planner_org = "overlap-test-org"
@@ -762,7 +762,7 @@ class TestIncrementalReadAppliesOverlap:
         db_session.flush()
 
         watermark_ts = datetime(2025, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
-        _wm_mod.set_watermark(
+        set_watermark(
             db_session, planner_org, source.external_id, "commits", watermark_ts
         )
 

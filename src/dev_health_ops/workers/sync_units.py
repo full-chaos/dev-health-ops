@@ -255,15 +255,54 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         except Exception as exc:
             _mark_dispatch_enqueue_failed(sync_run_id, str(exc))
             raise
+        # Fix 1: if some units were capped, schedule a delayed redispatch so
+        # those PLANNED units are eventually claimed once slots free up.
+        # The chord above only finalizes after the *dispatched* units complete;
+        # without this redispatch the capped units would stay PLANNED forever.
+        if capped_ids:
+            _schedule_redispatch(sync_run_id)
         return {"status": "dispatched", "queued_units": len(signatures)}
 
-    # No units were claimable this pass (all capped or already dispatching).
-    # Always schedule a redispatch so capped units eventually drain.
-    _schedule_redispatch(sync_run_id)
+    # Fix 2: no units were claimable this pass.  Distinguish two cases:
+    #   a) Deferred work remains (PLANNED units exist, not all terminal) →
+    #      schedule a countdown redispatch so they drain when slots free up.
+    #   b) No deferred work (zero-unit run, or every unit already terminal) →
+    #      call finalize directly; redispatching would loop forever.
+    with get_postgres_session_sync() as session:
+        run_uuid_check = uuid.UUID(str(sync_run_id))
+        pending_count = (
+            session.query(SyncRunUnit)
+            .filter(
+                SyncRunUnit.sync_run_id == run_uuid_check,
+                SyncRunUnit.status.in_(
+                    {
+                        SyncRunUnitStatus.PLANNED.value,
+                        SyncRunUnitStatus.DISPATCHING.value,
+                        SyncRunUnitStatus.RUNNING.value,
+                        SyncRunUnitStatus.RETRYING.value,
+                    }
+                ),
+            )
+            .count()
+        )
+    if pending_count > 0:
+        # Deferred units remain — schedule countdown redispatch.
+        _schedule_redispatch(sync_run_id)
+        logger.info(
+            "dispatch_sync_run.noop",
+            extra={
+                "sync_run_id": sync_run_id,
+                "queued_units": 0,
+                "pending_units": pending_count,
+            },
+        )
+        return {"status": "noop", "queued_units": 0}
+    # No pending work — finalize (idempotent; handles zero-unit and already-finalized).
     logger.info(
-        "dispatch_sync_run.noop",
+        "dispatch_sync_run.noop_finalize",
         extra={"sync_run_id": sync_run_id, "queued_units": 0},
     )
+    finalize_sync_run(sync_run_id)
     return {"status": "noop", "queued_units": 0}
 
 
@@ -768,11 +807,14 @@ def _as_aware(value: datetime) -> datetime:
 
 
 def _schedule_redispatch(sync_run_id: str) -> None:
-    """Schedule a delayed redispatch of a run that had all units concurrency-capped.
+    """Schedule a delayed redispatch of a run with deferred (PLANNED) units.
 
-    Uses ``apply_async(countdown=...)`` so the deferred units are retried after
-    the current in-flight units from other runs have had a chance to complete.
+    Uses ``apply_async(countdown=...)`` so capped units are retried after
+    in-flight units from other runs have had a chance to complete.
     This is the D3 deferral mechanism: idempotent, no new status, no Celery retry.
+
+    Raises on broker enqueue failure so the caller can propagate the error
+    rather than leaving the run silently non-terminal.
     """
     countdown = int(__import__("os").getenv("SYNC_DISPATCH_REDISPATCH_COUNTDOWN", "60"))
     try:
@@ -790,3 +832,4 @@ def _schedule_redispatch(sync_run_id: str) -> None:
             "dispatch_sync_run.redispatch_schedule_failed",
             extra={"sync_run_id": sync_run_id},
         )
+        raise

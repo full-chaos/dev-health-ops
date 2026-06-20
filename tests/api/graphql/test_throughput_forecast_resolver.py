@@ -357,3 +357,221 @@ async def test_load_backlog_uses_equality_for_single_team(ctx):
     assert "team_id = {team_id:String}" in sql
     assert params["team_id"] == "team-a"
     assert "team_ids" not in params
+
+
+def _insufficient_result() -> ThroughputForecastResult:
+    """Short-history forecast: no estimate, every window flagged insufficient."""
+    return ThroughputForecastResult(
+        forecast_id="forecast-short",
+        computed_at=datetime(2026, 5, 22, 12, 0, 0, tzinfo=timezone.utc),
+        team_id=None,
+        work_scope_id=None,
+        backlog_size=20,
+        history_weeks=12,
+        p50_weeks=None,
+        p75_weeks=None,
+        p90_weeks=None,
+        rolling_windows=tuple(
+            RollingWindowThroughput(
+                window_weeks=weeks,
+                mean_weekly_throughput=0.0,
+                samples=(),
+                insufficient_history=True,
+            )
+            for weeks in (4, 8, 12)
+        ),
+        primary_risk=_risk(RiskKind.NONE),
+        wip_congestion=_risk(RiskKind.WIP),
+        review_bottleneck=_risk(RiskKind.REVIEW),
+        incident_load=_risk(RiskKind.INCIDENT),
+        insufficient_history=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolver_surfaces_insufficient_history_and_sample_count(ctx):
+    """Resolver output must populate insufficientHistory + per-window sampleCount."""
+    from dev_health_ops.api.graphql.models.inputs import ThroughputForecastInput
+    from dev_health_ops.api.graphql.resolvers.forecast import (
+        resolve_throughput_forecast,
+    )
+
+    with (
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_throughput_history",
+            new_callable=AsyncMock,
+            return_value=_history(),
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_work_item_overlay",
+            new_callable=AsyncMock,
+            return_value=(0.0, 0.0),
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_review_overlay",
+            new_callable=AsyncMock,
+            return_value=0.0,
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_incident_overlay",
+            new_callable=AsyncMock,
+            return_value=0.0,
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_backlog",
+            new_callable=AsyncMock,
+            return_value=20,
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast.forecast_throughput_capacity",
+            return_value=_insufficient_result(),
+        ),
+    ):
+        result = await resolve_throughput_forecast(ctx, ThroughputForecastInput())
+
+    assert result is not None
+    # Top-level honesty flag surfaced for the UI warning/disabled state.
+    assert result.insufficient_history is True
+    # No point estimate emitted under short history.
+    assert result.p50_weeks is None
+    assert result.p75_weeks is None
+    assert result.p90_weeks is None
+    # Per-window provenance: every window carries sample_count + insufficient flag.
+    assert [w.window_weeks for w in result.rolling_windows] == [4, 8, 12]
+    assert all(w.sample_count == 0 for w in result.rolling_windows)
+    assert all(w.insufficient_history for w in result.rolling_windows)
+
+
+# ---------------------------------------------------------------------------
+# Finding #1 — empty-history GraphQL must not return null
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolver_returns_no_estimate_payload_for_zero_row_history(ctx):
+    """Zero-row history must return a structured no-estimate payload, NOT null.
+
+    An empty scope / new team previously short-circuited to ``return None``
+    which made the GraphQL field resolve to null. The contract requires a
+    structured ThroughputForecast with insufficientHistory=True and per-window
+    sampleCount=0 so the UI can render a "no data yet" state instead of
+    crashing on a null forecast.
+    """
+    from dev_health_ops.api.graphql.models.inputs import ThroughputForecastInput
+    from dev_health_ops.api.graphql.resolvers.forecast import (
+        resolve_throughput_forecast,
+    )
+    from dev_health_ops.metrics.compute_capacity import ThroughputHistory
+
+    empty_history = ThroughputHistory([])
+
+    with patch(
+        "dev_health_ops.api.graphql.resolvers.forecast._load_throughput_history",
+        new_callable=AsyncMock,
+        return_value=empty_history,
+    ):
+        result = await resolve_throughput_forecast(ctx, ThroughputForecastInput())
+
+    # Must NOT be null.
+    assert result is not None
+    # Top-level insufficient flag must be set.
+    assert result.insufficient_history is True
+    # No point estimates.
+    assert result.p50_weeks is None
+    assert result.p75_weeks is None
+    assert result.p90_weeks is None
+    # All three rolling windows present with sampleCount=0 and insufficient flag.
+    assert [w.window_weeks for w in result.rolling_windows] == [4, 8, 12]
+    assert all(w.sample_count == 0 for w in result.rolling_windows)
+    assert all(w.insufficient_history for w in result.rolling_windows)
+
+
+# ---------------------------------------------------------------------------
+# Finding #2 — empty-history payload must use resolved backlog, not hardcoded 0
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_empty_history_omitted_backlog_uses_load_backlog(ctx):
+    """Empty history + omitted backlog_size must call _load_backlog, not hardcode 0."""
+    from dev_health_ops.api.graphql.models.inputs import ThroughputForecastInput
+    from dev_health_ops.api.graphql.resolvers.forecast import (
+        resolve_throughput_forecast,
+    )
+    from dev_health_ops.metrics.compute_capacity import ThroughputHistory
+
+    empty_history = ThroughputHistory([])
+
+    with (
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_throughput_history",
+            new_callable=AsyncMock,
+            return_value=empty_history,
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_backlog",
+            new_callable=AsyncMock,
+            return_value=77,
+        ) as load_backlog,
+    ):
+        result = await resolve_throughput_forecast(ctx, ThroughputForecastInput())
+
+    assert result is not None
+    # backlog_size must reflect _load_backlog, NOT the hardcoded 0.
+    assert result.backlog_size == 77
+    assert result.insufficient_history is True
+    load_backlog.assert_awaited_once_with(ctx, team_ids=None, work_scope_id=None)
+
+
+@pytest.mark.asyncio
+async def test_empty_history_negative_backlog_rejected(ctx):
+    """Empty history + negative explicit backlog_size must raise ValueError."""
+    from dev_health_ops.api.graphql.models.inputs import ThroughputForecastInput
+    from dev_health_ops.api.graphql.resolvers.forecast import (
+        resolve_throughput_forecast,
+    )
+    from dev_health_ops.metrics.compute_capacity import ThroughputHistory
+
+    empty_history = ThroughputHistory([])
+
+    with (
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_throughput_history",
+            new_callable=AsyncMock,
+            return_value=empty_history,
+        ),
+        pytest.raises(ValueError, match="backlog_size"),
+    ):
+        await resolve_throughput_forecast(ctx, ThroughputForecastInput(backlog_size=-1))
+
+
+# ---------------------------------------------------------------------------
+# Finding #3 — history_weeks validation must fire before empty-history branch
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_weeks", [0, -1])
+@pytest.mark.asyncio
+async def test_empty_history_invalid_history_weeks_rejected(ctx, bad_weeks):
+    """history_weeks <= 0 must raise ValueError regardless of whether rows exist."""
+    from dev_health_ops.api.graphql.models.inputs import ThroughputForecastInput
+    from dev_health_ops.api.graphql.resolvers.forecast import (
+        resolve_throughput_forecast,
+    )
+
+    with pytest.raises(ValueError, match="history_weeks must be positive"):
+        await resolve_throughput_forecast(
+            ctx, ThroughputForecastInput(history_weeks=bad_weeks)
+        )
+
+
+@pytest.mark.asyncio
+async def test_rows_exist_invalid_history_weeks_same_error(ctx):
+    """history_weeks <= 0 raises the same ValueError when rows exist (parity check)."""
+    from dev_health_ops.api.graphql.models.inputs import ThroughputForecastInput
+    from dev_health_ops.api.graphql.resolvers.forecast import (
+        resolve_throughput_forecast,
+    )
+
+    with pytest.raises(ValueError, match="history_weeks must be positive"):
+        await resolve_throughput_forecast(ctx, ThroughputForecastInput(history_weeks=0))

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from dev_health_ops.api.queries.client import query_dicts
@@ -10,6 +10,8 @@ from dev_health_ops.metrics.compute_capacity import ThroughputHistory, Throughpu
 from dev_health_ops.metrics.forecast import (
     RiskOverlay,
     ThroughputForecastResult,
+    compute_risk_overlays,
+    compute_rolling_windows,
     forecast_throughput_capacity,
 )
 from dev_health_ops.utils.datetime import utc_today
@@ -291,6 +293,8 @@ async def resolve_throughput_forecast(
     require_org_id(context)
     if context.client is None:
         raise RuntimeError("Database client not available")
+    if input.history_weeks <= 0:
+        raise ValueError("history_weeks must be positive")
 
     # Single-team scopes still set team_id on the result so the UI can
     # display the scope; multi-team and all-teams scopes leave it None.
@@ -304,8 +308,40 @@ async def resolve_throughput_forecast(
         work_scope_id=input.work_scope_id,
         history_weeks=input.history_weeks,
     )
+    backlog_size = input.backlog_size
+    if backlog_size is None:
+        backlog_size = await _load_backlog(
+            context,
+            team_ids=input.team_ids,
+            work_scope_id=input.work_scope_id,
+        )
+    if backlog_size < 0:
+        raise ValueError("backlog_size must be non-negative")
     if not history.samples:
-        return None
+        # Empty scope / new team: return a structured no-estimate payload
+        # instead of null so callers can distinguish "no data yet" from a
+        # genuine error. All rolling windows are flagged insufficient_history;
+        # p50/p75/p90 are None; risk overlays are neutral.
+        empty_windows = compute_rolling_windows(history)
+        primary, wip, review, incident = compute_risk_overlays()
+        no_estimate = ThroughputForecastResult(
+            forecast_id="no-history",
+            computed_at=datetime.now(timezone.utc),
+            team_id=result_team_id,
+            work_scope_id=input.work_scope_id,
+            backlog_size=backlog_size,
+            history_weeks=input.history_weeks,
+            p50_weeks=None,
+            p75_weeks=None,
+            p90_weeks=None,
+            rolling_windows=empty_windows,
+            primary_risk=primary,
+            wip_congestion=wip,
+            review_bottleneck=review,
+            incident_load=incident,
+            insufficient_history=True,
+        )
+        return _result_to_output(no_estimate)
 
     current_wip, average_wip = await _load_work_item_overlay(
         context,
@@ -321,13 +357,6 @@ async def resolve_throughput_forecast(
         context,
         history_weeks=input.history_weeks,
     )
-    backlog_size = input.backlog_size
-    if backlog_size is None:
-        backlog_size = await _load_backlog(
-            context,
-            team_ids=input.team_ids,
-            work_scope_id=input.work_scope_id,
-        )
     result = forecast_throughput_capacity(
         history=history,
         backlog_size=backlog_size,

@@ -115,20 +115,32 @@ def rolling_weekly_throughput(
         return RollingWindowThroughput(window_weeks, 0.0, (), True)
 
     if len(throughputs) < window_days:
-        total = sum(throughputs)
-        observed_weeks = max(len(throughputs) / MIN_DAYS_PER_WEEK, 1.0)
-        weekly_mean = total / observed_weeks
-        return RollingWindowThroughput(window_weeks, weekly_mean, (weekly_mean,), True)
+        # Insufficient history for this window size. Emit a no-estimate
+        # contract instead of fabricating a point estimate from a partial
+        # window. The previous `total / max(weeks, 1.0)` floor ignored
+        # ``window_weeks`` and produced the SAME value for every window size,
+        # collapsing 4w/8w/12w into one number that masqueraded as a confident
+        # forecast (CHAOS-2574). Honest behaviour: no samples, zero mean,
+        # flagged insufficient. Percentile selection falls back to a shorter
+        # window that DOES have enough history; when none do, the forecast
+        # returns no estimate.
+        return RollingWindowThroughput(
+            window_weeks=window_weeks,
+            mean_weekly_throughput=0.0,
+            samples=(),
+            insufficient_history=True,
+        )
 
     rolling = [
         sum(throughputs[index : index + window_days]) / window_weeks
         for index in range(0, len(throughputs) - window_days + 1)
     ]
+    insufficient = len(rolling) < MIN_SAMPLES_FOR_ESTIMATE
     return RollingWindowThroughput(
         window_weeks=window_weeks,
         mean_weekly_throughput=fmean(rolling),
         samples=tuple(rolling),
-        insufficient_history=False,
+        insufficient_history=insufficient,
     )
 
 
@@ -140,9 +152,22 @@ def compute_rolling_windows(
     return tuple(rolling_weekly_throughput(history, weeks) for weeks in windows_weeks)
 
 
+MIN_SAMPLES_FOR_ESTIMATE = 2
+
+
 def _select_percentile_distribution(
     windows: tuple[RollingWindowThroughput, ...], history_weeks: int
 ) -> tuple[float, ...]:
+    """Return the sample distribution to use for percentile estimates.
+
+    Selects the window whose ``window_weeks`` matches ``history_weeks``
+    (falling back to the longest available window). When the selected
+    window has fewer than ``MIN_SAMPLES_FOR_ESTIMATE`` samples the function
+    tries to fall back to the longest shorter window that meets the
+    minimum. If no window meets the minimum, an empty tuple is returned so
+    that callers produce no-estimate (None) outputs rather than emitting
+    percentiles derived from a single data point.
+    """
     if not windows:
         return ()
 
@@ -150,14 +175,17 @@ def _select_percentile_distribution(
         (window for window in windows if window.window_weeks == history_weeks),
         windows[-1],
     )
-    if len(selected.samples) > 1:
+    if len(selected.samples) >= MIN_SAMPLES_FOR_ESTIMATE:
         return selected.samples
 
+    # Selected window has 0 or 1 sample — try the longest shorter window
+    # that meets the minimum sample threshold.
     shorter_windows = sorted(
         (
             window
             for window in windows
-            if window.window_weeks < selected.window_weeks and len(window.samples) > 1
+            if window.window_weeks < selected.window_weeks
+            and len(window.samples) >= MIN_SAMPLES_FOR_ESTIMATE
         ),
         key=lambda window: window.window_weeks,
         reverse=True,
@@ -165,7 +193,8 @@ def _select_percentile_distribution(
     if shorter_windows:
         return shorter_windows[0].samples
 
-    return selected.samples
+    # No window meets the minimum — emit no estimate.
+    return ()
 
 
 def _weeks_to_complete(backlog_size: int, weekly_throughput: float) -> int | None:
@@ -274,6 +303,24 @@ def forecast_throughput_capacity(
 
     windows = compute_rolling_windows(history)
     distribution = list(_select_percentile_distribution(windows, history_weeks))
+    # Detect whether the requested window itself has too few rolling samples
+    # for a reliable percentile estimate (< MIN_SAMPLES_FOR_ESTIMATE). When
+    # true, _select_percentile_distribution fell back to a shorter window (or
+    # returned no estimate). Either way the provenance signal must be surfaced:
+    # the caller asked for history_weeks but the estimate came from less data.
+    #
+    # Additionally, when history_weeks does not correspond to any standard
+    # window (ROLLING_WINDOWS_WEEKS), the distribution selection silently
+    # falls back to the longest standard window. That is also a provenance
+    # mismatch: the estimate did NOT use the requested history_weeks window.
+    # Mark insufficient_history=True so callers can detect the fallback.
+    window_matched = any(w.window_weeks == history_weeks for w in windows)
+    requested_window = next(
+        (w for w in windows if w.window_weeks == history_weeks), windows[-1]
+    )
+    selected_window_insufficient = (
+        not window_matched or len(requested_window.samples) < MIN_SAMPLES_FOR_ESTIMATE
+    )
     p50_throughput = _percentile(distribution, 0.50)
     p75_throughput = _percentile(distribution, 0.25)
     p90_throughput = _percentile(distribution, 0.10)
@@ -302,5 +349,5 @@ def forecast_throughput_capacity(
         wip_congestion=wip,
         review_bottleneck=review,
         incident_load=incident,
-        insufficient_history=any(window.insufficient_history for window in windows),
+        insufficient_history=selected_window_insufficient,
     )

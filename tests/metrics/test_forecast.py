@@ -26,7 +26,9 @@ def _history(daily: list[int]) -> ThroughputHistory:
 
 
 def test_rolling_forecast_is_deterministic_for_constant_throughput() -> None:
-    history = _history([2] * 84)
+    history = _history(
+        [2] * 85
+    )  # 85 days: 12w window gets 2 rolling samples (not boundary-exact)
 
     result = forecast_throughput_capacity(
         history=history,
@@ -51,7 +53,11 @@ def test_rolling_forecast_is_deterministic_for_constant_throughput() -> None:
     assert result.primary_risk.kind is RiskKind.NONE
 
 
-def test_insufficient_history_uses_observed_weekly_rate() -> None:
+def test_insufficient_history_returns_no_estimate() -> None:
+    # 14 days is shorter than a single 4-week window. The old math floored the
+    # partial week to 1.0 and reported a confident 21.0/week estimate; the
+    # honest contract now flags the window as insufficient and emits no
+    # samples, so the forecast yields no point estimate (CHAOS-2574).
     history = _history([3] * 14)
 
     window = rolling_weekly_throughput(history, 4)
@@ -62,11 +68,32 @@ def test_insufficient_history_uses_observed_weekly_rate() -> None:
     )
 
     assert window.insufficient_history
-    assert window.mean_weekly_throughput == 21.0
+    assert window.mean_weekly_throughput == 0.0
+    assert window.samples == ()
     assert result.insufficient_history
-    assert result.p50_weeks == 2
-    assert result.p75_weeks == 2
-    assert result.p90_weeks == 2
+    assert result.p50_weeks is None
+    assert result.p75_weeks is None
+    assert result.p90_weeks is None
+
+
+def test_short_history_windows_not_identical() -> None:
+    # One day of five completed items cannot support a 4/8/12 week rolling
+    # mean. The old math collapsed every window to one fabricated value
+    # (CHAOS-2574); the honest contract flags each window insufficient and
+    # emits no point estimate.
+    history = _history([5])
+
+    windows = [rolling_weekly_throughput(history, weeks) for weeks in (4, 8, 12)]
+
+    assert all(window.insufficient_history for window in windows)
+    assert all(window.samples == () for window in windows)
+    assert all(window.mean_weekly_throughput == 0.0 for window in windows)
+
+    result = forecast_throughput_capacity(history=history, backlog_size=20)
+    assert result.insufficient_history
+    assert result.p50_weeks is None
+    assert result.p75_weeks is None
+    assert result.p90_weeks is None
 
 
 def test_forecast_percentiles_use_distribution_when_selected_window_collapses() -> None:
@@ -161,3 +188,201 @@ def test_assert_monotonic_weeks_is_null_safe(
     p50: int | None, p75: int | None, p90: int | None
 ) -> None:
     _assert_monotonic_weeks(p50, p75, p90)
+
+
+# ---------------------------------------------------------------------------
+# Finding #2 — percentile estimate provenance at exact window boundaries
+# ---------------------------------------------------------------------------
+
+
+def test_exactly_4_weeks_history_emits_no_estimate() -> None:
+    # 4 weeks = 28 days. rolling_weekly_throughput needs len(throughputs) >= window_days
+    # to produce samples. At exactly 28 days the 4w window produces exactly 1 rolling
+    # sample (range(0, 28-28+1) = range(0,1)). With MIN_SAMPLES_FOR_ESTIMATE=2 that
+    # single sample is insufficient; no shorter window exists, so the forecast must
+    # return no estimate.
+    history = _history([3] * 28)
+
+    result = forecast_throughput_capacity(
+        history=history,
+        backlog_size=20,
+        history_weeks=4,
+    )
+
+    # The 4w window has exactly 1 rolling sample — below the minimum.
+    four_week = next(w for w in result.rolling_windows if w.window_weeks == 4)
+    assert len(four_week.samples) == 1
+    # No shorter window can provide a fallback, so estimates must be None.
+    assert result.p50_weeks is None
+    assert result.p75_weeks is None
+    assert result.p90_weeks is None
+    assert result.insufficient_history
+
+
+def test_exactly_8_weeks_history_emits_no_estimate_for_8w_window() -> None:
+    # 8 weeks = 56 days. The 8w window produces exactly 1 rolling sample.
+    # The 4w window (28 days) produces 56-28+1 = 29 samples — above the minimum.
+    # _select_percentile_distribution with history_weeks=8 selects the 8w window
+    # (1 sample < MIN_SAMPLES_FOR_ESTIMATE), then falls back to the 4w window.
+    # With history_weeks=12 (default), the 12w window is selected (0 samples,
+    # insufficient), falls back to 8w (1 sample, insufficient), then 4w (29 samples).
+    history = _history([3] * 56)
+
+    result_8w = forecast_throughput_capacity(
+        history=history,
+        backlog_size=20,
+        history_weeks=8,
+    )
+    result_12w = forecast_throughput_capacity(
+        history=history,
+        backlog_size=20,
+        history_weeks=12,
+    )
+
+    eight_week = next(w for w in result_8w.rolling_windows if w.window_weeks == 8)
+    assert len(eight_week.samples) == 1
+    # history_weeks=8: 8w window has 1 sample (below min); falls back to 4w (29 samples).
+    # The 4w fallback has enough samples so estimates are produced.
+    assert result_8w.p50_weeks is not None
+    assert result_8w.p75_weeks is not None
+    assert result_8w.p90_weeks is not None
+    # history_weeks=12: 12w window has 0 samples; 8w has 1 (below min); 4w has 29.
+    # Falls back to 4w — estimates produced.
+    assert result_12w.p50_weeks is not None
+
+
+def test_exactly_12_weeks_history_emits_estimate_via_fallback() -> None:
+    # 12 weeks = 84 days. The 12w window produces exactly 1 rolling sample
+    # (range(0, 84-84+1) = range(0,1)). With MIN_SAMPLES_FOR_ESTIMATE=2 that
+    # single sample is insufficient, so the 12w window is flagged insufficient.
+    # The 8w window (56 days) produces 84-56+1 = 29 samples — above the minimum.
+    # The 4w window (28 days) produces 84-28+1 = 57 samples.
+    # _select_percentile_distribution falls back to the 8w window (29 samples),
+    # so estimates ARE produced. But the 12w window's insufficiency propagates
+    # to the top-level insufficient_history flag, preserving provenance.
+    history = _history([3] * 84)
+
+    result = forecast_throughput_capacity(
+        history=history,
+        backlog_size=20,
+        history_weeks=12,
+    )
+
+    twelve_week = next(w for w in result.rolling_windows if w.window_weeks == 12)
+    assert len(twelve_week.samples) == 1
+    # 12w has 1 sample — below MIN_SAMPLES_FOR_ESTIMATE=2 — so it is insufficient.
+    assert twelve_week.insufficient_history is True
+    # Fallback to 8w (29 samples) produces estimates.
+    assert result.p50_weeks is not None
+    assert result.p75_weeks is not None
+    assert result.p90_weeks is not None
+    # Top-level insufficient_history=True because the requested 12w window is
+    # insufficient, even though a fallback produced estimates. This preserves
+    # provenance: callers know the estimate came from a shorter window.
+    assert result.insufficient_history is True
+    # 8w and 4w windows have enough samples and are NOT insufficient.
+    eight_week = next(w for w in result.rolling_windows if w.window_weeks == 8)
+    four_week = next(w for w in result.rolling_windows if w.window_weeks == 4)
+    assert eight_week.insufficient_history is False
+    assert four_week.insufficient_history is False
+
+
+# ---------------------------------------------------------------------------
+# Non-standard history_weeks provenance (CHAOS-2574 follow-up)
+# ---------------------------------------------------------------------------
+
+
+def test_nonstandard_history_weeks_16_with_full_data_reports_insufficient() -> None:
+    # history_weeks=16 is not a standard window (4/8/12). With >=16 weeks of
+    # data the distribution selection falls back to the 12w window, which has
+    # enough samples to produce estimates. The result must still report
+    # insufficient_history=True because the estimate did NOT use the requested
+    # 16-week window — provenance is violated.
+    history = _history([3] * (16 * 7))  # 112 days — more than 16 weeks
+
+    result = forecast_throughput_capacity(
+        history=history,
+        backlog_size=20,
+        history_weeks=16,
+    )
+
+    # Estimates are produced (12w fallback has enough samples).
+    assert result.p50_weeks is not None
+    assert result.p75_weeks is not None
+    assert result.p90_weeks is not None
+    # But provenance is violated: the estimate used 12w, not the requested 16w.
+    assert result.insufficient_history is True
+
+
+def test_nonstandard_history_weeks_6_between_standard_windows_reports_insufficient() -> (
+    None
+):
+    # history_weeks=6 sits between the standard 4w and 8w windows. With plenty
+    # of data the distribution selection falls back to the 12w window (windows[-1]).
+    # The result must report insufficient_history=True because no 6w window exists.
+    history = _history([4] * 85)  # 85 days — enough for all standard windows
+
+    result = forecast_throughput_capacity(
+        history=history,
+        backlog_size=20,
+        history_weeks=6,
+    )
+
+    # Estimates are produced via the 12w fallback.
+    assert result.p50_weeks is not None
+    # Provenance mismatch: no 6w window exists; fallback was used.
+    assert result.insufficient_history is True
+
+
+# ---------------------------------------------------------------------------
+# Regression: result-level insufficient_history must reflect the REQUESTED
+# window only — longer unrequested windows must not taint the top-level flag.
+# ---------------------------------------------------------------------------
+
+
+def test_4w_request_with_29_daily_samples_is_not_insufficient() -> None:
+    # 29 daily samples: the 4w window (28 days) produces 29-28+1 = 2 rolling
+    # samples — exactly at MIN_SAMPLES_FOR_ESTIMATE. The 8w and 12w windows
+    # have 0 samples (insufficient), but the caller only asked for 4w.
+    # result.insufficient_history must be False.
+    history = _history([3] * 29)
+
+    result = forecast_throughput_capacity(
+        history=history,
+        backlog_size=20,
+        history_weeks=4,
+    )
+
+    four_week = next(w for w in result.rolling_windows if w.window_weeks == 4)
+    eight_week = next(w for w in result.rolling_windows if w.window_weeks == 8)
+    twelve_week = next(w for w in result.rolling_windows if w.window_weeks == 12)
+    # Per-window truth is preserved.
+    assert four_week.insufficient_history is False
+    assert eight_week.insufficient_history is True
+    assert twelve_week.insufficient_history is True
+    # Top-level flag reflects the requested 4w window only.
+    assert result.insufficient_history is False
+    assert result.p50_weeks is not None
+
+
+def test_8w_request_with_57_daily_samples_is_not_insufficient() -> None:
+    # 57 daily samples: the 8w window (56 days) produces 57-56+1 = 2 rolling
+    # samples — exactly at MIN_SAMPLES_FOR_ESTIMATE. The 12w window has 0
+    # samples (insufficient), but the caller only asked for 8w.
+    # result.insufficient_history must be False.
+    history = _history([3] * 57)
+
+    result = forecast_throughput_capacity(
+        history=history,
+        backlog_size=20,
+        history_weeks=8,
+    )
+
+    eight_week = next(w for w in result.rolling_windows if w.window_weeks == 8)
+    twelve_week = next(w for w in result.rolling_windows if w.window_weeks == 12)
+    # Per-window truth is preserved.
+    assert eight_week.insufficient_history is False
+    assert twelve_week.insufficient_history is True
+    # Top-level flag reflects the requested 8w window only.
+    assert result.insufficient_history is False
+    assert result.p50_weeks is not None

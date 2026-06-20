@@ -576,28 +576,15 @@ def test_same_run_running_units_count_against_cap(db_session, monkeypatch):
     assert str(units[2].id) in decision.capped_unit_ids
 
 
-def test_stale_other_run_running_always_consumes_cap(db_session, monkeypatch):
-    """F2 regression (b): RUNNING units always consume capacity regardless of age.
-
-    Under the new model RUNNING has no stale threshold — run_sync_unit does not
-    heartbeat, so a stale RUNNING unit may still be executing.  Reclaiming it
-    would cause duplicate provider writes.  Therefore a stale RUNNING unit from
-    another run MUST count as an active slot and cap the current run.
-
-    Durable dead-worker recovery (heartbeat + lease) is a separate follow-up
-    (CHAOS-2577).  Until then, a capped run whose only blocker is a dead RUNNING
-    unit may stall — acceptable, preserves at-most-once provider execution.
-    """
+def test_null_lease_running_counts_as_live(db_session, monkeypatch):
     from datetime import timedelta
 
     monkeypatch.setenv("SYNC_RUN_MAX_UNITS", "10")
     monkeypatch.setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "1")
-    # Even with a very short staleness window, RUNNING must still consume a slot.
     monkeypatch.setenv("SYNC_UNIT_RUNNING_STALE_SECONDS", "60")
 
     run, units, integration, source = _seed_run(db_session, unit_count=1)
 
-    # Another run with a RUNNING unit that is stale (updated 2 hours ago).
     other_run = SyncRun(
         org_id=run.org_id,
         integration_id=integration.id,
@@ -631,12 +618,96 @@ def test_stale_other_run_running_always_consumes_cap(db_session, monkeypatch):
 
     decision = DispatchGuard.authorize_run(db_session, str(run.id))
 
-    # Stale RUNNING must still consume a slot — cap expected.
-    # (INTERIM: run may stall until heartbeat/lease follow-up lands.)
     assert decision.allowed is True
-    assert decision.concurrency_capped is True, (
-        "stale other-run RUNNING must still consume a slot (no heartbeat)"
+    assert decision.concurrency_capped is True
+    assert len(decision.capped_unit_ids) == 1
+
+
+def test_expired_running_lease_does_not_consume_cap(db_session, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setenv("SYNC_RUN_MAX_UNITS", "10")
+    monkeypatch.setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "1")
+    run, units, integration, source = _seed_run(db_session, unit_count=1)
+    other_run = SyncRun(
+        org_id=run.org_id,
+        integration_id=integration.id,
+        triggered_by="schedule",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunStatus.RUNNING.value,
+        total_units=1,
+        completed_units=0,
+        failed_units=0,
     )
+    db_session.add(other_run)
+    db_session.flush()
+    now = datetime.now(timezone.utc)
+    other_unit = SyncRunUnit(
+        org_id=run.org_id,
+        sync_run_id=other_run.id,
+        integration_id=integration.id,
+        source_id=source.id,
+        provider="github",
+        dataset_key="commits-expired",
+        cost_class="medium",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunUnitStatus.RUNNING.value,
+        attempts=1,
+        lease_owner="worker-dead",
+        lease_expires_at=now - timedelta(seconds=1),
+        last_heartbeat_at=now - timedelta(minutes=2),
+    )
+    db_session.add(other_unit)
+    db_session.flush()
+
+    decision = DispatchGuard.authorize_run(db_session, str(run.id))
+
+    assert decision.allowed is True
+    assert decision.concurrency_capped is False
+    assert decision.capped_unit_ids == ()
+
+
+def test_live_running_lease_consumes_cap(db_session, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setenv("SYNC_RUN_MAX_UNITS", "10")
+    monkeypatch.setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "1")
+    run, units, integration, source = _seed_run(db_session, unit_count=1)
+    other_run = SyncRun(
+        org_id=run.org_id,
+        integration_id=integration.id,
+        triggered_by="schedule",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunStatus.RUNNING.value,
+        total_units=1,
+        completed_units=0,
+        failed_units=0,
+    )
+    db_session.add(other_run)
+    db_session.flush()
+    now = datetime.now(timezone.utc)
+    other_unit = SyncRunUnit(
+        org_id=run.org_id,
+        sync_run_id=other_run.id,
+        integration_id=integration.id,
+        source_id=source.id,
+        provider="github",
+        dataset_key="commits-live",
+        cost_class="medium",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunUnitStatus.RUNNING.value,
+        attempts=1,
+        lease_owner="worker-live",
+        lease_expires_at=now + timedelta(minutes=10),
+        last_heartbeat_at=now,
+    )
+    db_session.add(other_unit)
+    db_session.flush()
+
+    decision = DispatchGuard.authorize_run(db_session, str(run.id))
+
+    assert decision.allowed is True
+    assert decision.concurrency_capped is True
     assert len(decision.capped_unit_ids) == 1
 
 
@@ -773,13 +844,9 @@ def _make_dispatch_harness(db_session, monkeypatch, *, unit_count, cap, active_s
     return run, units, integration, source
 
 
-def test_chord_capped_redispatch_failure_marks_run_terminal(db_session, monkeypatch):
-    """F4 regression (d-chord): redispatch publish failure after chord dispatch
-    marks the run/units terminal — capped PLANNED units must not be stranded.
-
-    Scenario: cap=2, 1 active slot → 1 unit dispatched (chord), 1 unit capped.
-    Redispatch publish raises → _mark_dispatch_enqueue_failed must be called.
-    """
+def test_chord_capped_redispatch_failure_preserves_published_work(
+    db_session, monkeypatch
+):
     from dev_health_ops.workers import sync_units
 
     run, units, integration, source = _make_dispatch_harness(
@@ -820,7 +887,6 @@ def test_chord_capped_redispatch_failure_marks_run_terminal(db_session, monkeypa
 
     call_count = [0]
 
-    # Patch chord to call our counter on apply_async.
     class CountingChord:
         def __init__(self, header, callback):
             pass
@@ -847,24 +913,17 @@ def test_chord_capped_redispatch_failure_marks_run_terminal(db_session, monkeypa
     for unit in units:
         db_session.refresh(unit)
 
-    # Run must be terminal (FAILED) — not left in DISPATCHING/PLANNED.
-    assert run.status == SyncRunStatus.FAILED.value, (
-        f"run must be FAILED after redispatch enqueue failure, got {run.status}"
-    )
-    # All non-terminal units must be marked FAILED.
-    non_terminal = [u for u in units if u.status not in {"success", "failed"}]
-    assert len(non_terminal) == 0, (
-        f"all units must be terminal after enqueue failure, got {[u.status for u in non_terminal]}"
-    )
+    assert run.status == SyncRunStatus.DISPATCHING.value
+    assert run.completed_at is None
+    assert sorted(unit.status for unit in units) == [
+        SyncRunUnitStatus.DISPATCHING.value,
+        SyncRunUnitStatus.PLANNED.value,
+    ]
 
 
-def test_noop_redispatch_failure_marks_run_terminal(db_session, monkeypatch):
-    """F5 regression (d-noop): redispatch publish failure in the no-signatures
-    path marks the run/units terminal — PLANNED units must not be stranded.
-
-    Scenario: cap=1, 1 active slot → ALL units capped → noop path.
-    Redispatch publish raises → _mark_dispatch_enqueue_failed must be called.
-    """
+def test_noop_redispatch_failure_preserves_planned_for_reconciler(
+    db_session, monkeypatch
+):
     from dev_health_ops.workers import sync_units
 
     run, units, integration, source = _make_dispatch_harness(
@@ -883,14 +942,9 @@ def test_noop_redispatch_failure_marks_run_terminal(db_session, monkeypatch):
     for unit in units:
         db_session.refresh(unit)
 
-    # Run must be terminal (FAILED) — not left stranded.
-    assert run.status == SyncRunStatus.FAILED.value, (
-        f"run must be FAILED after noop redispatch failure, got {run.status}"
-    )
-    non_terminal = [u for u in units if u.status not in {"success", "failed"}]
-    assert len(non_terminal) == 0, (
-        f"all units must be terminal after noop enqueue failure, got {[u.status for u in non_terminal]}"
-    )
+    assert run.status == SyncRunStatus.PLANNED.value
+    assert run.completed_at is None
+    assert units[0].status == SyncRunUnitStatus.PLANNED.value
 
 
 def test_fresh_same_run_dispatching_caps_planned_unit(db_session, monkeypatch):

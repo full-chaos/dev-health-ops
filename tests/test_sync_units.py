@@ -732,3 +732,34 @@ def test_dispatch_sync_run_does_not_reclaim_fresh_running_units(
     assert result["queued_units"] == 0
     db_session.refresh(unit)
     assert unit.status == SyncRunUnitStatus.RUNNING.value
+
+
+# ---------------------------------------------------------------------------
+# Finding #2 regression: full_resync stamps watermark on success (CHAOS-2569)
+# ---------------------------------------------------------------------------
+
+
+def test_run_sync_unit_success_stamps_watermark_for_full_resync(db_session, monkeypatch):
+    """Successful full_resync unit must advance the watermark (end-to-end).""",
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(db_session, mode=SyncRunMode.FULL_RESYNC.value)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        dataset_adapters, "run_dataset_unit", lambda ctx, runtime: {"ok": True}
+    )
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    assert result["status"] == "success"
+    db_session.refresh(unit)
+    assert unit.status == SyncRunUnitStatus.SUCCESS.value
+    # full_resync must stamp the watermark so the next incremental doesn't cold-start
+    watermark = db_session.query(SyncWatermark).one()
+    assert watermark.dataset_key == "commits"

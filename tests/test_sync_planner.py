@@ -441,3 +441,80 @@ def test_existing_watermark_incremental_unchanged(db_session):
     unit = units[0]
     assert unit.since_at is not None
     assert unit.since_at.replace(tzinfo=timezone.utc) == watermark
+
+
+# ---------------------------------------------------------------------------
+# Finding #1 regression: WatermarkBehavior.NONE datasets keep since_at=None
+# ---------------------------------------------------------------------------
+
+
+def test_none_watermark_behavior_incremental_keeps_since_at_none(db_session):
+    """NONE-behavior datasets (repo-metadata, work-item-labels, etc.) must
+    keep since_at=None on incremental — cold-start depth must NOT be applied.
+    """
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    # work-item-labels has WatermarkBehavior.NONE
+    _create_dataset(db_session, integration, "work-item-labels")
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    assert units[0].since_at is None, (
+        "NONE-behavior dataset must keep since_at=None on incremental, "
+        "not receive a cold-start depth window"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Finding #3 regression: tier cap fails closed
+# ---------------------------------------------------------------------------
+
+
+def test_tier_cap_fails_closed_on_non_uuid_org_id(db_session):
+    """Non-UUID org_id must fail closed to default depth (30), not unlimited."""
+    from dev_health_ops.sync.planner import (
+        _DEFAULT_INITIAL_SYNC_DEPTH_DAYS,
+        _get_tier_backfill_days_cap,
+    )
+
+    cap = _get_tier_backfill_days_cap(db_session, "not-a-uuid")
+    assert cap == _DEFAULT_INITIAL_SYNC_DEPTH_DAYS, (
+        "Non-UUID org_id must fail closed to default cap, not unlimited"
+    )
+
+
+def test_tier_cap_fails_closed_on_operational_error(db_session, monkeypatch):
+    """OperationalError (missing tier_limits table) must fail closed to default depth."""
+    import uuid as _uuid
+
+    from sqlalchemy.exc import OperationalError
+
+    from dev_health_ops.sync.planner import (
+        _DEFAULT_INITIAL_SYNC_DEPTH_DAYS,
+        _get_tier_backfill_days_cap,
+    )
+
+    def _raise_op_error(*args, **kwargs):
+        raise OperationalError("no such table: tier_limits", None, None)
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.services.licensing.TierLimitService.get_limit",
+        _raise_op_error,
+    )
+
+    cap = _get_tier_backfill_days_cap(db_session, str(_uuid.uuid4()))
+    assert cap == _DEFAULT_INITIAL_SYNC_DEPTH_DAYS, (
+        "OperationalError must fail closed to default cap, not unlimited"
+    )

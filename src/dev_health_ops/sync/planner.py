@@ -307,26 +307,40 @@ def resolve_initial_sync_depth(
     return max(depth, 1)
 
 
-def _get_tier_backfill_days_cap(session: Session, org_id: str) -> int | None:
-    """Return the tier backfill_days cap for the org, or None if unlimited."""
+def _get_tier_backfill_days_cap(session: Session, org_id: str) -> int:
+    """Return the tier backfill_days cap for the org.
+
+    Fails CLOSED: on any lookup failure (missing table, non-UUID org_id,
+    transient DB error) returns the hardcoded community-tier default (30d)
+    rather than unlimited, so entitlement caps are never silently bypassed.
+    Rolls back the session on OperationalError so the caller's transaction
+    remains usable.
+    """
     try:
         import uuid as _uuid
 
         from dev_health_ops.api.services.licensing import TierLimitService
 
+        org_uuid = _uuid.UUID(str(org_id))  # raises ValueError for non-UUID strings
         svc = TierLimitService(session)
-        cap = svc.get_limit(_uuid.UUID(str(org_id)), "backfill_days")
+        cap = svc.get_limit(org_uuid, "backfill_days")
         if cap is None:
-            return None
+            return _DEFAULT_INITIAL_SYNC_DEPTH_DAYS  # unlimited tier → use default
         return int(cap)
+    except ValueError:
+        # Non-UUID org_id (e.g. test fixtures): fail closed to default cap.
+        return _DEFAULT_INITIAL_SYNC_DEPTH_DAYS
     except Exception as exc:  # noqa: BLE001
-        # Swallow pre-migration OperationalError (missing tier_limits table) and
-        # ValueError from non-UUID org_id strings used in unit tests.
         from sqlalchemy.exc import OperationalError
 
-        if not isinstance(exc, (OperationalError, ValueError)):
-            raise
-        return None
+        if isinstance(exc, OperationalError):
+            # Missing tier_limits table (pre-migration): roll back and fail closed.
+            try:
+                session.rollback()
+            except Exception:
+                pass
+            return _DEFAULT_INITIAL_SYNC_DEPTH_DAYS
+        raise
 
 
 def _resolve_windows(
@@ -348,20 +362,21 @@ def _resolve_windows(
             window_start = get_watermark(
                 session, org_id, watermark_source_key, dataset_key
             )
-        if window_start is None:
-            # Cold-start: no watermark — use configured depth (CHAOS-2569)
-            depth = resolve_initial_sync_depth(session, integration, dataset)
-            window_start = now - timedelta(days=depth)
+            if window_start is None:
+                # Cold-start: INCREMENTAL dataset with no watermark yet — use depth.
+                depth = resolve_initial_sync_depth(session, integration, dataset)
+                window_start = now - timedelta(days=depth)
+        # WatermarkBehavior.NONE datasets keep window_start=None (registered behavior).
         return ((window_start, _request_before_or_now(request, now)),)
 
     if mode == SyncRunMode.BACKFILL.value:
         return _backfill_windows(request)
 
     if mode == SyncRunMode.FULL_RESYNC.value:
-        # full_resync: use configured depth (CHAOS-2569)
+        # full_resync: use configured depth for all datasets (CHAOS-2569).
         depth = resolve_initial_sync_depth(session, integration, dataset)
-        window_start = now - timedelta(days=depth)
-        return ((window_start, _request_before_or_now(request, now)),)
+        window_start_fr = now - timedelta(days=depth)
+        return ((window_start_fr, _request_before_or_now(request, now)),)
 
     return ((None, _request_before_or_now(request, now)),)
 

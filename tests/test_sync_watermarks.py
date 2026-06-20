@@ -623,7 +623,9 @@ class TestLegacyTargetAliasWarmsPlanner:
 
         # The alias must resolve 'git' to a dataset_key.
         resolved_key = dataset_key_for_legacy_target("git")
-        assert resolved_key is not None, "'git' must resolve to a dataset_key via the registry alias"
+        assert resolved_key is not None, (
+            "'git' must resolve to a dataset_key via the registry alias"
+        )
 
         # Planner read via canonical dataset_key must find the row.
         # set_legacy_repo_watermark delegates to set_watermark(dataset_key=resolved_key),
@@ -673,7 +675,7 @@ class TestIncrementalReadAppliesOverlap:
 
         result = get_watermark_with_overlap(db_session, ORG_ID, REPO_ID, "commits")
         assert result is not None
-        expected = ts - __import__('datetime').timedelta(seconds=overlap_seconds)
+        expected = ts - __import__("datetime").timedelta(seconds=overlap_seconds)
         assert result.replace(tzinfo=timezone.utc) == expected, (
             f"Overlap not applied: got {result}, expected {expected}"
         )
@@ -693,8 +695,12 @@ class TestIncrementalReadAppliesOverlap:
         """With no watermark row, get_watermark_with_overlap returns None (cold-start)."""
         monkeypatch.setenv("SYNC_WATERMARK_OVERLAP", "3600")
 
-        result = get_watermark_with_overlap(db_session, ORG_ID, "no-such-repo", "commits")
-        assert result is None, "Cold-start must return None even with overlap configured"
+        result = get_watermark_with_overlap(
+            db_session, ORG_ID, "no-such-repo", "commits"
+        )
+        assert result is None, (
+            "Cold-start must return None even with overlap configured"
+        )
 
     def test_planner_incremental_window_applies_overlap(self, db_session, monkeypatch):
         """End-to-end: planner incremental since_at == watermark - overlap."""
@@ -715,6 +721,7 @@ class TestIncrementalReadAppliesOverlap:
         import importlib
 
         import dev_health_ops.sync.watermarks as _wm_mod
+
         importlib.reload(_wm_mod)
 
         planner_org = "overlap-test-org"
@@ -771,6 +778,7 @@ class TestIncrementalReadAppliesOverlap:
         )
 
         from dev_health_ops.models import SyncRunUnit
+
         units = (
             db_session.query(SyncRunUnit)
             .filter(SyncRunUnit.sync_run_id == plan.sync_run_id)

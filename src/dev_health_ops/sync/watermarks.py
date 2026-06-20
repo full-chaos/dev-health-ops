@@ -242,6 +242,48 @@ def get_watermark_with_overlap(
     return raw - timedelta(seconds=overlap)
 
 
+def _monotonic_update(
+    session: Session, row: SyncWatermark, timestamp: datetime
+) -> None:
+    """Apply a monotonic timestamp update to an existing SyncWatermark row.
+
+    On PostgreSQL uses ``GREATEST(COALESCE(last_synced_at, :ts), :ts)`` so the
+    DB resolves concurrent-write races atomically.  On SQLite (tests only) falls
+    back to a Python-level comparison.
+    """
+    dialect_name = session.bind.dialect.name if session.bind is not None else ""
+    if dialect_name == "postgresql":
+        session.execute(
+            update(SyncWatermark)
+            .where(SyncWatermark.id == row.id)
+            .values(
+                last_synced_at=func.greatest(
+                    func.coalesce(SyncWatermark.last_synced_at, timestamp),
+                    timestamp,
+                ),
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+    else:
+        # SQLite / other dialects: Python-level monotonic check.
+        existing = row.last_synced_at
+        if existing is not None:
+            existing_utc = (
+                existing.replace(tzinfo=timezone.utc)
+                if existing.tzinfo is None
+                else existing.astimezone(timezone.utc)
+            )
+            new_utc = (
+                timestamp.replace(tzinfo=timezone.utc)
+                if timestamp.tzinfo is None
+                else timestamp.astimezone(timezone.utc)
+            )
+            if new_utc <= existing_utc:
+                return
+        row.last_synced_at = timestamp
+        row.updated_at = datetime.now(timezone.utc)
+
+
 def set_watermark(
     session: Session,
     org_id: str,
@@ -293,47 +335,7 @@ def set_watermark(
         )
         session.add(row)
     else:
-        # Monotonic write (CHAOS-2578): never roll the watermark backwards.
-        #
-        # On PostgreSQL we use a DB-level GREATEST(COALESCE(...), :ts) UPDATE so
-        # that two concurrent sessions cannot both read the same value, both decide
-        # theirs is newer, and the later commit overwrite a higher timestamp with a
-        # lower one — the DB resolves the race atomically.
-        #
-        # On SQLite (tests only) GREATEST is not available; fall back to the
-        # Python-level comparison which is correct for single-session use.
-        dialect_name = session.bind.dialect.name if session.bind is not None else ""
-        if dialect_name == "postgresql":
-            session.execute(
-                update(SyncWatermark)
-                .where(SyncWatermark.id == row.id)
-                .values(
-                    last_synced_at=func.greatest(
-                        func.coalesce(SyncWatermark.last_synced_at, timestamp),
-                        timestamp,
-                    ),
-                    updated_at=datetime.now(timezone.utc),
-                )
-            )
-        else:
-            # SQLite / other dialects: Python-level monotonic check.
-            existing = row.last_synced_at
-            if existing is not None:
-                existing_utc = (
-                    existing.replace(tzinfo=timezone.utc)
-                    if existing.tzinfo is None
-                    else existing.astimezone(timezone.utc)
-                )
-                new_utc = (
-                    timestamp.replace(tzinfo=timezone.utc)
-                    if timestamp.tzinfo is None
-                    else timestamp.astimezone(timezone.utc)
-                )
-                if new_utc <= existing_utc:
-                    session.flush()
-                    return
-            row.last_synced_at = timestamp
-            row.updated_at = datetime.now(timezone.utc)
+        _monotonic_update(session, row, timestamp)
         return
     session.flush()
 
@@ -388,11 +390,20 @@ def set_legacy_repo_watermark(
     populating ``dataset_key`` with the canonical key resolved via the alias
     map (D4 one-way toward canonical).
 
-    When a pre-existing legacy row has ``dataset_key`` equal to the raw target
-    string (e.g. ``dataset_key='git'``) rather than the canonical key (e.g.
-    ``'commits'``), the row is reconciled in-place: ``dataset_key`` is updated
-    to the canonical key so that planner reads via
-    ``get_watermark(..., 'commits')`` find the row (CHAOS-2573/D4).
+    Mixed-deployment collision handling (CHAOS-2573/D4):
+    In a mixed deployment a legacy row (``target='git', dataset_key='git'``)
+    can coexist with a planner-created canonical row
+    (``target='commits', dataset_key='commits'``).  Mutating the legacy row's
+    ``dataset_key`` in-place would violate the
+    ``uq_sync_watermark_org_source_dataset`` unique constraint.  Instead:
+    - Both rows are fetched upfront.
+    - If both exist: the canonical row is updated to
+      ``max(legacy_ts, canonical_ts, new_ts)`` and the legacy row is deleted
+      in the same transaction (merge).
+    - If only the legacy row exists with a stale ``dataset_key``: reconcile
+      in-place (safe — no collision possible).
+    - If only the canonical row exists: update it monotonically.
+    - If neither exists: create a new row with the canonical key.
 
     Monotonic advance is enforced at the DB level on PostgreSQL using
     ``GREATEST(COALESCE(last_synced_at, :ts), :ts)`` so that two concurrent
@@ -401,9 +412,9 @@ def set_legacy_repo_watermark(
     """
     canonical_key = dataset_key_for_legacy_target(target) or target
 
-    # Look up by the legacy (org_id, repo_id, target) key first so we update
-    # the existing row rather than creating a duplicate.
-    row = (
+    # Fetch both the legacy row and the canonical row upfront so we can detect
+    # the collision case before touching anything.
+    legacy_row = (
         session.query(SyncWatermark)
         .filter(
             SyncWatermark.org_id == org_id,
@@ -412,74 +423,80 @@ def set_legacy_repo_watermark(
         )
         .one_or_none()
     )
-    if row is None:
-        # Also check canonical key in case the new planner already wrote it.
-        row = (
-            session.query(SyncWatermark)
-            .filter(
-                SyncWatermark.org_id == org_id,
-                SyncWatermark.source_id == repo_id,
-                SyncWatermark.dataset_key == canonical_key,
-            )
-            .one_or_none()
+    canonical_row = (
+        session.query(SyncWatermark)
+        .filter(
+            SyncWatermark.org_id == org_id,
+            SyncWatermark.source_id == repo_id,
+            SyncWatermark.dataset_key == canonical_key,
         )
+        .one_or_none()
+    )
 
-    if row is None:
-        row = SyncWatermark(
-            repo_id=repo_id,
-            target=target,  # preserve legacy target string
-            org_id=org_id,
-            source_id=repo_id,
-            dataset_key=canonical_key,
-            last_synced_at=timestamp,
-        )
-        session.add(row)
-    else:
-        # Finding 1 (CHAOS-2573/D4): reconcile dataset_key to the canonical key
-        # when the existing row still carries the raw legacy target string as its
-        # dataset_key (e.g. dataset_key='git' instead of 'commits').  Without
-        # this, get_watermark(..., 'commits') cannot find the row because the
-        # alias fallback only triggers when the *requested* key is a legacy
-        # target, not when the *stored* key is one.
-        if row.dataset_key != canonical_key:
-            row.dataset_key = canonical_key
-            # Also ensure source_id is populated (may be NULL on very old rows).
-            if not row.source_id:
-                row.source_id = repo_id
+    # Determine which row to update and whether a merge is needed.
+    if legacy_row is not None and canonical_row is not None:
+        if legacy_row.id == canonical_row.id:
+            # Same physical row matched both queries (already reconciled in a
+            # prior call: target='git', dataset_key='commits').  Treat as a
+            # single-row update — no collision, no delete needed.
+            _monotonic_update(session, legacy_row, timestamp)
+            session.flush()
+            return
+        # TRUE COLLISION: two distinct rows exist — a legacy row
+        # (target='git', dataset_key='git') and a planner-created canonical row
+        # (target='commits', dataset_key='commits').  Mutating the legacy row's
+        # dataset_key in-place would violate uq_sync_watermark_org_source_dataset.
+        # Merge: update the canonical row to max(all timestamps), delete the
+        # legacy row in the same transaction.
+        legacy_ts = legacy_row.last_synced_at
+        canonical_ts = canonical_row.last_synced_at
+        candidates = [
+            ts for ts in (legacy_ts, canonical_ts, timestamp) if ts is not None
+        ]
+        if candidates:
 
-        # Finding 2 (CHAOS-2578): atomic monotonic write — reuse the same
-        # GREATEST(COALESCE(...), :ts) pattern as set_watermark() so that two
-        # concurrent legacy completions cannot race and roll the watermark back.
-        dialect_name = session.bind.dialect.name if session.bind is not None else ""
-        if dialect_name == "postgresql":
-            session.execute(
-                update(SyncWatermark)
-                .where(SyncWatermark.id == row.id)
-                .values(
-                    last_synced_at=func.greatest(
-                        func.coalesce(SyncWatermark.last_synced_at, timestamp),
-                        timestamp,
-                    ),
-                    updated_at=datetime.now(timezone.utc),
+            def _to_utc(t: datetime) -> datetime:
+                return (
+                    t.replace(tzinfo=timezone.utc)
+                    if t.tzinfo is None
+                    else t.astimezone(timezone.utc)
                 )
-            )
+
+            merged_ts = max(candidates, key=_to_utc)
         else:
-            # SQLite / other dialects: Python-level monotonic check.
-            existing = row.last_synced_at
-            if existing is not None:
-                existing_utc = (
-                    existing.replace(tzinfo=timezone.utc)
-                    if existing.tzinfo is None
-                    else existing.astimezone(timezone.utc)
-                )
-                new_utc = (
-                    timestamp.replace(tzinfo=timezone.utc)
-                    if timestamp.tzinfo is None
-                    else timestamp.astimezone(timezone.utc)
-                )
-                if new_utc <= existing_utc:
-                    session.flush()
-                    return
-            row.last_synced_at = timestamp
-            row.updated_at = datetime.now(timezone.utc)
+            merged_ts = timestamp
+        _monotonic_update(session, canonical_row, merged_ts)
+        session.delete(legacy_row)
+        session.flush()
+        return
+
+    if legacy_row is not None:
+        # Only the legacy row exists.  Reconcile dataset_key in-place when it
+        # still carries the raw target string (safe — no canonical row to collide
+        # with).  Then apply the monotonic timestamp update.
+        if legacy_row.dataset_key != canonical_key:
+            legacy_row.dataset_key = canonical_key
+            if not legacy_row.source_id:
+                legacy_row.source_id = repo_id
+        _monotonic_update(session, legacy_row, timestamp)
+        session.flush()
+        return
+
+    if canonical_row is not None:
+        # Only the canonical row exists (planner already wrote it).  Update
+        # monotonically.
+        _monotonic_update(session, canonical_row, timestamp)
+        session.flush()
+        return
+
+    # Neither row exists — create a new canonical row.
+    row = SyncWatermark(
+        repo_id=repo_id,
+        target=target,  # preserve legacy target string
+        org_id=org_id,
+        source_id=repo_id,
+        dataset_key=canonical_key,
+        last_synced_at=timestamp,
+    )
+    session.add(row)
     session.flush()

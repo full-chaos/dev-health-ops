@@ -1231,3 +1231,198 @@ class TestLegacyWriteMonotonicAtDBLevel:
         assert stored_canonical.replace(tzinfo=timezone.utc) == t_high, (
             f"Canonical read returned wrong value: got {stored_canonical}, expected {t_high}"
         )
+
+
+class TestLegacyWriteCollisionMerge:
+    """Regression: set_legacy_repo_watermark must not raise IntegrityError when
+    a legacy row (target='git', dataset_key='git') and a canonical row
+    (target='commits', dataset_key='commits') coexist.
+
+    Before the fix, mutating the legacy row's dataset_key in-place violated the
+    uq_sync_watermark_org_source_dataset unique constraint.  The fix detects the
+    collision, merges into the canonical row (max of all timestamps), and deletes
+    the legacy row in the same transaction.
+    """
+
+    def test_no_integrity_error_when_both_rows_exist(self, db_session):
+        """Seed both rows, call set_legacy_repo_watermark, assert no IntegrityError.
+
+        Mandatory regression from codex round-3: seed
+        SyncWatermark(target='git', dataset_key='git') AND
+        SyncWatermark(target='commits', dataset_key='commits') with different
+        timestamps, then call set_legacy_repo_watermark(..., 'git').  Assert:
+        - No IntegrityError raised.
+        - Surviving canonical row's last_synced_at == max(all three timestamps).
+        - No duplicate (org_id, source_id, dataset_key='commits') rows.
+        - get_watermark(..., 'commits') returns the merged value.
+        """
+        from dev_health_ops.sync.watermarks import (
+            dataset_key_for_legacy_target,
+            set_legacy_repo_watermark,
+        )
+
+        canonical_key = dataset_key_for_legacy_target("git")
+        assert canonical_key is not None
+        assert canonical_key != "git"
+
+        t_legacy = datetime(2025, 3, 1, 8, 0, 0, tzinfo=timezone.utc)
+        t_canonical = datetime(2025, 3, 1, 10, 0, 0, tzinfo=timezone.utc)
+        t_new = datetime(2025, 3, 1, 9, 0, 0, tzinfo=timezone.utc)  # between the two
+        t_expected = t_canonical  # max of all three
+
+        # Seed the legacy row: target='git', dataset_key='git' (old runtime style).
+        legacy_row = SyncWatermark(
+            repo_id=REPO_ID,
+            target="git",
+            org_id=ORG_ID,
+            source_id=REPO_ID,
+            dataset_key="git",
+            last_synced_at=t_legacy,
+        )
+        db_session.add(legacy_row)
+        db_session.flush()
+
+        # Seed the canonical row: target='commits', dataset_key='commits' (planner style).
+        canonical_row = SyncWatermark(
+            repo_id=REPO_ID,
+            target=canonical_key,
+            org_id=ORG_ID,
+            source_id=REPO_ID,
+            dataset_key=canonical_key,
+            last_synced_at=t_canonical,
+        )
+        db_session.add(canonical_row)
+        db_session.flush()
+
+        # Both rows exist — this is the collision scenario.
+        count_before = (
+            db_session.query(SyncWatermark)
+            .filter(
+                SyncWatermark.org_id == ORG_ID,
+                SyncWatermark.repo_id == REPO_ID,
+            )
+            .count()
+        )
+        assert count_before == 2, f"Expected 2 rows before merge, got {count_before}"
+
+        # Must not raise IntegrityError.
+        set_legacy_repo_watermark(db_session, ORG_ID, REPO_ID, "git", t_new)
+
+        # After merge: exactly one row with dataset_key=canonical_key.
+        count_after = (
+            db_session.query(SyncWatermark)
+            .filter(
+                SyncWatermark.org_id == ORG_ID,
+                SyncWatermark.source_id == REPO_ID,
+                SyncWatermark.dataset_key == canonical_key,
+            )
+            .count()
+        )
+        assert count_after == 1, (
+            f"Expected 1 canonical row after merge, got {count_after} — duplicate or missing"
+        )
+
+        # Surviving row must carry the max timestamp.
+        stored = get_watermark(db_session, ORG_ID, REPO_ID, canonical_key)
+        assert stored is not None, (
+            f"get_watermark(..., {canonical_key!r}) must find the merged row"
+        )
+        assert stored.replace(tzinfo=timezone.utc) == t_expected, (
+            f"Merged timestamp wrong: got {stored}, expected {t_expected} (max of all three)"
+        )
+
+    def test_collision_max_is_new_timestamp(self, db_session):
+        """When the new timestamp is the largest, the merged row carries it."""
+        from dev_health_ops.sync.watermarks import (
+            dataset_key_for_legacy_target,
+            set_legacy_repo_watermark,
+        )
+
+        canonical_key = dataset_key_for_legacy_target("git")
+        assert canonical_key is not None
+
+        t_legacy = datetime(2025, 4, 1, 8, 0, 0, tzinfo=timezone.utc)
+        t_canonical = datetime(2025, 4, 1, 9, 0, 0, tzinfo=timezone.utc)
+        t_new = datetime(2025, 4, 1, 12, 0, 0, tzinfo=timezone.utc)  # largest
+
+        legacy_row = SyncWatermark(
+            repo_id=REPO_ID,
+            target="git",
+            org_id=ORG_ID,
+            source_id=REPO_ID,
+            dataset_key="git",
+            last_synced_at=t_legacy,
+        )
+        db_session.add(legacy_row)
+        db_session.flush()
+
+        canonical_row = SyncWatermark(
+            repo_id=REPO_ID,
+            target=canonical_key,
+            org_id=ORG_ID,
+            source_id=REPO_ID,
+            dataset_key=canonical_key,
+            last_synced_at=t_canonical,
+        )
+        db_session.add(canonical_row)
+        db_session.flush()
+
+        set_legacy_repo_watermark(db_session, ORG_ID, REPO_ID, "git", t_new)
+
+        stored = get_watermark(db_session, ORG_ID, REPO_ID, canonical_key)
+        assert stored is not None
+        assert stored.replace(tzinfo=timezone.utc) == t_new, (
+            f"Expected t_new={t_new} as max, got {stored}"
+        )
+
+    def test_collision_legacy_row_deleted_after_merge(self, db_session):
+        """After merge, the legacy row (target='git', dataset_key='git') is gone."""
+        from dev_health_ops.sync.watermarks import (
+            dataset_key_for_legacy_target,
+            set_legacy_repo_watermark,
+        )
+
+        canonical_key = dataset_key_for_legacy_target("git")
+        assert canonical_key is not None
+
+        t_legacy = datetime(2025, 5, 1, 8, 0, 0, tzinfo=timezone.utc)
+        t_canonical = datetime(2025, 5, 1, 10, 0, 0, tzinfo=timezone.utc)
+        t_new = datetime(2025, 5, 1, 9, 0, 0, tzinfo=timezone.utc)
+
+        legacy_row = SyncWatermark(
+            repo_id=REPO_ID,
+            target="git",
+            org_id=ORG_ID,
+            source_id=REPO_ID,
+            dataset_key="git",
+            last_synced_at=t_legacy,
+        )
+        db_session.add(legacy_row)
+        db_session.flush()
+
+        canonical_row = SyncWatermark(
+            repo_id=REPO_ID,
+            target=canonical_key,
+            org_id=ORG_ID,
+            source_id=REPO_ID,
+            dataset_key=canonical_key,
+            last_synced_at=t_canonical,
+        )
+        db_session.add(canonical_row)
+        db_session.flush()
+
+        set_legacy_repo_watermark(db_session, ORG_ID, REPO_ID, "git", t_new)
+
+        # The legacy row (dataset_key='git') must be gone.
+        remaining_legacy = (
+            db_session.query(SyncWatermark)
+            .filter(
+                SyncWatermark.org_id == ORG_ID,
+                SyncWatermark.repo_id == REPO_ID,
+                SyncWatermark.dataset_key == "git",
+            )
+            .one_or_none()
+        )
+        assert remaining_legacy is None, (
+            "Legacy row with dataset_key='git' must be deleted after merge"
+        )

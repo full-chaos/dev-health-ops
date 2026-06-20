@@ -726,6 +726,9 @@ def test_dispatch_sync_run_does_not_reclaim_fresh_running_units(
         "chord",
         lambda header, callback: type("C", (), {"apply_async": lambda self: None})(),
     )
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run, "apply_async", lambda *a, **k: None
+    )
 
     result = sync_units.dispatch_sync_run(str(run.id))
     assert result["queued_units"] == 0

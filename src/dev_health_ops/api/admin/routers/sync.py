@@ -1354,7 +1354,8 @@ async def trigger_sync_config_backfill(
                     sync_session, config, org_id, "backfill"
                 )
             )
-            await session.commit()
+
+        await session.commit()
 
         result = getattr(run_backfill, "delay")(
             sync_config_id=str(config.id),
@@ -1365,7 +1366,7 @@ async def trigger_sync_config_backfill(
             pending_run_id=pending_run_id,
         )
         backfill_job.celery_task_id = result.id
-        await session.flush()
+        await session.commit()
         return {
             "status": "accepted",
             "config_id": str(config.id),

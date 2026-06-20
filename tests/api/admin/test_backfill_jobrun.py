@@ -11,6 +11,7 @@ Covers:
 from __future__ import annotations
 
 import importlib
+import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -316,6 +317,72 @@ async def test_backfill_fanout_does_not_create_job_run(
         jr_result = await session.execute(select(JobRun))
         runs = list(jr_result.scalars().all())
     assert runs == []
+
+
+@pytest.mark.asyncio
+async def test_backfill_fanout_commits_backfill_job_before_dispatch(
+    client, session_maker, seeded_state
+):
+    ac, _ = client
+
+    create_resp = await _create_sync_config(
+        ac, name="bf-fanout-committed-before-dispatch", provider="github"
+    )
+    assert create_resp.status_code == 201
+    config_id = create_resp.json()["id"]
+
+    async with session_maker() as session:
+        result = await session.execute(
+            select(SyncConfiguration).where(
+                SyncConfiguration.id == uuid.UUID(config_id)
+            )
+        )
+        cfg = result.scalar_one()
+        integration_id = uuid.uuid4()
+        setattr(cfg, "migrated_integration_id", integration_id)
+        cfg.planner_managed = True
+        await session.commit()
+    await _seed_source(session_maker, seeded_state["org_id"], integration_id)
+
+    db_path = session_maker.kw["bind"].url.database
+    visible_at_dispatch: list[tuple[str, int, str | None]] = []
+
+    def _delay_side_effect(**kwargs):
+        backfill_job_id = uuid.UUID(kwargs["backfill_job_id"])
+        assert db_path is not None
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT status, total_chunks, celery_task_id
+                FROM backfill_jobs
+                WHERE id = ?
+                """,
+                (backfill_job_id.hex,),
+            ).fetchone()
+        assert row is not None, "BackfillJob must be committed before dispatch"
+        visible_at_dispatch.append(row)
+        return MagicMock(id="bf-fanout-visible-task-id")
+
+    mock_run_backfill = MagicMock()
+    mock_run_backfill.delay.side_effect = _delay_side_effect
+
+    with (
+        patch("dev_health_ops.workers.sync_tasks.run_backfill", mock_run_backfill),
+        patch.dict("os.environ", {"SYNC_FANOUT_BACKFILL": ""}),
+    ):
+        resp = await ac.post(
+            f"/api/v1/admin/sync-configs/{config_id}/backfill",
+            json={"since": "2026-01-01", "before": "2026-01-08"},
+        )
+
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["mode"] == "fanout"
+    assert visible_at_dispatch == [("pending", 0, None)]
+
+    async with session_maker() as session:
+        result = await session.execute(select(BackfillJob))
+        backfill_job = result.scalar_one()
+    assert backfill_job.celery_task_id == "bf-fanout-visible-task-id"
 
 
 @pytest.mark.asyncio

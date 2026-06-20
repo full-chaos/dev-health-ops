@@ -24,6 +24,12 @@ from dev_health_ops.models import (
 )
 
 
+def _aware(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 @pytest.fixture
 def db_session():
     engine = create_engine("sqlite:///:memory:")
@@ -181,6 +187,9 @@ def test_run_sync_unit_success_persists_status_and_incremental_watermark(
     assert unit.status == SyncRunUnitStatus.SUCCESS.value
     assert unit.attempts == 1
     assert unit.result == {"ok": True}
+    assert unit.lease_owner is None
+    assert unit.lease_expires_at is None
+    assert unit.last_heartbeat_at is not None
     watermark = db_session.query(SyncWatermark).one()
     assert watermark.org_id == run.org_id
     assert watermark.source_id == "full-chaos/dev-health"
@@ -265,6 +274,114 @@ def test_run_sync_unit_failure_persists_failed_and_error(db_session, monkeypatch
     db_session.refresh(unit)
     assert unit.status == SyncRunUnitStatus.FAILED.value
     assert unit.error == "adapter failed"
+    assert unit.lease_owner is None
+    assert unit.lease_expires_at is None
+    assert unit.last_heartbeat_at is not None
+    assert finalize_calls == [((str(run.id),), "sync")]
+
+
+def test_run_sync_unit_sets_and_clears_lease_around_provider_call(
+    db_session, monkeypatch
+):
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(db_session)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    monkeypatch.setenv("SYNC_UNIT_RUNNING_STALE_SECONDS", "120")
+
+    def run_dataset(ctx, runtime):
+        db_session.refresh(unit)
+        assert unit.status == SyncRunUnitStatus.RUNNING.value
+        assert unit.lease_owner is not None
+        assert unit.lease_expires_at is not None
+        assert _aware(unit.lease_expires_at) > datetime.now(timezone.utc)
+        assert unit.last_heartbeat_at is not None
+        return {"ok": True}
+
+    monkeypatch.setattr(dataset_adapters, "run_dataset_unit", run_dataset)
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    db_session.refresh(unit)
+    assert result["status"] == "success"
+    assert unit.status == SyncRunUnitStatus.SUCCESS.value
+    assert unit.lease_owner is None
+    assert unit.lease_expires_at is None
+
+
+def test_heartbeat_extends_live_matching_lease(db_session, monkeypatch):
+    import threading
+
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(db_session)
+    now = datetime.now(timezone.utc)
+    unit.status = SyncRunUnitStatus.RUNNING.value
+    unit.lease_owner = "worker-1"
+    unit.lease_expires_at = now + timedelta(seconds=30)
+    unit.last_heartbeat_at = now
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setattr(sync_units, "_heartbeat_interval_seconds", lambda: 1)
+    monkeypatch.setattr(sync_units, "_running_lease_seconds", lambda: 120)
+
+    class OneHeartbeatStop(threading.Event):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def wait(self, timeout=None):
+            self.calls += 1
+            return self.calls > 1
+
+    sync_units._heartbeat_unit_lease(str(unit.id), "worker-1", OneHeartbeatStop())
+
+    db_session.refresh(unit)
+    lease_expires_at = unit.lease_expires_at
+    last_heartbeat_at = unit.last_heartbeat_at
+    assert lease_expires_at is not None
+    assert last_heartbeat_at is not None
+    assert _aware(lease_expires_at) > now + timedelta(seconds=30)
+    assert _aware(last_heartbeat_at) > now
+
+
+def test_worker_success_after_reconciler_failed_does_not_overwrite_terminal(
+    db_session, monkeypatch
+):
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(db_session)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    finalize_calls = _patch_finalize_apply(monkeypatch)
+
+    def run_dataset(ctx, runtime):
+        db_session.refresh(unit)
+        unit.status = SyncRunUnitStatus.FAILED.value
+        unit.error = "sync unit lease expired"
+        unit.result = {"error_category": "worker_lost"}
+        unit.lease_owner = None
+        unit.lease_expires_at = None
+        db_session.flush()
+        return {"ok": True}
+
+    monkeypatch.setattr(dataset_adapters, "run_dataset_unit", run_dataset)
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    db_session.refresh(unit)
+    assert result == {
+        "status": "skipped",
+        "unit_id": str(unit.id),
+        "reason": "terminal",
+    }
+    assert unit.status == SyncRunUnitStatus.FAILED.value
+    assert unit.error == "sync unit lease expired"
+    assert unit.result == {"error_category": "worker_lost"}
     assert finalize_calls == [((str(run.id),), "sync")]
 
 
@@ -582,7 +699,7 @@ def test_dispatch_sync_run_denies_inactive_migrated_child_config(
     assert parent_config.last_sync_error == "sync configuration is paused"
 
 
-def test_dispatch_sync_run_marks_run_failed_when_chord_enqueue_fails(
+def test_dispatch_sync_run_does_not_terminalize_when_chord_enqueue_fails(
     db_session, monkeypatch
 ):
     from dev_health_ops.workers import sync_units
@@ -619,13 +736,13 @@ def test_dispatch_sync_run_marks_run_failed_when_chord_enqueue_fails(
 
     db_session.refresh(run)
     db_session.refresh(unit)
-    assert run.status == SyncRunStatus.FAILED.value
-    assert run.completed_at is not None
-    assert run.error == "broker down"
-    assert run.result == {"error": "broker down", "phase": "dispatch_enqueue"}
-    assert run.failed_units == 1
-    assert unit.status == SyncRunUnitStatus.FAILED.value
-    assert unit.error == "broker down"
+    assert run.status == SyncRunStatus.DISPATCHING.value
+    assert run.completed_at is None
+    assert run.error is None
+    assert run.result is None
+    assert run.failed_units == 0
+    assert unit.status == SyncRunUnitStatus.DISPATCHING.value
+    assert unit.error is None
 
 
 def test_dispatch_sync_run_redispatches_stale_dispatching_units(
@@ -667,10 +784,6 @@ def test_dispatch_sync_run_redispatches_stale_dispatching_units(
 def test_dispatch_sync_run_does_not_reclaim_stale_running_units(
     db_session, monkeypatch
 ):
-    # F2 regression: a unit that is RUNNING (even stale) must NOT be reclaimed.
-    # run_sync_unit does not heartbeat during the provider call, so reclaiming
-    # a stale RUNNING unit would cause duplicate provider writes.  Durable
-    # dead-worker recovery is a separate follow-up (CHAOS-2577).
     from dev_health_ops.workers import sync_units
 
     run, unit = _seed_run(db_session)
@@ -695,10 +808,8 @@ def test_dispatch_sync_run_does_not_reclaim_stale_running_units(
     )
 
     result = sync_units.dispatch_sync_run(str(run.id))
-    # No units should be dispatched — stale RUNNING is not reclaimed.
     assert result["queued_units"] == 0
     db_session.refresh(unit)
-    # Unit must remain RUNNING, not flipped to DISPATCHING.
     assert unit.status == SyncRunUnitStatus.RUNNING.value
 
 

@@ -36,6 +36,8 @@ Observability (CHAOS-2519):
 from __future__ import annotations
 
 import logging
+import os
+import threading
 import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -252,13 +254,13 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         callback.set(queue="sync")
         try:
             chord(group(signatures), callback).apply_async()
-            # F4: schedule redispatch for capped units INSIDE the try block so
-            # any broker failure marks the run terminal rather than leaving
-            # PLANNED units stranded with no chord/finalizer pending.
             if capped_ids:
                 _schedule_redispatch(sync_run_id)
         except Exception as exc:
-            _mark_dispatch_enqueue_failed(sync_run_id, str(exc))
+            logger.exception(
+                "dispatch_sync_run.publish_failed",
+                extra={"sync_run_id": sync_run_id, "error": str(exc)},
+            )
             raise
         return {"status": "dispatched", "queued_units": len(signatures)}
 
@@ -285,13 +287,13 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
             .count()
         )
     if pending_count > 0:
-        # Deferred units remain — schedule countdown redispatch.
-        # F5: wrap in try/except so a broker failure marks the run terminal
-        # rather than leaving PLANNED units stranded with no follow-up.
         try:
             _schedule_redispatch(sync_run_id)
         except Exception as exc:
-            _mark_dispatch_enqueue_failed(sync_run_id, str(exc))
+            logger.exception(
+                "dispatch_sync_run.redispatch_publish_failed",
+                extra={"sync_run_id": sync_run_id, "error": str(exc)},
+            )
             raise
         logger.info(
             "dispatch_sync_run.noop",
@@ -332,6 +334,9 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
     sync_run_id: str | None = None
     should_finalize = False
     started_at = datetime.now(timezone.utc)
+    lease_owner: str | None = None
+    heartbeat_stop: threading.Event | None = None
+    heartbeat_thread: threading.Thread | None = None
     # Unit context fields for structured logging — populated once ctx is loaded.
     _log_ctx: dict[str, Any] = {"unit_id": unit_id}
     try:
@@ -353,9 +358,14 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     "unit_id": unit_id,
                     "reason": "terminal",
                 }
+            lease_owner = str(uuid.uuid4())
+            lease_expires_at = started_at + timedelta(seconds=_running_lease_seconds())
             unit.status = SyncRunUnitStatus.RUNNING.value
             unit.attempts = int(unit.attempts or 0) + 1
             unit.error = None
+            unit.lease_owner = lease_owner
+            unit.lease_expires_at = lease_expires_at
+            unit.last_heartbeat_at = started_at
             session.flush()
             should_finalize = True
             _log_ctx = {
@@ -368,6 +378,8 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
             }
 
         logger.info("run_sync_unit.started", extra=_log_ctx)
+
+        heartbeat_stop, heartbeat_thread = _start_unit_heartbeat(unit_id, lease_owner)
 
         runtime = _runtime_cache.get(ctx)
         result = run_dataset_unit(ctx, runtime)
@@ -390,10 +402,19 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     "unit_id": unit_id,
                     "reason": "terminal",
                 }
+            if not _unit_lease_is_owned_and_live(unit, lease_owner, completed_at):
+                return {
+                    "status": "skipped",
+                    "unit_id": unit_id,
+                    "reason": "lease_lost",
+                }
             unit.status = SyncRunUnitStatus.SUCCESS.value
             unit.duration_seconds = duration_seconds
             unit.result = dict(result or {})
             unit.error = None
+            unit.lease_owner = None
+            unit.lease_expires_at = None
+            unit.last_heartbeat_at = completed_at
             if ctx.mode in {
                 SyncRunMode.INCREMENTAL.value,
                 SyncRunMode.FULL_RESYNC.value,  # full_resync stamps watermark on success
@@ -436,10 +457,21 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     "unit_id": unit_id,
                     "reason": "terminal",
                 }
+            if lease_owner is not None and not _unit_lease_is_owned_and_live(
+                unit, lease_owner, completed_at
+            ):
+                return {
+                    "status": "skipped",
+                    "unit_id": unit_id,
+                    "reason": "lease_lost",
+                }
             unit.status = SyncRunUnitStatus.FAILED.value
             unit.duration_seconds = duration_seconds
             unit.error = str(exc)
             unit.result = {"error_category": error_category}
+            unit.lease_owner = None
+            unit.lease_expires_at = None
+            unit.last_heartbeat_at = completed_at
             session.flush()
             should_finalize = True
         logger.exception(
@@ -457,6 +489,10 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
             "error_category": error_category,
         }
     finally:
+        if heartbeat_stop is not None:
+            heartbeat_stop.set()
+        if heartbeat_thread is not None:
+            heartbeat_thread.join(timeout=2)
         if should_finalize and sync_run_id is not None:
             try:
                 getattr(finalize_sync_run, "apply_async")(
@@ -821,9 +857,7 @@ def _aggregate_run_status(
 
 def _stale_dispatch_seconds() -> int:
     try:
-        return max(
-            1, int(__import__("os").getenv("SYNC_UNIT_DISPATCH_STALE_SECONDS", "900"))
-        )
+        return max(1, int(os.getenv("SYNC_UNIT_DISPATCH_STALE_SECONDS", "900")))
     except ValueError:
         return 900
 
@@ -832,7 +866,7 @@ def _stale_running_seconds() -> int:
     try:
         return max(
             1,
-            int(__import__("os").getenv("SYNC_UNIT_RUNNING_STALE_SECONDS", "3600")),
+            int(os.getenv("SYNC_UNIT_RUNNING_STALE_SECONDS", "3600")),
         )
     except ValueError:
         return 3600
@@ -842,6 +876,78 @@ def _as_aware(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _running_lease_seconds() -> int:
+    return _stale_running_seconds()
+
+
+def _heartbeat_interval_seconds() -> int:
+    return max(1, min(60, _running_lease_seconds() // 4))
+
+
+def _unit_lease_is_owned_and_live(
+    unit: SyncRunUnit,
+    lease_owner: str | None,
+    now: datetime,
+) -> bool:
+    if lease_owner is None or unit.lease_owner != lease_owner:
+        return False
+    if unit.lease_expires_at is None:
+        return False
+    return _as_aware(unit.lease_expires_at) > now
+
+
+def _start_unit_heartbeat(
+    unit_id: str,
+    lease_owner: str | None,
+) -> tuple[threading.Event, threading.Thread] | tuple[None, None]:
+    if lease_owner is None:
+        return None, None
+    stop_event = threading.Event()
+    thread = threading.Thread(
+        target=_heartbeat_unit_lease,
+        args=(unit_id, lease_owner, stop_event),
+        name=f"sync-unit-heartbeat-{unit_id}",
+        daemon=True,
+    )
+    thread.start()
+    return stop_event, thread
+
+
+def _heartbeat_unit_lease(
+    unit_id: str,
+    lease_owner: str,
+    stop_event: threading.Event,
+) -> None:
+    from dev_health_ops.db import get_postgres_session_sync
+
+    interval = _heartbeat_interval_seconds()
+    lease_seconds = _running_lease_seconds()
+    while not stop_event.wait(interval):
+        now = datetime.now(timezone.utc)
+        lease_expires_at = now + timedelta(seconds=lease_seconds)
+        try:
+            with get_postgres_session_sync() as session:
+                session.execute(
+                    update(SyncRunUnit)
+                    .where(
+                        SyncRunUnit.id == uuid.UUID(str(unit_id)),
+                        SyncRunUnit.status == SyncRunUnitStatus.RUNNING.value,
+                        SyncRunUnit.lease_owner == lease_owner,
+                        SyncRunUnit.lease_expires_at > now,
+                    )
+                    .values(
+                        lease_expires_at=lease_expires_at,
+                        last_heartbeat_at=now,
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+        except Exception:
+            logger.exception(
+                "run_sync_unit.heartbeat_failed",
+                extra={"unit_id": unit_id},
+            )
 
 
 def _schedule_redispatch(sync_run_id: str) -> None:
@@ -854,7 +960,7 @@ def _schedule_redispatch(sync_run_id: str) -> None:
     Raises on broker enqueue failure so the caller can propagate the error
     rather than leaving the run silently non-terminal.
     """
-    countdown = int(__import__("os").getenv("SYNC_DISPATCH_REDISPATCH_COUNTDOWN", "60"))
+    countdown = int(os.getenv("SYNC_DISPATCH_REDISPATCH_COUNTDOWN", "60"))
     try:
         getattr(dispatch_sync_run, "apply_async")(
             args=(sync_run_id,),

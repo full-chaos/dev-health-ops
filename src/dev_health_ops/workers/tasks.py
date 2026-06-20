@@ -23,6 +23,7 @@ from dev_health_ops.workers.sync_batch import (
     _is_batch_eligible,
     _run_sync_for_repo,
 )
+from dev_health_ops.workers.sync_reconciler import reconcile_sync_dispatch
 from dev_health_ops.workers.sync_runtime import (
     _dispatch_post_sync_tasks,
     run_sync_config,
@@ -87,6 +88,7 @@ __all__ = [
     "monitor_queue_depths",
     "phone_home_heartbeat",
     "process_webhook_event",
+    "reconcile_sync_dispatch",
     "reconcile_team_members",
     "dispatch_membership_backfill",
     "run_backfill",

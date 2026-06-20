@@ -33,7 +33,7 @@ from dev_health_ops.api.services.integrations import (
 )
 from dev_health_ops.sync.discovery import discover_sources_for_integration
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
-from dev_health_ops.sync.trigger_routing import mark_sync_run_failed
+from dev_health_ops.sync.trigger_routing import map_sync_mode, mark_sync_run_failed
 from dev_health_ops.workers.sync_units import dispatch_sync_run
 
 from .common import get_session
@@ -383,7 +383,7 @@ async def trigger_integration_sync(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SyncTriggerResponse:
-    """Plan an incremental sync run and dispatch it."""
+    """Plan a sync run and dispatch it. Pass full_resync=true for a full-resync."""
     int_svc = IntegrationService(session, org_id)
     if await int_svc.get_by_id(integration_id) is None:
         raise HTTPException(status_code=404, detail="Integration not found")
@@ -391,7 +391,7 @@ async def trigger_integration_sync(
     request = SyncPlanRequest(
         integration_id=integration_id,
         org_id=org_id,
-        mode="incremental",
+        mode=map_sync_mode("full_resync") if payload.full_resync else "incremental",
         triggered_by="admin-api",
         source_ids=tuple(payload.source_ids)
         if payload.source_ids is not None

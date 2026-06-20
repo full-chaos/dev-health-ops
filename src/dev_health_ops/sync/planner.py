@@ -319,8 +319,13 @@ def _get_tier_backfill_days_cap(session: Session, org_id: str) -> int | None:
         if cap is None:
             return None
         return int(cap)
-    except Exception:
-        # Licensing tables may not exist in test environments; fall through.
+    except Exception as exc:  # noqa: BLE001
+        # Swallow pre-migration OperationalError (missing tier_limits table) and
+        # ValueError from non-UUID org_id strings used in unit tests.
+        from sqlalchemy.exc import OperationalError
+
+        if not isinstance(exc, (OperationalError, ValueError)):
+            raise
         return None
 
 

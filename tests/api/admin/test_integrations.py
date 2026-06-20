@@ -1048,3 +1048,49 @@ async def test_get_sync_run_units_all_success_no_partial_summary(
     data = resp.json()
     assert data["partial_failure_summary"] is None
     assert data["failed_unit_ids"] == []
+
+
+# ---------------------------------------------------------------------------
+# WS-A trigger-path test: full-resync intent mapping (CHAOS-2579)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_trigger_sync_full_resync_flag_sets_mode(client):
+    """POST /integrations/{id}/sync with full_resync=true -> SyncRun.mode == 'full_resync'.""",
+    ac, _ = client
+    created = await _create_integration(ac)
+    integration_id = created["id"]
+
+    captured = {}
+
+    mock_plan = MagicMock()
+    mock_plan.sync_run_id = str(uuid.uuid4())
+    mock_plan.total_units = 0
+    mock_plan.unit_ids = ()
+
+    def _fake_plan(session, request):
+        captured["mode"] = request.mode
+        return mock_plan
+
+    mock_dispatch = MagicMock()
+    mock_dispatch.apply_async = MagicMock()
+    with (
+        patch(
+            "dev_health_ops.api.admin.routers.integrations.plan_sync_run",
+            side_effect=_fake_plan,
+        ),
+        patch(
+            "dev_health_ops.api.admin.routers.integrations.dispatch_sync_run",
+            mock_dispatch,
+        ),
+    ):
+        resp = await ac.post(
+            f"/api/v1/admin/integrations/{integration_id}/sync",
+            json={"full_resync": True},
+        )
+
+    assert resp.status_code == 202
+    from dev_health_ops.models import SyncRunMode
+
+    assert captured["mode"] == SyncRunMode.FULL_RESYNC.value

@@ -35,6 +35,11 @@ from dev_health_ops.workers.sync_tasks import (
     run_work_items_sync,
     sync_team_drift,
 )
+from dev_health_ops.workers.sync_units import (
+    dispatch_sync_run,
+    finalize_sync_run,
+    run_sync_unit,
+)
 from dev_health_ops.workers.system_tasks import (
     health_check,
     phone_home_heartbeat,
@@ -76,6 +81,7 @@ __all__ = [
     "dispatch_scheduled_metrics",
     "dispatch_scheduled_reports",
     "dispatch_scheduled_syncs",
+    "dispatch_sync_run",
     "execute_saved_report",
     "health_check",
     "monitor_queue_depths",
@@ -94,11 +100,13 @@ __all__ = [
     "run_investment_materialize",
     "run_investment_materialize_chunk",
     "finalize_investment_materialize_partitioned",
+    "finalize_sync_run",
     "run_membership_backfill",
     "run_product_telemetry_consumer",
     "run_recommendations_job",
     "run_release_impact_job",
     "run_sync_config",
+    "run_sync_unit",
     "run_work_graph_build",
     "run_work_items_sync",
     "send_billing_notification",

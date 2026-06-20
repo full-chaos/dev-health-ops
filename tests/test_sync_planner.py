@@ -11,6 +11,7 @@ from dev_health_ops.models import (
     Integration,
     IntegrationDataset,
     IntegrationSource,
+    OrgLicense,
     SyncRun,
     SyncRunMode,
     SyncRunStatus,
@@ -479,46 +480,23 @@ def test_none_watermark_behavior_incremental_keeps_since_at_none(db_session):
 
 
 # ---------------------------------------------------------------------------
-# Finding #3 regression: tier cap fails closed
+# Tier cap: non-UUID org_id, unlimited tier, and real missing-table path
 # ---------------------------------------------------------------------------
 
 
-def test_tier_cap_fails_closed_on_non_uuid_org_id(db_session):
-    """Non-UUID org_id must fail closed to default depth (30), not unlimited."""
+def test_tier_cap_non_uuid_org_id_returns_community_default(db_session):
+    """Non-UUID org_id (e.g. test fixtures) returns community default (30).
+
+    This is a defensive guard in _get_tier_backfill_days_cap for callers that
+    pass string org_ids; it does NOT represent the missing-table path.
+    """
     from dev_health_ops.sync.planner import (
         _DEFAULT_INITIAL_SYNC_DEPTH_DAYS,
         _get_tier_backfill_days_cap,
     )
 
     cap = _get_tier_backfill_days_cap(db_session, "not-a-uuid")
-    assert cap == _DEFAULT_INITIAL_SYNC_DEPTH_DAYS, (
-        "Non-UUID org_id must fail closed to default cap, not unlimited"
-    )
-
-
-def test_tier_cap_fails_closed_on_operational_error(db_session, monkeypatch):
-    """OperationalError (missing tier_limits table) must fail closed to default depth."""
-    import uuid as _uuid
-
-    from sqlalchemy.exc import OperationalError
-
-    from dev_health_ops.sync.planner import (
-        _DEFAULT_INITIAL_SYNC_DEPTH_DAYS,
-        _get_tier_backfill_days_cap,
-    )
-
-    def _raise_op_error(*args, **kwargs):
-        raise OperationalError("no such table: tier_limits", None, Exception())
-
-    monkeypatch.setattr(
-        "dev_health_ops.api.services.licensing.TierLimitService.get_limit",
-        _raise_op_error,
-    )
-
-    cap = _get_tier_backfill_days_cap(db_session, str(_uuid.uuid4()))
-    assert cap == _DEFAULT_INITIAL_SYNC_DEPTH_DAYS, (
-        "OperationalError must fail closed to default cap, not unlimited"
-    )
+    assert cap == _DEFAULT_INITIAL_SYNC_DEPTH_DAYS
 
 
 def test_tier_cap_unlimited_tier_does_not_cap_depth(db_session, monkeypatch):
@@ -530,7 +508,6 @@ def test_tier_cap_unlimited_tier_does_not_cap_depth(db_session, monkeypatch):
 
     from dev_health_ops.sync.planner import _get_tier_backfill_days_cap
 
-    # Simulate get_limit returning None (unlimited tier success value)
     monkeypatch.setattr(
         "dev_health_ops.api.services.licensing.TierLimitService.get_limit",
         lambda self, org_id, key: None,
@@ -540,98 +517,81 @@ def test_tier_cap_unlimited_tier_does_not_cap_depth(db_session, monkeypatch):
     assert cap is None, "Unlimited tier must return None (no cap), not a default value"
 
 
-# ---------------------------------------------------------------------------
-# Real-path test: missing tier_limits table does NOT poison the session
-# ---------------------------------------------------------------------------
+def test_tier_limit_service_rolls_back_session_on_missing_table():
+    """TierLimitService._get_db_tier_limits rolls back the session on OperationalError.
+
+    When tier_limits is absent, the failed query aborts the transaction.
+    _get_db_tier_limits must roll back so the caller's session stays usable.
+    """
+    from dev_health_ops.models.git import Base as GitBase
+    from dev_health_ops.api.services.licensing import TierLimitService
+    from dev_health_ops.licensing.types import LicenseTier
+    from tests._helpers import tables_of
+
+    # Schema with NO tier_limits table
+    engine = create_engine("sqlite:///:memory:")
+    GitBase.metadata.create_all(engine, tables=tables_of(Integration))
+
+    with Session(engine) as session:
+        svc = TierLimitService(session)
+        # Must not raise; must return {} (fall through to hardcoded defaults)
+        result = svc._get_db_tier_limits(LicenseTier.COMMUNITY.value)
+        assert result == {}, "Missing tier_limits must return empty dict (use hardcoded defaults)"
+        # Session must be usable after the rollback
+        session.execute(__import__('sqlalchemy').text("SELECT 1"))
+
+    engine.dispose()
 
 
-def test_plan_sync_run_succeeds_when_tier_limits_table_missing():
-    """plan_sync_run must succeed and use depth=30 when tier_limits table is absent.
+def test_plan_sync_run_succeeds_when_tier_limits_unavailable(db_session, monkeypatch):
+    """plan_sync_run must succeed and flush SyncRun when tier cap lookup fails.
 
-    Uses a schema that omits tier_limits so the real OperationalError path fires
-    (not a monkeypatch of get_limit). Asserts (a) the SyncRun row flushes
-    (session NOT poisoned) and (b) cold-start depth falls back to 30.
+    Monkeypatches _get_db_tier_limits to raise OperationalError (same shape as
+    a missing tier_limits table) so we can verify the planner session stays
+    usable end-to-end without needing to replicate the full licensing schema.
+    Asserts (a) SyncRun flushes (session NOT poisoned) and (b) depth falls
+    back to the community hardcoded default (30).
     """
     from datetime import timedelta
 
-    from dev_health_ops.models.git import Base as GitBase
-    from tests._helpers import tables_of
+    from sqlalchemy.exc import OperationalError
 
-    # Build a schema that includes all planner tables but OMITS tier_limits.
-    # tables_of() returns the SQLAlchemy Table objects for the given models.
-    planner_tables = tables_of(
-        Integration,
-        IntegrationDataset,
-        IntegrationSource,
-        SyncRun,
-        SyncRunUnit,
-        SyncWatermark,
+    def _raise_op_error(self, tier):
+        raise OperationalError("no such table: tier_limits", None, Exception())
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.services.licensing.TierLimitService._get_db_tier_limits",
+        _raise_op_error,
     )
-    engine = create_engine("sqlite:///:memory:")
-    GitBase.metadata.create_all(engine, tables=planner_tables)
 
-    with Session(engine) as session:
-        org_id = "no-tier-limits-org"
-        integration = Integration(
-            org_id=org_id,
-            provider="github",
-            name="test",
-            config={"initial_sync_depth": 90},  # would be 90 if tier cap worked
-            is_active=True,
-        )
-        session.add(integration)
-        session.flush()
-        source = IntegrationSource(
-            org_id=org_id,
-            integration_id=integration.id,
-            provider="github",
-            source_type="repo",
-            external_id="owner/repo",
-            name="repo",
-            full_name="owner/repo",
-            metadata_={},
-            is_enabled=True,
-        )
-        dataset = IntegrationDataset(
-            org_id=org_id,
-            integration_id=integration.id,
-            dataset_key="commits",
-            is_enabled=True,
-            options={},
-        )
-        session.add_all([source, dataset])
-        session.flush()
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": 90}
+    db_session.flush()
+    _create_source(db_session, integration, external_id="owner/repo")
+    _create_dataset(db_session, integration, "commits")
 
-        now = datetime.now(timezone.utc)
-        # Must not raise even though tier_limits table is absent
-        plan = plan_sync_run(
-            session,
-            SyncPlanRequest(
-                integration_id=str(integration.id),
-                org_id=org_id,
-                mode=SyncRunMode.INCREMENTAL.value,
-                triggered_by="test",
-            ),
-        )
+    now = datetime.now(timezone.utc)
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="test",
+        ),
+    )
 
-        # (a) SyncRun flushed — session NOT poisoned
-        run = session.get(SyncRun, plan.sync_run_id)
-        assert run is not None, "SyncRun must flush even when tier_limits is absent"
-        assert run.status == SyncRunStatus.PLANNED.value
+    # (a) SyncRun flushed — session NOT poisoned
+    run = db_session.get(SyncRun, plan.sync_run_id)
+    assert run is not None, "SyncRun must flush even when tier_limits is unavailable"
+    assert run.status == SyncRunStatus.PLANNED.value
 
-        # (b) Depth falls back to 30 (community default), not 90
-        units = (
-            session.query(SyncRunUnit)
-            .filter(SyncRunUnit.sync_run_id == plan.sync_run_id)
-            .all()
-        )
-        assert len(units) == 1
-        unit = units[0]
-        assert unit.since_at is not None
-        expected_start = now - timedelta(days=30)
-        since = unit.since_at.replace(tzinfo=timezone.utc)
-        assert abs((since - expected_start).total_seconds()) < 2, (
-            f"Expected depth=30 fallback, got since_at={since} (expected ~{expected_start})"
-        )
-
-    engine.dispose()
+    # (b) Depth falls back to community hardcoded default (30), not 90
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    assert units[0].since_at is not None
+    expected_start = now - timedelta(days=30)
+    since = units[0].since_at.replace(tzinfo=timezone.utc)
+    assert abs((since - expected_start).total_seconds()) < 2, (
+        f"Expected depth=30 (community default), got since_at={since}"
+    )

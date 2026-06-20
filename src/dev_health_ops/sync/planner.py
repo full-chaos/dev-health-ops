@@ -311,10 +311,12 @@ def _get_tier_backfill_days_cap(session: Session, org_id: str) -> int | None:
     """Return the tier backfill_days cap for the org, or None if unlimited.
 
     None means the tier is genuinely unlimited (enterprise) — do NOT cap.
-    Fails CLOSED only on actual lookup FAILURES:
-      - ValueError (non-UUID org_id) → return 30 (community default)
-      - OperationalError (missing tier_limits table) → rollback + return 30
-    All other exceptions propagate.
+    The only failure this function handles directly is a non-UUID org_id
+    (e.g. test fixtures): returns the community default (30) so depth is
+    bounded rather than unbounded.
+    Missing-table OperationalErrors are handled inside TierLimitService
+    (_get_db_tier_limits rolls back + falls through to hardcoded tier
+    defaults), so they never surface here.
     """
     try:
         import uuid as _uuid
@@ -329,19 +331,8 @@ def _get_tier_backfill_days_cap(session: Session, org_id: str) -> int | None:
             return None
         return int(cap)
     except ValueError:
-        # Non-UUID org_id (e.g. test fixtures): fail closed to community default.
+        # Non-UUID org_id (e.g. test fixtures): return community default.
         return _DEFAULT_INITIAL_SYNC_DEPTH_DAYS
-    except Exception as exc:  # noqa: BLE001
-        from sqlalchemy.exc import OperationalError
-
-        if isinstance(exc, OperationalError):
-            # Missing tier_limits table (pre-migration): roll back and fail closed.
-            try:
-                session.rollback()
-            except Exception:
-                pass
-            return _DEFAULT_INITIAL_SYNC_DEPTH_DAYS
-        raise
 
 
 def _resolve_windows(

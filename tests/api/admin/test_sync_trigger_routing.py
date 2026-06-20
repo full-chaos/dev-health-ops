@@ -544,3 +544,77 @@ async def test_planner_enqueue_failure_marks_run_failed_and_503(client, session_
     # Legacy path NOT used -- we surfaced the queue outage instead.
     fake_run_sync_config.apply_async.assert_not_called()
     fake_dispatch_batch_sync.apply_async.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# WS-A CHAOS-2579: migrated config full_resync intent mapping
+# ---------------------------------------------------------------------------
+
+
+def test_plan_request_for_config_promotes_full_resync_from_sync_options():
+    """Migrated config with sync_options.full_resync=True -> mode=full_resync.
+
+    Mirrors legacy worker semantics (sync_runtime.py:656 / sync_batch.py:657).
+    """
+    from dev_health_ops.models import SyncRunMode
+    from dev_health_ops.sync.trigger_routing import plan_request_for_config
+
+    config = SyncConfiguration(
+        name="full-resync-config",
+        provider="github",
+        org_id=str(uuid.uuid4()),
+        sync_targets=["git"],
+        sync_options={"full_resync": True},
+        migrated_integration_id=uuid.uuid4(),
+    )
+
+    request = plan_request_for_config(config, triggered_by="test")
+
+    assert request is not None
+    assert request.mode == SyncRunMode.FULL_RESYNC.value, (
+        "sync_options.full_resync=True must promote mode to full_resync"
+    )
+
+
+def test_plan_request_for_config_does_not_override_explicit_backfill():
+    """Explicit mode=backfill is NOT overridden even if sync_options.full_resync=True."""
+    from dev_health_ops.models import SyncRunMode
+    from dev_health_ops.sync.trigger_routing import plan_request_for_config
+
+    config = SyncConfiguration(
+        name="full-resync-config",
+        provider="github",
+        org_id=str(uuid.uuid4()),
+        sync_targets=["git"],
+        sync_options={"full_resync": True},
+        migrated_integration_id=uuid.uuid4(),
+    )
+
+    request = plan_request_for_config(
+        config, triggered_by="test", mode=SyncRunMode.BACKFILL.value
+    )
+
+    assert request is not None
+    assert request.mode == SyncRunMode.BACKFILL.value, (
+        "Explicit backfill mode must not be overridden by sync_options.full_resync"
+    )
+
+
+def test_plan_request_for_config_incremental_without_full_resync_flag():
+    """Migrated config without sync_options.full_resync stays incremental."""
+    from dev_health_ops.models import SyncRunMode
+    from dev_health_ops.sync.trigger_routing import plan_request_for_config
+
+    config = SyncConfiguration(
+        name="incremental-config",
+        provider="github",
+        org_id=str(uuid.uuid4()),
+        sync_targets=["git"],
+        sync_options={},
+        migrated_integration_id=uuid.uuid4(),
+    )
+
+    request = plan_request_for_config(config, triggered_by="test")
+
+    assert request is not None
+    assert request.mode == SyncRunMode.INCREMENTAL.value

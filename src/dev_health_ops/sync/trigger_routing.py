@@ -148,6 +148,13 @@ def plan_request_for_config(
     * **Child config** (``migrated_source_id`` set): scope the run to that one
       source, and to the dataset keys derived from the child's legacy targets so
       the migrated trigger covers exactly what the child used to.
+
+    Mode resolution (D4 / D5 compat): if the caller passes the default
+    ``mode="incremental"`` and the config's ``sync_options`` carries a truthy
+    ``full_resync`` flag (legacy worker semantics), the mode is promoted to
+    ``SyncRunMode.FULL_RESYNC`` via :func:`map_sync_mode`. An explicit
+    ``mode="backfill"`` or ``mode="full_resync"`` from the caller is never
+    overridden.
     """
     integration_id = getattr(config, "migrated_integration_id", None)
     if integration_id is None:
@@ -161,6 +168,15 @@ def plan_request_for_config(
         child_dataset_keys = _dataset_keys_for_config(config)
         # Empty => fall back to all enabled datasets rather than an empty run.
         dataset_keys = child_dataset_keys or None
+
+    # Promote incremental -> full_resync when the config's sync_options carry
+    # the legacy full_resync flag (mirrors sync_runtime.py:656 / sync_batch.py:657).
+    # Only promote when the caller passed the default "incremental" mode; an
+    # explicit backfill or full_resync from the caller is never overridden.
+    if mode == SyncRunMode.INCREMENTAL.value:
+        sync_options = getattr(config, "sync_options", None) or {}
+        if bool(sync_options.get("full_resync")):
+            mode = map_sync_mode("full_resync")
 
     return SyncPlanRequest(
         integration_id=str(integration_id),

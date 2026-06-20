@@ -739,8 +739,10 @@ def test_dispatch_sync_run_does_not_reclaim_fresh_running_units(
 # ---------------------------------------------------------------------------
 
 
-def test_run_sync_unit_success_stamps_watermark_for_full_resync(db_session, monkeypatch):
-    """Successful full_resync unit must advance the watermark (end-to-end).""",
+def test_run_sync_unit_success_stamps_watermark_for_full_resync(
+    db_session, monkeypatch
+):
+    ("""Successful full_resync unit must advance the watermark (end-to-end).""",)
     from dev_health_ops.processors import dataset_adapters
     from dev_health_ops.workers.sync_units import run_sync_unit
 

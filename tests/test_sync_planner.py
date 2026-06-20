@@ -507,7 +507,7 @@ def test_tier_cap_fails_closed_on_operational_error(db_session, monkeypatch):
     )
 
     def _raise_op_error(*args, **kwargs):
-        raise OperationalError("no such table: tier_limits", None, None)
+        raise OperationalError("no such table: tier_limits", None, Exception())
 
     monkeypatch.setattr(
         "dev_health_ops.api.services.licensing.TierLimitService.get_limit",

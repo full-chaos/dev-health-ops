@@ -388,7 +388,16 @@ def set_legacy_repo_watermark(
     populating ``dataset_key`` with the canonical key resolved via the alias
     map (D4 one-way toward canonical).
 
-    Monotonic advance is enforced: ``last_synced_at = max(existing, new)``.
+    When a pre-existing legacy row has ``dataset_key`` equal to the raw target
+    string (e.g. ``dataset_key='git'``) rather than the canonical key (e.g.
+    ``'commits'``), the row is reconciled in-place: ``dataset_key`` is updated
+    to the canonical key so that planner reads via
+    ``get_watermark(..., 'commits')`` find the row (CHAOS-2573/D4).
+
+    Monotonic advance is enforced at the DB level on PostgreSQL using
+    ``GREATEST(COALESCE(last_synced_at, :ts), :ts)`` so that two concurrent
+    legacy completions cannot race and roll the watermark backwards
+    (CHAOS-2578).  SQLite (tests only) falls back to Python-level comparison.
     """
     canonical_key = dataset_key_for_legacy_target(target) or target
 
@@ -426,22 +435,51 @@ def set_legacy_repo_watermark(
         )
         session.add(row)
     else:
-        # Monotonic: never roll back the watermark (CHAOS-2578).
-        existing = row.last_synced_at
-        if existing is not None:
-            existing_utc = (
-                existing.replace(tzinfo=timezone.utc)
-                if existing.tzinfo is None
-                else existing.astimezone(timezone.utc)
+        # Finding 1 (CHAOS-2573/D4): reconcile dataset_key to the canonical key
+        # when the existing row still carries the raw legacy target string as its
+        # dataset_key (e.g. dataset_key='git' instead of 'commits').  Without
+        # this, get_watermark(..., 'commits') cannot find the row because the
+        # alias fallback only triggers when the *requested* key is a legacy
+        # target, not when the *stored* key is one.
+        if row.dataset_key != canonical_key:
+            row.dataset_key = canonical_key
+            # Also ensure source_id is populated (may be NULL on very old rows).
+            if not row.source_id:
+                row.source_id = repo_id
+
+        # Finding 2 (CHAOS-2578): atomic monotonic write — reuse the same
+        # GREATEST(COALESCE(...), :ts) pattern as set_watermark() so that two
+        # concurrent legacy completions cannot race and roll the watermark back.
+        dialect_name = session.bind.dialect.name if session.bind is not None else ""
+        if dialect_name == "postgresql":
+            session.execute(
+                update(SyncWatermark)
+                .where(SyncWatermark.id == row.id)
+                .values(
+                    last_synced_at=func.greatest(
+                        func.coalesce(SyncWatermark.last_synced_at, timestamp),
+                        timestamp,
+                    ),
+                    updated_at=datetime.now(timezone.utc),
+                )
             )
-            new_utc = (
-                timestamp.replace(tzinfo=timezone.utc)
-                if timestamp.tzinfo is None
-                else timestamp.astimezone(timezone.utc)
-            )
-            if new_utc <= existing_utc:
-                session.flush()
-                return
-        row.last_synced_at = timestamp
-        row.updated_at = datetime.now(timezone.utc)
+        else:
+            # SQLite / other dialects: Python-level monotonic check.
+            existing = row.last_synced_at
+            if existing is not None:
+                existing_utc = (
+                    existing.replace(tzinfo=timezone.utc)
+                    if existing.tzinfo is None
+                    else existing.astimezone(timezone.utc)
+                )
+                new_utc = (
+                    timestamp.replace(tzinfo=timezone.utc)
+                    if timestamp.tzinfo is None
+                    else timestamp.astimezone(timezone.utc)
+                )
+                if new_utc <= existing_utc:
+                    session.flush()
+                    return
+            row.last_synced_at = timestamp
+            row.updated_at = datetime.now(timezone.utc)
     session.flush()

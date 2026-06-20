@@ -1057,9 +1057,7 @@ async def test_get_sync_run_units_all_success_no_partial_summary(
 
 @pytest.mark.asyncio
 async def test_trigger_sync_full_resync_flag_sets_mode(client):
-    (
-        """POST /integrations/{id}/sync with full_resync=true -> SyncRun.mode == 'full_resync'.""",
-    )
+    """POST /integrations/{id}/sync with full_resync=true -> SyncRun.mode == 'full_resync'."""
     ac, _ = client
     created = await _create_integration(ac)
     integration_id = created["id"]

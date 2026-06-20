@@ -51,7 +51,11 @@ def test_rolling_forecast_is_deterministic_for_constant_throughput() -> None:
     assert result.primary_risk.kind is RiskKind.NONE
 
 
-def test_insufficient_history_uses_observed_weekly_rate() -> None:
+def test_insufficient_history_returns_no_estimate() -> None:
+    # 14 days is shorter than a single 4-week window. The old math floored the
+    # partial week to 1.0 and reported a confident 21.0/week estimate; the
+    # honest contract now flags the window as insufficient and emits no
+    # samples, so the forecast yields no point estimate (CHAOS-2574).
     history = _history([3] * 14)
 
     window = rolling_weekly_throughput(history, 4)
@@ -62,11 +66,32 @@ def test_insufficient_history_uses_observed_weekly_rate() -> None:
     )
 
     assert window.insufficient_history
-    assert window.mean_weekly_throughput == 21.0
+    assert window.mean_weekly_throughput == 0.0
+    assert window.samples == ()
     assert result.insufficient_history
-    assert result.p50_weeks == 2
-    assert result.p75_weeks == 2
-    assert result.p90_weeks == 2
+    assert result.p50_weeks is None
+    assert result.p75_weeks is None
+    assert result.p90_weeks is None
+
+
+def test_short_history_windows_not_identical() -> None:
+    # One day of five completed items cannot support a 4/8/12 week rolling
+    # mean. The old math collapsed every window to one fabricated value
+    # (CHAOS-2574); the honest contract flags each window insufficient and
+    # emits no point estimate.
+    history = _history([5])
+
+    windows = [rolling_weekly_throughput(history, weeks) for weeks in (4, 8, 12)]
+
+    assert all(window.insufficient_history for window in windows)
+    assert all(window.samples == () for window in windows)
+    assert all(window.mean_weekly_throughput == 0.0 for window in windows)
+
+    result = forecast_throughput_capacity(history=history, backlog_size=20)
+    assert result.insufficient_history
+    assert result.p50_weeks is None
+    assert result.p75_weeks is None
+    assert result.p90_weeks is None
 
 
 def test_forecast_percentiles_use_distribution_when_selected_window_collapses() -> None:

@@ -115,10 +115,21 @@ def rolling_weekly_throughput(
         return RollingWindowThroughput(window_weeks, 0.0, (), True)
 
     if len(throughputs) < window_days:
-        total = sum(throughputs)
-        observed_weeks = max(len(throughputs) / MIN_DAYS_PER_WEEK, 1.0)
-        weekly_mean = total / observed_weeks
-        return RollingWindowThroughput(window_weeks, weekly_mean, (weekly_mean,), True)
+        # Insufficient history for this window size. Emit a no-estimate
+        # contract instead of fabricating a point estimate from a partial
+        # window. The previous `total / max(weeks, 1.0)` floor ignored
+        # ``window_weeks`` and produced the SAME value for every window size,
+        # collapsing 4w/8w/12w into one number that masqueraded as a confident
+        # forecast (CHAOS-2574). Honest behaviour: no samples, zero mean,
+        # flagged insufficient. Percentile selection falls back to a shorter
+        # window that DOES have enough history; when none do, the forecast
+        # returns no estimate.
+        return RollingWindowThroughput(
+            window_weeks=window_weeks,
+            mean_weekly_throughput=0.0,
+            samples=(),
+            insufficient_history=True,
+        )
 
     rolling = [
         sum(throughputs[index : index + window_days]) / window_weeks

@@ -357,3 +357,86 @@ async def test_load_backlog_uses_equality_for_single_team(ctx):
     assert "team_id = {team_id:String}" in sql
     assert params["team_id"] == "team-a"
     assert "team_ids" not in params
+
+
+def _insufficient_result() -> ThroughputForecastResult:
+    """Short-history forecast: no estimate, every window flagged insufficient."""
+    return ThroughputForecastResult(
+        forecast_id="forecast-short",
+        computed_at=datetime(2026, 5, 22, 12, 0, 0, tzinfo=timezone.utc),
+        team_id=None,
+        work_scope_id=None,
+        backlog_size=20,
+        history_weeks=12,
+        p50_weeks=None,
+        p75_weeks=None,
+        p90_weeks=None,
+        rolling_windows=tuple(
+            RollingWindowThroughput(
+                window_weeks=weeks,
+                mean_weekly_throughput=0.0,
+                samples=(),
+                insufficient_history=True,
+            )
+            for weeks in (4, 8, 12)
+        ),
+        primary_risk=_risk(RiskKind.NONE),
+        wip_congestion=_risk(RiskKind.WIP),
+        review_bottleneck=_risk(RiskKind.REVIEW),
+        incident_load=_risk(RiskKind.INCIDENT),
+        insufficient_history=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolver_surfaces_insufficient_history_and_sample_count(ctx):
+    """Resolver output must populate insufficientHistory + per-window sampleCount."""
+    from dev_health_ops.api.graphql.models.inputs import ThroughputForecastInput
+    from dev_health_ops.api.graphql.resolvers.forecast import (
+        resolve_throughput_forecast,
+    )
+
+    with (
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_throughput_history",
+            new_callable=AsyncMock,
+            return_value=_history(),
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_work_item_overlay",
+            new_callable=AsyncMock,
+            return_value=(0.0, 0.0),
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_review_overlay",
+            new_callable=AsyncMock,
+            return_value=0.0,
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_incident_overlay",
+            new_callable=AsyncMock,
+            return_value=0.0,
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_backlog",
+            new_callable=AsyncMock,
+            return_value=20,
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast.forecast_throughput_capacity",
+            return_value=_insufficient_result(),
+        ),
+    ):
+        result = await resolve_throughput_forecast(ctx, ThroughputForecastInput())
+
+    assert result is not None
+    # Top-level honesty flag surfaced for the UI warning/disabled state.
+    assert result.insufficient_history is True
+    # No point estimate emitted under short history.
+    assert result.p50_weeks is None
+    assert result.p75_weeks is None
+    assert result.p90_weeks is None
+    # Per-window provenance: every window carries sample_count + insufficient flag.
+    assert [w.window_weeks for w in result.rolling_windows] == [4, 8, 12]
+    assert all(w.sample_count == 0 for w in result.rolling_windows)
+    assert all(w.insufficient_history for w in result.rolling_windows)

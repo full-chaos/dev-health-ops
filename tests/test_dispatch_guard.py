@@ -653,7 +653,9 @@ def test_finalize_passes_full_datetime_work_graph_window(db_session, monkeypatch
         yield s
         s.commit()
 
-    monkeypatch.setattr(db, "get_postgres_session_sync", lambda: _fake_session_ctx(db_session))
+    monkeypatch.setattr(
+        db, "get_postgres_session_sync", lambda: _fake_session_ctx(db_session)
+    )
 
     # Mark the unit SUCCESS with a known since_at / before_at window.
     since_dt = datetime(2024, 3, 1, 6, 0, 0, tzinfo=timezone.utc)
@@ -673,7 +675,9 @@ def test_finalize_passes_full_datetime_work_graph_window(db_session, monkeypatch
     def fake_dispatch_post_sync(**kwargs):
         captured_kwargs.update(kwargs)
 
-    monkeypatch.setattr(sync_units, "_dispatch_post_sync_tasks", fake_dispatch_post_sync)
+    monkeypatch.setattr(
+        sync_units, "_dispatch_post_sync_tasks", fake_dispatch_post_sync
+    )
     # Ensure legacy_targets is non-empty so _dispatch_post_sync_tasks is called.
     monkeypatch.setattr(
         sync_units,
@@ -756,7 +760,9 @@ def _make_dispatch_harness(db_session, monkeypatch, *, unit_count, cap, active_s
         yield s
         s.commit()
 
-    monkeypatch.setattr(db, "get_postgres_session_sync", lambda: _fake_session_ctx(db_session))
+    monkeypatch.setattr(
+        db, "get_postgres_session_sync", lambda: _fake_session_ctx(db_session)
+    )
 
     return run, units, integration, source
 
@@ -795,10 +801,16 @@ def test_chord_capped_redispatch_failure_marks_run_terminal(db_session, monkeypa
         def apply_async(self):
             return None
 
-    monkeypatch.setattr(sync_units.run_sync_unit, "s", lambda unit_id: FakeUnitSig(unit_id))
-    monkeypatch.setattr(sync_units.finalize_sync_run, "si", lambda run_id: FakeFinalizeSig(run_id))
+    monkeypatch.setattr(
+        sync_units.run_sync_unit, "s", lambda unit_id: FakeUnitSig(unit_id)
+    )
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run, "si", lambda run_id: FakeFinalizeSig(run_id)
+    )
     monkeypatch.setattr(sync_units, "group", list)
-    monkeypatch.setattr(sync_units, "chord", lambda header, callback: FakeChord(header, callback))
+    monkeypatch.setattr(
+        sync_units, "chord", lambda header, callback: FakeChord(header, callback)
+    )
 
     call_count = [0]
 
@@ -819,7 +831,9 @@ def test_chord_capped_redispatch_failure_marks_run_terminal(db_session, monkeypa
             call_count[0] += 1
             return None
 
-    monkeypatch.setattr(sync_units, "chord", lambda header, callback: CountingChord(header, callback))
+    monkeypatch.setattr(
+        sync_units, "chord", lambda header, callback: CountingChord(header, callback)
+    )
     monkeypatch.setattr(
         sync_units.dispatch_sync_run,
         "apply_async",
@@ -840,9 +854,7 @@ def test_chord_capped_redispatch_failure_marks_run_terminal(db_session, monkeypa
         f"run must be FAILED after redispatch enqueue failure, got {run.status}"
     )
     # All non-terminal units must be marked FAILED.
-    non_terminal = [
-        u for u in units if u.status not in {"success", "failed"}
-    ]
+    non_terminal = [u for u in units if u.status not in {"success", "failed"}]
     assert len(non_terminal) == 0, (
         f"all units must be terminal after enqueue failure, got {[u.status for u in non_terminal]}"
     )
@@ -877,9 +889,7 @@ def test_noop_redispatch_failure_marks_run_terminal(db_session, monkeypatch):
     assert run.status == SyncRunStatus.FAILED.value, (
         f"run must be FAILED after noop redispatch failure, got {run.status}"
     )
-    non_terminal = [
-        u for u in units if u.status not in {"success", "failed"}
-    ]
+    non_terminal = [u for u in units if u.status not in {"success", "failed"}]
     assert len(non_terminal) == 0, (
         f"all units must be terminal after noop enqueue failure, got {[u.status for u in non_terminal]}"
     )

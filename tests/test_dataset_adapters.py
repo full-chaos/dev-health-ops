@@ -98,6 +98,7 @@ def test_github_code_datasets_call_repo_processor_with_explicit_flags(
     assert kwargs["owner"] == "full-chaos"
     assert kwargs["repo_name"] == "dev-health"
     assert kwargs["since"] == WINDOW_START
+    assert kwargs["until"] == WINDOW_END
     assert kwargs["backfill_missing"] is False
     assert kwargs["fetch_blame"] is False
     assert kwargs["max_commits"] is None
@@ -179,6 +180,7 @@ def test_gitlab_code_datasets_call_project_processor_with_explicit_flags(
     assert kwargs["token"] == "gitlab-token"
     assert kwargs["gitlab_url"] == "https://gitlab.example"
     assert kwargs["since"] == WINDOW_START
+    assert kwargs["until"] == WINDOW_END
     assert kwargs["backfill_missing"] is False
     assert kwargs["fetch_blame"] is False
     for flag_name, expected in flags.items():

@@ -93,12 +93,16 @@ def _fetch_gitlab_commits_sync(
     max_commits: int | None,
     repo_id,
     since: datetime | None = None,
+    until: datetime | None = None,
 ):
     """Sync helper to fetch GitLab commits."""
     list_params: dict[str, object] = {"per_page": 100, "get_all": False}
     if since is not None:
         since_iso = since.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
         list_params["since"] = since_iso
+    if until is not None:
+        until_iso = until.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        list_params["until"] = until_iso
 
     commit_objects = []
     count = 0
@@ -133,6 +137,10 @@ def _fetch_gitlab_commits_sync(
                     committed_when = safe_parse_datetime(commit.committed_date)
                 except Exception:
                     committed_when = None
+
+            if until is not None and isinstance(committed_when, datetime):
+                if committed_when.astimezone(timezone.utc) > until:
+                    continue
 
             if since is not None and isinstance(committed_when, datetime):
                 if committed_when.astimezone(timezone.utc) < since:
@@ -599,6 +607,7 @@ def _sync_gitlab_mrs_to_store(
     state: str = "all",
     gate: Any = None,
     since: datetime | None = None,
+    until: datetime | None = None,
 ) -> int:
     """Fetch all MRs for a project and insert them in batches.
 
@@ -680,6 +689,13 @@ def _sync_gitlab_mrs_to_store(
             created_at = safe_parse_datetime(mr.get("created_at"))
 
             comments_count = int(mr.get("user_notes_count") or 0)
+
+            if (
+                until is not None
+                and isinstance(updated_at, datetime)
+                and updated_at.astimezone(timezone.utc) > until
+            ):
+                continue
 
             if (
                 since is not None
@@ -1419,6 +1435,7 @@ async def _sync_gitlab_commits(
     loop: asyncio.AbstractEventLoop,
     max_commits: int | None,
     since: datetime | None,
+    until: datetime | None = None,
 ) -> tuple[list[str], int]:
     if max_commits is None:
         logging.info("Fetching all commits from GitLab...")
@@ -1431,6 +1448,7 @@ async def _sync_gitlab_commits(
         max_commits,
         db_repo.id,
         since,
+        until,
     )
     if commit_objects:
         await ingestion_sink.insert_git_commit_data(commit_objects)
@@ -1446,6 +1464,7 @@ async def _sync_gitlab_commit_stats(
     loop: asyncio.AbstractEventLoop,
     max_commits: int | None,
     since: datetime | None,
+    until: datetime | None = None,
     commit_hashes: list[str] | None = None,
 ) -> int:
     if commit_hashes is None:
@@ -1456,6 +1475,7 @@ async def _sync_gitlab_commit_stats(
             max_commits,
             db_repo.id,
             since,
+            until,
         )
     logging.info("Fetching commit stats from GitLab...")
     stats_limit = resolve_commit_stats_limit(len(commit_hashes), max_commits, since)
@@ -1606,6 +1626,7 @@ async def _sync_gitlab_test_reports(
     ingestion_sink: IngestionSink,
     loop: asyncio.AbstractEventLoop,
     since: datetime | None,
+    until: datetime | None = None,
 ) -> None:
     """Ingest TestOps data for one GitLab project (CHAOS-2370).
 
@@ -1659,6 +1680,13 @@ async def _sync_gitlab_test_reports(
     case_rows: list[Any] = []
     coverage_rows: list[Any] = []
     for run_id, report, started_at, finished_at in test_reports:
+        if (
+            until is not None
+            and isinstance(started_at, datetime)
+            and started_at.astimezone(timezone.utc) > until
+        ):
+            continue
+
         suites, cases = await process_gitlab_test_report(
             repo_id=repo_id,
             run_id=run_id,
@@ -1691,6 +1719,32 @@ async def _sync_gitlab_test_reports(
     )
 
 
+def _filter_after(
+    records: list[Any], until: datetime | None, *fields: str
+) -> list[Any]:
+    """Drop records whose timestamp falls after the window upper bound.
+
+    Code-dataset fetchers page newest-first under a flat cap, so an
+    inclusive post-fetch upper-bound filter is equivalent to filtering
+    inside the fetch loop while keeping each fetcher signature stable
+    (CHAOS-2573). ``until`` is inclusive, mirroring the inclusive lower
+    bound applied for ``since``.
+    """
+    if until is None:
+        return records
+    out: list[Any] = []
+    for record in records:
+        ts = None
+        for field in fields:
+            ts = getattr(record, field, None)
+            if ts is not None:
+                break
+        if isinstance(ts, datetime) and ts.astimezone(timezone.utc) > until:
+            continue
+        out.append(record)
+    return out
+
+
 async def process_gitlab_project(
     store: GitSyncStore | Any,
     project_id: int,
@@ -1708,6 +1762,7 @@ async def process_gitlab_project(
     sync_tests: bool = False,
     backfill_missing: bool = True,
     since: datetime | None = None,
+    until: datetime | None = None,
     sync_commits: bool | None = None,
     sync_commit_stats: bool | None = None,
     sync_files: bool | None = None,
@@ -1790,6 +1845,7 @@ async def process_gitlab_project(
                 loop=loop,
                 max_commits=max_commits,
                 since=since,
+                until=until,
             )
 
         if run_commit_stats:
@@ -1800,6 +1856,7 @@ async def process_gitlab_project(
                 loop=loop,
                 max_commits=max_commits,
                 since=since,
+                until=until,
                 commit_hashes=commit_hashes,
             )
 
@@ -1818,6 +1875,7 @@ async def process_gitlab_project(
                 "all",
                 None,
                 since,
+                until,
             )
             logging.info(f"Stored {mr_total} merge requests from GitLab")
 
@@ -1831,6 +1889,7 @@ async def process_gitlab_project(
                 BATCH_SIZE,
                 since,
             )
+            pipeline_runs = _filter_after(pipeline_runs, until, "started_at")
             if pipeline_runs:
                 await ingestion_sink.insert_ci_pipeline_runs(pipeline_runs)
                 logging.info(f"Stored {len(pipeline_runs)} pipeline runs from GitLab")
@@ -1846,6 +1905,7 @@ async def process_gitlab_project(
                 ingestion_sink=ingestion_sink,
                 loop=loop,
                 since=since,
+                until=until,
             )
 
         if sync_deployments:
@@ -1859,6 +1919,7 @@ async def process_gitlab_project(
                 BATCH_SIZE,
                 since,
             )
+            deployments = _filter_after(deployments, until, "deployed_at", "started_at")
             if deployments:
                 await ingestion_sink.insert_deployments(deployments)
                 logging.info(f"Stored {len(deployments)} deployments from GitLab")
@@ -1874,6 +1935,7 @@ async def process_gitlab_project(
                 BATCH_SIZE,
                 since,
             )
+            incidents = _filter_after(incidents, until, "started_at")
             if incidents:
                 await ingestion_sink.insert_incidents(incidents)
                 logging.info(f"Stored {len(incidents)} incidents from GitLab")
@@ -1889,6 +1951,7 @@ async def process_gitlab_project(
                 BATCH_SIZE,
                 since,
             )
+            security_alerts = _filter_after(security_alerts, until, "created_at")
             if security_alerts:
                 insert_security_alerts = getattr(
                     ingestion_sink, "insert_security_alerts"

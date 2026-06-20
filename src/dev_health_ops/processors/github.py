@@ -109,13 +109,16 @@ def _fetch_github_commits_sync(
     max_commits: int | None,
     repo_id,
     since: datetime | None = None,
+    until: datetime | None = None,
 ):
     """Sync helper to fetch and parse GitHub commits."""
     raw_commits = []
+    commits_kwargs: dict[str, Any] = {}
     if since is not None:
-        commits_iter = gh_repo.get_commits(since=since)
-    else:
-        commits_iter = gh_repo.get_commits()
+        commits_kwargs["since"] = since
+    if until is not None:
+        commits_kwargs["until"] = until
+    commits_iter = gh_repo.get_commits(**commits_kwargs)
 
     for commit in commits_iter:
         raw_commits.append(commit)
@@ -509,6 +512,7 @@ def _collect_github_pr_objects(
     gate: "RateLimitGate",
     state: str = "all",
     since: datetime | None = None,
+    until: datetime | None = None,
 ) -> tuple[list[GitPullRequest], list[Any]]:
     """Collect raw PR objects and build GitPullRequest records without per-PR review/comment API calls.
 
@@ -552,6 +556,14 @@ def _collect_github_pr_objects(
                 )
                 continue
             raise
+
+        if until is not None:
+            updated_at = getattr(gh_pr, "updated_at", None)
+            if (
+                isinstance(updated_at, datetime)
+                and updated_at.astimezone(timezone.utc) > until
+            ):
+                continue
 
         if since is not None and sorted_by_updated:
             updated_at = getattr(gh_pr, "updated_at", None)
@@ -679,6 +691,7 @@ def _sync_github_prs_to_store(
     state: str = "all",
     gate: RateLimitGate | None = None,
     since: datetime | None = None,
+    until: datetime | None = None,
 ) -> int:
     """Fetch all PRs for a repo and insert them in batches.
 
@@ -707,6 +720,7 @@ def _sync_github_prs_to_store(
         gate=gate,
         state=state,
         since=since,
+        until=until,
     )
     total = len(pr_objects)
 
@@ -1071,6 +1085,7 @@ async def _sync_github_commits(
     loop: asyncio.AbstractEventLoop,
     max_commits: int | None,
     since: datetime | None,
+    until: datetime | None = None,
 ) -> tuple[list[Any], int]:
     if max_commits is None:
         logging.info("Fetching all commits from GitHub...")
@@ -1083,6 +1098,7 @@ async def _sync_github_commits(
         max_commits,
         db_repo.id,
         since,
+        until,
     )
     if commit_objects:
         await ingestion_sink.insert_git_commit_data(commit_objects)
@@ -1098,6 +1114,7 @@ async def _sync_github_commit_stats(
     loop: asyncio.AbstractEventLoop,
     max_commits: int | None,
     since: datetime | None,
+    until: datetime | None = None,
     raw_commits: list[Any] | None = None,
 ) -> int:
     if raw_commits is None:
@@ -1108,6 +1125,7 @@ async def _sync_github_commit_stats(
             max_commits,
             db_repo.id,
             since,
+            until,
         )
     logging.info("Fetching commit stats from GitHub...")
     stats_limit = resolve_commit_stats_limit(len(raw_commits), max_commits, since)
@@ -1146,6 +1164,7 @@ def _fetch_github_test_artifacts_sync(
     since: datetime | None,
     default_branch: str | None,
     max_runs: int,
+    until: datetime | None = None,
 ) -> list[tuple[str, list[tuple[str, bytes]], datetime | None, datetime | None]]:
     """Blocking: download + extract JUnit/coverage report files per workflow run.
 
@@ -1191,6 +1210,8 @@ def _fetch_github_test_artifacts_sync(
             getattr(run, "run_started_at", None) or getattr(run, "created_at", None)
         )
         run_finished = _as_utc(getattr(run, "updated_at", None))
+        if until is not None and run_started is not None and run_started > until:
+            continue
         try:
             artifacts = connector.list_run_artifacts(
                 owner, repo_name, run_id, max_items=MAX_ARTIFACTS_PER_RUN
@@ -1231,6 +1252,7 @@ async def _sync_github_test_reports(
     ingestion_sink: IngestionSink,
     loop: asyncio.AbstractEventLoop,
     since: datetime | None,
+    until: datetime | None = None,
 ) -> None:
     """Ingest TestOps data for one GitHub repo (CHAOS-2370).
 
@@ -1289,6 +1311,7 @@ async def _sync_github_test_reports(
         since,
         default_branch,
         MAX_RUNS_PER_SYNC,
+        until,
     )
     suite_rows: list[Any] = []
     case_rows: list[Any] = []
@@ -1322,6 +1345,32 @@ async def _sync_github_test_reports(
     )
 
 
+def _filter_after(
+    records: list[Any], until: datetime | None, *fields: str
+) -> list[Any]:
+    """Drop records whose timestamp falls after the window upper bound.
+
+    Code-dataset fetchers page newest-first under a flat cap, so an
+    inclusive post-fetch upper-bound filter is equivalent to filtering
+    inside the fetch loop while keeping each fetcher signature stable
+    (CHAOS-2573). ``until`` is inclusive, mirroring the inclusive lower
+    bound applied for ``since``.
+    """
+    if until is None:
+        return records
+    out: list[Any] = []
+    for record in records:
+        ts = None
+        for field in fields:
+            ts = getattr(record, field, None)
+            if ts is not None:
+                break
+        if isinstance(ts, datetime) and ts.astimezone(timezone.utc) > until:
+            continue
+        out.append(record)
+    return out
+
+
 async def process_github_repo(
     store: GitSyncStore | Any,
     owner: str,
@@ -1339,6 +1388,7 @@ async def process_github_repo(
     sync_tests: bool = False,
     backfill_missing: bool = True,
     since: datetime | None = None,
+    until: datetime | None = None,
     sync_commits: bool | None = None,
     sync_commit_stats: bool | None = None,
     sync_files: bool | None = None,
@@ -1434,6 +1484,7 @@ async def process_github_repo(
                     loop=loop,
                     max_commits=max_commits,
                     since=since,
+                    until=until,
                 )
 
             if run_commit_stats:
@@ -1444,6 +1495,7 @@ async def process_github_repo(
                     loop=loop,
                     max_commits=max_commits,
                     since=since,
+                    until=until,
                     raw_commits=raw_commits,
                 )
 
@@ -1463,6 +1515,7 @@ async def process_github_repo(
                     "all",
                     None,
                     since,
+                    until,
                 )
                 logging.info(f"Stored {pr_total} pull requests from GitHub")
 
@@ -1476,6 +1529,7 @@ async def process_github_repo(
                     BATCH_SIZE,
                     since,
                 )
+                pipeline_runs = _filter_after(pipeline_runs, until, "started_at")
                 if pipeline_runs:
                     await ingestion_sink.insert_ci_pipeline_runs(pipeline_runs)
                     logging.info("Stored %d workflow runs", len(pipeline_runs))
@@ -1491,6 +1545,7 @@ async def process_github_repo(
                     ingestion_sink=ingestion_sink,
                     loop=loop,
                     since=since,
+                    until=until,
                 )
 
             if sync_deployments:
@@ -1502,6 +1557,9 @@ async def process_github_repo(
                     db_repo.id,
                     BATCH_SIZE,
                     since,
+                )
+                deployments = _filter_after(
+                    deployments, until, "deployed_at", "started_at"
                 )
                 if deployments:
                     await ingestion_sink.insert_deployments(deployments)
@@ -1517,6 +1575,7 @@ async def process_github_repo(
                     BATCH_SIZE,
                     since,
                 )
+                incidents = _filter_after(incidents, until, "started_at")
                 if incidents:
                     await ingestion_sink.insert_incidents(incidents)
                     logging.info("Stored %d incidents", len(incidents))
@@ -1533,6 +1592,7 @@ async def process_github_repo(
                     BATCH_SIZE,
                     since,
                 )
+                security_alerts = _filter_after(security_alerts, until, "created_at")
                 if security_alerts:
                     insert_security_alerts = getattr(
                         ingestion_sink, "insert_security_alerts"

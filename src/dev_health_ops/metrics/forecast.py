@@ -349,8 +349,5 @@ def forecast_throughput_capacity(
         wip_congestion=wip,
         review_bottleneck=review,
         incident_load=incident,
-        insufficient_history=(
-            any(window.insufficient_history for window in windows)
-            or selected_window_insufficient
-        ),
+        insufficient_history=selected_window_insufficient,
     )

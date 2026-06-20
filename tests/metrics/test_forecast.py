@@ -332,3 +332,57 @@ def test_nonstandard_history_weeks_6_between_standard_windows_reports_insufficie
     assert result.p50_weeks is not None
     # Provenance mismatch: no 6w window exists; fallback was used.
     assert result.insufficient_history is True
+
+
+# ---------------------------------------------------------------------------
+# Regression: result-level insufficient_history must reflect the REQUESTED
+# window only — longer unrequested windows must not taint the top-level flag.
+# ---------------------------------------------------------------------------
+
+
+def test_4w_request_with_29_daily_samples_is_not_insufficient() -> None:
+    # 29 daily samples: the 4w window (28 days) produces 29-28+1 = 2 rolling
+    # samples — exactly at MIN_SAMPLES_FOR_ESTIMATE. The 8w and 12w windows
+    # have 0 samples (insufficient), but the caller only asked for 4w.
+    # result.insufficient_history must be False.
+    history = _history([3] * 29)
+
+    result = forecast_throughput_capacity(
+        history=history,
+        backlog_size=20,
+        history_weeks=4,
+    )
+
+    four_week = next(w for w in result.rolling_windows if w.window_weeks == 4)
+    eight_week = next(w for w in result.rolling_windows if w.window_weeks == 8)
+    twelve_week = next(w for w in result.rolling_windows if w.window_weeks == 12)
+    # Per-window truth is preserved.
+    assert four_week.insufficient_history is False
+    assert eight_week.insufficient_history is True
+    assert twelve_week.insufficient_history is True
+    # Top-level flag reflects the requested 4w window only.
+    assert result.insufficient_history is False
+    assert result.p50_weeks is not None
+
+
+def test_8w_request_with_57_daily_samples_is_not_insufficient() -> None:
+    # 57 daily samples: the 8w window (56 days) produces 57-56+1 = 2 rolling
+    # samples — exactly at MIN_SAMPLES_FOR_ESTIMATE. The 12w window has 0
+    # samples (insufficient), but the caller only asked for 8w.
+    # result.insufficient_history must be False.
+    history = _history([3] * 57)
+
+    result = forecast_throughput_capacity(
+        history=history,
+        backlog_size=20,
+        history_weeks=8,
+    )
+
+    eight_week = next(w for w in result.rolling_windows if w.window_weeks == 8)
+    twelve_week = next(w for w in result.rolling_windows if w.window_weeks == 12)
+    # Per-window truth is preserved.
+    assert eight_week.insufficient_history is False
+    assert twelve_week.insufficient_history is True
+    # Top-level flag reflects the requested 8w window only.
+    assert result.insufficient_history is False
+    assert result.p50_weeks is not None

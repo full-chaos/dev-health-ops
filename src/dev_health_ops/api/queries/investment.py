@@ -124,9 +124,12 @@ async def fetch_mock_fixture_investment_row_count(
           AND work_unit_investments.org_id = %(org_id)s
           AND (
             lower(ifNull(work_unit_investments.provider, '')) IN ('mock', 'fixture', 'fixtures', 'synthetic')
-            OR lower(ifNull(work_unit_investments.categorization_model_version, '')) LIKE '%mock%'
-            OR lower(ifNull(work_unit_investments.categorization_model_version, '')) LIKE '%synthetic%'
-            OR lower(ifNull(work_unit_investments.categorization_model_version, '')) LIKE '%fixture%'
+            -- %% is required: clickhouse-connect applies pyformat
+            -- substitution to queries using %%(name)s params; literal
+            -- percent signs must be doubled to survive query %% params.
+            OR lower(ifNull(work_unit_investments.categorization_model_version, '')) LIKE '%%mock%%'
+            OR lower(ifNull(work_unit_investments.categorization_model_version, '')) LIKE '%%synthetic%%'
+            OR lower(ifNull(work_unit_investments.categorization_model_version, '')) LIKE '%%fixture%%'
           )
         {scope_filter}
         {category_filter}

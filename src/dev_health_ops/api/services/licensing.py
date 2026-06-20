@@ -431,7 +431,13 @@ class TierLimitService:
             rows = self.session.query(TierLimit).filter(TierLimit.tier == tier).all()
             return {str(row.limit_key): row.typed_value for row in rows}
         except Exception:
-            # Table may not exist yet (pre-migration). Fall through to defaults.
+            # Table may not exist yet (pre-migration). Roll back the aborted
+            # transaction so the caller's session remains usable, then fall
+            # through to hardcoded defaults.
+            try:
+                self.session.rollback()
+            except Exception:
+                pass
             return {}
 
     def _resolve_tier_limits(

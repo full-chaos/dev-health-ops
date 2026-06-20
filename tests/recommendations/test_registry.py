@@ -137,7 +137,10 @@ def test_all_rules_tuple_is_immutable() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("rule_id", CANONICAL_IDS)
+# CANONICAL_IDS is a set; sort it so parametrized test IDs collect in a stable
+# order across xdist workers (xdist requires identical collection per worker;
+# unordered set iteration triggers "Different tests were collected" — CHAOS-2586).
+@pytest.mark.parametrize("rule_id", sorted(CANONICAL_IDS))
 def test_get_rule_returns_correct_ruledef(rule_id: str) -> None:
     rule = get_rule(rule_id)
     assert isinstance(rule, RuleDef)

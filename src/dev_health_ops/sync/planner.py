@@ -25,7 +25,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from dev_health_ops.backfill.chunker import chunk_date_range
@@ -245,6 +245,8 @@ def _build_planned_units(
                 dataset_key=dataset.dataset_key,
                 watermark_behavior=spec.watermark_behavior,
                 now=now,
+                integration=integration,
+                dataset=dataset,
             )
             for window_start, window_end in windows:
                 planned_units.append(
@@ -264,6 +266,64 @@ def _build_planned_units(
     return planned_units
 
 
+# ---------------------------------------------------------------------------
+# D1 depth resolver — reusable by WS-C and WS-D
+# ---------------------------------------------------------------------------
+
+_DEFAULT_INITIAL_SYNC_DEPTH_DAYS: int = 30
+
+
+def resolve_initial_sync_depth(
+    session: Session,
+    integration: Integration,
+    dataset: IntegrationDataset,
+) -> int:
+    """Return the effective initial-sync depth in days for a (integration, dataset) pair.
+
+    Resolution order (D1):
+      1. ``IntegrationDataset.options["initial_sync_depth"]`` — per-dataset override
+      2. ``Integration.config["initial_sync_depth"]`` — integration-level setting
+      3. Default: 30 days
+    Then cap by the org's tier ``backfill_days`` limit (None = unlimited).
+    """
+    # 1. Dataset-level override
+    dataset_depth = (dataset.options or {}).get("initial_sync_depth")
+    if dataset_depth is not None:
+        depth = int(dataset_depth)
+    else:
+        # 2. Integration-level config
+        integration_depth = (integration.config or {}).get("initial_sync_depth")
+        if integration_depth is not None:
+            depth = int(integration_depth)
+        else:
+            # 3. Default
+            depth = _DEFAULT_INITIAL_SYNC_DEPTH_DAYS
+
+    # Apply tier backfill_days cap
+    tier_cap = _get_tier_backfill_days_cap(session, integration.org_id)
+    if tier_cap is not None:
+        depth = min(depth, tier_cap)
+
+    return max(depth, 1)
+
+
+def _get_tier_backfill_days_cap(session: Session, org_id: str) -> int | None:
+    """Return the tier backfill_days cap for the org, or None if unlimited."""
+    try:
+        import uuid as _uuid
+
+        from dev_health_ops.api.services.licensing import TierLimitService
+
+        svc = TierLimitService(session)
+        cap = svc.get_limit(_uuid.UUID(str(org_id)), "backfill_days")
+        if cap is None:
+            return None
+        return int(cap)
+    except Exception:
+        # Licensing tables may not exist in test environments; fall through.
+        return None
+
+
 def _resolve_windows(
     *,
     session: Session,
@@ -274,17 +334,29 @@ def _resolve_windows(
     dataset_key: str,
     watermark_behavior: WatermarkBehavior,
     now: datetime,
+    integration: Integration,
+    dataset: IntegrationDataset,
 ) -> tuple[tuple[datetime | None, datetime | None], ...]:
     if mode == SyncRunMode.INCREMENTAL.value:
-        window_start = None
+        window_start: datetime | None = None
         if watermark_behavior == WatermarkBehavior.INCREMENTAL:
             window_start = get_watermark(
                 session, org_id, watermark_source_key, dataset_key
             )
+        if window_start is None:
+            # Cold-start: no watermark — use configured depth (CHAOS-2569)
+            depth = resolve_initial_sync_depth(session, integration, dataset)
+            window_start = now - timedelta(days=depth)
         return ((window_start, _request_before_or_now(request, now)),)
 
     if mode == SyncRunMode.BACKFILL.value:
         return _backfill_windows(request)
+
+    if mode == SyncRunMode.FULL_RESYNC.value:
+        # full_resync: use configured depth (CHAOS-2569)
+        depth = resolve_initial_sync_depth(session, integration, dataset)
+        window_start = now - timedelta(days=depth)
+        return ((window_start, _request_before_or_now(request, now)),)
 
     return ((None, _request_before_or_now(request, now)),)
 

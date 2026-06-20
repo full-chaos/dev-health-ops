@@ -311,3 +311,130 @@ def test_planned_units_persist_isolated_processor_flags(db_session):
     assert unit.processor_flags.get("sync_security", False) is False
     assert unit.processor_flags.get("sync_deployments", False) is False
     assert unit.processor_flags.get("sync_incidents", False) is False
+
+
+# ---------------------------------------------------------------------------
+# WS-A tests: cold-start depth + full_resync (CHAOS-2569)
+# ---------------------------------------------------------------------------
+
+
+def test_incremental_cold_start_uses_initial_sync_depth(db_session):
+    """No watermark row → window_start == now - depth (±2s).
+
+    Covers both a work-item dataset (prs) and a code dataset (commits).
+    """
+    from datetime import timedelta
+
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, "commits")
+    _create_dataset(db_session, integration, "prs")
+
+    now = datetime.now(timezone.utc)
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 2
+    expected_start = now - timedelta(days=30)
+    for unit in units:
+        assert unit.since_at is not None
+        since = unit.since_at.replace(tzinfo=timezone.utc)
+        assert abs((since - expected_start).total_seconds()) < 2
+
+
+def test_full_resync_uses_configured_depth(db_session):
+    """full_resync mode → window_start == now - depth, not None.""", 
+    from datetime import timedelta
+
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": 14}
+    db_session.flush()
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, "commits")
+
+    now = datetime.now(timezone.utc)
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.FULL_RESYNC.value,
+            triggered_by="manual",
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    unit = units[0]
+    assert unit.since_at is not None, "full_resync must not produce a None window_start"
+    expected_start = now - timedelta(days=14)
+    since = unit.since_at.replace(tzinfo=timezone.utc)
+    assert abs((since - expected_start).total_seconds()) < 2
+
+
+def test_dataset_option_overrides_integration_depth(db_session):
+    """Dataset options.initial_sync_depth wins over integration config.""", 
+    from datetime import timedelta
+
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    dataset = _create_dataset(db_session, integration, "commits")
+    dataset.options = {"initial_sync_depth": 7}
+    db_session.flush()
+
+    now = datetime.now(timezone.utc)
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    expected_start = now - timedelta(days=7)
+    since = units[0].since_at.replace(tzinfo=timezone.utc)
+    assert abs((since - expected_start).total_seconds()) < 2
+
+
+def test_existing_watermark_incremental_unchanged(db_session):
+    """With a watermark row, since_at == watermark (regression guard).""", 
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    source = _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, "commits")
+    watermark = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+    set_watermark(db_session, ORG_ID, source.external_id, "commits", watermark)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+            before=datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc),
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    unit = units[0]
+    assert unit.since_at is not None
+    assert unit.since_at.replace(tzinfo=timezone.utc) == watermark

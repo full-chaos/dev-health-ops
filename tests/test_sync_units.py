@@ -732,3 +732,63 @@ def test_dispatch_sync_run_does_not_reclaim_fresh_running_units(
     assert result["queued_units"] == 0
     db_session.refresh(unit)
     assert unit.status == SyncRunUnitStatus.RUNNING.value
+
+
+# ---------------------------------------------------------------------------
+# WS-A trigger-path test: full-resync intent mapping (CHAOS-2579)
+# ---------------------------------------------------------------------------
+
+
+def test_full_resync_trigger_maps_mode(db_session):
+    """Trigger full-resync intent → planned SyncRun.mode == 'full_resync'.""", 
+    from dev_health_ops.models import IntegrationDataset, IntegrationSource
+    from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
+    from dev_health_ops.sync.trigger_routing import map_sync_mode
+
+    org_id = str(uuid.uuid4())
+    integration = Integration(
+        org_id=org_id,
+        provider="github",
+        name="test-integration",
+        config={"initial_sync_depth": 30},
+        is_active=True,
+    )
+    db_session.add(integration)
+    db_session.flush()
+
+    source = IntegrationSource(
+        org_id=org_id,
+        integration_id=integration.id,
+        provider="github",
+        source_type="repo",
+        external_id="full-chaos/dev-health",
+        name="dev-health",
+        full_name="full-chaos/dev-health",
+        metadata_={},
+        is_enabled=True,
+    )
+    dataset = IntegrationDataset(
+        org_id=org_id,
+        integration_id=integration.id,
+        dataset_key="commits",
+        is_enabled=True,
+        options={},
+    )
+    db_session.add_all([source, dataset])
+    db_session.flush()
+
+    # map_sync_mode maps the full-resync intent to the canonical mode value
+    mode = map_sync_mode("full_resync")
+    assert mode == SyncRunMode.FULL_RESYNC.value
+
+    request = SyncPlanRequest(
+        integration_id=str(integration.id),
+        org_id=org_id,
+        mode=mode,
+        triggered_by="manual",
+    )
+    plan = plan_sync_run(db_session, request)
+
+    run = db_session.get(SyncRun, plan.sync_run_id)
+    assert run is not None
+    assert run.mode == SyncRunMode.FULL_RESYNC.value

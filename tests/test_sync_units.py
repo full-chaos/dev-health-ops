@@ -740,7 +740,7 @@ def test_dispatch_sync_run_does_not_reclaim_fresh_running_units(
 
 
 def test_full_resync_trigger_maps_mode(db_session):
-    """Trigger full-resync intent → planned SyncRun.mode == 'full_resync'.""", 
+    ("""Trigger full-resync intent → planned SyncRun.mode == 'full_resync'.""",)
     from dev_health_ops.models import IntegrationDataset, IntegrationSource
     from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
     from dev_health_ops.sync.trigger_routing import map_sync_mode

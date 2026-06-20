@@ -353,7 +353,7 @@ def test_incremental_cold_start_uses_initial_sync_depth(db_session):
 
 
 def test_full_resync_uses_configured_depth(db_session):
-    """full_resync mode → window_start == now - depth, not None.""", 
+    """full_resync mode -> window_start == now - depth, not None."""
     from datetime import timedelta
 
     integration = _create_integration(db_session)
@@ -383,7 +383,7 @@ def test_full_resync_uses_configured_depth(db_session):
 
 
 def test_dataset_option_overrides_integration_depth(db_session):
-    """Dataset options.initial_sync_depth wins over integration config.""", 
+    """Dataset options.initial_sync_depth wins over integration config."""
     from datetime import timedelta
 
     integration = _create_integration(db_session)
@@ -407,17 +407,20 @@ def test_dataset_option_overrides_integration_depth(db_session):
 
     units = _planned_units(db_session, plan.sync_run_id)
     assert len(units) == 1
+    assert units[0].since_at is not None
     expected_start = now - timedelta(days=7)
     since = units[0].since_at.replace(tzinfo=timezone.utc)
     assert abs((since - expected_start).total_seconds()) < 2
 
 
 def test_existing_watermark_incremental_unchanged(db_session):
-    """With a watermark row, since_at == watermark (regression guard).""", 
+    """With a watermark row, since_at == watermark (regression guard)."""
     integration = _create_integration(db_session)
     integration.config = {"initial_sync_depth": 30}
     db_session.flush()
-    source = _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    source = _create_source(
+        db_session, integration, external_id="full-chaos/dev-health"
+    )
     _create_dataset(db_session, integration, "commits")
     watermark = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
     set_watermark(db_session, ORG_ID, source.external_id, "commits", watermark)

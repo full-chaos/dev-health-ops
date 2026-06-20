@@ -222,6 +222,42 @@ def canonical_sync_config_for_sync_run(session: Session, sync_run: Any) -> Any |
     return configs[0]
 
 
+def inactive_child_configs_for_sync_run(session: Session, sync_run: Any) -> list[Any]:
+    import uuid
+
+    from dev_health_ops.models.integrations import SyncRunUnit
+    from dev_health_ops.models.settings import SyncConfiguration
+
+    org_id = getattr(sync_run, "org_id", None)
+    sync_run_id = getattr(sync_run, "id", None)
+    if org_id is None or sync_run_id is None:
+        return []
+
+    run_uuid = uuid.UUID(str(sync_run_id))
+    source_ids = [
+        source_id
+        for (source_id,) in session.query(SyncRunUnit.source_id)
+        .filter(SyncRunUnit.sync_run_id == run_uuid)
+        .distinct()
+        .all()
+        if source_id is not None
+    ]
+    if not source_ids:
+        return []
+
+    return (
+        session.query(SyncConfiguration)
+        .filter(
+            SyncConfiguration.org_id == str(org_id),
+            SyncConfiguration.parent_id.is_not(None),
+            SyncConfiguration.migrated_source_id.in_(source_ids),
+            SyncConfiguration.is_active.is_(False),
+        )
+        .order_by(SyncConfiguration.created_at.asc(), SyncConfiguration.id.asc())
+        .all()
+    )
+
+
 def mark_sync_run_failed(session: Session, sync_run_id: str, error: str) -> None:
     """Mark a committed-but-undispatched SyncRun FAILED so it is not stranded.
 

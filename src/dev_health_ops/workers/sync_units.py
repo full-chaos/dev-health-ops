@@ -58,6 +58,7 @@ from dev_health_ops.sync.guard import DispatchGuard
 from dev_health_ops.sync.planner import map_datasets_to_legacy_targets
 from dev_health_ops.sync.trigger_routing import (
     canonical_sync_config_for_sync_run,
+    inactive_child_configs_for_sync_run,
     stamp_sync_run_canonical_config,
 )
 from dev_health_ops.sync.watermarks import set_watermark
@@ -156,7 +157,17 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
             return {"status": "denied", "reason": run.error}
 
         canonical_config = canonical_sync_config_for_sync_run(session, run)
-        if canonical_config is not None and not bool(canonical_config.is_active):
+        inactive_config = (
+            canonical_config
+            if canonical_config is not None and not bool(canonical_config.is_active)
+            else None
+        )
+        if inactive_config is None:
+            inactive_child_configs = inactive_child_configs_for_sync_run(session, run)
+            inactive_config = (
+                inactive_child_configs[0] if inactive_child_configs else None
+            )
+        if inactive_config is not None:
             completed_at = datetime.now(timezone.utc)
             error = "sync configuration is paused"
             run.status = SyncRunStatus.FAILED.value
@@ -187,7 +198,7 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                 "dispatch_sync_run.inactive_config",
                 extra={
                     "sync_run_id": sync_run_id,
-                    "config_id": str(canonical_config.id),
+                    "config_id": str(inactive_config.id),
                 },
             )
             return {"status": "denied", "reason": error}

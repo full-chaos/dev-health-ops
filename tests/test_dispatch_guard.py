@@ -234,7 +234,7 @@ def test_concurrency_cap_defers_not_fails(db_session, monkeypatch):
     monkeypatch.setattr(
         sync_units.finalize_sync_run, "si", lambda run_id: FakeFinalizeSig(run_id)
     )
-    monkeypatch.setattr(sync_units, "group", lambda sigs: list(sigs))
+    monkeypatch.setattr(sync_units, "group", list)
     monkeypatch.setattr(
         sync_units, "chord", lambda header, callback: FakeChord(header, callback)
     )

@@ -331,11 +331,66 @@ def set_legacy_repo_watermark(
 ) -> None:
     """Legacy shim: write watermark by (org_id, repo_id, target).
 
-    Resolves ``target`` to its canonical ``dataset_key`` via the registry alias
-    map (D4 one-way toward canonical) and delegates to :func:`set_watermark`.
-    This ensures that rows written via the legacy path are stored under the
-    canonical key and are visible to the new planner's :func:`get_watermark`
-    lookup.
+    Writes the row with ``target`` preserved as the legacy string (so the
+    ``uq_sync_watermark_org_repo_target`` constraint is satisfied and existing
+    readers that filter on ``target`` continue to find the row) while also
+    populating ``dataset_key`` with the canonical key resolved via the alias
+    map (D4 one-way toward canonical).
+
+    Monotonic advance is enforced: ``last_synced_at = max(existing, new)``.
     """
     canonical_key = dataset_key_for_legacy_target(target) or target
-    set_watermark(session, org_id, repo_id, canonical_key, timestamp)
+
+    # Look up by the legacy (org_id, repo_id, target) key first so we update
+    # the existing row rather than creating a duplicate.
+    row = (
+        session.query(SyncWatermark)
+        .filter(
+            SyncWatermark.org_id == org_id,
+            SyncWatermark.repo_id == repo_id,
+            SyncWatermark.target == target,
+        )
+        .one_or_none()
+    )
+    if row is None:
+        # Also check canonical key in case the new planner already wrote it.
+        row = (
+            session.query(SyncWatermark)
+            .filter(
+                SyncWatermark.org_id == org_id,
+                SyncWatermark.source_id == repo_id,
+                SyncWatermark.dataset_key == canonical_key,
+            )
+            .one_or_none()
+        )
+
+    if row is None:
+        row = SyncWatermark(
+            repo_id=repo_id,
+            target=target,  # preserve legacy target string
+            org_id=org_id,
+            source_id=repo_id,
+            dataset_key=canonical_key,
+            last_synced_at=timestamp,
+        )
+        session.add(row)
+    else:
+        # Monotonic: never roll back the watermark (CHAOS-2578).
+        existing = row.last_synced_at
+        if existing is not None:
+            existing_utc = (
+                existing.replace(tzinfo=timezone.utc)
+                if existing.tzinfo is None
+                else existing.astimezone(timezone.utc)
+            )
+            new_utc = (
+                timestamp.replace(tzinfo=timezone.utc)
+                if timestamp.tzinfo is None
+                else timestamp.astimezone(timezone.utc)
+            )
+            if new_utc <= existing_utc:
+                session.flush()
+                return
+        row.last_synced_at = timestamp
+        row.updated_at = datetime.now(timezone.utc)
+    session.flush()

@@ -717,12 +717,8 @@ class TestIncrementalReadAppliesOverlap:
         overlap_seconds = 1800  # 30 minutes
         monkeypatch.setenv("SYNC_WATERMARK_OVERLAP", str(overlap_seconds))
 
-        # Reload the module so the env var is picked up by _watermark_overlap_seconds().
-        import importlib
-        import sys
-
-        _wm_mod = sys.modules["dev_health_ops.sync.watermarks"]
-        importlib.reload(_wm_mod)
+        # monkeypatch.setenv is sufficient: _watermark_overlap_seconds() reads
+        # os.getenv at call time, so no module reload is needed.
 
         planner_org = "overlap-test-org"
         integration = Integration(

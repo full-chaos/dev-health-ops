@@ -285,3 +285,50 @@ def test_exactly_12_weeks_history_emits_estimate_via_fallback() -> None:
     four_week = next(w for w in result.rolling_windows if w.window_weeks == 4)
     assert eight_week.insufficient_history is False
     assert four_week.insufficient_history is False
+
+
+# ---------------------------------------------------------------------------
+# Non-standard history_weeks provenance (CHAOS-2574 follow-up)
+# ---------------------------------------------------------------------------
+
+
+def test_nonstandard_history_weeks_16_with_full_data_reports_insufficient() -> None:
+    # history_weeks=16 is not a standard window (4/8/12). With >=16 weeks of
+    # data the distribution selection falls back to the 12w window, which has
+    # enough samples to produce estimates. The result must still report
+    # insufficient_history=True because the estimate did NOT use the requested
+    # 16-week window — provenance is violated.
+    history = _history([3] * (16 * 7))  # 112 days — more than 16 weeks
+
+    result = forecast_throughput_capacity(
+        history=history,
+        backlog_size=20,
+        history_weeks=16,
+    )
+
+    # Estimates are produced (12w fallback has enough samples).
+    assert result.p50_weeks is not None
+    assert result.p75_weeks is not None
+    assert result.p90_weeks is not None
+    # But provenance is violated: the estimate used 12w, not the requested 16w.
+    assert result.insufficient_history is True
+
+
+def test_nonstandard_history_weeks_6_between_standard_windows_reports_insufficient() -> (
+    None
+):
+    # history_weeks=6 sits between the standard 4w and 8w windows. With plenty
+    # of data the distribution selection falls back to the 12w window (windows[-1]).
+    # The result must report insufficient_history=True because no 6w window exists.
+    history = _history([4] * 85)  # 85 days — enough for all standard windows
+
+    result = forecast_throughput_capacity(
+        history=history,
+        backlog_size=20,
+        history_weeks=6,
+    )
+
+    # Estimates are produced via the 12w fallback.
+    assert result.p50_weeks is not None
+    # Provenance mismatch: no 6w window exists; fallback was used.
+    assert result.insufficient_history is True

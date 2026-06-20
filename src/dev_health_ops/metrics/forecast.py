@@ -308,11 +308,18 @@ def forecast_throughput_capacity(
     # true, _select_percentile_distribution fell back to a shorter window (or
     # returned no estimate). Either way the provenance signal must be surfaced:
     # the caller asked for history_weeks but the estimate came from less data.
+    #
+    # Additionally, when history_weeks does not correspond to any standard
+    # window (ROLLING_WINDOWS_WEEKS), the distribution selection silently
+    # falls back to the longest standard window. That is also a provenance
+    # mismatch: the estimate did NOT use the requested history_weeks window.
+    # Mark insufficient_history=True so callers can detect the fallback.
+    window_matched = any(w.window_weeks == history_weeks for w in windows)
     requested_window = next(
         (w for w in windows if w.window_weeks == history_weeks), windows[-1]
     )
     selected_window_insufficient = (
-        len(requested_window.samples) < MIN_SAMPLES_FOR_ESTIMATE
+        not window_matched or len(requested_window.samples) < MIN_SAMPLES_FOR_ESTIMATE
     )
     p50_throughput = _percentile(distribution, 0.50)
     p75_throughput = _percentile(distribution, 0.25)

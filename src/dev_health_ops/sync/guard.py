@@ -18,6 +18,33 @@ Decision shapes
   concurrency slots.  The caller MUST leave capped units PLANNED and schedule
   a delayed redispatch; it MUST NOT mark the run FAILED.
 * **Full allow** — ``GuardDecision(allowed=True, concurrency_capped=False)``.
+
+Concurrency model
+-----------------
+Two disjoint sets per (org_id, provider, cost_class) bucket:
+
+**Capacity-consumer set** — units that are genuinely occupying a concurrency
+slot right now, across ALL runs (including the current run).  These reduce
+``allowed_slots``:
+
+* status == DISPATCHING  AND  updated_at > stale_dispatch_cutoff  (fresh)
+* status in {RUNNING, RETRYING}  AND  updated_at > stale_running_cutoff  (fresh)
+
+Stale units are excluded because ``_claim_units`` will reclaim them on the
+next pass; they must not permanently block capacity.
+
+**Candidate set** — units from THIS run that ``_claim_units`` can enqueue this
+pass.  Mirrors ``_claim_units`` claim + reclaim logic exactly:
+
+* status == PLANNED  (any age — claimed via UPDATE…RETURNING)
+* status == DISPATCHING  AND  updated_at <= stale_dispatch_cutoff  (stale reclaim)
+* status == RUNNING  AND  updated_at <= stale_running_cutoff  (stale reclaim)
+
+Fresh DISPATCHING is NOT a candidate (it is a consumer).
+Stale RETRYING is NOT a candidate (``_claim_units`` does not reclaim RETRYING).
+
+The two sets are disjoint by construction — no subtraction is needed or
+performed.
 """
 
 from __future__ import annotations
@@ -75,6 +102,7 @@ class DispatchGuard:
         if run is None:
             return GuardDecision(False, f"sync_run not found: {sync_run_id}")
 
+        # Load all units for this run, ordered by id (stable ordering for cap suffix).
         units = (
             session.query(SyncRunUnit)
             .filter(SyncRunUnit.sync_run_id == run_uuid)
@@ -92,69 +120,64 @@ class DispatchGuard:
 
         concurrency_cap = _env_int("SYNC_UNIT_CONCURRENCY_PER_BUCKET", 8)
 
-        # Units from THIS run that are candidates for dispatch this pass:
-        # only PLANNED and DISPATCHING (fresh DISPATCHING will be reclaimed by
-        # _claim_units; RUNNING/RETRYING from this run are already in-flight
-        # and must count against the cap, not be re-dispatched).
-        dispatch_candidate_statuses = {
-            SyncRunUnitStatus.PLANNED.value,
-            SyncRunUnitStatus.DISPATCHING.value,
-        }
-        planned_by_bucket: dict[tuple[str, str, str], list[SyncRunUnit]] = defaultdict(
-            list
-        )
-        for unit in units:
-            if unit.status in dispatch_candidate_statuses:
-                planned_by_bucket[
-                    (str(unit.org_id), unit.provider, unit.cost_class)
-                ].append(unit)
-
-        # Freshness cutoffs — same semantics as _stale_dispatch_seconds() /
-        # _stale_running_seconds() in sync_units.py.  We do NOT import
-        # sync_units here (circular: sync_units imports DispatchGuard).
+        # Staleness cutoffs — same env vars as _stale_dispatch_seconds() /
+        # _stale_running_seconds() in sync_units.py.  Defined locally to avoid
+        # a circular import (sync_units imports DispatchGuard from this module).
         now = datetime.now(timezone.utc)
         stale_dispatch_cutoff = now - timedelta(seconds=_stale_dispatch_seconds_guard())
         stale_running_cutoff = now - timedelta(seconds=_stale_running_seconds_guard())
 
-        # Active-slot statuses: units that are genuinely occupying a concurrency
-        # slot right now (across ALL runs, including the current run).
-        # DISPATCHING/RUNNING/RETRYING from the current run are already in-flight
-        # and must reduce available capacity — they must NOT be re-dispatched.
-        active_statuses = {
-            SyncRunUnitStatus.DISPATCHING.value,
-            SyncRunUnitStatus.RUNNING.value,
-            SyncRunUnitStatus.RETRYING.value,
-        }
+        # Build the CANDIDATE set per bucket — units from THIS run that
+        # _claim_units can enqueue this pass.  Mirrors _claim_units exactly:
+        #   • PLANNED (any age) — claimed via UPDATE…RETURNING
+        #   • stale DISPATCHING (updated_at <= stale_dispatch_cutoff) — reclaimed
+        #   • stale RUNNING (updated_at <= stale_running_cutoff) — reclaimed
+        # Fresh DISPATCHING is a capacity CONSUMER, not a candidate.
+        # Stale RETRYING is neither (_claim_units does not reclaim RETRYING).
+        candidates_by_bucket: dict[tuple[str, str, str], list[SyncRunUnit]] = (
+            defaultdict(list)
+        )
+        for unit in units:
+            bucket = (str(unit.org_id), unit.provider, unit.cost_class)
+            if unit.status == SyncRunUnitStatus.PLANNED.value:
+                candidates_by_bucket[bucket].append(unit)
+            elif unit.status == SyncRunUnitStatus.DISPATCHING.value:
+                if _as_aware_guard(unit.updated_at) <= stale_dispatch_cutoff:
+                    # Stale DISPATCHING — _claim_units will reclaim it.
+                    candidates_by_bucket[bucket].append(unit)
+            elif unit.status == SyncRunUnitStatus.RUNNING.value:
+                if _as_aware_guard(unit.updated_at) <= stale_running_cutoff:
+                    # Stale RUNNING — _claim_units will reclaim it.
+                    candidates_by_bucket[bucket].append(unit)
+            # Fresh DISPATCHING → consumer only (counted in active_count below).
+            # RETRYING (any age) → neither candidate nor consumer for this run.
+            # SUCCESS / FAILED → terminal, ignored.
 
         capped_unit_ids: list[str] = []
-        for bucket, bucket_units in planned_by_bucket.items():
+        for bucket, bucket_candidates in candidates_by_bucket.items():
             org_id, provider, cost_class = bucket
 
-            # Count fresh active units across ALL runs (including this one).
-            # A unit is "fresh" if its updated_at is within the staleness window
-            # for its status — stale units will be reclaimed by _claim_units and
-            # should not permanently block capacity.
-            #
-            # F1: include same-run RUNNING/RETRYING/DISPATCHING so they reduce
-            #     available slots (previously excluded via != run_uuid).
-            # F2: apply freshness thresholds so dead-worker leftovers don't cap
-            #     forever (previously no updated_at filter).
+            # Count the CAPACITY-CONSUMER set across ALL runs (including this
+            # run) for this bucket.  Consumers are fresh active units:
+            #   • fresh DISPATCHING: updated_at > stale_dispatch_cutoff
+            #   • fresh RUNNING or RETRYING: updated_at > stale_running_cutoff
+            # Stale units are excluded — they will be reclaimed and must not
+            # permanently block capacity (F2 stale-blocker fix).
+            # Same-run fresh DISPATCHING IS included — it is a genuine consumer
+            # that reduces available slots (F1 same-run visibility fix).
+            # No subtraction is performed; the consumer and candidate sets are
+            # disjoint by construction.
             active_count = (
                 session.query(func.count(SyncRunUnit.id))
                 .filter(
                     SyncRunUnit.org_id == org_id,
                     SyncRunUnit.provider == provider,
                     SyncRunUnit.cost_class == cost_class,
-                    SyncRunUnit.status.in_(active_statuses),
-                    # Exclude units that are stale (dead worker) — they will be
-                    # reclaimed and must not permanently block capacity.
-                    # DISPATCHING units stale after stale_dispatch_cutoff,
-                    # RUNNING/RETRYING units stale after stale_running_cutoff.
-                    # We use the more conservative (longer) running cutoff for
-                    # RETRYING since it shares the same semantics as RUNNING.
                     (
-                        (SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value)
-                        & (SyncRunUnit.updated_at > stale_dispatch_cutoff)
+                        (
+                            (SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value)
+                            & (SyncRunUnit.updated_at > stale_dispatch_cutoff)
+                        )
                         | (
                             SyncRunUnit.status.in_(
                                 {
@@ -162,33 +185,18 @@ class DispatchGuard:
                                     SyncRunUnitStatus.RETRYING.value,
                                 }
                             )
+                            & (SyncRunUnit.updated_at > stale_running_cutoff)
                         )
-                        & (SyncRunUnit.updated_at > stale_running_cutoff)
                     ),
                 )
                 .scalar()
                 or 0
             )
 
-            # Subtract same-run dispatch candidates that are DISPATCHING
-            # (they are already counted in active_count above but will be
-            # reclaimed by _claim_units, so they don't consume a net new slot).
-            # RUNNING/RETRYING from this run are genuinely in-flight and DO
-            # consume slots — do not subtract them.
-            same_run_fresh_dispatching = sum(
-                1
-                for u in bucket_units
-                if u.status == SyncRunUnitStatus.DISPATCHING.value
-                and _as_aware_guard(u.updated_at) > stale_dispatch_cutoff
-            )
-            # Net active slots consumed by OTHER units (not the candidates we
-            # are about to dispatch).
-            net_active = int(active_count) - same_run_fresh_dispatching
-            allowed_slots = max(0, concurrency_cap - net_active)
-
-            if len(bucket_units) > allowed_slots:
+            allowed_slots = max(0, concurrency_cap - int(active_count))
+            if len(bucket_candidates) > allowed_slots:
                 capped_unit_ids.extend(
-                    str(unit.id) for unit in bucket_units[allowed_slots:]
+                    str(unit.id) for unit in bucket_candidates[allowed_slots:]
                 )
 
         if capped_unit_ids:

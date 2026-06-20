@@ -893,3 +893,38 @@ def test_noop_redispatch_failure_marks_run_terminal(db_session, monkeypatch):
     assert len(non_terminal) == 0, (
         f"all units must be terminal after noop enqueue failure, got {[u.status for u in non_terminal]}"
     )
+
+
+def test_fresh_same_run_dispatching_caps_planned_unit(db_session, monkeypatch):
+    """F1 round-3 codex repro: cap=1, one fresh same-run DISPATCHING unit +
+    one PLANNED unit in the same bucket → PLANNED must be capped.
+
+    Fresh DISPATCHING is a capacity CONSUMER, not a reclaim candidate.
+    The guard must NOT subtract it from active_count.
+    """
+    monkeypatch.setenv("SYNC_RUN_MAX_UNITS", "10")
+    monkeypatch.setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "1")
+    # Use a long staleness window so the DISPATCHING unit is definitely fresh.
+    monkeypatch.setenv("SYNC_UNIT_DISPATCH_STALE_SECONDS", "900")
+
+    run, units, integration, source = _seed_run(db_session, unit_count=2)
+    # Mark units[0] as fresh DISPATCHING (same run, same bucket).
+    from datetime import datetime, timezone
+
+    units[0].status = SyncRunUnitStatus.DISPATCHING.value
+    units[0].updated_at = datetime.now(timezone.utc)  # fresh
+    # units[1] remains PLANNED.
+    db_session.flush()
+
+    decision = DispatchGuard.authorize_run(db_session, str(run.id))
+
+    # cap=1, 1 fresh same-run DISPATCHING consumes the slot.
+    # The 1 PLANNED unit must be capped — no cap overrun.
+    assert decision.allowed is True
+    assert decision.concurrency_capped is True, (
+        "fresh same-run DISPATCHING must consume the slot; PLANNED must be capped"
+    )
+    assert len(decision.capped_unit_ids) == 1
+    assert str(units[1].id) in decision.capped_unit_ids, (
+        "the PLANNED unit must be in capped_unit_ids"
+    )

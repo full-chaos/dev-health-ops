@@ -140,6 +140,7 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
             )
             return {"status": "missing", "sync_run_id": sync_run_id}
 
+        # --- Total-cap hard-deny: whole run is over the org unit ceiling ---
         if not decision.allowed:
             completed_at = datetime.now(timezone.utc)
             run.status = SyncRunStatus.FAILED.value
@@ -155,6 +156,19 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                 },
             )
             return {"status": "denied", "reason": run.error}
+
+        # --- Concurrency partial-cap: defer overflow units, proceed with rest ---
+        capped_ids: frozenset[str] = frozenset()
+        if decision.concurrency_capped and decision.capped_unit_ids:
+            capped_ids = frozenset(decision.capped_unit_ids)
+            logger.info(
+                "dispatch_sync_run.concurrency_capped",
+                extra={
+                    "sync_run_id": sync_run_id,
+                    "capped_count": len(capped_ids),
+                    "reason": decision.reason,
+                },
+            )
 
         canonical_config = canonical_sync_config_for_sync_run(session, run)
         inactive_config = (
@@ -203,7 +217,7 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
             )
             return {"status": "denied", "reason": error}
 
-        units = _claim_units(session, run_uuid)
+        units = _claim_units(session, run_uuid, capped_ids=capped_ids)
         signatures = []
         for unit in units:
             dispatch_route = route(
@@ -238,13 +252,59 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         callback.set(queue="sync")
         try:
             chord(group(signatures), callback).apply_async()
+            # F4: schedule redispatch for capped units INSIDE the try block so
+            # any broker failure marks the run terminal rather than leaving
+            # PLANNED units stranded with no chord/finalizer pending.
+            if capped_ids:
+                _schedule_redispatch(sync_run_id)
         except Exception as exc:
             _mark_dispatch_enqueue_failed(sync_run_id, str(exc))
             raise
         return {"status": "dispatched", "queued_units": len(signatures)}
 
+    # Fix 2: no units were claimable this pass.  Distinguish two cases:
+    #   a) Deferred work remains (PLANNED units exist, not all terminal) →
+    #      schedule a countdown redispatch so they drain when slots free up.
+    #   b) No deferred work (zero-unit run, or every unit already terminal) →
+    #      call finalize directly; redispatching would loop forever.
+    with get_postgres_session_sync() as session:
+        run_uuid_check = uuid.UUID(str(sync_run_id))
+        pending_count = (
+            session.query(SyncRunUnit)
+            .filter(
+                SyncRunUnit.sync_run_id == run_uuid_check,
+                SyncRunUnit.status.in_(
+                    {
+                        SyncRunUnitStatus.PLANNED.value,
+                        SyncRunUnitStatus.DISPATCHING.value,
+                        SyncRunUnitStatus.RUNNING.value,
+                        SyncRunUnitStatus.RETRYING.value,
+                    }
+                ),
+            )
+            .count()
+        )
+    if pending_count > 0:
+        # Deferred units remain — schedule countdown redispatch.
+        # F5: wrap in try/except so a broker failure marks the run terminal
+        # rather than leaving PLANNED units stranded with no follow-up.
+        try:
+            _schedule_redispatch(sync_run_id)
+        except Exception as exc:
+            _mark_dispatch_enqueue_failed(sync_run_id, str(exc))
+            raise
+        logger.info(
+            "dispatch_sync_run.noop",
+            extra={
+                "sync_run_id": sync_run_id,
+                "queued_units": 0,
+                "pending_units": pending_count,
+            },
+        )
+        return {"status": "noop", "queued_units": 0}
+    # No pending work — finalize (idempotent; handles zero-unit and already-finalized).
     logger.info(
-        "dispatch_sync_run.noop",
+        "dispatch_sync_run.noop_finalize",
         extra={"sync_run_id": sync_run_id, "queued_units": 0},
     )
     finalize_sync_run(sync_run_id)
@@ -512,6 +572,38 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
                 map_datasets_to_legacy_targets(provider, dataset_keys)
             )
 
+        # --- WS-E / CHAOS-2577: compute covered window from successful units ---
+        # Thread min(since_at)/max(before_at) of successful units into
+        # _dispatch_post_sync_tasks so metrics/work-graph cover the backfilled
+        # range.  Confined to this distinct block; WS-C later advances a
+        # coverage marker in a separate block below.
+        successful_units = [
+            u for u in units if u.status == SyncRunUnitStatus.SUCCESS.value
+        ]
+        covered_since: datetime | None = None
+        covered_before: datetime | None = None
+        if successful_units:
+            # If ANY unit has since_at=None the lower bound is unbounded;
+            # only compute min when ALL units carry an explicit lower bound.
+            any_unbounded_lower = any(u.since_at is None for u in successful_units)
+            any_unbounded_upper = any(u.before_at is None for u in successful_units)
+            if not any_unbounded_lower:
+                since_values = [
+                    _as_aware(u.since_at)
+                    for u in successful_units
+                    if u.since_at is not None
+                ]
+                covered_since = min(since_values)
+            # else: covered_since stays None → unbounded lower
+            if not any_unbounded_upper:
+                before_values = [
+                    _as_aware(u.before_at)
+                    for u in successful_units
+                    if u.before_at is not None
+                ]
+                covered_before = max(before_values)
+            # else: covered_before stays None → unbounded upper
+
         provider_for_dispatch = next(iter(successful_by_provider), "unknown")
         run_org_id = str(run.org_id)
         session.flush()
@@ -532,10 +624,46 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
     # between claim and dispatch cannot roll back the claim and let a later
     # finalize re-dispatch (at-most-once, not duplicate-on-retry).
     if legacy_targets:
+        # Thread the covered window so downstream metrics/work-graph tasks
+        # know the exact date range that was backfilled (CHAOS-2577).
+        from_date_str = (
+            covered_since.date().isoformat() if covered_since is not None else None
+        )
+        to_date_str = (
+            covered_before.date().isoformat() if covered_before is not None else None
+        )
+        # F3: pass full ISO datetimes via work_graph_from/to_date so the
+        # work-graph build covers the full final day (not truncated to midnight).
+        # from_date/to_date remain date-only for _parse_materialize_window().
+        # Mirror the precedent in sync_backfill.py:374-383.
+        from datetime import time as _time
+
+        work_graph_from_date_str = (
+            datetime.combine(
+                covered_since.date(),
+                _time.min,
+                tzinfo=timezone.utc,
+            ).isoformat()
+            if covered_since is not None
+            else None
+        )
+        work_graph_to_date_str = (
+            datetime.combine(
+                covered_before.date() + timedelta(days=1),
+                _time.min,
+                tzinfo=timezone.utc,
+            ).isoformat()
+            if covered_before is not None
+            else None
+        )
         _dispatch_post_sync_tasks(
             provider=provider_for_dispatch,
             sync_targets=sorted(legacy_targets),
             org_id=run_org_id,
+            from_date=from_date_str,
+            to_date=to_date_str,
+            work_graph_from_date=work_graph_from_date_str,
+            work_graph_to_date=work_graph_to_date_str,
         )
 
     return {
@@ -547,23 +675,46 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
     }
 
 
-def _claim_units(session, run_uuid: uuid.UUID) -> list[SyncRunUnit]:
+def _claim_units(
+    session,
+    run_uuid: uuid.UUID,
+    *,
+    capped_ids: frozenset[str] = frozenset(),
+) -> list[SyncRunUnit]:
     """Atomically claim dispatchable units for a run.
 
     Fresh ``planned`` units are claimed with an atomic ``UPDATE ... RETURNING``
     so two concurrent ``dispatch_sync_run`` calls cannot both enqueue the same
-    unit (no double-queue / duplicate provider writes). Stale ``dispatching``
-    or ``running`` units (a worker died mid-flight) are reclaimed by age so a
-    crash cannot leave the run unfinishable.
+    unit (no double-queue / duplicate provider writes).  Stale ``dispatching``
+    units (a worker died before the unit started running) are reclaimed by age.
+
+    F2 fix: RUNNING units are NEVER reclaimed here.  ``run_sync_unit`` does not
+    heartbeat during the provider call, so a legitimately long-running unit past
+    SYNC_UNIT_RUNNING_STALE_SECONDS would be re-dispatched and run a second time
+    concurrently, causing duplicate provider writes.  Durable dead-worker
+    recovery (heartbeat + lease) is a separate follow-up (CHAOS-2577).
+
+    INTERIM: a capped run whose only blocker is a DEAD RUNNING unit may stall
+    — acceptable, preserves at-most-once provider execution.
+
+    ``capped_ids`` is the set of unit IDs that the concurrency guard deferred.
+    Those units are left in PLANNED status so a later redispatch can claim them
+    once slots free up.
     """
     now = datetime.now(timezone.utc)
+    # Build the WHERE clause for the atomic claim, excluding capped units.
+    planned_where = [
+        SyncRunUnit.sync_run_id == run_uuid,
+        SyncRunUnit.status == SyncRunUnitStatus.PLANNED.value,
+    ]
+    if capped_ids:
+        planned_where.append(
+            ~SyncRunUnit.id.in_([uuid.UUID(cid) for cid in capped_ids])
+        )
     claimed_ids: set[uuid.UUID] = set(
         session.execute(
             update(SyncRunUnit)
-            .where(
-                SyncRunUnit.sync_run_id == run_uuid,
-                SyncRunUnit.status == SyncRunUnitStatus.PLANNED.value,
-            )
+            .where(*planned_where)
             .values(status=SyncRunUnitStatus.DISPATCHING.value, updated_at=now)
             .returning(SyncRunUnit.id)
             .execution_options(synchronize_session=False)
@@ -572,30 +723,26 @@ def _claim_units(session, run_uuid: uuid.UUID) -> list[SyncRunUnit]:
         .all()
     )
 
+    # Reclaim stale DISPATCHING units only (F2: RUNNING is never reclaimed).
+    # A DISPATCHING unit that is stale means the worker was enqueued but never
+    # picked up (e.g. broker restart).  It is safe to re-enqueue because the
+    # worker never started the provider call.
     stale_dispatch = now - timedelta(seconds=_stale_dispatch_seconds())
-    stale_running = now - timedelta(seconds=_stale_running_seconds())
     reclaim_candidates = (
         session.query(SyncRunUnit)
         .filter(
             SyncRunUnit.sync_run_id == run_uuid,
-            SyncRunUnit.status.in_(
-                {
-                    SyncRunUnitStatus.DISPATCHING.value,
-                    SyncRunUnitStatus.RUNNING.value,
-                }
-            ),
+            SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value,
         )
         .all()
     )
     for unit in reclaim_candidates:
         if unit.id in claimed_ids:
             continue
-        threshold = (
-            stale_dispatch
-            if unit.status == SyncRunUnitStatus.DISPATCHING.value
-            else stale_running
-        )
-        if _as_aware(unit.updated_at) <= threshold:
+        # Never reclaim a unit that the concurrency guard deferred.
+        if str(unit.id) in capped_ids:
+            continue
+        if _as_aware(unit.updated_at) <= stale_dispatch:
             unit.status = SyncRunUnitStatus.DISPATCHING.value
             unit.updated_at = now
             claimed_ids.add(unit.id)
@@ -695,3 +842,32 @@ def _as_aware(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _schedule_redispatch(sync_run_id: str) -> None:
+    """Schedule a delayed redispatch of a run with deferred (PLANNED) units.
+
+    Uses ``apply_async(countdown=...)`` so capped units are retried after
+    in-flight units from other runs have had a chance to complete.
+    This is the D3 deferral mechanism: idempotent, no new status, no Celery retry.
+
+    Raises on broker enqueue failure so the caller can propagate the error
+    rather than leaving the run silently non-terminal.
+    """
+    countdown = int(__import__("os").getenv("SYNC_DISPATCH_REDISPATCH_COUNTDOWN", "60"))
+    try:
+        getattr(dispatch_sync_run, "apply_async")(
+            args=(sync_run_id,),
+            queue="sync",
+            countdown=countdown,
+        )
+        logger.info(
+            "dispatch_sync_run.redispatch_scheduled",
+            extra={"sync_run_id": sync_run_id, "countdown": countdown},
+        )
+    except Exception:
+        logger.exception(
+            "dispatch_sync_run.redispatch_schedule_failed",
+            extra={"sync_run_id": sync_run_id},
+        )
+        raise

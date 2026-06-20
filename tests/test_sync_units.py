@@ -664,10 +664,13 @@ def test_dispatch_sync_run_redispatches_stale_dispatching_units(
     assert queued[0][0] == str(unit.id)
 
 
-def test_dispatch_sync_run_reclaims_stale_running_units(db_session, monkeypatch):
-    # Regression (Codex Wave 2): a worker that died after marking a unit
-    # RUNNING must not strand the run forever. Stale running units are
-    # reclaimed on redispatch.
+def test_dispatch_sync_run_does_not_reclaim_stale_running_units(
+    db_session, monkeypatch
+):
+    # F2 regression: a unit that is RUNNING (even stale) must NOT be reclaimed.
+    # run_sync_unit does not heartbeat during the provider call, so reclaiming
+    # a stale RUNNING unit would cause duplicate provider writes.  Durable
+    # dead-worker recovery is a separate follow-up (CHAOS-2577).
     from dev_health_ops.workers import sync_units
 
     run, unit = _seed_run(db_session)
@@ -675,19 +678,11 @@ def test_dispatch_sync_run_reclaims_stale_running_units(db_session, monkeypatch)
     unit.updated_at = datetime.now(timezone.utc) - timedelta(hours=2)
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
-    queued = []
 
-    class FakeSig:
-        def __init__(self, unit_id):
-            self.unit_id = unit_id
-
-        def set(self, *, queue):
-            queued.append((self.unit_id, queue))
-            return self
-
-    monkeypatch.setattr(sync_units.run_sync_unit, "s", lambda unit_id: FakeSig(unit_id))
+    monkeypatch.setattr(sync_units.run_sync_unit, "s", lambda unit_id: None)
+    monkeypatch.setattr(sync_units.finalize_sync_run, "si", lambda run_id: None)
     monkeypatch.setattr(
-        sync_units.finalize_sync_run, "si", lambda run_id: FakeSig(run_id)
+        sync_units.finalize_sync_run, "apply_async", lambda *a, **k: None
     )
     monkeypatch.setattr(sync_units, "group", lambda signatures: list(signatures))
     monkeypatch.setattr(
@@ -695,12 +690,16 @@ def test_dispatch_sync_run_reclaims_stale_running_units(db_session, monkeypatch)
         "chord",
         lambda header, callback: type("C", (), {"apply_async": lambda self: None})(),
     )
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run, "apply_async", lambda *a, **k: None
+    )
 
     result = sync_units.dispatch_sync_run(str(run.id))
-    assert result["queued_units"] == 1
-    assert queued[0][0] == str(unit.id)
+    # No units should be dispatched — stale RUNNING is not reclaimed.
+    assert result["queued_units"] == 0
     db_session.refresh(unit)
-    assert unit.status == SyncRunUnitStatus.DISPATCHING.value
+    # Unit must remain RUNNING, not flipped to DISPATCHING.
+    assert unit.status == SyncRunUnitStatus.RUNNING.value
 
 
 def test_dispatch_sync_run_does_not_reclaim_fresh_running_units(
@@ -726,6 +725,9 @@ def test_dispatch_sync_run_does_not_reclaim_fresh_running_units(
         sync_units,
         "chord",
         lambda header, callback: type("C", (), {"apply_async": lambda self: None})(),
+    )
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run, "apply_async", lambda *a, **k: None
     )
 
     result = sync_units.dispatch_sync_run(str(run.id))
@@ -765,3 +767,114 @@ def test_run_sync_unit_success_stamps_watermark_for_full_resync(
     # full_resync must stamp the watermark so the next incremental doesn't cold-start
     watermark = db_session.query(SyncWatermark).one()
     assert watermark.dataset_key == "commits"
+
+
+def test_post_sync_dispatch_includes_window(db_session, monkeypatch):
+    """finalize_sync_run threads min(since_at)/max(before_at) of successful units
+    into _dispatch_post_sync_tasks (CHAOS-2577).
+    """
+    from datetime import date
+
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(db_session)
+    config = SyncConfiguration(
+        org_id=run.org_id,
+        name="canonical-window",
+        provider="github",
+        sync_targets=["git"],
+        migrated_integration_id=run.integration_id,
+    )
+    db_session.add(config)
+    # Give the unit explicit window bounds.
+    since = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    before = datetime(2026, 6, 7, 23, 59, tzinfo=timezone.utc)
+    unit.since_at = since
+    unit.before_at = before
+    unit.status = SyncRunUnitStatus.SUCCESS.value
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    dispatches = []
+    monkeypatch.setattr(
+        sync_units,
+        "_dispatch_post_sync_tasks",
+        lambda **kwargs: dispatches.append(kwargs),
+    )
+
+    result = sync_units.finalize_sync_run(str(run.id))
+
+    assert result["status"] == "finalized"
+    assert len(dispatches) == 1
+    kwargs = dispatches[0]
+    # The covered window must be threaded through.
+    assert kwargs.get("from_date") == date(2026, 6, 1).isoformat()
+    assert kwargs.get("to_date") == date(2026, 6, 7).isoformat()
+
+
+def test_post_sync_dispatch_none_window_unit_unbounds_lower(db_session, monkeypatch):
+    """Mixed run: one NONE-window unit (since_at=None) + one bounded unit.
+
+    The aggregate lower bound must be unbounded (from_date=None and
+    work_graph_from_date=None), not the bounded unit's date (CHAOS-2577 fix).
+    """
+    from dev_health_ops.workers import sync_units
+
+    # Seed the run with the first unit (bounded).
+    run, unit_bounded = _seed_run(db_session)
+    since_bounded = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    before_bounded = datetime(2026, 6, 7, 23, 59, tzinfo=timezone.utc)
+    unit_bounded.since_at = since_bounded
+    unit_bounded.before_at = before_bounded
+    unit_bounded.status = SyncRunUnitStatus.SUCCESS.value
+
+    # Add a second unit with since_at=None (NONE-window / unbounded lower).
+    unit_none = SyncRunUnit(
+        org_id=run.org_id,
+        sync_run_id=run.id,
+        integration_id=run.integration_id,
+        source_id=unit_bounded.source_id,
+        provider="github",
+        dataset_key="work-item-labels",
+        cost_class="low",
+        mode=run.mode,
+        since_at=None,  # NONE-window: unbounded lower
+        before_at=before_bounded,
+        status=SyncRunUnitStatus.SUCCESS.value,
+        attempts=1,
+        processor_flags={},
+    )
+    db_session.add(unit_none)
+
+    config = SyncConfiguration(
+        org_id=run.org_id,
+        name="mixed-window",
+        provider="github",
+        sync_targets=["git"],
+        migrated_integration_id=run.integration_id,
+    )
+    db_session.add(config)
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+
+    dispatches: list[dict] = []
+    monkeypatch.setattr(
+        sync_units,
+        "_dispatch_post_sync_tasks",
+        lambda **kwargs: dispatches.append(kwargs),
+    )
+
+    result = sync_units.finalize_sync_run(str(run.id))
+
+    assert result["status"] == "finalized"
+    assert len(dispatches) == 1
+    kwargs = dispatches[0]
+    # The NONE-window unit makes the lower bound unbounded.
+    assert kwargs.get("from_date") is None, (
+        f"expected from_date=None (unbounded), got {kwargs.get('from_date')!r}"
+    )
+    assert kwargs.get("work_graph_from_date") is None, (
+        f"expected work_graph_from_date=None (unbounded), got {kwargs.get('work_graph_from_date')!r}"
+    )
+    # Upper bound: both units have before_at set, so to_date must be non-None.
+    assert kwargs.get("to_date") is not None
+    assert kwargs.get("work_graph_to_date") is not None

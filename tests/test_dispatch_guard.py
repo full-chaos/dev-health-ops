@@ -325,7 +325,9 @@ def test_partial_cap_dispatch_schedules_redispatch(db_session, monkeypatch):
         yield s
         s.commit()
 
-    monkeypatch.setattr(db, "get_postgres_session_sync", lambda: _fake_session_ctx(db_session))
+    monkeypatch.setattr(
+        db, "get_postgres_session_sync", lambda: _fake_session_ctx(db_session)
+    )
 
     unit_queued = []
     redispatches = []
@@ -352,14 +354,22 @@ def test_partial_cap_dispatch_schedules_redispatch(db_session, monkeypatch):
         def apply_async(self):
             return None
 
-    monkeypatch.setattr(sync_units.run_sync_unit, "s", lambda unit_id: FakeUnitSig(unit_id))
-    monkeypatch.setattr(sync_units.finalize_sync_run, "si", lambda run_id: FakeFinalizeSig(run_id))
+    monkeypatch.setattr(
+        sync_units.run_sync_unit, "s", lambda unit_id: FakeUnitSig(unit_id)
+    )
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run, "si", lambda run_id: FakeFinalizeSig(run_id)
+    )
     monkeypatch.setattr(sync_units, "group", list)
-    monkeypatch.setattr(sync_units, "chord", lambda header, callback: FakeChord(header, callback))
+    monkeypatch.setattr(
+        sync_units, "chord", lambda header, callback: FakeChord(header, callback)
+    )
     monkeypatch.setattr(
         sync_units.dispatch_sync_run,
         "apply_async",
-        lambda args=None, queue=None, countdown=None: redispatches.append((args, countdown)),
+        lambda args=None, queue=None, countdown=None: redispatches.append(
+            (args, countdown)
+        ),
     )
 
     result = sync_units.dispatch_sync_run(str(run.id))
@@ -394,7 +404,9 @@ def test_zero_unit_dispatch_finalizes_not_loops(db_session, monkeypatch):
         yield s
         s.commit()
 
-    monkeypatch.setattr(db, "get_postgres_session_sync", lambda: _fake_session_ctx(db_session))
+    monkeypatch.setattr(
+        db, "get_postgres_session_sync", lambda: _fake_session_ctx(db_session)
+    )
 
     redispatches = []
     finalize_calls = []
@@ -489,7 +501,9 @@ def test_redispatch_enqueue_failure_raises(db_session, monkeypatch):
         yield s
         s.commit()
 
-    monkeypatch.setattr(db, "get_postgres_session_sync", lambda: _fake_session_ctx(db_session))
+    monkeypatch.setattr(
+        db, "get_postgres_session_sync", lambda: _fake_session_ctx(db_session)
+    )
 
     class FakeUnitSig:
         def __init__(self, unit_id):
@@ -512,10 +526,16 @@ def test_redispatch_enqueue_failure_raises(db_session, monkeypatch):
         def apply_async(self):
             return None
 
-    monkeypatch.setattr(sync_units.run_sync_unit, "s", lambda unit_id: FakeUnitSig(unit_id))
-    monkeypatch.setattr(sync_units.finalize_sync_run, "si", lambda run_id: FakeFinalizeSig(run_id))
+    monkeypatch.setattr(
+        sync_units.run_sync_unit, "s", lambda unit_id: FakeUnitSig(unit_id)
+    )
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run, "si", lambda run_id: FakeFinalizeSig(run_id)
+    )
     monkeypatch.setattr(sync_units, "group", list)
-    monkeypatch.setattr(sync_units, "chord", lambda header, callback: FakeChord(header, callback))
+    monkeypatch.setattr(
+        sync_units, "chord", lambda header, callback: FakeChord(header, callback)
+    )
 
     def fail_redispatch(*args, **kwargs):
         raise RuntimeError("broker down")
@@ -523,5 +543,6 @@ def test_redispatch_enqueue_failure_raises(db_session, monkeypatch):
     monkeypatch.setattr(sync_units.dispatch_sync_run, "apply_async", fail_redispatch)
 
     import pytest
+
     with pytest.raises(RuntimeError, match="broker down"):
         sync_units.dispatch_sync_run(str(run.id))

@@ -21,7 +21,11 @@ from dev_health_ops.models.settings import (  # noqa: E402
     SyncConfiguration,
     SyncWatermark,
 )
-from dev_health_ops.sync.watermarks import get_watermark, set_watermark  # noqa: E402
+from dev_health_ops.sync.watermarks import (  # noqa: E402
+    get_watermark,
+    get_watermark_with_overlap,
+    set_watermark,
+)
 
 ORG_ID = "default"
 REPO_ID = "my-org/my-repo"
@@ -563,3 +567,220 @@ class TestRunSyncConfigWatermarks:
         assert result["status"] == "success"
         git_wm = get_watermark(db_session, ORG_ID, "42", "git")
         assert git_wm is not None
+
+
+# ---------------------------------------------------------------------------
+# WS-B tests: monotonic, legacy alias, overlap (CHAOS-2571, 2572, 2578)
+# ---------------------------------------------------------------------------
+
+
+class TestSetWatermarkIsMonotonic:
+    def test_set_watermark_is_monotonic(self, db_session):
+        """Writing an earlier timestamp must not roll back the watermark (CHAOS-2578)."""
+        t_later = datetime(2025, 6, 1, 10, 5, 0, tzinfo=timezone.utc)
+        t_earlier = datetime(2025, 6, 1, 10, 0, 0, tzinfo=timezone.utc)
+
+        set_watermark(db_session, ORG_ID, REPO_ID, "commits", t_later)
+        set_watermark(db_session, ORG_ID, REPO_ID, "commits", t_earlier)
+
+        stored = get_watermark(db_session, ORG_ID, REPO_ID, "commits")
+        assert stored is not None
+        stored_utc = stored.replace(tzinfo=timezone.utc)
+        assert stored_utc == t_later, (
+            f"Monotonic invariant violated: stored={stored_utc} < written={t_later}"
+        )
+
+    def test_set_watermark_advances_when_newer(self, db_session):
+        """Writing a later timestamp must advance the watermark normally."""
+        t_first = datetime(2025, 6, 1, 10, 0, 0, tzinfo=timezone.utc)
+        t_second = datetime(2025, 6, 1, 11, 0, 0, tzinfo=timezone.utc)
+
+        set_watermark(db_session, ORG_ID, REPO_ID, "commits", t_first)
+        set_watermark(db_session, ORG_ID, REPO_ID, "commits", t_second)
+
+        stored = get_watermark(db_session, ORG_ID, REPO_ID, "commits")
+        assert stored is not None
+        assert stored.replace(tzinfo=timezone.utc) == t_second
+
+
+class TestLegacyTargetAliasWarmsPlanner:
+    def test_legacy_target_alias_warms_planner_dataset(self, db_session):
+        """Write via legacy target='git'; planner read for the resolved dataset_key finds the row (CHAOS-2571).
+
+        The alias map resolves 'git' to the primary dataset_key in DatasetKey enum order.
+        Writing via the legacy target path and reading via the resolved canonical key
+        must return the same watermark, proving the alias warms the planner.
+        """
+        from dev_health_ops.sync.watermarks import (
+            dataset_key_for_legacy_target,
+            set_legacy_repo_watermark,
+        )
+
+        ts = datetime(2025, 7, 1, 8, 0, 0, tzinfo=timezone.utc)
+
+        # Write via legacy target path.
+        set_legacy_repo_watermark(db_session, ORG_ID, REPO_ID, "git", ts)
+
+        # The alias must resolve 'git' to a dataset_key.
+        resolved_key = dataset_key_for_legacy_target("git")
+        assert resolved_key is not None, "'git' must resolve to a dataset_key via the registry alias"
+
+        # Planner read via canonical dataset_key must find the row.
+        # set_legacy_repo_watermark delegates to set_watermark(dataset_key=resolved_key),
+        # so the canonical row is stored under resolved_key.
+        stored = get_watermark(db_session, ORG_ID, REPO_ID, resolved_key)
+        assert stored is not None, (
+            f"Planner read for dataset_key={resolved_key!r} must find the row written via legacy target='git'"
+        )
+        assert stored.replace(tzinfo=timezone.utc) == ts
+
+    def test_legacy_read_after_canonical_write(self, db_session):
+        """Write via canonical dataset_key; legacy read via target must find the row.
+
+        The legacy get_legacy_repo_watermark reads by target column first, then
+        falls back via the alias map.  Writing 'prs' (which maps to legacy target
+        'prs') and reading via get_legacy_repo_watermark('prs') must succeed.
+        """
+        from dev_health_ops.sync.watermarks import (
+            get_legacy_repo_watermark,
+        )
+
+        ts = datetime(2025, 7, 2, 9, 0, 0, tzinfo=timezone.utc)
+        # 'prs' dataset_key maps to legacy target 'prs' (1:1 mapping).
+        set_watermark(db_session, ORG_ID, REPO_ID, "prs", ts)
+
+        # Legacy read via target='prs' must find the canonical row.
+        # set_watermark stores target='prs' (target == dataset_key convention),
+        # so the legacy lookup by target column finds it directly.
+        stored = get_legacy_repo_watermark(db_session, ORG_ID, REPO_ID, "prs")
+        assert stored is not None, (
+            "Legacy read via target='prs' must find the row written via canonical dataset_key='prs'"
+        )
+        assert stored.replace(tzinfo=timezone.utc) == ts
+
+
+class TestIncrementalReadAppliesOverlap:
+    def test_incremental_read_applies_overlap(self, db_session, monkeypatch):
+        """Planner incremental window_start == watermark - overlap (CHAOS-2572)."""
+
+        from dev_health_ops.sync.watermarks import get_watermark_with_overlap
+
+        overlap_seconds = 3600  # 1 hour
+        monkeypatch.setenv("SYNC_WATERMARK_OVERLAP", str(overlap_seconds))
+
+        ts = datetime(2025, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
+        set_watermark(db_session, ORG_ID, REPO_ID, "commits", ts)
+
+        result = get_watermark_with_overlap(db_session, ORG_ID, REPO_ID, "commits")
+        assert result is not None
+        expected = ts - __import__('datetime').timedelta(seconds=overlap_seconds)
+        assert result.replace(tzinfo=timezone.utc) == expected, (
+            f"Overlap not applied: got {result}, expected {expected}"
+        )
+
+    def test_overlap_not_applied_when_zero(self, db_session, monkeypatch):
+        """With SYNC_WATERMARK_OVERLAP=0, get_watermark_with_overlap returns raw value."""
+        monkeypatch.setenv("SYNC_WATERMARK_OVERLAP", "0")
+
+        ts = datetime(2025, 8, 2, 12, 0, 0, tzinfo=timezone.utc)
+        set_watermark(db_session, ORG_ID, REPO_ID, "prs", ts)
+
+        result = get_watermark_with_overlap(db_session, ORG_ID, REPO_ID, "prs")
+        assert result is not None
+        assert result.replace(tzinfo=timezone.utc) == ts
+
+    def test_overlap_not_applied_on_cold_start(self, db_session, monkeypatch):
+        """With no watermark row, get_watermark_with_overlap returns None (cold-start)."""
+        monkeypatch.setenv("SYNC_WATERMARK_OVERLAP", "3600")
+
+        result = get_watermark_with_overlap(db_session, ORG_ID, "no-such-repo", "commits")
+        assert result is None, "Cold-start must return None even with overlap configured"
+
+    def test_planner_incremental_window_applies_overlap(self, db_session, monkeypatch):
+        """End-to-end: planner incremental since_at == watermark - overlap."""
+        from datetime import timedelta
+
+        from dev_health_ops.models import (
+            Integration,
+            IntegrationDataset,
+            IntegrationSource,
+            SyncRunMode,
+        )
+        from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
+
+        overlap_seconds = 1800  # 30 minutes
+        monkeypatch.setenv("SYNC_WATERMARK_OVERLAP", str(overlap_seconds))
+
+        # Reload the module so the env var is picked up by _watermark_overlap_seconds().
+        import importlib
+
+        import dev_health_ops.sync.watermarks as _wm_mod
+        importlib.reload(_wm_mod)
+
+        planner_org = "overlap-test-org"
+        integration = Integration(
+            org_id=planner_org,
+            provider="github",
+            name="overlap-integration",
+            config={},
+            is_active=True,
+        )
+        db_session.add(integration)
+        db_session.flush()
+
+        source = IntegrationSource(
+            org_id=planner_org,
+            integration_id=integration.id,
+            provider="github",
+            source_type="repo",
+            external_id="overlap-org/overlap-repo",
+            name="overlap-repo",
+            full_name="overlap-org/overlap-repo",
+            metadata_={},
+            is_enabled=True,
+            discovered_at=datetime.now(timezone.utc),
+            last_seen_at=datetime.now(timezone.utc),
+        )
+        db_session.add(source)
+        db_session.flush()
+
+        dataset = IntegrationDataset(
+            org_id=planner_org,
+            integration_id=integration.id,
+            dataset_key="commits",
+            is_enabled=True,
+            options={},
+        )
+        db_session.add(dataset)
+        db_session.flush()
+
+        watermark_ts = datetime(2025, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
+        _wm_mod.set_watermark(
+            db_session, planner_org, source.external_id, "commits", watermark_ts
+        )
+
+        plan = plan_sync_run(
+            db_session,
+            SyncPlanRequest(
+                integration_id=str(integration.id),
+                org_id=planner_org,
+                mode=SyncRunMode.INCREMENTAL.value,
+                triggered_by="test",
+                before=datetime(2025, 9, 2, 0, 0, 0, tzinfo=timezone.utc),
+            ),
+        )
+
+        from dev_health_ops.models import SyncRunUnit
+        units = (
+            db_session.query(SyncRunUnit)
+            .filter(SyncRunUnit.sync_run_id == plan.sync_run_id)
+            .all()
+        )
+        assert len(units) == 1
+        unit = units[0]
+        assert unit.since_at is not None
+        expected_since = watermark_ts - timedelta(seconds=overlap_seconds)
+        actual_since = unit.since_at.replace(tzinfo=timezone.utc)
+        assert abs((actual_since - expected_since).total_seconds()) < 2, (
+            f"Planner did not apply overlap: got {actual_since}, expected {expected_since}"
+        )

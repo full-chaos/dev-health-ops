@@ -40,7 +40,7 @@ from dev_health_ops.models import (
     SyncRunUnitStatus,
 )
 from dev_health_ops.sync.datasets import WatermarkBehavior, get_dataset_spec
-from dev_health_ops.sync.watermarks import get_watermark
+from dev_health_ops.sync.watermarks import get_watermark_with_overlap
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -351,7 +351,7 @@ def _resolve_windows(
     if mode == SyncRunMode.INCREMENTAL.value:
         window_start: datetime | None = None
         if watermark_behavior == WatermarkBehavior.INCREMENTAL:
-            window_start = get_watermark(
+            window_start = get_watermark_with_overlap(
                 session, org_id, watermark_source_key, dataset_key
             )
             if window_start is None:

@@ -575,3 +575,83 @@ async def test_rows_exist_invalid_history_weeks_same_error(ctx):
 
     with pytest.raises(ValueError, match="history_weeks must be positive"):
         await resolve_throughput_forecast(ctx, ThroughputForecastInput(history_weeks=0))
+
+
+# ---------------------------------------------------------------------------
+# Finding #4 — tenant isolation: org_id must be passed in SQL params
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_load_backlog_passes_org_id_in_sql_params(ctx):
+    """_load_backlog must include org_id in the query params (tenant isolation)."""
+    from dev_health_ops.api.graphql.resolvers.forecast import _load_backlog
+
+    with patch(
+        "dev_health_ops.api.graphql.resolvers.forecast.query_dicts",
+        new_callable=AsyncMock,
+        return_value=[{"backlog": 0}],
+    ) as mock_query:
+        await _load_backlog(ctx, team_ids=None, work_scope_id=None)
+
+    call_args = mock_query.await_args
+    assert call_args is not None
+    sql: str = call_args.args[1]
+    params: dict = call_args.args[2]
+    # org_id placeholder must appear in the SQL so ClickHouse actually filters.
+    assert "{org_id:String}" in sql
+    # org_id value must be present in the params dict.
+    assert params.get("org_id") == ctx.org_id
+
+
+@pytest.mark.asyncio
+async def test_load_throughput_history_passes_org_id_in_sql_params(ctx):
+    """_load_throughput_history must include org_id in the query params (tenant isolation)."""
+    from dev_health_ops.api.graphql.resolvers.forecast import _load_throughput_history
+
+    with patch(
+        "dev_health_ops.api.graphql.resolvers.forecast.query_dicts",
+        new_callable=AsyncMock,
+        return_value=[],
+    ) as mock_query:
+        await _load_throughput_history(
+            ctx, team_ids=None, work_scope_id=None, history_weeks=4
+        )
+
+    call_args = mock_query.await_args
+    assert call_args is not None
+    sql: str = call_args.args[1]
+    params: dict = call_args.args[2]
+    # org_id placeholder must appear in the SQL so ClickHouse actually filters.
+    assert "{org_id:String}" in sql
+    # org_id value must be present in the params dict.
+    assert params.get("org_id") == ctx.org_id
+
+
+@pytest.mark.asyncio
+async def test_load_backlog_org_id_isolation_other_org_rows_not_returned(ctx):
+    """Another org's rows must not bleed into the current org's backlog.
+
+    Simulates the scenario where another tenant has rows for the same team/scope
+    but the current org has none: the loader must return 0, not the other org's data.
+    The SQL must carry org_id so ClickHouse server-side binding filters correctly.
+    """
+    from dev_health_ops.api.graphql.resolvers.forecast import _load_backlog
+
+    # Simulate ClickHouse returning empty (current org has no rows) even though
+    # another org has rows for the same scope. The mock represents the filtered
+    # result after ClickHouse applies the org_id predicate.
+    with patch(
+        "dev_health_ops.api.graphql.resolvers.forecast.query_dicts",
+        new_callable=AsyncMock,
+        return_value=[],  # current org: no rows
+    ) as mock_query:
+        result = await _load_backlog(ctx, team_ids=["team-x"], work_scope_id=None)
+
+    # Current org gets 0, not another org's data.
+    assert result == 0
+    # Confirm org_id is in the SQL so the predicate is actually applied.
+    call_args = mock_query.await_args
+    assert call_args is not None
+    sql: str = call_args.args[1]
+    assert "{org_id:String}" in sql

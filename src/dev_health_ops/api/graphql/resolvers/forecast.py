@@ -93,7 +93,7 @@ async def _load_throughput_history(
     history_weeks: int,
 ) -> ThroughputHistory:
     start_date = utc_today() - timedelta(weeks=history_weeks)
-    conditions = ["day >= {start_date:Date}"]
+    conditions = ["day >= {start_date:Date}", "org_id = {org_id:String}"]
     params: dict[str, Any] = {
         "start_date": start_date,
         "org_id": context.org_id,
@@ -149,7 +149,7 @@ async def _load_work_item_overlay(
     history_weeks: int,
 ) -> tuple[float, float]:
     start_date = utc_today() - timedelta(weeks=history_weeks)
-    conditions = ["day >= {start_date:Date}"]
+    conditions = ["day >= {start_date:Date}", "org_id = {org_id:String}"]
     params: dict[str, Any] = {
         "start_date": start_date,
         "org_id": context.org_id,
@@ -205,7 +205,7 @@ async def _load_review_overlay(
                 day,
                 argMax(pr_first_review_p50_hours, computed_at) AS pr_first_review_p50_hours
             FROM repo_metrics_daily
-            WHERE day >= {start_date:Date}
+            WHERE day >= {start_date:Date} AND org_id = {org_id:String}
             GROUP BY repo_id, day
         )
         WHERE pr_first_review_p50_hours IS NOT NULL
@@ -229,7 +229,7 @@ async def _load_backlog(
     backlog; with multiple teams it sums their backlogs (CHAOS-1783
     multi-team follow-up).
     """
-    conditions: list[str] = []
+    conditions: list[str] = ["org_id = {org_id:String}"]
     params: dict[str, Any] = {"org_id": context.org_id}
     _team_filter(team_ids, conditions, params)
     if work_scope_id:
@@ -276,7 +276,7 @@ async def _load_incident_overlay(
                 day,
                 argMax(incidents_count, computed_at) AS incidents_count
             FROM incident_metrics_daily
-            WHERE day >= {start_date:Date}
+            WHERE day >= {start_date:Date} AND org_id = {org_id:String}
             GROUP BY repo_id, day
         )
         """,

@@ -77,6 +77,30 @@ def _mark_job_run_failed(sync_session, run_id: str, error: str) -> None:
     sync_session.flush()
 
 
+def _mark_job_run_success(
+    sync_session, run_id: str, result: dict[str, Any] | None = None
+) -> None:
+    completed_at = datetime.now(timezone.utc)
+    run = (
+        sync_session.query(JobRun)
+        .filter(JobRun.id == uuid.UUID(str(run_id)))
+        .one_or_none()
+    )
+    if run is None:
+        return
+    run.status = JobRunStatus.SUCCESS.value
+    run.completed_at = completed_at
+    if result is not None:
+        current = run.result if isinstance(run.result, dict) else {}
+        run.result = {**current, **result}
+    started_at = getattr(run, "started_at", None)
+    if started_at is not None:
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=timezone.utc)
+        run.duration_seconds = max(0, int((completed_at - started_at).total_seconds()))
+    sync_session.flush()
+
+
 def _mark_backfill_job_failed(
     sync_session, backfill_job_id: str, error: str, completed_at: datetime
 ) -> None:
@@ -96,7 +120,11 @@ def _mark_backfill_job_failed(
 
 
 def _ensure_pending_sync_job_run(
-    sync_session, config, org_id: str, triggered_by: str
+    sync_session,
+    config,
+    org_id: str,
+    triggered_by: str,
+    result: dict[str, Any] | None = None,
 ) -> str:
     """Find-or-create the ScheduledJob anchor and create a PENDING JobRun.
 
@@ -147,6 +175,7 @@ def _ensure_pending_sync_job_run(
         triggered_by=triggered_by,
         status=JobRunStatus.PENDING.value,
     )
+    run.result = result
     sync_session.add(run)
     sync_session.flush()
     return str(run.id)
@@ -1238,24 +1267,48 @@ async def trigger_sync_config(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+        planner_pending_run_id = await session.run_sync(
+            lambda sync_session: _ensure_pending_sync_job_run(
+                sync_session,
+                config,
+                org_id,
+                "manual",
+                {"sync_run_id": plan.sync_run_id},
+            )
+        )
         await session.commit()
         try:
-            getattr(dispatch_sync_run, "apply_async")(
+            dispatch_result = getattr(dispatch_sync_run, "apply_async")(
                 args=(plan.sync_run_id,), queue="sync"
             )
         except Exception as exc:
+            error_message = f"dispatch enqueue failed: {exc}"
             await session.run_sync(
                 lambda s: mark_sync_run_failed(
                     s, plan.sync_run_id, "dispatch enqueue failed"
                 )
             )
+            await session.run_sync(
+                lambda s: _mark_job_run_failed(s, planner_pending_run_id, error_message)
+            )
+            await session.commit()
             raise HTTPException(
                 status_code=503, detail=f"Task queue unavailable: {exc}"
             )
+        dispatch_task_id = str(getattr(dispatch_result, "id", "") or "")
+        await session.run_sync(
+            lambda s: _mark_job_run_success(
+                s,
+                planner_pending_run_id,
+                {"dispatch_task_id": dispatch_task_id} if dispatch_task_id else None,
+            )
+        )
+        await session.commit()
         return {
             "status": "triggered",
             "config_id": str(config.id),
             "sync_run_id": plan.sync_run_id,
+            "run_id": planner_pending_run_id,
             "total_units": plan.total_units,
         }
 
@@ -1362,16 +1415,15 @@ async def trigger_sync_config_backfill(
     try:
         from dev_health_ops.workers.sync_tasks import run_backfill
 
-        # For the legacy path only: create a PENDING JobRun so the sync-activity
-        # list shows the backfill immediately (CHAOS-2536).  The fan-out path
-        # already produces a visible SyncRun, so we skip this there.
-        pending_run_id: str | None = None
-        if not fanout_backfill:
-            pending_run_id = await session.run_sync(
-                lambda sync_session: _ensure_pending_sync_job_run(
-                    sync_session, config, org_id, "backfill"
-                )
+        pending_run_id = await session.run_sync(
+            lambda sync_session: _ensure_pending_sync_job_run(
+                sync_session,
+                config,
+                org_id,
+                "backfill",
+                {"planner_managed": fanout_backfill},
             )
+        )
 
         await session.commit()
 

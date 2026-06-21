@@ -18,15 +18,23 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.git import Base
-from dev_health_ops.models.integrations import Integration, IntegrationSource
+from dev_health_ops.models.integrations import (
+    Integration,
+    IntegrationDataset,
+    IntegrationSource,
+    SyncRun,
+    SyncRunUnit,
+)
 from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.settings import (
     IntegrationCredential,
     JobRun,
+    JobRunStatus,
     ScheduledJob,
     Setting,
     SettingCategory,
@@ -50,6 +58,9 @@ _TABLES = tables_of(
     Setting,
     Integration,
     IntegrationSource,
+    IntegrationDataset,
+    SyncRun,
+    SyncRunUnit,
 )
 
 
@@ -541,6 +552,11 @@ async def test_planner_enqueue_failure_marks_run_failed_and_503(client, session_
     # Committed run marked FAILED so it is not stranded PLANNED with no dispatcher.
     fake_mark_failed.assert_called_once()
     assert fake_mark_failed.call_args.args[1] == fake_plan.sync_run_id
+    async with session_maker() as session:
+        job_run = (await session.execute(select(JobRun))).scalar_one()
+        assert job_run.status == JobRunStatus.FAILED.value
+        assert job_run.error == "dispatch enqueue failed: broker down"
+        assert job_run.completed_at is not None
     # Legacy path NOT used -- we surfaced the queue outage instead.
     fake_run_sync_config.apply_async.assert_not_called()
     fake_dispatch_batch_sync.apply_async.assert_not_called()
@@ -618,3 +634,78 @@ def test_plan_request_for_config_incremental_without_full_resync_flag():
 
     assert request is not None
     assert request.mode == SyncRunMode.INCREMENTAL.value
+
+
+@pytest.mark.asyncio
+async def test_planner_trigger_creates_jobrun_anchor_visible_in_jobs(
+    client, session_maker
+):
+    ac, seeded_state = client
+    org_id = seeded_state["org_id"]
+
+    integration_id = uuid.uuid4()
+    config_id = await _seed_config(
+        session_maker,
+        org_id,
+        migrated_integration_id=integration_id,
+        planner_managed=True,
+    )
+    await _seed_source(session_maker, org_id, integration_id)
+
+    fake_dispatch = MagicMock()
+    fake_dispatch.apply_async = MagicMock(return_value=MagicMock(id="task-real"))
+    fake_run_sync_config = MagicMock()
+    fake_dispatch_batch_sync = MagicMock()
+
+    with (
+        patch(
+            "dev_health_ops.api.admin.routers.sync.dispatch_sync_run",
+            fake_dispatch,
+        ),
+        patch.dict(
+            "sys.modules",
+            {
+                "dev_health_ops.workers.sync_tasks": MagicMock(
+                    run_sync_config=fake_run_sync_config,
+                    dispatch_batch_sync=fake_dispatch_batch_sync,
+                )
+            },
+        ),
+    ):
+        resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
+
+    assert resp.status_code == 202, resp.text
+    body = resp.json()
+    sync_run_id = body.get("sync_run_id")
+    job_run_id = body.get("run_id")
+    assert sync_run_id, f"planner trigger must return a sync_run_id: {body}"
+    assert job_run_id, f"planner trigger must return a JobRun run_id: {body}"
+    fake_dispatch.apply_async.assert_called_once()
+
+    async with session_maker() as session:
+        run = await session.get(SyncRun, uuid.UUID(sync_run_id))
+        assert run is not None, "trigger must create a SyncRun row"
+        assert str(run.integration_id) == str(integration_id)
+        assert run.org_id == org_id
+        job_run = await session.get(JobRun, uuid.UUID(job_run_id))
+        assert job_run is not None, "trigger must create a JobRun anchor"
+        assert job_run.triggered_by == "manual"
+        assert job_run.status == JobRunStatus.SUCCESS.value
+        assert job_run.completed_at is not None
+        assert job_run.result == {
+            "sync_run_id": sync_run_id,
+            "dispatch_task_id": "task-real",
+        }
+
+    jobs_resp = await ac.get(f"/api/v1/admin/sync-configs/{config_id}/jobs")
+    assert jobs_resp.status_code == 200, jobs_resp.text
+    jobs = jobs_resp.json()
+    ids = {job["id"] for job in jobs}
+    assert job_run_id in ids, f"planner JobRun anchor must appear in jobs: {ids}"
+    surfaced = next(job for job in jobs if job["id"] == job_run_id)
+    assert surfaced["triggered_by"] == "manual"
+    assert surfaced["status"] == "success"
+    assert surfaced["result"] == {
+        "sync_run_id": sync_run_id,
+        "dispatch_task_id": "task-real",
+    }

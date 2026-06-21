@@ -51,6 +51,10 @@ from dev_health_ops.models import (
     SyncRunUnitStatus,
 )
 from dev_health_ops.sync.datasets import WatermarkBehavior, get_dataset_spec
+from dev_health_ops.sync.dispatch_outbox import (
+    OUTBOX_KIND_DISPATCH,
+    upsert_outbox_wakeup,
+)
 from dev_health_ops.sync.watermarks import get_watermark_with_overlap
 
 if TYPE_CHECKING:
@@ -170,6 +174,13 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
     ]
     session.add_all(unit_rows)
     session.flush()
+    upsert_outbox_wakeup(
+        session,
+        sync_run_id=sync_run.id,
+        kind=OUTBOX_KIND_DISPATCH,
+        available_at=now,
+        now=now,
+    )
 
     return SyncRunPlan(
         sync_run_id=str(sync_run.id),

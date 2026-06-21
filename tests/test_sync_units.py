@@ -14,6 +14,7 @@ from dev_health_ops.models import (
     IntegrationDataset,
     IntegrationSource,
     SyncConfiguration,
+    SyncDispatchOutbox,
     SyncRun,
     SyncRunMode,
     SyncRunPostDispatch,
@@ -21,6 +22,13 @@ from dev_health_ops.models import (
     SyncRunUnit,
     SyncRunUnitStatus,
     SyncWatermark,
+)
+from dev_health_ops.sync.dispatch_outbox import (
+    OUTBOX_KIND_FINALIZE,
+    OUTBOX_KIND_POST_SYNC,
+    OUTBOX_STATUS_DISPATCHED,
+    OUTBOX_STATUS_PENDING,
+    build_post_sync_dispatch_payload,
 )
 
 
@@ -268,6 +276,12 @@ def test_run_sync_unit_success_persists_status_and_incremental_watermark(
     assert watermark.org_id == run.org_id
     assert watermark.source_id == "full-chaos/dev-health"
     assert watermark.dataset_key == "commits"
+    finalize_outbox = (
+        db_session.query(SyncDispatchOutbox)
+        .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_FINALIZE)
+        .one()
+    )
+    assert finalize_outbox.status == OUTBOX_STATUS_PENDING
     assert finalize_calls == [((str(run.id),), "sync")]
 
 
@@ -354,6 +368,12 @@ def test_run_sync_unit_failure_persists_failed_and_error(db_session, monkeypatch
     assert unit.lease_owner is None
     assert unit.lease_expires_at is None
     assert unit.last_heartbeat_at is not None
+    finalize_outbox = (
+        db_session.query(SyncDispatchOutbox)
+        .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_FINALIZE)
+        .one()
+    )
+    assert finalize_outbox.status == OUTBOX_STATUS_PENDING
     assert finalize_calls == [((str(run.id),), "sync")]
 
 
@@ -966,6 +986,12 @@ def test_finalize_once_only_dispatches_metrics_once(db_session, monkeypatch):
     assert second["status"] == "already_dispatched"
     assert run.status == SyncRunStatus.SUCCESS.value
     assert db_session.query(SyncRunPostDispatch).count() == 1
+    post_sync_outbox = (
+        db_session.query(SyncDispatchOutbox)
+        .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_POST_SYNC)
+        .one()
+    )
+    assert post_sync_outbox.status == OUTBOX_STATUS_DISPATCHED
     assert len(dispatches) == 1
     assert dispatches[0]["sync_targets"] == ["git"]
     assert config.last_sync_at is not None
@@ -1017,12 +1043,44 @@ def test_finalize_aggregates_partial_failed(db_session, monkeypatch):
     assert config.last_sync_error == "Sync run completed with failed units"
 
 
+def test_build_post_sync_dispatch_payload_matches_finalize_window_fields(db_session):
+    run, unit = _seed_run(db_session)
+    unit.status = SyncRunUnitStatus.SUCCESS.value
+    unit.since_at = datetime(2026, 6, 1, 10, 30, tzinfo=timezone.utc)
+    unit.before_at = datetime(2026, 6, 3, 22, 15, tzinfo=timezone.utc)
+    db_session.flush()
+
+    payload = build_post_sync_dispatch_payload(db_session, run.id)
+
+    assert payload is not None
+    assert payload.provider == "github"
+    assert payload.sync_targets == ["git"]
+    assert payload.org_id == run.org_id
+    assert payload.from_date == "2026-06-01"
+    assert payload.to_date == "2026-06-03"
+    assert payload.work_graph_from_date == "2026-06-01T00:00:00+00:00"
+    assert payload.work_graph_to_date == "2026-06-04T00:00:00+00:00"
+
+
+def test_build_post_sync_dispatch_payload_returns_none_without_success(db_session):
+    run, unit = _seed_run(db_session)
+    unit.status = SyncRunUnitStatus.FAILED.value
+    db_session.flush()
+
+    assert build_post_sync_dispatch_payload(db_session, run.id) is None
+
+
 def test_finalize_zero_unit_run_does_not_report_success(db_session, monkeypatch):
     from dev_health_ops.workers import sync_units
 
     run = _seed_zero_unit_run(db_session)
     _patch_db_session(monkeypatch, db_session)
-    monkeypatch.setattr(sync_units, "_dispatch_post_sync_tasks", lambda **kwargs: None)
+    dispatches = []
+    monkeypatch.setattr(
+        sync_units,
+        "_dispatch_post_sync_tasks",
+        lambda **kwargs: dispatches.append(kwargs),
+    )
 
     result = sync_units.finalize_sync_run(str(run.id))
 
@@ -1038,6 +1096,13 @@ def test_finalize_zero_unit_run_does_not_report_success(db_session, monkeypatch)
         "reason": "no_sync_units_planned",
     }
     assert db_session.query(SyncRunPostDispatch).count() == 1
+    post_sync_outbox = (
+        db_session.query(SyncDispatchOutbox)
+        .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_POST_SYNC)
+        .one()
+    )
+    assert post_sync_outbox.status == OUTBOX_STATUS_DISPATCHED
+    assert dispatches == []
 
 
 def test_dispatch_sync_run_redispatches_only_planned_units(db_session, monkeypatch):

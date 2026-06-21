@@ -43,7 +43,6 @@ from dev_health_ops.models.settings import (
 from dev_health_ops.sync.datasets import supported_datasets, supported_legacy_targets
 from dev_health_ops.sync.planner import plan_sync_run
 from dev_health_ops.sync.trigger_routing import (
-    mark_sync_run_failed,
     planner_request_for_config_if_routed,
 )
 from dev_health_ops.workers.queues import sync_queue_for_provider
@@ -1244,13 +1243,13 @@ async def trigger_sync_config(
                 args=(plan.sync_run_id,), queue="sync"
             )
         except Exception as exc:
-            await session.run_sync(
-                lambda s: mark_sync_run_failed(
-                    s, plan.sync_run_id, "dispatch enqueue failed"
-                )
-            )
-            raise HTTPException(
-                status_code=503, detail=f"Task queue unavailable: {exc}"
+            logger.warning(
+                "sync_config.dispatch_fastpath_failed",
+                extra={
+                    "config_id": str(config.id),
+                    "sync_run_id": plan.sync_run_id,
+                    "error": str(exc),
+                },
             )
         return {
             "status": "triggered",

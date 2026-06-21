@@ -26,6 +26,7 @@ from dev_health_ops.sync.dispatch_outbox import (
     backoff_seconds,
     claim_due_outbox_rows,
     mark_outbox_dispatched,
+    mark_outbox_dispatched_fastpath,
     mark_outbox_publish_failed,
     upsert_outbox_wakeup,
 )
@@ -400,6 +401,43 @@ def test_mark_outbox_dispatched_is_token_guarded(db_session):
     assert row.claim_token is None
     assert row.claim_expires_at is None
     assert row.last_error is None
+
+
+def test_mark_outbox_dispatched_fastpath_marks_unclaimed_pending_row(db_session):
+    now = datetime(2026, 6, 21, 12, tzinfo=timezone.utc)
+    row = _seed_outbox(db_session, available_at=now)
+
+    result = mark_outbox_dispatched_fastpath(
+        db_session,
+        sync_run_id=row.sync_run_id,
+        kind=row.kind,
+        now=now + timedelta(seconds=3),
+    )
+
+    db_session.refresh(row)
+    assert result is True
+    assert row.status == OUTBOX_STATUS_DISPATCHED
+    assert _aware(row.dispatched_at) == now + timedelta(seconds=3)
+    assert row.claim_token is None
+
+
+def test_mark_outbox_dispatched_fastpath_noops_on_claimed_row(db_session):
+    now = datetime(2026, 6, 21, 12, tzinfo=timezone.utc)
+    row = _seed_outbox(db_session, available_at=now)
+    claim = claim_due_outbox_rows(db_session, now=now, limit=1)[0]
+
+    result = mark_outbox_dispatched_fastpath(
+        db_session,
+        sync_run_id=row.sync_run_id,
+        kind=row.kind,
+        now=now + timedelta(seconds=3),
+    )
+
+    db_session.refresh(row)
+    assert result is False
+    assert row.status == OUTBOX_STATUS_PENDING
+    assert row.claim_token == claim.claim_token
+    assert row.dispatched_at is None
 
 
 def test_mark_outbox_dispatched_rejects_expired_lease(db_session):

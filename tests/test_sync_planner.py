@@ -11,11 +11,16 @@ from dev_health_ops.models import (
     Integration,
     IntegrationDataset,
     IntegrationSource,
+    SyncDispatchOutbox,
     SyncRun,
     SyncRunMode,
     SyncRunStatus,
     SyncRunUnit,
     SyncRunUnitStatus,
+)
+from dev_health_ops.sync.dispatch_outbox import (
+    OUTBOX_KIND_DISPATCH,
+    OUTBOX_STATUS_PENDING,
 )
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
 from dev_health_ops.sync.watermarks import get_watermark, set_watermark
@@ -124,6 +129,11 @@ def test_enabled_sources_and_enabled_datasets_fan_out_to_units(db_session):
 
     sync_run = db_session.get(SyncRun, plan.sync_run_id)
     units = _planned_units(db_session, plan.sync_run_id)
+    outbox = (
+        db_session.query(SyncDispatchOutbox)
+        .filter_by(sync_run_id=plan.sync_run_id, kind=OUTBOX_KIND_DISPATCH)
+        .one()
+    )
 
     assert plan.total_units == 4
     assert len(plan.unit_ids) == 4
@@ -137,6 +147,8 @@ def test_enabled_sources_and_enabled_datasets_fan_out_to_units(db_session):
     }
     assert {unit.status for unit in units} == {SyncRunUnitStatus.PLANNED.value}
     assert {unit.mode for unit in units} == {SyncRunMode.INCREMENTAL.value}
+    assert outbox.status == OUTBOX_STATUS_PENDING
+    assert outbox.claim_token is None
 
 
 def test_unsupported_provider_dataset_pairs_are_skipped(db_session):

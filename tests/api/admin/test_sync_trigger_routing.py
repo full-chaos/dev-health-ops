@@ -487,10 +487,9 @@ async def test_flag_on_unmigrated_config_uses_legacy_path(client, session_maker)
 
 
 @pytest.mark.asyncio
-async def test_planner_enqueue_failure_marks_run_failed_and_503(client, session_maker):
-    """Flag ON + migrated config, plan commits, but dispatch_sync_run.apply_async
-    raises => the committed run is marked FAILED (not stranded PLANNED) and the
-    queue outage is surfaced as 503; legacy path is NOT used."""
+async def test_planner_enqueue_failure_returns_202_for_durable_dispatch(
+    client, session_maker
+):
     ac, seeded_state = client
     org_id = seeded_state["org_id"]
 
@@ -507,7 +506,6 @@ async def test_planner_enqueue_failure_marks_run_failed_and_503(client, session_
     fake_dispatch = MagicMock()
     fake_dispatch.apply_async = MagicMock(side_effect=RuntimeError("broker down"))
 
-    fake_mark_failed = MagicMock()
     fake_run_sync_config = MagicMock()
     fake_dispatch_batch_sync = MagicMock()
 
@@ -519,10 +517,6 @@ async def test_planner_enqueue_failure_marks_run_failed_and_503(client, session_
         patch(
             "dev_health_ops.api.admin.routers.sync.dispatch_sync_run",
             fake_dispatch,
-        ),
-        patch(
-            "dev_health_ops.api.admin.routers.sync.mark_sync_run_failed",
-            fake_mark_failed,
         ),
         patch.dict(
             "sys.modules",
@@ -536,12 +530,11 @@ async def test_planner_enqueue_failure_marks_run_failed_and_503(client, session_
     ):
         resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
 
-    assert resp.status_code == 503, resp.text
+    assert resp.status_code == 202, resp.text
+    body = resp.json()
+    assert body["status"] == "triggered"
+    assert body["sync_run_id"] == fake_plan.sync_run_id
     fake_dispatch.apply_async.assert_called_once()
-    # Committed run marked FAILED so it is not stranded PLANNED with no dispatcher.
-    fake_mark_failed.assert_called_once()
-    assert fake_mark_failed.call_args.args[1] == fake_plan.sync_run_id
-    # Legacy path NOT used -- we surfaced the queue outage instead.
     fake_run_sync_config.apply_async.assert_not_called()
     fake_dispatch_batch_sync.apply_async.assert_not_called()
 

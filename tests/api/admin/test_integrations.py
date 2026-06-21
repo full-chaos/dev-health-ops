@@ -20,6 +20,7 @@ from dev_health_ops.models.integrations import (
     Integration,
     IntegrationDataset,
     IntegrationSource,
+    SyncDispatchOutbox,
     SyncRun,
     SyncRunUnit,
 )
@@ -29,6 +30,10 @@ from dev_health_ops.models.settings import (
     SyncConfiguration,
 )
 from dev_health_ops.models.users import Organization, User
+from dev_health_ops.sync.dispatch_outbox import (
+    OUTBOX_KIND_DISPATCH,
+    OUTBOX_STATUS_PENDING,
+)
 from tests._helpers import tables_of
 
 admin_router_module = importlib.import_module("dev_health_ops.api.admin")
@@ -44,6 +49,7 @@ _TABLES = tables_of(
     Integration,
     IntegrationSource,
     IntegrationDataset,
+    SyncDispatchOutbox,
     SyncRun,
     SyncRunUnit,
     SyncConfiguration,
@@ -530,7 +536,7 @@ async def test_trigger_sync_org_scoped(client, seeded_state):
 
 
 @pytest.mark.asyncio
-async def test_trigger_sync_marks_run_failed_when_enqueue_fails(
+async def test_trigger_sync_returns_202_when_enqueue_fails(
     client,
     session_maker,
 ):
@@ -550,18 +556,24 @@ async def test_trigger_sync_marks_run_failed_when_enqueue_fails(
             json={},
         )
 
-    assert resp.status_code == 503
-    assert resp.json()["detail"] == "Task queue unavailable: broker down"
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "accepted"
 
     async with session_maker() as session:
         result = await session.execute(
             select(SyncRun).where(SyncRun.integration_id == uuid.UUID(integration_id))
         )
         run = result.scalar_one()
+        outbox_result = await session.execute(
+            select(SyncDispatchOutbox).where(SyncDispatchOutbox.sync_run_id == run.id)
+        )
+        outbox = outbox_result.scalar_one()
 
-    assert run.status == "failed"
-    assert run.error == "Task queue unavailable: broker down"
-    assert run.completed_at is not None
+    assert run.status == "planned"
+    assert run.error is None
+    assert run.completed_at is None
+    assert outbox.kind == OUTBOX_KIND_DISPATCH
+    assert outbox.status == OUTBOX_STATUS_PENDING
 
 
 @pytest.mark.asyncio
@@ -622,7 +634,7 @@ async def test_trigger_backfill_org_scoped(client, seeded_state):
 
 
 @pytest.mark.asyncio
-async def test_trigger_backfill_marks_run_failed_when_enqueue_fails(
+async def test_trigger_backfill_returns_202_when_enqueue_fails(
     client,
     session_maker,
 ):
@@ -645,19 +657,25 @@ async def test_trigger_backfill_marks_run_failed_when_enqueue_fails(
             },
         )
 
-    assert resp.status_code == 503
-    assert resp.json()["detail"] == "Task queue unavailable: broker down"
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "accepted"
 
     async with session_maker() as session:
         result = await session.execute(
             select(SyncRun).where(SyncRun.integration_id == uuid.UUID(integration_id))
         )
         run = result.scalar_one()
+        outbox_result = await session.execute(
+            select(SyncDispatchOutbox).where(SyncDispatchOutbox.sync_run_id == run.id)
+        )
+        outbox = outbox_result.scalar_one()
 
-    assert run.status == "failed"
+    assert run.status == "planned"
     assert run.mode == "backfill"
-    assert run.error == "Task queue unavailable: broker down"
-    assert run.completed_at is not None
+    assert run.error is None
+    assert run.completed_at is None
+    assert outbox.kind == OUTBOX_KIND_DISPATCH
+    assert outbox.status == OUTBOX_STATUS_PENDING
 
 
 @pytest.mark.asyncio

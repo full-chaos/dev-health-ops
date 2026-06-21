@@ -18,7 +18,7 @@ from dev_health_ops.models import (
     SyncRunUnitStatus,
 )
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
-from dev_health_ops.sync.watermarks import set_watermark
+from dev_health_ops.sync.watermarks import get_watermark, set_watermark
 
 ORG_ID = "planner-org"
 
@@ -598,3 +598,101 @@ def test_plan_sync_run_succeeds_when_tier_limits_unavailable(db_session, monkeyp
     assert abs((since - expected_start).total_seconds()) < 2, (
         f"Expected depth=30 (community default), got since_at={since}"
     )
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-2570: backfill -> incremental composition (no date gap)
+# ---------------------------------------------------------------------------
+
+
+def test_backfill_then_incremental_has_no_date_gap(db_session):
+    """Canonical onboarding flow: a backfill (which never seeds a watermark per
+    CHAOS-2514) followed by an incremental must leave NO date gap.
+
+    With no watermark, the incremental cold-starts at ``now - initial_sync_depth``
+    (CHAOS-2569), which reaches back past a backfill whose ``before`` is ~now, so
+    coverage is continuous across the seam.
+    """
+    from datetime import timedelta
+
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    source = _create_source(
+        db_session, integration, external_id="full-chaos/dev-health"
+    )
+    _create_dataset(db_session, integration, "commits")
+
+    now = datetime.now(timezone.utc)
+    backfill_before = now  # canonical onboarding: backfill up to ~now
+
+    # 1) Backfill plan: units are mode=backfill and NO watermark is seeded.
+    backfill_plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.BACKFILL.value,
+            triggered_by="backfill",
+            since=now - timedelta(days=14),
+            before=backfill_before,
+        ),
+    )
+    backfill_units = _planned_units(db_session, backfill_plan.sync_run_id)
+    assert {u.mode for u in backfill_units} == {SyncRunMode.BACKFILL.value}
+    assert get_watermark(db_session, ORG_ID, source.external_id, "commits") is None, (
+        "backfill must not seed a watermark (CHAOS-2514)"
+    )
+
+    # 2) First incremental cold-starts; window_start <= backfill `before` => no gap.
+    inc_plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+    inc_units = _planned_units(db_session, inc_plan.sync_run_id)
+    assert len(inc_units) == 1
+    assert inc_units[0].since_at is not None
+    since = inc_units[0].since_at.replace(tzinfo=timezone.utc)
+    assert since <= backfill_before, (
+        "incremental cold-start must reach back to the backfill's `before` "
+        "so there is no date gap"
+    )
+
+
+def test_incremental_cold_start_seam_is_depth_bounded(db_session):
+    """The no-gap guarantee is depth-bounded: the first incremental cold-start
+    window_start is exactly ``now - initial_sync_depth``, so a backfill whose
+    ``before`` is at/after that boundary is seamlessly covered. A backfill whose
+    ``before`` is OLDER than the boundary is the documented residual edge
+    (paused-then-resumed) and is intentionally out of scope here.
+    """
+    from datetime import timedelta
+
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, "commits")
+
+    now = datetime.now(timezone.utc)
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert units[0].since_at is not None
+    since = units[0].since_at.replace(tzinfo=timezone.utc)
+    boundary = now - timedelta(days=30)
+    assert abs((since - boundary).total_seconds()) < 5
+    # A backfill ending at/after the boundary is covered (no gap).
+    assert since <= boundary + timedelta(seconds=5)

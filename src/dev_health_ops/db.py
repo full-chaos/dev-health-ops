@@ -346,6 +346,21 @@ def get_postgres_sync_engine(uri: str | None = None) -> Engine:
     return _postgres_sync_engine
 
 
+def reset_sync_engine() -> None:
+    """Dispose and clear the cached global sync Postgres engine.
+
+    ``get_postgres_sync_engine()`` caches the engine keyed off POSTGRES_URI on
+    first use. Tests that monkeypatch POSTGRES_URI per test must reset it so the
+    next caller binds to the current env instead of a stale engine pointing at a
+    previous test's database -- the cross-test / cross-xdist-worker pollution
+    behind CHAOS-2586.
+    """
+    global _postgres_sync_engine
+    if _postgres_sync_engine is not None:
+        _postgres_sync_engine.dispose()
+        _postgres_sync_engine = None
+
+
 @contextmanager
 def get_postgres_session_sync() -> Generator[Session, None, None]:
     engine = get_postgres_sync_engine()

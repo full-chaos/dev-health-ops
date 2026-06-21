@@ -14,6 +14,7 @@ from dev_health_ops.metrics.checkpoints import (
 )
 from dev_health_ops.models.checkpoints import CheckpointStatus
 from dev_health_ops.models.git import Base
+from tests._helpers import closing_coroutine_runner
 
 
 @pytest.fixture
@@ -123,7 +124,7 @@ class TestRunDailyMetricsBatch:
         from dev_health_ops.workers.metrics_partitioned import run_daily_metrics_batch
 
         mock_get_session.side_effect = lambda: _fake_session_ctx(db_session)
-        mock_asyncio_run.return_value = None
+        mock_asyncio_run.side_effect = closing_coroutine_runner()
 
         repo_id = uuid.uuid4()
         task = run_daily_metrics_batch
@@ -158,7 +159,9 @@ class TestRunDailyMetricsBatch:
         from dev_health_ops.workers.metrics_partitioned import run_daily_metrics_batch
 
         mock_get_session.side_effect = lambda: _fake_session_ctx(db_session)
-        mock_asyncio_run.side_effect = RuntimeError("boom")
+        mock_asyncio_run.side_effect = closing_coroutine_runner(
+            raises=RuntimeError("boom")
+        )
 
         repo_id = uuid.uuid4()
         task = run_daily_metrics_batch
@@ -238,7 +241,7 @@ class TestRunDailyMetricsFinalizeTask:
         )
 
         mock_get_session.side_effect = lambda: _fake_session_ctx(db_session)
-        mock_asyncio_run.return_value = None
+        mock_asyncio_run.side_effect = closing_coroutine_runner()
 
         task = run_daily_metrics_finalize_task
         task.push_request(id="finalize-task-1", retries=0)
@@ -289,7 +292,9 @@ class TestRunDailyMetricsFinalizeTask:
         )
 
         mock_get_session.side_effect = lambda: _fake_session_ctx(db_session)
-        mock_asyncio_run.side_effect = RuntimeError("finalize exploded")
+        mock_asyncio_run.side_effect = closing_coroutine_runner(
+            raises=RuntimeError("finalize exploded")
+        )
 
         task = run_daily_metrics_finalize_task
         task.push_request(id="finalize-task-2", retries=0)

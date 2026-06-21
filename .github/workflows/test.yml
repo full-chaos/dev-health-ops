@@ -39,9 +39,18 @@ jobs:
               - 'Makefile'
               - 'scripts/**'
 
+  # Fast, pytest-xdist-parallelized unit suite across the supported Python
+  # versions. This is the per-PR signal that the required `test` gate (below)
+  # aggregates. Coverage is intentionally NOT gated here so the iterative PR
+  # loop stays fast — the coverage-gated full suite runs in the `coverage` job
+  # at merge time and on main (CHAOS-2586).
   test-matrix:
     needs: [changes]
-    if: needs.changes.outputs.code == 'true'
+    # On merge_group, dorny/paths-filter has no PR base/head diff to compute and
+    # can report code=false, which would skip every test job; the `test`
+    # aggregator then treats the skip as a pass and an untested change reaches
+    # main. Always run in the merge queue regardless of the path filter.
+    if: github.event_name == 'merge_group' || needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04-arm
     # Test matrix needs package read access for dependency installs.
     permissions:
@@ -49,7 +58,7 @@ jobs:
       packages: read
     strategy:
       matrix:
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.12", "3.13", "3.14"]
 
     services:
       postgres:
@@ -88,26 +97,26 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run tiered test contract
+      - name: Run parallel unit test contract
         env:
           DATABASE_URI: clickhouse://ch:ch@localhost:8123/default
           CLICKHOUSE_URI: clickhouse://ch:ch@localhost:8123/default
           POSTGRES_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           SECONDARY_DATABASE_URI: mongodb://localhost:27017
-          COVERAGE_THRESHOLD: "70"
           # No OTLP collector runs in CI; with OTEL on, the exporter retries to
           # localhost:4317 with backoff on every span/metric, flooding logs and
           # slowing the suite into timeouts. We don't assert OTEL stats in CI.
           OTEL_ENABLED: "false"
+          # Cap xdist workers so parallelism does not contend on the single
+          # postgres/clickhouse service container. The standard arm runner has
+          # 4 vCPUs, so this matches `-n auto` there while staying predictable on
+          # larger runners. Override PYTEST_XDIST_WORKERS to tune.
+          PYTEST_XDIST_WORKERS: "4"
         run: |
           chmod +x ci/run_tests.sh
           mkdir -p test-results/logs
           set -o pipefail
-          if [ "${{ matrix.python-version }}" = "3.11" ]; then
-            ./ci/run_tests.sh ci 2>&1 | tee test-results/logs/ci-${{ matrix.python-version }}.log
-          else
-            ./ci/run_tests.sh unit 2>&1 | tee test-results/logs/unit-${{ matrix.python-version }}.log
-          fi
+          ./ci/run_tests.sh unit 2>&1 | tee test-results/logs/unit-${{ matrix.python-version }}.log
 
       - name: Upload junit test reports
         if: always()
@@ -129,34 +138,126 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # Full coverage-gated suite (ruff/mypy gates + unit tests with coverage
+  # threshold + integration/e2e). Kept OFF the per-PR iterative path: it runs in
+  # the merge queue (before code reaches main) and on push to main (post-merge
+  # verification + Codecov upload), never on pull_request. Reassigned from the
+  # retired 3.11 leg to 3.12 and parallelized with xdist (CHAOS-2586).
+  coverage:
+    needs: [changes]
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.event_name == 'merge_group' || needs.changes.outputs.code == 'true')
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: read
+
+    services:
+      postgres:
+        image: postgres:17.4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+
+      clickhouse:
+        image: clickhouse/clickhouse-server:25.1
+        env:
+          CLICKHOUSE_DB: default
+          CLICKHOUSE_USER: ch
+          CLICKHOUSE_PASSWORD: ch
+        ports:
+          - 8123:8123
+        options: >-
+          --health-cmd "clickhouse-client --user ch --password ch --query 'SELECT 1'" --health-interval 10s --health-timeout 5s --health-retries 5
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run coverage-gated test contract
+        env:
+          DATABASE_URI: clickhouse://ch:ch@localhost:8123/default
+          CLICKHOUSE_URI: clickhouse://ch:ch@localhost:8123/default
+          POSTGRES_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+          SECONDARY_DATABASE_URI: mongodb://localhost:27017
+          COVERAGE_THRESHOLD: "70"
+          OTEL_ENABLED: "false"
+          PYTEST_XDIST_WORKERS: "4"
+        run: |
+          chmod +x ci/run_tests.sh
+          mkdir -p test-results/logs
+          set -o pipefail
+          ./ci/run_tests.sh ci 2>&1 | tee test-results/logs/ci-3.12.log
+
+      - name: Upload junit test reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: junit-coverage
+          path: test-results/junit/*.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload pytest logs on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pytest-logs-coverage
+          path: |
+            test-results/logs/*.log
+            **/pytest.log
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Upload coverage reports
-        if: matrix.python-version == '3.11'
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
         continue-on-error: true
 
   # Required-status-check gate. Branch protection requires a check named
-  # exactly "test"; the matrix above produces "test (3.11)"..."test (3.14)"
-  # which never match. This aggregator always runs, treating skipped (path
-  # filter) as pass and failure/cancelled as fail. Do not remove.
+  # exactly "test"; the matrix above produces "test-matrix (3.12)".."(3.14)"
+  # and the coverage job produces "coverage", none of which match. This
+  # aggregator always runs, treating skipped (path filter, or coverage skipped
+  # on pull_request) as pass and failure/cancelled as fail. It is the single
+  # required check for both PRs and the merge queue. Do not remove.
   test:
     name: test
     if: always()
-    needs: [test-matrix]
+    needs: [test-matrix, coverage]
     runs-on: ubuntu-latest
     steps:
-      - name: Aggregate matrix result
+      - name: Aggregate test results
         env:
           MATRIX_RESULT: ${{ needs.test-matrix.result }}
+          COVERAGE_RESULT: ${{ needs.coverage.result }}
         run: |
           echo "test-matrix result: ${MATRIX_RESULT}"
-          case "${MATRIX_RESULT}" in
-            success|skipped)
-              echo "test gate passed"
-              ;;
-            failure|cancelled|*)
-              echo "test gate failed"
-              exit 1
-              ;;
-          esac
+          echo "coverage result: ${COVERAGE_RESULT}"
+          for result in "${MATRIX_RESULT}" "${COVERAGE_RESULT}"; do
+            case "${result}" in
+              success|skipped)
+                ;;
+              failure|cancelled|*)
+                echo "test gate failed (${result})"
+                exit 1
+                ;;
+            esac
+          done
+          echo "test gate passed"

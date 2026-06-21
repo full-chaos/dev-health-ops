@@ -21,6 +21,8 @@ Environment:
   PYTEST_SINGLE_RETRY=1  Retry a failing pytest tier once
   PYTEST_DURATIONS=25    Emit the slowest N test durations in output
   TEST_RESULTS_DIR=...   Base directory for junit outputs (default: ./test-results)
+  PYTEST_XDIST_WORKERS=auto   pytest-xdist worker count (-n). Set 0 to disable parallelism.
+  PYTEST_DIST_MODE=loadscope  xdist distribution mode (loadscope keeps a module on one worker).
 EOF
 }
 
@@ -47,6 +49,15 @@ JUNIT_XML_E2E="${JUNIT_XML_E2E:-${JUNIT_RESULTS_DIR}/e2e.xml}"
 PYTEST_SINGLE_RETRY="${PYTEST_SINGLE_RETRY:-0}"
 PYTEST_DURATIONS="${PYTEST_DURATIONS:-25}"
 PYTEST_DIAGNOSTIC_OPTS=(-ra "--durations=${PYTEST_DURATIONS}")
+
+# pytest-xdist parallelization (CHAOS-2586). Defaults to `-n auto --dist
+# loadscope`. loadscope keeps every test in a module on a single worker so
+# intra-module ordering is preserved (this suite has ordering-sensitive tests:
+# importlib.reload module pollution, tier_limits MagicMock subset ordering).
+# xdist workers are separate processes, so module-level/env/reload state is
+# per-worker isolated. Set PYTEST_XDIST_WORKERS=0 to run serially.
+PYTEST_XDIST_WORKERS="${PYTEST_XDIST_WORKERS:-auto}"
+PYTEST_DIST_MODE="${PYTEST_DIST_MODE:-loadscope}"
 
 HAS_UV=0
 if command -v uv >/dev/null 2>&1; then
@@ -147,10 +158,13 @@ unit_tests() {
   # The `clickhouse` marker is opt-in (mirrors `benchmark`). Tests under
   # that marker require a live ClickHouse seeded with demo data and are
   # intended for local development via `pytest -m clickhouse`.
-  run_pytest_step "unit tests" "${JUNIT_XML_UNIT}" \
-    tests -v --tb=short -m "not benchmark and not clickhouse" \
-    --ignore=tests/test_connectors_integration.py \
-    --ignore=tests/test_private_repo_access.py
+  local pytest_args=(tests -v --tb=short -m "not benchmark and not clickhouse"
+    --ignore=tests/test_connectors_integration.py
+    --ignore=tests/test_private_repo_access.py)
+  if [ "${PYTEST_XDIST_WORKERS}" != "0" ]; then
+    pytest_args+=(-n "${PYTEST_XDIST_WORKERS}" --dist "${PYTEST_DIST_MODE}")
+  fi
+  run_pytest_step "unit tests" "${JUNIT_XML_UNIT}" "${pytest_args[@]}"
 }
 
 integration_tests() {
@@ -230,11 +244,17 @@ ci_tests() {
   run_step "ruff (lint gates)" ruff check --select=E9,F63,F7,F82 .
   # Mirror unit_tests()'s marker filter: skip `clickhouse`-marked tests that
   # need a seeded live ClickHouse (opt-in locally via `pytest -m clickhouse`).
-  run_pytest_step "unit tests with coverage >= ${coverage_threshold}" "${JUNIT_XML_UNIT}" \
-    tests -v --tb=short -m "not benchmark and not clickhouse" \
-    --ignore=tests/test_connectors_integration.py \
-    --ignore=tests/test_private_repo_access.py \
-    --cov=. --cov-report=xml --cov-report=term-missing --cov-fail-under="${coverage_threshold}"
+  local cov_args=(tests -v --tb=short -m "not benchmark and not clickhouse"
+    --ignore=tests/test_connectors_integration.py
+    --ignore=tests/test_private_repo_access.py
+    --cov=. --cov-report=xml --cov-report=term-missing
+    --cov-fail-under="${coverage_threshold}")
+  # pytest-cov aggregates per-worker coverage automatically under xdist, so the
+  # --cov-fail-under gate still evaluates the combined total across workers.
+  if [ "${PYTEST_XDIST_WORKERS}" != "0" ]; then
+    cov_args+=(-n "${PYTEST_XDIST_WORKERS}" --dist "${PYTEST_DIST_MODE}")
+  fi
+  run_pytest_step "unit tests with coverage >= ${coverage_threshold}" "${JUNIT_XML_UNIT}" "${cov_args[@]}"
   integration_tests
   e2e_tests
 }

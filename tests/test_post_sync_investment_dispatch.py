@@ -28,6 +28,7 @@ from unittest.mock import MagicMock, patch
 # import that otherwise ERRORs isolated collection (mirrors CHAOS-2370).
 import dev_health_ops.connectors  # noqa: F401
 from dev_health_ops.workers.sync_runtime import _dispatch_post_sync_tasks
+from tests._helpers import closing_coroutine_runner
 
 _INVESTMENT_TASK = (
     "dev_health_ops.workers.tasks.dispatch_investment_materialize_partitioned"
@@ -282,7 +283,9 @@ def test_run_investment_materialize_forwards_org_id_to_config() -> None:
         ),
         patch(
             "dev_health_ops.workers.work_graph_tasks.run_async",
-            return_value={"components": 0, "records": 0, "quotes": 0},
+            side_effect=closing_coroutine_runner(
+                {"components": 0, "records": 0, "quotes": 0}
+            ),
         ),
     ):
         task = cast(Any, run_investment_materialize)
@@ -317,7 +320,9 @@ def test_run_investment_materialize_empty_org_id_becomes_none() -> None:
         ),
         patch(
             "dev_health_ops.workers.work_graph_tasks.run_async",
-            return_value={"components": 0, "records": 0, "quotes": 0},
+            side_effect=closing_coroutine_runner(
+                {"components": 0, "records": 0, "quotes": 0}
+            ),
         ),
     ):
         task = cast(Any, run_investment_materialize)
@@ -353,7 +358,9 @@ def test_run_investment_materialize_resolves_worker_llm_credentials(
         ),
         patch(
             "dev_health_ops.workers.work_graph_tasks.run_async",
-            return_value={"components": 0, "records": 0, "quotes": 0},
+            side_effect=closing_coroutine_runner(
+                {"components": 0, "records": 0, "quotes": 0}
+            ),
         ),
     ):
         task = cast(Any, run_investment_materialize)

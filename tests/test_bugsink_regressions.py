@@ -20,6 +20,7 @@ from dev_health_ops.models.settings import (  # noqa: E402
     ScheduledJob,
     SyncConfiguration,
 )
+from tests._helpers import closing_coroutine_runner  # noqa: E402
 
 
 @pytest.fixture
@@ -152,7 +153,7 @@ def test_run_daily_metrics_batch_defaults_none_org_id(
     from dev_health_ops.workers.metrics_partitioned import run_daily_metrics_batch
 
     mock_get_session.side_effect = lambda: _fake_session_ctx(db_session)
-    mock_asyncio_run.return_value = None
+    mock_asyncio_run.side_effect = closing_coroutine_runner()
 
     repo_id = uuid.uuid4()
     task = run_daily_metrics_batch
@@ -186,7 +187,7 @@ def test_run_daily_metrics_finalize_defaults_none_org_id(
     )
 
     mock_get_session.side_effect = lambda: _fake_session_ctx(db_session)
-    mock_asyncio_run.return_value = None
+    mock_asyncio_run.side_effect = closing_coroutine_runner()
 
     task = run_daily_metrics_finalize_task
     task.push_request(id="bugsink-finalize-none-org", retries=0)

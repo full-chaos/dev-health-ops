@@ -10,17 +10,22 @@ an inclusive post-fetch filter.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from dev_health_ops.processors.github import (
     _fetch_github_commits_sync,
     _filter_after,
+    _sync_github_test_reports,
 )
 from dev_health_ops.processors.gitlab import (
     _fetch_gitlab_commits_sync,
     _fetch_gitlab_test_reports_sync,
+    _sync_gitlab_test_reports,
 )
 from dev_health_ops.processors.gitlab import (
     _filter_after as _gitlab_filter_after,
@@ -159,3 +164,91 @@ def test_gitlab_test_reports_fetch_skips_post_window_pipelines() -> None:
         for call in connector.rest_client.get_pipeline_test_report.call_args_list
     }
     assert queried_ids == {1}
+
+
+def _async_cm(target: MagicMock) -> MagicMock:
+    target.__aenter__ = AsyncMock(return_value=target)
+    target.__aexit__ = AsyncMock(return_value=False)
+    return target
+
+
+@pytest.mark.asyncio
+async def test_github_test_reports_forwards_until_date_to_testops() -> None:
+    # CHAOS-2573 (Codex review): the TestOps pipeline/job path must forward
+    # window_end so post-window pipeline/job rows are not persisted.
+    loop = asyncio.get_running_loop()
+    proc = MagicMock()
+    proc.fetch_and_store = AsyncMock(
+        return_value=SimpleNamespace(pipeline_runs=0, job_runs=0)
+    )
+    adapter = _async_cm(MagicMock())
+
+    with (
+        patch(
+            "dev_health_ops.providers.github.testops_pipeline.GitHubActionsAdapter",
+            return_value=adapter,
+        ),
+        patch(
+            "dev_health_ops.processors.testops_pipeline.TestOpsPipelineProcessor",
+            return_value=proc,
+        ),
+        patch(
+            "dev_health_ops.processors.github._fetch_github_test_artifacts_sync",
+            return_value=[],
+        ),
+    ):
+        await _sync_github_test_reports(
+            connector=MagicMock(),
+            gh_repo=MagicMock(default_branch="main"),
+            owner="o",
+            repo_name="r",
+            repo_id="repo-1",
+            org_id="org-1",
+            ingestion_sink=MagicMock(),
+            loop=loop,
+            since=SINCE,
+            until=UNTIL,
+        )
+
+    proc.fetch_and_store.assert_awaited_once()
+    assert proc.fetch_and_store.await_args.kwargs["until_date"] == UNTIL
+
+
+@pytest.mark.asyncio
+async def test_gitlab_test_reports_forwards_until_date_to_testops() -> None:
+    loop = asyncio.get_running_loop()
+    proc = MagicMock()
+    proc.fetch_and_store = AsyncMock(
+        return_value=SimpleNamespace(pipeline_runs=0, job_runs=0)
+    )
+    adapter = _async_cm(MagicMock())
+
+    with (
+        patch(
+            "dev_health_ops.providers.gitlab.testops_pipeline.GitLabCIAdapter",
+            return_value=adapter,
+        ),
+        patch(
+            "dev_health_ops.processors.testops_pipeline.TestOpsPipelineProcessor",
+            return_value=proc,
+        ),
+        patch(
+            "dev_health_ops.processors.gitlab._fetch_gitlab_test_reports_sync",
+            return_value=([], []),
+        ),
+    ):
+        await _sync_gitlab_test_reports(
+            connector=MagicMock(),
+            gl_project=MagicMock(default_branch="main"),
+            project_id=123,
+            token="t",
+            repo_id="repo-1",
+            org_id="org-1",
+            ingestion_sink=MagicMock(),
+            loop=loop,
+            since=SINCE,
+            until=UNTIL,
+        )
+
+    proc.fetch_and_store.assert_awaited_once()
+    assert proc.fetch_and_store.await_args.kwargs["until_date"] == UNTIL

@@ -182,7 +182,7 @@ def test_reconciler_finalizes_when_dead_running_makes_run_terminal(
 def test_reconciler_does_not_expire_live_lease(db_session, monkeypatch):
     from dev_health_ops.workers import sync_reconciler, sync_units
 
-    run, running, planned = _seed_run(db_session, planned_units=1)
+    run, running, planned = _seed_run(db_session, planned_units=0)
     running.lease_expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
@@ -206,3 +206,91 @@ def test_reconciler_does_not_expire_live_lease(db_session, monkeypatch):
     assert running.status == SyncRunUnitStatus.RUNNING.value
     assert dispatches == []
     assert finalizers == []
+
+
+def test_reconciler_retries_dispatchable_run_after_enqueue_failure(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler, sync_units
+
+    run, running, planned = _seed_run(db_session, planned_units=1)
+    running.status = SyncRunUnitStatus.FAILED.value
+    running.error = "sync unit lease expired"
+    running.lease_owner = None
+    running.lease_expires_at = None
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    dispatches = []
+    finalizers = []
+
+    def fail_dispatch(args=None, queue=None):
+        raise RuntimeError("broker down")
+
+    monkeypatch.setattr(sync_units.dispatch_sync_run, "apply_async", fail_dispatch)
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: finalizers.append((args, queue)),
+    )
+
+    first = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    db_session.refresh(planned[0])
+    assert first["expired_units"] == 0
+    assert first["dispatches_enqueued"] == 0
+    assert planned[0].status == SyncRunUnitStatus.PLANNED.value
+    assert finalizers == []
+
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: dispatches.append((args, queue)),
+    )
+
+    second = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    assert second["dispatches_enqueued"] == 1
+    assert dispatches == [((str(run.id),), "sync")]
+
+
+def test_reconciler_retries_finalizable_run_after_enqueue_failure(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler, sync_units
+
+    run, running, planned = _seed_run(db_session, planned_units=0)
+    running.status = SyncRunUnitStatus.FAILED.value
+    running.error = "sync unit lease expired"
+    running.lease_owner = None
+    running.lease_expires_at = None
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    dispatches = []
+    finalizers = []
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: dispatches.append((args, queue)),
+    )
+
+    def fail_finalize(args=None, queue=None):
+        raise RuntimeError("broker down")
+
+    monkeypatch.setattr(sync_units.finalize_sync_run, "apply_async", fail_finalize)
+
+    first = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    assert first["expired_units"] == 0
+    assert first["finalizers_enqueued"] == 0
+    assert dispatches == []
+
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: finalizers.append((args, queue)),
+    )
+
+    second = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    assert second["finalizers_enqueued"] == 1
+    assert finalizers == [((str(run.id),), "sync")]

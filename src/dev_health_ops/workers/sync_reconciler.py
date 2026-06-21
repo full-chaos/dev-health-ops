@@ -7,7 +7,7 @@ from typing import Any
 
 from sqlalchemy import update
 
-from dev_health_ops.models import SyncRunUnit, SyncRunUnitStatus
+from dev_health_ops.models import SyncRun, SyncRunStatus, SyncRunUnit, SyncRunUnitStatus
 from dev_health_ops.sync.guard import _acquire_bucket_advisory_locks
 from dev_health_ops.workers.celery_app import celery_app
 
@@ -77,8 +77,8 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
                 expired_run_ids.add(unit.sync_run_id)
         session.flush()
         session.expire_all()
-        dispatch_run_ids: set[str] = set()
-        finalize_run_ids: set[str] = set()
+        dispatch_run_ids = _dispatchable_run_ids(session, stale_dispatch_cutoff, limit)
+        finalize_run_ids = _finalizable_run_ids(session, limit)
         for run_id in expired_run_ids:
             units = (
                 session.query(SyncRunUnit)
@@ -110,6 +110,52 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
         "dispatches_enqueued": dispatched,
         "finalizers_enqueued": finalized,
     }
+
+
+def _dispatchable_run_ids(
+    session, stale_dispatch_cutoff: datetime, limit: int
+) -> set[str]:
+    rows = (
+        session.query(SyncRunUnit.sync_run_id)
+        .join(SyncRun, SyncRun.id == SyncRunUnit.sync_run_id)
+        .filter(
+            SyncRun.status.not_in(_TERMINAL_RUN_STATUSES),
+            (
+                (SyncRunUnit.status == SyncRunUnitStatus.PLANNED.value)
+                | (
+                    (SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value)
+                    & (SyncRunUnit.updated_at <= stale_dispatch_cutoff)
+                )
+            ),
+        )
+        .distinct()
+        .order_by(SyncRunUnit.sync_run_id.asc())
+        .limit(max(1, int(limit)))
+        .all()
+    )
+    return {str(run_id) for (run_id,) in rows}
+
+
+def _finalizable_run_ids(session, limit: int) -> set[str]:
+    runs = (
+        session.query(SyncRun)
+        .filter(SyncRun.status.not_in(_TERMINAL_RUN_STATUSES))
+        .order_by(SyncRun.created_at.asc(), SyncRun.id.asc())
+        .limit(max(1, int(limit)))
+        .all()
+    )
+    run_ids: set[str] = set()
+    for run in runs:
+        units = (
+            session.query(SyncRunUnit).filter(SyncRunUnit.sync_run_id == run.id).all()
+        )
+        if units and all(
+            unit.status
+            in {SyncRunUnitStatus.SUCCESS.value, SyncRunUnitStatus.FAILED.value}
+            for unit in units
+        ):
+            run_ids.add(str(run.id))
+    return run_ids
 
 
 def _enqueue_dispatches(task, run_ids: set[str]) -> int:
@@ -144,6 +190,13 @@ def _as_aware(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+_TERMINAL_RUN_STATUSES = {
+    SyncRunStatus.SUCCESS.value,
+    SyncRunStatus.PARTIAL_FAILED.value,
+    SyncRunStatus.FAILED.value,
+}
 
 
 __all__ = ["reconcile_sync_dispatch"]

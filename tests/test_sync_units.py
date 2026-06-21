@@ -1772,3 +1772,165 @@ def test_post_sync_dispatch_none_window_unit_unbounds_lower(db_session, monkeypa
     # Upper bound: both units have before_at set, so to_date must be non-None.
     assert kwargs.get("to_date") is not None
     assert kwargs.get("work_graph_to_date") is not None
+
+
+def test_fail_stale_dispatching_does_not_overwrite_concurrent_claim(tmp_path):
+    """Write-time CAS: a stale DISPATCHING row a delayed run_sync_unit has
+    concurrently claimed to RUNNING (with a live lease) must NOT be clobbered to
+    FAILED by the dispatch-denial stale-fail path.
+    """
+    from sqlalchemy import update as sa_update
+
+    from dev_health_ops.workers.sync_units import (
+        _fail_stale_dispatching_units,
+        _stale_dispatch_seconds,
+    )
+
+    engine = _file_backed_engine(tmp_path)
+    try:
+        stale_age = timedelta(seconds=_stale_dispatch_seconds() + 600)
+        seeded_at = datetime.now(timezone.utc) - stale_age
+        with Session(engine) as seed_session:
+            run, unit = _seed_run(seed_session)
+            run_id = run.id
+            unit_id = unit.id
+            failed_unit = SyncRunUnit(
+                org_id=unit.org_id,
+                sync_run_id=run.id,
+                integration_id=unit.integration_id,
+                source_id=unit.source_id,
+                provider=unit.provider,
+                dataset_key="pull_requests",
+                cost_class=unit.cost_class,
+                mode=unit.mode,
+                since_at=unit.since_at,
+                before_at=unit.before_at,
+                status=SyncRunUnitStatus.DISPATCHING.value,
+                attempts=0,
+                processor_flags=unit.processor_flags,
+                updated_at=seeded_at,
+            )
+            run.total_units = 2
+            seed_session.add(failed_unit)
+            # Explicit updated_at in the SET clause suppresses the column onupdate,
+            # so the row is durably STALE DISPATCHING.
+            seed_session.execute(
+                sa_update(SyncRunUnit)
+                .where(SyncRunUnit.id == unit_id)
+                .values(
+                    status=SyncRunUnitStatus.DISPATCHING.value,
+                    updated_at=seeded_at,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            seed_session.commit()
+            failed_unit_id = failed_unit.id
+
+        # A delayed run_sync_unit atomically claims the SAME stale row
+        # DISPATCHING -> RUNNING with a live lease, in an independent session.
+        lease_owner = str(uuid.uuid4())
+        claimed_at = datetime.now(timezone.utc)
+        lease_expires_at = claimed_at + timedelta(seconds=3600)
+        with Session(engine) as claim_session:
+            claimed_count = (
+                claim_session.query(SyncRunUnit)
+                .filter(
+                    SyncRunUnit.id == unit_id,
+                    SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value,
+                )
+                .update(
+                    {
+                        SyncRunUnit.status: SyncRunUnitStatus.RUNNING.value,
+                        SyncRunUnit.error: None,
+                        SyncRunUnit.lease_owner: lease_owner,
+                        SyncRunUnit.lease_expires_at: lease_expires_at,
+                        SyncRunUnit.last_heartbeat_at: claimed_at,
+                        SyncRunUnit.updated_at: claimed_at,
+                    },
+                    synchronize_session=False,
+                )
+            )
+            assert claimed_count == 1
+            claim_session.commit()
+
+        # The dispatch-denial path now runs the stale-fail helper.  The write-time
+        # status='dispatching' predicate excludes the now-RUNNING row.
+        with Session(engine) as fail_session:
+            failed = _fail_stale_dispatching_units(
+                fail_session, run_id, "sync dispatch denied"
+            )
+            fail_session.commit()
+
+        assert failed == 1
+        with Session(engine) as assert_session:
+            unit = (
+                assert_session.query(SyncRunUnit)
+                .filter(SyncRunUnit.id == unit_id)
+                .one()
+            )
+            stale_unit = (
+                assert_session.query(SyncRunUnit)
+                .filter(SyncRunUnit.id == failed_unit_id)
+                .one()
+            )
+            assert unit.status == SyncRunUnitStatus.RUNNING.value
+            assert unit.lease_owner == lease_owner
+            assert unit.lease_expires_at is not None
+            assert _aware(unit.lease_expires_at) > datetime.now(timezone.utc)
+            assert unit.error is None
+            assert unit.result is None
+            assert stale_unit.status == SyncRunUnitStatus.FAILED.value
+            assert stale_unit.error == "sync dispatch denied"
+            assert stale_unit.result == {"error_category": "dispatch_denied"}
+    finally:
+        engine.dispose()
+
+
+def test_fail_stale_dispatching_fails_genuinely_stale_unit(tmp_path):
+    """Control: a genuinely-stale DISPATCHING unit with no concurrent claim IS
+    failed by the write-time CAS.
+    """
+    from sqlalchemy import update as sa_update
+
+    from dev_health_ops.workers.sync_units import (
+        _fail_stale_dispatching_units,
+        _stale_dispatch_seconds,
+    )
+
+    engine = _file_backed_engine(tmp_path)
+    try:
+        stale_age = timedelta(seconds=_stale_dispatch_seconds() + 600)
+        seeded_at = datetime.now(timezone.utc) - stale_age
+        with Session(engine) as seed_session:
+            run, unit = _seed_run(seed_session)
+            run_id = run.id
+            unit_id = unit.id
+            seed_session.execute(
+                sa_update(SyncRunUnit)
+                .where(SyncRunUnit.id == unit_id)
+                .values(
+                    status=SyncRunUnitStatus.DISPATCHING.value,
+                    updated_at=seeded_at,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            seed_session.commit()
+
+        with Session(engine) as fail_session:
+            failed = _fail_stale_dispatching_units(
+                fail_session, run_id, "sync dispatch denied"
+            )
+            fail_session.commit()
+
+        assert failed == 1
+        with Session(engine) as assert_session:
+            unit = (
+                assert_session.query(SyncRunUnit)
+                .filter(SyncRunUnit.id == unit_id)
+                .one()
+            )
+            assert unit.status == SyncRunUnitStatus.FAILED.value
+            assert unit.error == "sync dispatch denied"
+            assert unit.result == {"error_category": "dispatch_denied"}
+    finally:
+        engine.dispose()

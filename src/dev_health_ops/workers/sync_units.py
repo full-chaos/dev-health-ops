@@ -856,24 +856,28 @@ def _fail_planned_units(session, run_uuid: uuid.UUID, error: str) -> int:
 def _fail_stale_dispatching_units(session, run_uuid: uuid.UUID, error: str) -> int:
     now = datetime.now(timezone.utc)
     stale_dispatch_cutoff = now - timedelta(seconds=_stale_dispatch_seconds())
-    stale_units = (
-        session.query(SyncRunUnit)
-        .filter(
+    # Write-time CAS (NOT load-and-mutate): the ``status == 'dispatching'`` predicate
+    # is evaluated by the database at UPDATE time, so a stale row that a delayed
+    # ``run_sync_unit`` concurrently claimed to RUNNING (DISPATCHING->RUNNING + live
+    # lease) between our read and write is EXCLUDED -- we never overwrite a live
+    # worker's claim with FAILED.  ``updated_at <= cutoff`` scopes to genuinely stale
+    # rows exactly as the prior load-and-mutate did, still scoped to this run.
+    result = session.execute(
+        update(SyncRunUnit)
+        .where(
             SyncRunUnit.sync_run_id == run_uuid,
             SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value,
+            SyncRunUnit.updated_at <= stale_dispatch_cutoff,
         )
-        .all()
+        .values(
+            status=SyncRunUnitStatus.FAILED.value,
+            error=error,
+            result={"error_category": "dispatch_denied"},
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
     )
-    failed = 0
-    for unit in stale_units:
-        if _as_aware(unit.updated_at) > stale_dispatch_cutoff:
-            continue
-        unit.status = SyncRunUnitStatus.FAILED.value
-        unit.error = error
-        unit.result = {"error_category": "dispatch_denied"}
-        unit.updated_at = now
-        failed += 1
-    return failed
+    return int(result.rowcount or 0)
 
 
 def _enqueue_denied_active_finalize(sync_run_id: str) -> None:
@@ -968,47 +972,6 @@ def _claim_units(
         .order_by(SyncRunUnit.id)
         .all()
     )
-
-
-def _mark_dispatch_enqueue_failed(sync_run_id: str, error: str) -> None:
-    from dev_health_ops.db import get_postgres_session_sync
-
-    completed_at = datetime.now(timezone.utc)
-    run_uuid = uuid.UUID(str(sync_run_id))
-    with get_postgres_session_sync() as session:
-        run = session.query(SyncRun).filter(SyncRun.id == run_uuid).one_or_none()
-        if run is None:
-            return
-        run.status = SyncRunStatus.FAILED.value
-        run.completed_at = completed_at
-        run.error = error
-        run.result = {"error": error, "phase": "dispatch_enqueue"}
-        units = (
-            session.query(SyncRunUnit).filter(SyncRunUnit.sync_run_id == run_uuid).all()
-        )
-        for unit in units:
-            if unit.status not in {
-                SyncRunUnitStatus.SUCCESS.value,
-                SyncRunUnitStatus.FAILED.value,
-            }:
-                unit.status = SyncRunUnitStatus.FAILED.value
-                unit.error = error
-                unit.updated_at = completed_at
-        run.completed_units = sum(
-            1 for unit in units if unit.status == SyncRunUnitStatus.SUCCESS.value
-        )
-        run.failed_units = sum(
-            1 for unit in units if unit.status == SyncRunUnitStatus.FAILED.value
-        )
-        stamp_sync_run_canonical_config(
-            session,
-            run,
-            completed_at=completed_at,
-            success=False,
-            error=error,
-            stats={"error": error, "phase": "dispatch_enqueue"},
-        )
-        session.flush()
 
 
 def _load_unit(session, unit_id: str) -> SyncRunUnit:

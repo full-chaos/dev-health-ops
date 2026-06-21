@@ -28,8 +28,8 @@ from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_POST_SYNC,
     OUTBOX_STATUS_DISPATCHED,
     OUTBOX_STATUS_PENDING,
-    build_post_sync_dispatch_payload,
 )
+from dev_health_ops.workers.sync_runtime import build_post_sync_dispatch_payload
 
 
 def _aware(value: datetime) -> datetime:

@@ -28,7 +28,7 @@ from __future__ import annotations
 import os
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import and_, case, or_, select, update
@@ -38,8 +38,6 @@ from sqlalchemy.orm import Session
 from dev_health_ops.models import (
     SyncDispatchOutbox,
     SyncRun,
-    SyncRunUnit,
-    SyncRunUnitStatus,
 )
 
 OUTBOX_KIND_DISPATCH = "dispatch_sync_run"
@@ -61,17 +59,6 @@ class ClaimedOutboxRow:
     attempts: int
     available_at: datetime
     claim_token: str
-
-
-@dataclass(frozen=True)
-class PostSyncDispatchPayload:
-    provider: str
-    sync_targets: list[str]
-    org_id: str
-    from_date: str | None
-    to_date: str | None
-    work_graph_from_date: str | None
-    work_graph_to_date: str | None
 
 
 def backoff_seconds(attempts: int) -> int:
@@ -347,90 +334,6 @@ def mark_outbox_dispatched(
     )
     session.flush()
     return _rowcount(result) == 1
-
-
-def build_post_sync_dispatch_payload(
-    session: Session, sync_run_id: str | uuid.UUID
-) -> PostSyncDispatchPayload | None:
-    from dev_health_ops.sync.planner import map_datasets_to_legacy_targets
-
-    run_uuid = uuid.UUID(str(sync_run_id))
-    run = session.query(SyncRun).filter(SyncRun.id == run_uuid).one_or_none()
-    if run is None:
-        return None
-
-    units = (
-        session.query(SyncRunUnit)
-        .filter(SyncRunUnit.sync_run_id == run_uuid)
-        .order_by(SyncRunUnit.id)
-        .all()
-    )
-    successful_by_provider: dict[str, set[str]] = {}
-    successful_units: list[SyncRunUnit] = []
-    for unit in units:
-        if unit.status != SyncRunUnitStatus.SUCCESS.value:
-            continue
-        provider = str(unit.provider)
-        successful_by_provider.setdefault(provider, set()).add(str(unit.dataset_key))
-        successful_units.append(unit)
-    if not successful_units:
-        return None
-
-    legacy_targets: set[str] = set()
-    for provider, dataset_keys in successful_by_provider.items():
-        legacy_targets.update(map_datasets_to_legacy_targets(provider, dataset_keys))
-    if not legacy_targets:
-        return None
-
-    covered_since: datetime | None = None
-    covered_before: datetime | None = None
-    any_unbounded_lower = any(u.since_at is None for u in successful_units)
-    any_unbounded_upper = any(u.before_at is None for u in successful_units)
-    if not any_unbounded_lower:
-        since_values = [
-            _as_aware(u.since_at) for u in successful_units if u.since_at is not None
-        ]
-        covered_since = min(since_values)
-    if not any_unbounded_upper:
-        before_values = [
-            _as_aware(u.before_at) for u in successful_units if u.before_at is not None
-        ]
-        covered_before = max(before_values)
-
-    from_date_str = (
-        covered_since.date().isoformat() if covered_since is not None else None
-    )
-    to_date_str = (
-        covered_before.date().isoformat() if covered_before is not None else None
-    )
-    work_graph_from_date_str = (
-        datetime.combine(
-            covered_since.date(),
-            time.min,
-            tzinfo=timezone.utc,
-        ).isoformat()
-        if covered_since is not None
-        else None
-    )
-    work_graph_to_date_str = (
-        datetime.combine(
-            covered_before.date() + timedelta(days=1),
-            time.min,
-            tzinfo=timezone.utc,
-        ).isoformat()
-        if covered_before is not None
-        else None
-    )
-
-    return PostSyncDispatchPayload(
-        provider=next(iter(successful_by_provider), "unknown"),
-        sync_targets=sorted(legacy_targets),
-        org_id=str(run.org_id),
-        from_date=from_date_str,
-        to_date=to_date_str,
-        work_graph_from_date=work_graph_from_date_str,
-        work_graph_to_date=work_graph_to_date_str,
-    )
 
 
 def mark_outbox_publish_failed(

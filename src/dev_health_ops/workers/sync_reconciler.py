@@ -38,13 +38,15 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
         OUTBOX_KIND_DISPATCH,
         OUTBOX_KIND_FINALIZE,
         OUTBOX_KIND_POST_SYNC,
-        build_post_sync_dispatch_payload,
         claim_due_outbox_rows,
         mark_outbox_dispatched,
         mark_outbox_publish_failed,
         upsert_outbox_wakeup,
     )
-    from dev_health_ops.workers.sync_runtime import _dispatch_post_sync_tasks
+    from dev_health_ops.workers.sync_runtime import (
+        _dispatch_post_sync_tasks,
+        build_post_sync_dispatch_payload,
+    )
     from dev_health_ops.workers.sync_units import (
         _stale_dispatch_seconds,
         dispatch_sync_run,

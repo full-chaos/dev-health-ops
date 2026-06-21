@@ -65,7 +65,6 @@ from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_FINALIZE,
     OUTBOX_KIND_POST_SYNC,
     OUTBOX_STATUS_PENDING,
-    build_post_sync_dispatch_payload,
     upsert_outbox_wakeup,
 )
 from dev_health_ops.sync.dispatch_policy import route
@@ -82,6 +81,7 @@ from dev_health_ops.workers.sync_bootstrap import (
     ProviderRuntimeCache,
     SyncTaskBootstrap,
 )
+from dev_health_ops.workers.sync_runtime import build_post_sync_dispatch_payload
 
 logger = logging.getLogger(__name__)
 _runtime_cache = ProviderRuntimeCache()

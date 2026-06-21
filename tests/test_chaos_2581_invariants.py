@@ -22,6 +22,7 @@ from dev_health_ops.models import (
     SyncRunStatus,
     SyncRunUnit,
     SyncRunUnitStatus,
+    SyncWatermark,
 )
 from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_DISPATCH,
@@ -743,11 +744,21 @@ def test_a2_backfill_then_sync_now_has_no_date_gap_with_cold_start_depth(
     )
     assert backfill_units[0].since_at is not None
     assert backfill_units[-1].before_at is not None
-    assert _aware(backfill_units[-1].before_at) == backfill_before
+    last_backfill_before = _aware(backfill_units[-1].before_at)
+    assert last_backfill_before == backfill_before
     assert incremental_unit.since_at is not None
-    assert _aware(incremental_unit.since_at) <= backfill_before
     assert incremental_unit.before_at is not None
-    assert _aware(incremental_unit.before_at) >= backfill_before
+    incremental_window = (
+        _aware(incremental_unit.since_at),
+        _aware(incremental_unit.before_at),
+    )
+    assert incremental_window[0] <= last_backfill_before <= incremental_window[1]
+    assert (
+        db_session.query(SyncWatermark)
+        .filter_by(org_id=integration.org_id, dataset_key="commits")
+        .count()
+        == 0
+    )
 
 
 def test_a3_over_cap_backfill_queues_overflow_rearm_and_reconciler_drains(

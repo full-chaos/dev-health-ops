@@ -1,5 +1,10 @@
 """Add sync run unit lease columns.
 
+Retry safety: the lease columns are guarded individually so a rerun after a
+partial failure between column creation and concurrent index creation can resume
+instead of failing on duplicate columns. The downgrade mirrors this by dropping
+columns only when present.
+
 Revision ID: 0019
 Revises: 0018
 Create Date: 2026-06-20 00:00:00
@@ -22,12 +27,14 @@ __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
 
 
 def upgrade() -> None:
-    op.add_column("sync_run_units", sa.Column("lease_owner", sa.Text(), nullable=True))
-    op.add_column(
+    _add_column_if_missing(
+        "sync_run_units", sa.Column("lease_owner", sa.Text(), nullable=True)
+    )
+    _add_column_if_missing(
         "sync_run_units",
         sa.Column("lease_expires_at", sa.DateTime(timezone=True), nullable=True),
     )
-    op.add_column(
+    _add_column_if_missing(
         "sync_run_units",
         sa.Column("last_heartbeat_at", sa.DateTime(timezone=True), nullable=True),
     )
@@ -49,6 +56,23 @@ def downgrade() -> None:
             postgresql_concurrently=True,
             if_exists=True,
         )
-    op.drop_column("sync_run_units", "last_heartbeat_at")
-    op.drop_column("sync_run_units", "lease_expires_at")
-    op.drop_column("sync_run_units", "lease_owner")
+    _drop_column_if_present("sync_run_units", "last_heartbeat_at")
+    _drop_column_if_present("sync_run_units", "lease_expires_at")
+    _drop_column_if_present("sync_run_units", "lease_owner")
+
+
+def _add_column_if_missing(table_name: str, column: sa.Column) -> None:
+    existing_columns = _column_names(table_name)
+    if column.name not in existing_columns:
+        op.add_column(table_name, column)
+
+
+def _drop_column_if_present(table_name: str, column_name: str) -> None:
+    existing_columns = _column_names(table_name)
+    if column_name in existing_columns:
+        op.drop_column(table_name, column_name)
+
+
+def _column_names(table_name: str) -> set[str]:
+    bind = op.get_bind()
+    return {column["name"] for column in sa.inspect(bind).get_columns(table_name)}

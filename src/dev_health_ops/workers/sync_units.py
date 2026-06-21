@@ -341,8 +341,6 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
     _log_ctx: dict[str, Any] = {"unit_id": unit_id}
     try:
         with get_postgres_session_sync() as session:
-            ctx = SyncTaskBootstrap.load(session, unit_id)
-            sync_run_id = ctx.sync_run_id
             unit = _load_unit(session, unit_id)
             run = (
                 session.query(SyncRun)
@@ -385,6 +383,8 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
             session.flush()
             session.refresh(unit)
             should_finalize = True
+            ctx = SyncTaskBootstrap.load(session, unit_id)
+            sync_run_id = ctx.sync_run_id
             _log_ctx = {
                 "sync_run_id": ctx.sync_run_id,
                 "unit_id": unit_id,

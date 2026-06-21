@@ -402,6 +402,7 @@ def test_run_sync_unit_bootstrap_failure_enqueues_finalize(db_session, monkeypat
     from dev_health_ops.workers.sync_units import run_sync_unit
 
     run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
     _patch_db_session(monkeypatch, db_session)
     finalize_calls = _patch_finalize_apply(monkeypatch)
 
@@ -417,6 +418,72 @@ def test_run_sync_unit_bootstrap_failure_enqueues_finalize(db_session, monkeypat
     assert unit.status == SyncRunUnitStatus.FAILED.value
     assert unit.error == "missing source"
     assert finalize_calls == [((str(run.id),), "sync")]
+
+
+def test_run_sync_unit_bootstrap_failure_skips_duplicate_live_running_lease(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers.sync_bootstrap import SyncTaskBootstrap
+
+    run, unit = _seed_run(db_session)
+    now = datetime.now(timezone.utc)
+    lease_expires_at = now + timedelta(minutes=10)
+    unit.status = SyncRunUnitStatus.RUNNING.value
+    unit.lease_owner = "other-worker"
+    unit.lease_expires_at = lease_expires_at
+    unit.last_heartbeat_at = now
+    unit.error = "existing error"
+    unit.result = {"existing": True}
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+
+    dispatch_calls = []
+    finalize_calls = []
+    chord_calls = []
+
+    class FakeChord:
+        def apply_async(self):
+            chord_calls.append("apply_async")
+
+    def fail_bootstrap(session, unit_id):
+        raise ValueError("missing source")
+
+    monkeypatch.setattr(SyncTaskBootstrap, "load", fail_bootstrap)
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: dispatch_calls.append((args, queue)),
+    )
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: finalize_calls.append((args, queue)),
+    )
+    monkeypatch.setattr(
+        sync_units,
+        "chord",
+        lambda *args, **kwargs: FakeChord(),
+    )
+
+    result = getattr(sync_units.run_sync_unit, "run")(str(unit.id))
+
+    db_session.refresh(unit)
+    assert result == {
+        "status": "skipped",
+        "unit_id": str(unit.id),
+        "reason": "not_dispatchable",
+    }
+    assert unit.status == SyncRunUnitStatus.RUNNING.value
+    assert unit.lease_owner == "other-worker"
+    persisted_lease_expires_at = unit.lease_expires_at
+    assert persisted_lease_expires_at is not None
+    assert _aware(persisted_lease_expires_at) == lease_expires_at
+    assert unit.error == "existing error"
+    assert unit.result == {"existing": True}
+    assert dispatch_calls == []
+    assert finalize_calls == []
+    assert chord_calls == []
 
 
 def test_run_sync_unit_skips_terminal_run_without_overwriting_unit(

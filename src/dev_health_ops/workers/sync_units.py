@@ -943,25 +943,34 @@ def _claim_units(
     # A DISPATCHING unit that is stale means the worker was enqueued but never
     # picked up (e.g. broker restart).  It is safe to re-enqueue because the
     # worker never started the provider call.
+    #
+    # Atomic CAS: this single UPDATE re-checks status='dispatching' AND
+    # updated_at <= stale_dispatch at write time, so a row that a delayed
+    # run_sync_unit concurrently claimed to RUNNING is excluded by
+    # construction -- it can never be reclaimed/requeued, and no status
+    # rewrite of a RUNNING row is possible.  status stays DISPATCHING; only
+    # updated_at is refreshed so a later redispatch re-enqueues the unit.
     stale_dispatch = now - timedelta(seconds=_stale_dispatch_seconds())
-    reclaim_candidates = (
-        session.query(SyncRunUnit)
-        .filter(
-            SyncRunUnit.sync_run_id == run_uuid,
-            SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value,
+    stale_where = [
+        SyncRunUnit.sync_run_id == run_uuid,
+        SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value,
+        SyncRunUnit.updated_at <= stale_dispatch,
+        ~SyncRunUnit.id.in_(claimed_ids),
+    ]
+    if capped_ids:
+        stale_where.append(~SyncRunUnit.id.in_([uuid.UUID(cid) for cid in capped_ids]))
+    stale_reclaimed: set[uuid.UUID] = set(
+        session.execute(
+            update(SyncRunUnit)
+            .where(*stale_where)
+            .values(updated_at=now)
+            .returning(SyncRunUnit.id)
+            .execution_options(synchronize_session=False)
         )
+        .scalars()
         .all()
     )
-    for unit in reclaim_candidates:
-        if unit.id in claimed_ids:
-            continue
-        # Never reclaim a unit that the concurrency guard deferred.
-        if str(unit.id) in capped_ids:
-            continue
-        if _as_aware(unit.updated_at) <= stale_dispatch:
-            unit.status = SyncRunUnitStatus.DISPATCHING.value
-            unit.updated_at = now
-            claimed_ids.add(unit.id)
+    claimed_ids.update(stale_reclaimed)
 
     session.flush()
     if not claimed_ids:

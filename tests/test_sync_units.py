@@ -1934,3 +1934,120 @@ def test_fail_stale_dispatching_fails_genuinely_stale_unit(tmp_path):
             assert unit.result == {"error_category": "dispatch_denied"}
     finally:
         engine.dispose()
+
+
+def test_claim_units_does_not_reclaim_concurrently_claimed_running(tmp_path):
+    """Write-time CAS in _claim_units stale-reclaim: a stale DISPATCHING row a
+    delayed run_sync_unit has concurrently claimed to RUNNING (with a live
+    lease) must NOT be reclaimed/requeued. A genuinely-stale DISPATCHING unit
+    with no concurrent claim IS reclaimed (returned, updated_at refreshed).
+    """
+    from sqlalchemy import update as sa_update
+
+    from dev_health_ops.workers.sync_units import (
+        _claim_units,
+        _stale_dispatch_seconds,
+    )
+
+    engine = _file_backed_engine(tmp_path)
+    try:
+        stale_age = timedelta(seconds=_stale_dispatch_seconds() + 600)
+        seeded_at = datetime.now(timezone.utc) - stale_age
+        with Session(engine) as seed_session:
+            run, reclaimable = _seed_run(seed_session)
+            run_id = run.id
+            reclaimable_id = reclaimable.id
+            # Second unit: stale DISPATCHING that a delayed run_sync_unit will
+            # concurrently claim to RUNNING below.
+            concurrent = SyncRunUnit(
+                org_id=reclaimable.org_id,
+                sync_run_id=run.id,
+                integration_id=reclaimable.integration_id,
+                source_id=reclaimable.source_id,
+                provider=reclaimable.provider,
+                dataset_key="pull_requests",
+                cost_class=reclaimable.cost_class,
+                mode=reclaimable.mode,
+                since_at=reclaimable.since_at,
+                before_at=reclaimable.before_at,
+                status=SyncRunUnitStatus.DISPATCHING.value,
+                attempts=0,
+                processor_flags=reclaimable.processor_flags,
+                updated_at=seeded_at,
+            )
+            run.total_units = 2
+            seed_session.add(concurrent)
+            # Explicit updated_at in the SET clause suppresses the column
+            # onupdate, so both rows are durably STALE DISPATCHING.
+            seed_session.execute(
+                sa_update(SyncRunUnit)
+                .where(SyncRunUnit.id == reclaimable_id)
+                .values(
+                    status=SyncRunUnitStatus.DISPATCHING.value,
+                    updated_at=seeded_at,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            seed_session.commit()
+            concurrent_id = concurrent.id
+
+        # A delayed run_sync_unit atomically claims the SAME stale row
+        # DISPATCHING -> RUNNING with a live lease, in an independent session.
+        lease_owner = str(uuid.uuid4())
+        claimed_at = datetime.now(timezone.utc)
+        lease_expires_at = claimed_at + timedelta(seconds=3600)
+        with Session(engine) as claim_session:
+            claimed_count = (
+                claim_session.query(SyncRunUnit)
+                .filter(
+                    SyncRunUnit.id == concurrent_id,
+                    SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value,
+                )
+                .update(
+                    {
+                        SyncRunUnit.status: SyncRunUnitStatus.RUNNING.value,
+                        SyncRunUnit.error: None,
+                        SyncRunUnit.lease_owner: lease_owner,
+                        SyncRunUnit.lease_expires_at: lease_expires_at,
+                        SyncRunUnit.last_heartbeat_at: claimed_at,
+                        SyncRunUnit.updated_at: claimed_at,
+                    },
+                    synchronize_session=False,
+                )
+            )
+            assert claimed_count == 1
+            claim_session.commit()
+
+        # Now run the stale-reclaim path. The write-time status='dispatching'
+        # AND updated_at<=stale_dispatch predicates exclude the now-RUNNING row.
+        with Session(engine) as claim_units_session:
+            claimed = _claim_units(claim_units_session, run_id)
+            claimed_ids = {unit.id for unit in claimed}
+            claim_units_session.commit()
+
+        # The concurrently-claimed RUNNING unit was NOT reclaimed/requeued.
+        assert concurrent_id not in claimed_ids
+        # The genuinely-stale DISPATCHING unit WAS reclaimed.
+        assert reclaimable_id in claimed_ids
+
+        with Session(engine) as assert_session:
+            running_unit = (
+                assert_session.query(SyncRunUnit)
+                .filter(SyncRunUnit.id == concurrent_id)
+                .one()
+            )
+            reclaimed_unit = (
+                assert_session.query(SyncRunUnit)
+                .filter(SyncRunUnit.id == reclaimable_id)
+                .one()
+            )
+            # RUNNING row untouched: lease intact, never reclaimed.
+            assert running_unit.status == SyncRunUnitStatus.RUNNING.value
+            assert running_unit.lease_owner == lease_owner
+            assert running_unit.lease_expires_at is not None
+            assert _aware(running_unit.lease_expires_at) > datetime.now(timezone.utc)
+            # Reclaimed row stays DISPATCHING with a freshly-refreshed updated_at.
+            assert reclaimed_unit.status == SyncRunUnitStatus.DISPATCHING.value
+            assert _aware(reclaimed_unit.updated_at) > seeded_at
+    finally:
+        engine.dispose()

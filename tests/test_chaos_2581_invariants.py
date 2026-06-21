@@ -206,6 +206,19 @@ def _patch_reconciler_enqueues(
     return dispatches, finalizers, post_sync
 
 
+def _patch_chord_apply_async(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    from dev_health_ops.workers import sync_units
+
+    chord_calls: list[str] = []
+
+    class FakeChord:
+        def apply_async(self) -> None:
+            chord_calls.append("apply_async")
+
+    monkeypatch.setattr(sync_units, "chord", lambda *_args, **_kwargs: FakeChord())
+    return chord_calls
+
+
 def _mark_units_success(session: Session, run: SyncRun) -> None:
     for unit in session.query(SyncRunUnit).filter_by(sync_run_id=run.id).all():
         unit.status = SyncRunUnitStatus.SUCCESS.value
@@ -587,6 +600,7 @@ def test_b6_idempotency_two_reconciler_passes_do_not_double_claim_or_post_sync(
     db_session.commit()
     _patch_db_session(monkeypatch, db_session)
     dispatches, _finalizers, post_sync = _patch_reconciler_enqueues(monkeypatch)
+    chord_calls = _patch_chord_apply_async(monkeypatch)
 
     first = sync_reconciler.reconcile_sync_dispatch(limit=10)
     sync_units.dispatch_sync_run(str(dispatch_run.id))
@@ -599,6 +613,7 @@ def test_b6_idempotency_two_reconciler_passes_do_not_double_claim_or_post_sync(
     assert first["relayed_dispatch"] == 1
     assert second["relayed_dispatch"] == 0
     assert dispatches == [((str(dispatch_run.id),), "sync")]
+    assert chord_calls == ["apply_async"]
     assert dispatch_row.status == OUTBOX_STATUS_PENDING
     assert dispatch_row.attempts == 1
     assert dispatch_units[0].attempts == 0
@@ -829,9 +844,11 @@ def test_a4_worker_dies_after_running_bucket_frees_and_run_redrives_terminal(
     assert dispatch_row.status == OUTBOX_STATUS_DISPATCHED
 
     monkeypatch.setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "8")
+    chord_calls = _patch_chord_apply_async(monkeypatch)
     sync_units.dispatch_sync_run(str(run.id))
     db_session.refresh(units[1])
     assert units[1].status == SyncRunUnitStatus.DISPATCHING.value
+    assert chord_calls == ["apply_async"]
     units[1].status = SyncRunUnitStatus.SUCCESS.value
     units[1].lease_owner = None
     units[1].lease_expires_at = None

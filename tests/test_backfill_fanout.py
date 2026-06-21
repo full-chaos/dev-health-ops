@@ -263,7 +263,7 @@ def test_backfill_unit_does_not_write_watermark(db_session, monkeypatch):
 
 
 def test_backfill_finalize_dispatches_post_sync_metrics_once(db_session, monkeypatch):
-    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers import sync_reconciler, sync_runtime, sync_units
 
     run, unit = _seed_single_unit_run(db_session, mode=SyncRunMode.BACKFILL.value)
     unit.status = SyncRunUnitStatus.SUCCESS.value
@@ -271,19 +271,23 @@ def test_backfill_finalize_dispatches_post_sync_metrics_once(db_session, monkeyp
     _patch_db_session(monkeypatch, db_session)
     dispatches = []
     monkeypatch.setattr(
-        sync_units,
+        sync_runtime,
         "_dispatch_post_sync_tasks",
         lambda **kwargs: dispatches.append(kwargs),
     )
 
     first = sync_units.finalize_sync_run(str(run.id))
     second = sync_units.finalize_sync_run(str(run.id))
+    relay_first = sync_reconciler.reconcile_sync_dispatch(limit=10)
+    relay_second = sync_reconciler.reconcile_sync_dispatch(limit=10)
 
     db_session.refresh(run)
     assert first["status"] == "finalized"
     assert second["status"] == "already_dispatched"
     assert run.status == SyncRunStatus.SUCCESS.value
     assert db_session.query(SyncRunPostDispatch).count() == 1
+    assert relay_first["relayed_post_sync"] == 1
+    assert relay_second["relayed_post_sync"] == 0
     assert len(dispatches) == 1
     assert dispatches[0]["sync_targets"] == ["git"]
 

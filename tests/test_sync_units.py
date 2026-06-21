@@ -956,7 +956,7 @@ def test_run_sync_unit_skips_duplicate_delivery_with_live_running_lease(
 
 
 def test_finalize_once_only_dispatches_metrics_once(db_session, monkeypatch):
-    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers import sync_reconciler, sync_runtime, sync_units
 
     run, unit = _seed_run(db_session)
     config = SyncConfiguration(
@@ -972,13 +972,15 @@ def test_finalize_once_only_dispatches_metrics_once(db_session, monkeypatch):
     _patch_db_session(monkeypatch, db_session)
     dispatches = []
     monkeypatch.setattr(
-        sync_units,
+        sync_runtime,
         "_dispatch_post_sync_tasks",
         lambda **kwargs: dispatches.append(kwargs),
     )
 
     first = sync_units.finalize_sync_run(str(run.id))
     second = sync_units.finalize_sync_run(str(run.id))
+    relay_first = sync_reconciler.reconcile_sync_dispatch(limit=10)
+    relay_second = sync_reconciler.reconcile_sync_dispatch(limit=10)
 
     db_session.refresh(run)
     db_session.refresh(config)
@@ -991,7 +993,10 @@ def test_finalize_once_only_dispatches_metrics_once(db_session, monkeypatch):
         .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_POST_SYNC)
         .one()
     )
+    db_session.refresh(post_sync_outbox)
     assert post_sync_outbox.status == OUTBOX_STATUS_DISPATCHED
+    assert relay_first["relayed_post_sync"] == 1
+    assert relay_second["relayed_post_sync"] == 0
     assert len(dispatches) == 1
     assert dispatches[0]["sync_targets"] == ["git"]
     assert config.last_sync_at is not None
@@ -1029,8 +1034,6 @@ def test_finalize_aggregates_partial_failed(db_session, monkeypatch):
     db_session.add(failed)
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
-    monkeypatch.setattr(sync_units, "_dispatch_post_sync_tasks", lambda **kwargs: None)
-
     result = sync_units.finalize_sync_run(str(run.id))
 
     db_session.refresh(run)
@@ -1075,12 +1078,6 @@ def test_finalize_zero_unit_run_does_not_report_success(db_session, monkeypatch)
 
     run = _seed_zero_unit_run(db_session)
     _patch_db_session(monkeypatch, db_session)
-    dispatches = []
-    monkeypatch.setattr(
-        sync_units,
-        "_dispatch_post_sync_tasks",
-        lambda **kwargs: dispatches.append(kwargs),
-    )
 
     result = sync_units.finalize_sync_run(str(run.id))
 
@@ -1101,8 +1098,7 @@ def test_finalize_zero_unit_run_does_not_report_success(db_session, monkeypatch)
         .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_POST_SYNC)
         .one()
     )
-    assert post_sync_outbox.status == OUTBOX_STATUS_DISPATCHED
-    assert dispatches == []
+    assert post_sync_outbox.status == OUTBOX_STATUS_PENDING
 
 
 def test_dispatch_sync_run_redispatches_only_planned_units(db_session, monkeypatch):
@@ -1246,8 +1242,6 @@ def test_paused_config_with_running_and_planned_units_does_not_strand(
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
     dispatch_calls, finalize_calls, chord_calls = _patch_worker_enqueues(monkeypatch)
-    monkeypatch.setattr(sync_units, "_dispatch_post_sync_tasks", lambda **kwargs: None)
-
     dispatch_result = sync_units.dispatch_sync_run(str(run.id))
 
     db_session.refresh(run)
@@ -1734,7 +1728,7 @@ def test_post_sync_dispatch_includes_window(db_session, monkeypatch):
     """
     from datetime import date
 
-    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers import sync_reconciler, sync_runtime, sync_units
 
     run, unit = _seed_run(db_session)
     config = SyncConfiguration(
@@ -1755,14 +1749,16 @@ def test_post_sync_dispatch_includes_window(db_session, monkeypatch):
     _patch_db_session(monkeypatch, db_session)
     dispatches = []
     monkeypatch.setattr(
-        sync_units,
+        sync_runtime,
         "_dispatch_post_sync_tasks",
         lambda **kwargs: dispatches.append(kwargs),
     )
 
     result = sync_units.finalize_sync_run(str(run.id))
+    relay_result = sync_reconciler.reconcile_sync_dispatch(limit=10)
 
     assert result["status"] == "finalized"
+    assert relay_result["relayed_post_sync"] == 1
     assert len(dispatches) == 1
     kwargs = dispatches[0]
     # The covered window must be threaded through.
@@ -1776,7 +1772,7 @@ def test_post_sync_dispatch_none_window_unit_unbounds_lower(db_session, monkeypa
     The aggregate lower bound must be unbounded (from_date=None and
     work_graph_from_date=None), not the bounded unit's date (CHAOS-2577 fix).
     """
-    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers import sync_reconciler, sync_runtime, sync_units
 
     # Seed the run with the first unit (bounded).
     run, unit_bounded = _seed_run(db_session)
@@ -1817,14 +1813,16 @@ def test_post_sync_dispatch_none_window_unit_unbounds_lower(db_session, monkeypa
 
     dispatches: list[dict] = []
     monkeypatch.setattr(
-        sync_units,
+        sync_runtime,
         "_dispatch_post_sync_tasks",
         lambda **kwargs: dispatches.append(kwargs),
     )
 
     result = sync_units.finalize_sync_run(str(run.id))
+    relay_result = sync_reconciler.reconcile_sync_dispatch(limit=10)
 
     assert result["status"] == "finalized"
+    assert relay_result["relayed_post_sync"] == 1
     assert len(dispatches) == 1
     kwargs = dispatches[0]
     # The NONE-window unit makes the lower bound unbounded.

@@ -61,7 +61,6 @@ from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_POST_SYNC,
     OUTBOX_STATUS_PENDING,
     build_post_sync_dispatch_payload,
-    mark_outbox_dispatched_fastpath,
     upsert_outbox_wakeup,
 )
 from dev_health_ops.sync.dispatch_policy import route
@@ -78,7 +77,6 @@ from dev_health_ops.workers.sync_bootstrap import (
     ProviderRuntimeCache,
     SyncTaskBootstrap,
 )
-from dev_health_ops.workers.sync_runtime import _dispatch_post_sync_tasks
 
 logger = logging.getLogger(__name__)
 _runtime_cache = ProviderRuntimeCache()
@@ -628,12 +626,11 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
 
 @celery_app.task(queue="sync", name="dev_health_ops.workers.tasks.finalize_sync_run")
 def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
-    """Aggregate unit statuses and dispatch post-sync metrics once per run.
+    """Aggregate unit statuses and materialize post-sync metrics once per run.
 
     No-op until all units are terminal; once-only via the SyncRunPostDispatch
-    outbox. Maps completed dataset keys back to legacy sync_targets via
-    ``planner.map_datasets_to_legacy_targets`` before calling the existing
-    ``_dispatch_post_sync_tasks``. Implemented in CHAOS-2512.
+    outbox. Maps completed dataset keys back to legacy sync_targets for the
+    reconciler relay, which is the sole post-sync publisher.
     """
 
     from dev_health_ops.db import get_postgres_session_sync
@@ -740,24 +737,6 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
             "run_status": run_status,
         },
     )
-
-    if post_sync_payload is not None:
-        _dispatch_post_sync_tasks(
-            provider=post_sync_payload.provider,
-            sync_targets=post_sync_payload.sync_targets,
-            org_id=post_sync_payload.org_id,
-            from_date=post_sync_payload.from_date,
-            to_date=post_sync_payload.to_date,
-            work_graph_from_date=post_sync_payload.work_graph_from_date,
-            work_graph_to_date=post_sync_payload.work_graph_to_date,
-        )
-
-    with get_postgres_session_sync() as session:
-        mark_outbox_dispatched_fastpath(
-            session,
-            sync_run_id=sync_run_id,
-            kind=OUTBOX_KIND_POST_SYNC,
-        )
 
     return {
         "status": "finalized",

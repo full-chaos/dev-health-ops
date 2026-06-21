@@ -42,7 +42,12 @@ def _validate_worker_clickhouse_uri(db_url: str) -> str:
 
 
 def _get_db_url() -> str:
-    return _validate_worker_clickhouse_uri(os.getenv("CLICKHOUSE_URI") or "")
+    return (
+        os.getenv("CLICKHOUSE_URI")
+        or os.getenv("DATABASE_URI")
+        or os.getenv("DATABASE_URL")
+        or ""
+    )
 
 
 def _merge_sync_flags(sync_targets: list[str]) -> dict[str, bool]:

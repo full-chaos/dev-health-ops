@@ -383,8 +383,11 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
             session.flush()
             session.refresh(unit)
             should_finalize = True
+
+        with get_postgres_session_sync() as session:
             ctx = SyncTaskBootstrap.load(session, unit_id)
             sync_run_id = ctx.sync_run_id
+            unit = _load_unit(session, unit_id)
             _log_ctx = {
                 "sync_run_id": ctx.sync_run_id,
                 "unit_id": unit_id,

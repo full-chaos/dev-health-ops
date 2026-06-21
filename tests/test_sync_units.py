@@ -41,13 +41,19 @@ def db_session():
 
 @contextmanager
 def _fake_session_ctx(session):
-    yield session
-    session.commit()
+    try:
+        yield session
+    except Exception:
+        session.rollback()
+        raise
+    else:
+        session.commit()
 
 
 def _patch_db_session(monkeypatch, session):
     import dev_health_ops.db as db
 
+    session.commit()
     monkeypatch.setattr(
         db, "get_postgres_session_sync", lambda: _fake_session_ctx(session)
     )
@@ -166,6 +172,31 @@ def _patch_finalize_apply(monkeypatch):
         lambda args=None, queue=None: calls.append((args, queue)),
     )
     return calls
+
+
+def _patch_worker_enqueues(monkeypatch):
+    from dev_health_ops.workers import sync_units
+
+    dispatch_calls = []
+    finalize_calls = []
+    chord_calls = []
+
+    class FakeChord:
+        def apply_async(self):
+            chord_calls.append("apply_async")
+
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: dispatch_calls.append((args, queue)),
+    )
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: finalize_calls.append((args, queue)),
+    )
+    monkeypatch.setattr(sync_units, "chord", lambda *args, **kwargs: FakeChord())
+    return dispatch_calls, finalize_calls, chord_calls
 
 
 def test_run_sync_unit_success_persists_status_and_incremental_watermark(
@@ -404,7 +435,7 @@ def test_run_sync_unit_bootstrap_failure_enqueues_finalize(db_session, monkeypat
     run, unit = _seed_run(db_session)
     _mark_dispatching(db_session, unit)
     _patch_db_session(monkeypatch, db_session)
-    finalize_calls = _patch_finalize_apply(monkeypatch)
+    dispatch_calls, finalize_calls, chord_calls = _patch_worker_enqueues(monkeypatch)
 
     def fail_bootstrap(session, unit_id):
         raise ValueError("missing source")
@@ -416,8 +447,49 @@ def test_run_sync_unit_bootstrap_failure_enqueues_finalize(db_session, monkeypat
     db_session.refresh(unit)
     assert result["status"] == "failed"
     assert unit.status == SyncRunUnitStatus.FAILED.value
+    assert unit.attempts == 1
     assert unit.error == "missing source"
+    assert unit.lease_owner is None
+    assert unit.lease_expires_at is None
+    assert unit.result == {"error_category": "adapter_error"}
+    assert dispatch_calls == []
     assert finalize_calls == [((str(run.id),), "sync")]
+    assert chord_calls == []
+
+
+def test_run_sync_unit_bootstrap_failure_survives_session_rollback(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers.sync_bootstrap import SyncTaskBootstrap
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    dispatch_calls, finalize_calls, chord_calls = _patch_worker_enqueues(monkeypatch)
+
+    def fail_bootstrap(session, unit_id):
+        db_session.refresh(unit)
+        assert unit.status == SyncRunUnitStatus.RUNNING.value
+        assert unit.lease_owner is not None
+        assert unit.lease_expires_at is not None
+        raise ValueError("missing source")
+
+    monkeypatch.setattr(SyncTaskBootstrap, "load", fail_bootstrap)
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    db_session.refresh(unit)
+    assert result["status"] == "failed"
+    assert unit.status == SyncRunUnitStatus.FAILED.value
+    assert unit.attempts == 1
+    assert unit.error == "missing source"
+    assert unit.lease_owner is None
+    assert unit.lease_expires_at is None
+    assert unit.result == {"error_category": "adapter_error"}
+    assert dispatch_calls == []
+    assert finalize_calls == [((str(run.id),), "sync")]
+    assert chord_calls == []
 
 
 def test_run_sync_unit_bootstrap_failure_skips_duplicate_live_running_lease(
@@ -437,34 +509,12 @@ def test_run_sync_unit_bootstrap_failure_skips_duplicate_live_running_lease(
     unit.result = {"existing": True}
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
-
-    dispatch_calls = []
-    finalize_calls = []
-    chord_calls = []
-
-    class FakeChord:
-        def apply_async(self):
-            chord_calls.append("apply_async")
+    dispatch_calls, finalize_calls, chord_calls = _patch_worker_enqueues(monkeypatch)
 
     def fail_bootstrap(session, unit_id):
         raise ValueError("missing source")
 
     monkeypatch.setattr(SyncTaskBootstrap, "load", fail_bootstrap)
-    monkeypatch.setattr(
-        sync_units.dispatch_sync_run,
-        "apply_async",
-        lambda args=None, queue=None: dispatch_calls.append((args, queue)),
-    )
-    monkeypatch.setattr(
-        sync_units.finalize_sync_run,
-        "apply_async",
-        lambda args=None, queue=None: finalize_calls.append((args, queue)),
-    )
-    monkeypatch.setattr(
-        sync_units,
-        "chord",
-        lambda *args, **kwargs: FakeChord(),
-    )
 
     result = getattr(sync_units.run_sync_unit, "run")(str(unit.id))
 

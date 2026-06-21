@@ -17,6 +17,17 @@ Responsibilities (CHAOS-2511):
 Invariants:
   * Disabled source -> zero units. Disabled dataset -> zero units.
   * Backfill units carry mode="backfill" and must never update watermarks.
+  * Backfill -> incremental composition (CHAOS-2570): because backfill never
+    seeds a watermark, the first incremental after a backfill cold-starts;
+    continuity is provided by the cold-start depth (CHAOS-2569,
+    ``window_start = now - initial_sync_depth``). No date gap results as long as
+    the first incremental runs within ``initial_sync_depth`` of the backfill's
+    ``before``. The no-gap guarantee is therefore BOUNDED to that depth window:
+    backfill stays watermark-free (CHAOS-2514) and no ``backfilled-through``
+    marker is introduced. If the first incremental is delayed beyond
+    ``initial_sync_depth`` after ``before``, the residual gap
+    ``[before, now - depth]`` is an accepted, tracked limitation (CHAOS-2588)
+    whose fix would require such a marker. See docs/architecture/data-pipeline.md.
   * total_units on the persisted SyncRun equals len(unit_ids).
 """
 

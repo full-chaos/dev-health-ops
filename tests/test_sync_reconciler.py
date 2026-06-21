@@ -31,8 +31,13 @@ def db_session():
 
 @contextmanager
 def _fake_session_ctx(session):
-    yield session
-    session.commit()
+    try:
+        yield session
+    except Exception:
+        session.rollback()
+        raise
+    else:
+        session.commit()
 
 
 def _patch_db_session(monkeypatch, session):

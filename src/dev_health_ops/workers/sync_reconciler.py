@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from dev_health_ops.models import SyncRun, SyncRunStatus, SyncRunUnit, SyncRunUnitStatus
 from dev_health_ops.sync.guard import _acquire_bucket_advisory_locks
@@ -50,14 +50,17 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
         expired_run_ids: set[uuid.UUID] = set()
         expired_count = 0
         for unit in expired_units:
+            observed_lease_owner = unit.lease_owner
             result: Any = session.execute(
                 update(SyncRunUnit)
                 .where(
                     SyncRunUnit.id == unit.id,
                     SyncRunUnit.status == SyncRunUnitStatus.RUNNING.value,
+                    SyncRunUnit.lease_owner == observed_lease_owner,
                     SyncRunUnit.lease_owner.is_not(None),
                     SyncRunUnit.lease_expires_at.is_not(None),
                     SyncRunUnit.lease_expires_at <= now,
+                    SyncRunUnit.sync_run_id.in_(_nonterminal_run_ids_select()),
                 )
                 .values(
                     status=SyncRunUnitStatus.FAILED.value,
@@ -205,6 +208,10 @@ _TERMINAL_RUN_STATUSES = {
     SyncRunStatus.PARTIAL_FAILED.value,
     SyncRunStatus.FAILED.value,
 }
+
+
+def _nonterminal_run_ids_select():
+    return select(SyncRun.id).where(SyncRun.status.not_in(_TERMINAL_RUN_STATUSES))
 
 
 __all__ = ["reconcile_sync_dispatch"]

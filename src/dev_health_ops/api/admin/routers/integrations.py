@@ -41,15 +41,6 @@ from .common import get_session
 logger = logging.getLogger(__name__)
 
 
-def _safe_log_value(value: object, *, max_length: int = 500) -> str:
-    text = str(value)
-    sanitized = "".join(
-        char if char.isprintable() and char not in {"\n", "\r", "\t"} else " "
-        for char in text
-    )
-    return sanitized[:max_length]
-
-
 router = APIRouter()
 
 
@@ -271,11 +262,7 @@ async def discover_integration_sources(
     except Exception as exc:
         logger.exception(
             "integration_discovery.failed",
-            extra={
-                "integration_id": _safe_log_value(integration_id),
-                "error": _safe_log_value(exc),
-                "error_type": type(exc).__name__,
-            },
+            extra={"error_type": type(exc).__name__},
         )
         raise HTTPException(status_code=503, detail=f"Discovery failed: {exc}")
 
@@ -439,9 +426,7 @@ async def trigger_integration_sync(
         logger.warning(
             "integration_sync.dispatch_fastpath_failed",
             extra={
-                "integration_id": _safe_log_value(integration_id),
-                "sync_run_id": _safe_log_value(plan.sync_run_id),
-                "error": _safe_log_value(exc),
+                "sync_run_id": plan.sync_run_id,
                 "error_type": type(exc).__name__,
             },
         )
@@ -504,9 +489,7 @@ async def trigger_integration_backfill(
         logger.warning(
             "integration_backfill.dispatch_fastpath_failed",
             extra={
-                "integration_id": _safe_log_value(integration_id),
-                "sync_run_id": _safe_log_value(plan.sync_run_id),
-                "error": _safe_log_value(exc),
+                "sync_run_id": plan.sync_run_id,
                 "error_type": type(exc).__name__,
             },
         )

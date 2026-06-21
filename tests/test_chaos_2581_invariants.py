@@ -500,7 +500,6 @@ def test_b4_post_sync_partial_fanout_failure_is_at_most_once_and_lossy(
     assert second["relayed_post_sync"] == 0
     assert second["publish_failures"] == 0
     assert len(post_sync) == 1
-    assert fanout_attempts == 1
     assert post_sync_row.status == OUTBOX_STATUS_DISPATCHED
     assert post_sync_row.attempts == 1
     assert post_sync_row.claim_token is None

@@ -332,3 +332,64 @@ def test_registry_flags_make_split_git_datasets_actually_sync(
     split_flags = {"sync_commits", "sync_commit_stats", "sync_files", "sync_blame"}
     for other in split_flags - {own_flag}:
         assert kwargs[other] is False
+
+
+class _ClientAssertingStore:
+    """Store double that replicates ClickHouseStore's client invariant.
+
+    ``insert_repo`` asserts ``client is not None`` exactly like
+    ``ClickHouseStore.insert_repo`` (storage/clickhouse.py:260), and ``client``
+    is assigned only inside ``__aenter__``. A store handed to a processor
+    WITHOUT being entered therefore reproduces the CHAOS-2592 AssertionError.
+    """
+
+    def __init__(self) -> None:
+        self.client: object | None = None
+        self.org_id: str | None = None
+        self.entered = 0
+        self.inserted: list[object] = []
+
+    async def __aenter__(self) -> _ClientAssertingStore:
+        self.client = object()
+        self.entered += 1
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+        self.client = None
+
+    async def insert_repo(self, repo: object) -> None:
+        assert self.client is not None
+        self.inserted.append(repo)
+
+
+def test_github_dataset_through_runtime_cache_enters_store_before_insert(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Integration regression (CHAOS-2592): a store obtained through the REAL
+    # ProviderRuntimeCache and threaded into run_dataset_unit must be entered,
+    # so a processor that writes to it hits a live client instead of asserting.
+    # The other adapter tests use a Mock() store, which masks this entire class
+    # of "store handed over un-entered" bugs -- this test exercises the actual
+    # cache -> adapter -> handler -> sink seam end to end.
+    from dev_health_ops.workers.sync_bootstrap import ProviderRuntimeCache
+
+    store = _ClientAssertingStore()
+    monkeypatch.setattr("dev_health_ops.storage.create_store", lambda *a, **k: store)
+
+    async def _fake_process_github_repo(**kwargs: object) -> None:
+        # Mimic process_github_repo's first persistence call against the store.
+        await kwargs["store"].insert_repo({"id": "repo-1"})  # type: ignore[attr-defined]
+
+    ctx = _context(dataset_key="repo-metadata")
+    runtime = ProviderRuntimeCache().get(ctx)
+
+    with patch(
+        "dev_health_ops.processors.github.process_github_repo",
+        _fake_process_github_repo,
+    ):
+        result = run_dataset_unit(ctx, runtime)
+
+    assert store.entered == 1
+    assert store.client is not None
+    assert store.inserted == [{"id": "repo-1"}]
+    assert result["dataset"] == "repo-metadata"

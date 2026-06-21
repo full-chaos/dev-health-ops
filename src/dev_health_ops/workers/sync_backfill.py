@@ -101,7 +101,9 @@ def _mark_sync_job_run_running(
 
 
 def _mark_sync_job_run_success(
-    pending_run_id: str | None, completed_at: datetime
+    pending_run_id: str | None,
+    completed_at: datetime,
+    result: dict[str, Any] | None = None,
 ) -> None:
     if pending_run_id is None:
         return
@@ -118,6 +120,9 @@ def _mark_sync_job_run_success(
             if run:
                 setattr(run, "status", JobRunStatus.SUCCESS.value)
                 setattr(run, "completed_at", completed_at)
+                if result is not None:
+                    current = run.result if isinstance(run.result, dict) else {}
+                    setattr(run, "result", {**current, **result})
                 session.flush()
     except Exception:
         logger.debug("Failed to mark sync job run success: %s", pending_run_id)
@@ -294,6 +299,11 @@ def run_backfill(
                         datetime.now(timezone.utc) if status == "completed" else None
                     ),
                 )
+            _mark_sync_job_run_success(
+                pending_run_id,
+                datetime.now(timezone.utc),
+                {"sync_run_id": str(result_payload["sync_run_id"])},
+            )
             return {
                 "status": "success",
                 "result": result_payload,

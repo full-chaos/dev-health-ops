@@ -1278,6 +1278,7 @@ async def _sync_github_test_reports(
             result = await processor.fetch_and_store(
                 adapter,
                 since_date=since,
+                until_date=until,
                 owner=owner,
                 repo=repo_name,
                 repo_id=repo_id,

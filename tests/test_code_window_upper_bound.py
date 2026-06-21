@@ -20,6 +20,7 @@ from dev_health_ops.processors.github import (
 )
 from dev_health_ops.processors.gitlab import (
     _fetch_gitlab_commits_sync,
+    _fetch_gitlab_test_reports_sync,
 )
 from dev_health_ops.processors.gitlab import (
     _filter_after as _gitlab_filter_after,
@@ -119,3 +120,42 @@ def test_gitlab_filter_after_matches_github_semantics() -> None:
     post_window = _record(datetime(2026, 1, 20, tzinfo=timezone.utc))
 
     assert _gitlab_filter_after([post_window], UNTIL, "started_at") == []
+
+
+def test_gitlab_test_reports_fetch_skips_post_window_pipelines() -> None:
+    # CHAOS-2573 (Codex review): coverage_members carry no timestamp and are
+    # ingested unconditionally, so a post-window pipeline must be dropped at the
+    # source -- before its native report OR coverage artifacts are collected.
+    in_window = SimpleNamespace(
+        id=1,
+        ref="main",
+        created_at="2026-01-11T00:00:00Z",
+        started_at="2026-01-11T00:00:00Z",
+        finished_at="2026-01-11T01:00:00Z",
+    )
+    post_window = SimpleNamespace(
+        id=2,
+        ref="main",
+        created_at="2026-01-20T00:00:00Z",
+        started_at="2026-01-20T00:00:00Z",
+        finished_at="2026-01-20T01:00:00Z",
+    )
+    gl_project = MagicMock()
+    gl_project.pipelines.list.return_value = [post_window, in_window]
+    connector = MagicMock()
+    connector.rest_client.get_pipeline_test_report.return_value = {
+        "test_suites": [{"name": "suite"}]
+    }
+    connector.rest_client.get_list.return_value = []  # no jobs -> no coverage
+
+    test_reports, coverage_members = _fetch_gitlab_test_reports_sync(
+        connector, gl_project, 123, SINCE, "main", 50, UNTIL
+    )
+
+    assert {run_id for run_id, *_ in test_reports} == {"1"}
+    # The post-window pipeline is skipped before any report/coverage fetch.
+    queried_ids = {
+        call.args[1]
+        for call in connector.rest_client.get_pipeline_test_report.call_args_list
+    }
+    assert queried_ids == {1}

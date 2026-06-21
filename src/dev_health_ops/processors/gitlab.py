@@ -1506,6 +1506,7 @@ def _fetch_gitlab_test_reports_sync(
     since: datetime | None,
     default_branch: str | None,
     max_pipelines: int,
+    until: datetime | None = None,
 ) -> tuple[
     list[tuple[str, dict[str, Any], datetime | None, datetime | None]],
     list[tuple[str, list[tuple[str, bytes]]]],
@@ -1568,6 +1569,13 @@ def _fetch_gitlab_test_reports_sync(
             safe_parse_datetime(getattr(pipeline, "started_at", None)) or created_at
         )
         finished_at = safe_parse_datetime(getattr(pipeline, "finished_at", None))
+
+        if (
+            until is not None
+            and isinstance(started_at, datetime)
+            and started_at.astimezone(timezone.utc) > until
+        ):
+            continue
 
         # Native parsed test report (pass/fail/duration) — preferred over XML.
         try:
@@ -1647,6 +1655,7 @@ async def _sync_gitlab_test_reports(
             result = await processor.fetch_and_store(
                 adapter,
                 since_date=since,
+                until_date=until,
                 project_id=project_id,
                 repo_id=repo_id,
                 org_id=org_id,
@@ -1674,6 +1683,7 @@ async def _sync_gitlab_test_reports(
         since,
         default_branch,
         MAX_RUNS_PER_SYNC,
+        until,
     )
 
     suite_rows: list[Any] = []

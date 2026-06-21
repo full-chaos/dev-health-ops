@@ -258,16 +258,18 @@ rather than a 1-day window.
 long as the first incremental runs within `initial_sync_depth` of the backfill's
 `before`. In the canonical onboarding flow (backfill up to ~now, then daily
 incrementals) the cold-start window `[now - depth, now]` overlaps the backfill's
-upper bound, so coverage is continuous. Continuity is **depth-driven, not
-marker-driven**, so backfill stays watermark-free and no `backfilled-through`
-marker (or migration) is required.
+upper bound, so coverage is continuous. The no-gap guarantee is **bounded to the
+cold-start depth**: backfill stays watermark-free (CHAOS-2514) and no
+`backfilled-through` marker is introduced. Closing the paused-then-resumed
+residual below would require such a marker and is deliberately deferred
+(CHAOS-2588).
 
 **Residual edges (intentional / tracked):**
 
 1. *Paused-then-resumed* -- if the first incremental runs **more than
    `initial_sync_depth` days** after the backfill's `before` (e.g. scheduling
    paused for >30d immediately after a backfill), a gap `[before, now - depth]`
-   remains. Narrow operational residual, tracked as a follow-up.
+   remains. Narrow operational residual, tracked in CHAOS-2588.
 2. *Deliberate historical backfill* -- backfilling a window whose `before` is
    far in the past does **not** trigger a giant `[before, now]` first
    incremental; the user chose a historical window, and auto-filling to now

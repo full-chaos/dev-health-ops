@@ -696,3 +696,38 @@ def test_incremental_cold_start_seam_is_depth_bounded(db_session):
     assert abs((since - boundary).total_seconds()) < 5
     # A backfill ending at/after the boundary is covered (no gap).
     assert since <= boundary + timedelta(seconds=5)
+
+
+def test_cold_start_does_not_cover_backfill_before_older_than_depth(db_session):
+    """CHAOS-2588 residual (documented boundary): a backfill whose ``before`` is
+    OLDER than ``now - initial_sync_depth`` is NOT covered by the incremental
+    cold-start window, so a gap ``[before, now - depth]`` remains. This proves the
+    no-gap guarantee is BOUNDED (depth-driven, marker-less), not universal -- it
+    is the accepted, tracked limit handed off to CHAOS-2588.
+    """
+    from datetime import timedelta
+
+    integration = _create_integration(db_session)
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, "commits")
+
+    now = datetime.now(timezone.utc)
+    backfill_before = now - timedelta(days=90)  # older than depth (30d)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert units[0].since_at is not None
+    since = units[0].since_at.replace(tzinfo=timezone.utc)
+    # Cold-start starts at now-depth, which is AFTER the old backfill `before`,
+    # so the residual gap [backfill_before, since] is non-empty.
+    assert since > backfill_before

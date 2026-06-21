@@ -232,6 +232,8 @@ def test_backfill_unit_does_not_write_watermark(db_session, monkeypatch):
     from dev_health_ops.workers.sync_units import run_sync_unit
 
     run, unit = _seed_single_unit_run(db_session, mode=SyncRunMode.BACKFILL.value)
+    unit.status = SyncRunUnitStatus.DISPATCHING.value
+    db_session.flush()
     initial_watermark = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
     set_watermark(
         db_session, ORG_ID, "full-chaos/dev-health", "commits", initial_watermark

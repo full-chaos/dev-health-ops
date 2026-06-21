@@ -28,13 +28,13 @@ slot right now, across ALL runs (including the current run).  These reduce
 ``allowed_slots``:
 
 * status == DISPATCHING  AND  updated_at > stale_dispatch_cutoff  (fresh)
-* status == RUNNING  (any age — no heartbeat, so stale threshold is not safe)
+* status == RUNNING  AND  (lease_expires_at IS NULL OR lease_expires_at > now)
 * status == RETRYING  AND  updated_at > stale_running_cutoff  (fresh)
 
-RUNNING always counts regardless of updated_at because run_sync_unit does not
-heartbeat during the provider call.  Reclaiming a stale RUNNING unit would
-cause duplicate provider writes (F2).  Durable dead-worker recovery (heartbeat
-+ lease) is a separate follow-up (CHAOS-2577).
+RUNNING is split by lease state. A NULL lease is unknown/pre-migration and
+therefore LIVE. Only an explicit expired lease proves the worker is dead; those
+units no longer consume capacity and are transitioned to FAILED by the
+reconciler. Stale updated_at alone is never proof of death.
 
 **Candidate set** — units from THIS run that ``_claim_units`` can enqueue this
 pass.  Mirrors ``_claim_units`` claim + reclaim logic exactly:
@@ -43,7 +43,7 @@ pass.  Mirrors ``_claim_units`` claim + reclaim logic exactly:
 * status == DISPATCHING  AND  updated_at <= stale_dispatch_cutoff  (stale reclaim)
 
 Fresh DISPATCHING is NOT a candidate (it is a consumer).
-RUNNING is NOT a candidate (never reclaimed — F2 fix).
+RUNNING is NOT a candidate (expired leases are terminalized, not requeued).
 Stale RETRYING is NOT a candidate (``_claim_units`` does not reclaim RETRYING).
 
 The two sets are disjoint by construction — no subtraction is needed or
@@ -190,15 +190,11 @@ class DispatchGuard:
             # Count the CAPACITY-CONSUMER set across ALL runs (including this
             # run) for this bucket.  Consumers are:
             #   • fresh DISPATCHING: updated_at > stale_dispatch_cutoff
-            #   • ALL RUNNING (any age) — no heartbeat, so stale threshold is
-            #     not safe to use; reclaiming would cause duplicate writes (F2)
+            #   • live RUNNING: lease_expires_at is NULL (unknown/pre-migration)
+            #     or lease_expires_at > now
             #   • fresh RETRYING: updated_at > stale_running_cutoff
             # No subtraction is performed; the consumer and candidate sets are
             # disjoint by construction.
-            #
-            # INTERIM: a capped run whose only blocker is a DEAD RUNNING unit
-            # may stall — acceptable, preserves at-most-once provider execution.
-            # The heartbeat/lease follow-up (CHAOS-2577) adds safe recovery.
             active_count = (
                 session.query(func.count(SyncRunUnit.id))
                 .filter(
@@ -210,7 +206,13 @@ class DispatchGuard:
                             (SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value)
                             & (SyncRunUnit.updated_at > stale_dispatch_cutoff)
                         )
-                        | (SyncRunUnit.status == SyncRunUnitStatus.RUNNING.value)
+                        | (
+                            (SyncRunUnit.status == SyncRunUnitStatus.RUNNING.value)
+                            & (
+                                SyncRunUnit.lease_expires_at.is_(None)
+                                | (SyncRunUnit.lease_expires_at > now)
+                            )
+                        )
                         | (
                             (SyncRunUnit.status == SyncRunUnitStatus.RETRYING.value)
                             & (SyncRunUnit.updated_at > stale_running_cutoff)

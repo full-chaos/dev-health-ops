@@ -113,6 +113,11 @@ def _seed_run(session, *, mode=SyncRunMode.INCREMENTAL.value):
     return run, unit
 
 
+def _mark_dispatching(session, unit):
+    unit.status = SyncRunUnitStatus.DISPATCHING.value
+    session.flush()
+
+
 def _patch_runtime(monkeypatch):
     from dev_health_ops.workers import sync_units
     from dev_health_ops.workers.sync_bootstrap import ProviderRuntime
@@ -180,6 +185,7 @@ def test_run_sync_unit_failure_persists_error_category(db_session, monkeypatch):
     from dev_health_ops.workers.sync_units import run_sync_unit
 
     run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
     _patch_db_session(monkeypatch, db_session)
     _patch_runtime(monkeypatch)
     _patch_finalize_apply(monkeypatch)
@@ -209,6 +215,7 @@ def test_run_sync_unit_failure_adapter_error_category(db_session, monkeypatch):
     from dev_health_ops.workers.sync_units import run_sync_unit
 
     run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
     _patch_db_session(monkeypatch, db_session)
     _patch_runtime(monkeypatch)
     _patch_finalize_apply(monkeypatch)
@@ -225,6 +232,7 @@ def test_run_sync_unit_failure_adapter_error_category(db_session, monkeypatch):
 
     assert result["error_category"] == "adapter_error"
     db_session.refresh(unit)
+    assert unit.result is not None
     assert unit.result["error_category"] == "adapter_error"
 
 
@@ -234,6 +242,7 @@ def test_run_sync_unit_success_result_has_no_error_category(db_session, monkeypa
     from dev_health_ops.workers.sync_units import run_sync_unit
 
     run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
     _patch_db_session(monkeypatch, db_session)
     _patch_runtime(monkeypatch)
     _patch_finalize_apply(monkeypatch)
@@ -248,6 +257,7 @@ def test_run_sync_unit_success_result_has_no_error_category(db_session, monkeypa
 
     assert result["status"] == "success"
     db_session.refresh(unit)
+    assert unit.result is not None
     assert "error_category" not in unit.result
 
 
@@ -262,6 +272,7 @@ def test_run_sync_unit_success_emits_structured_log(db_session, monkeypatch, cap
     from dev_health_ops.workers.sync_units import run_sync_unit
 
     run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
     _patch_db_session(monkeypatch, db_session)
     _patch_runtime(monkeypatch)
     _patch_finalize_apply(monkeypatch)
@@ -294,6 +305,7 @@ def test_run_sync_unit_failure_emits_structured_log(db_session, monkeypatch, cap
     from dev_health_ops.workers.sync_units import run_sync_unit
 
     run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
     _patch_db_session(monkeypatch, db_session)
     _patch_runtime(monkeypatch)
     _patch_finalize_apply(monkeypatch)

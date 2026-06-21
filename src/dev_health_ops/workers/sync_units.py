@@ -36,13 +36,15 @@ Observability (CHAOS-2519):
 from __future__ import annotations
 
 import logging
+import os
+import threading
 import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from celery import chord, group
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from dev_health_ops.models import (
@@ -142,20 +144,53 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
 
         # --- Total-cap hard-deny: whole run is over the org unit ceiling ---
         if not decision.allowed:
-            completed_at = datetime.now(timezone.utc)
-            run.status = SyncRunStatus.FAILED.value
-            run.completed_at = completed_at
-            run.error = decision.reason or "sync dispatch denied"
-            run.result = {"capped_unit_ids": list(decision.capped_unit_ids)}
-            session.flush()
+            error = decision.reason or "sync dispatch denied"
+            if _run_has_dispatching_or_running_units(session, run_uuid):
+                failed_planned = _fail_planned_units(session, run_uuid, error)
+                failed_stale_dispatching = _fail_stale_dispatching_units(
+                    session, run_uuid, error
+                )
+                session.flush()
+                logger.warning(
+                    "dispatch_sync_run.denied_with_active_units",
+                    extra={
+                        "sync_run_id": sync_run_id,
+                        "reason": error,
+                        "failed_planned_units": failed_planned,
+                        "failed_stale_dispatching_units": failed_stale_dispatching,
+                    },
+                )
+                _enqueue_denied_active_finalize(sync_run_id)
+                return {
+                    "status": "denied_active",
+                    "reason": error,
+                    "failed_planned_units": failed_planned,
+                    "failed_stale_dispatching_units": failed_stale_dispatching,
+                }
+            else:
+                completed_at = datetime.now(timezone.utc)
+                run.status = SyncRunStatus.FAILED.value
+                run.completed_at = completed_at
+                run.error = error
+                run.result = {"capped_unit_ids": list(decision.capped_unit_ids)}
+                session.flush()
+                logger.warning(
+                    "dispatch_sync_run.denied",
+                    extra={
+                        "sync_run_id": sync_run_id,
+                        "reason": run.error,
+                    },
+                )
+                return {"status": "denied", "reason": run.error}
+
+        if not decision.allowed:
             logger.warning(
-                "dispatch_sync_run.denied",
+                "dispatch_sync_run.continuing_after_denial_for_active_units",
                 extra={
                     "sync_run_id": sync_run_id,
-                    "reason": run.error,
+                    "reason": decision.reason or "sync dispatch denied",
                 },
             )
-            return {"status": "denied", "reason": run.error}
 
         # --- Concurrency partial-cap: defer overflow units, proceed with rest ---
         capped_ids: frozenset[str] = frozenset()
@@ -182,40 +217,63 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                 inactive_child_configs[0] if inactive_child_configs else None
             )
         if inactive_config is not None:
-            completed_at = datetime.now(timezone.utc)
             error = "sync configuration is paused"
-            run.status = SyncRunStatus.FAILED.value
-            run.completed_at = completed_at
-            run.error = error
-            run.result = {"reason": "inactive_sync_configuration"}
-            session.query(SyncRunUnit).filter(
-                SyncRunUnit.sync_run_id == run_uuid,
-                SyncRunUnit.status == SyncRunUnitStatus.PLANNED.value,
-            ).update(
-                {
-                    SyncRunUnit.status: SyncRunUnitStatus.FAILED.value,
-                    SyncRunUnit.error: error,
-                    SyncRunUnit.updated_at: completed_at,
-                },
-                synchronize_session=False,
-            )
-            stamp_sync_run_canonical_config(
-                session,
-                run,
-                completed_at=completed_at,
-                success=False,
-                error=error,
-                stats={"reason": "inactive_sync_configuration"},
-            )
-            session.flush()
-            logger.warning(
-                "dispatch_sync_run.inactive_config",
-                extra={
-                    "sync_run_id": sync_run_id,
-                    "config_id": str(inactive_config.id),
-                },
-            )
-            return {"status": "denied", "reason": error}
+            if _run_has_dispatching_or_running_units(session, run_uuid):
+                failed_planned = _fail_planned_units(session, run_uuid, error)
+                failed_stale_dispatching = _fail_stale_dispatching_units(
+                    session, run_uuid, error
+                )
+                session.flush()
+                logger.warning(
+                    "dispatch_sync_run.inactive_config_with_active_units",
+                    extra={
+                        "sync_run_id": sync_run_id,
+                        "config_id": str(inactive_config.id),
+                        "failed_planned_units": failed_planned,
+                        "failed_stale_dispatching_units": failed_stale_dispatching,
+                    },
+                )
+                _enqueue_denied_active_finalize(sync_run_id)
+                return {
+                    "status": "denied_active",
+                    "reason": error,
+                    "failed_planned_units": failed_planned,
+                    "failed_stale_dispatching_units": failed_stale_dispatching,
+                }
+            else:
+                completed_at = datetime.now(timezone.utc)
+                run.status = SyncRunStatus.FAILED.value
+                run.completed_at = completed_at
+                run.error = error
+                run.result = {"reason": "inactive_sync_configuration"}
+                session.query(SyncRunUnit).filter(
+                    SyncRunUnit.sync_run_id == run_uuid,
+                    SyncRunUnit.status == SyncRunUnitStatus.PLANNED.value,
+                ).update(
+                    {
+                        SyncRunUnit.status: SyncRunUnitStatus.FAILED.value,
+                        SyncRunUnit.error: error,
+                        SyncRunUnit.updated_at: completed_at,
+                    },
+                    synchronize_session=False,
+                )
+                stamp_sync_run_canonical_config(
+                    session,
+                    run,
+                    completed_at=completed_at,
+                    success=False,
+                    error=error,
+                    stats={"reason": "inactive_sync_configuration"},
+                )
+                session.flush()
+                logger.warning(
+                    "dispatch_sync_run.inactive_config",
+                    extra={
+                        "sync_run_id": sync_run_id,
+                        "config_id": str(inactive_config.id),
+                    },
+                )
+                return {"status": "denied", "reason": error}
 
         units = _claim_units(session, run_uuid, capped_ids=capped_ids)
         signatures = []
@@ -252,13 +310,13 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         callback.set(queue="sync")
         try:
             chord(group(signatures), callback).apply_async()
-            # F4: schedule redispatch for capped units INSIDE the try block so
-            # any broker failure marks the run terminal rather than leaving
-            # PLANNED units stranded with no chord/finalizer pending.
             if capped_ids:
                 _schedule_redispatch(sync_run_id)
         except Exception as exc:
-            _mark_dispatch_enqueue_failed(sync_run_id, str(exc))
+            logger.exception(
+                "dispatch_sync_run.publish_failed",
+                extra={"sync_run_id": sync_run_id, "error": str(exc)},
+            )
             raise
         return {"status": "dispatched", "queued_units": len(signatures)}
 
@@ -285,13 +343,13 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
             .count()
         )
     if pending_count > 0:
-        # Deferred units remain — schedule countdown redispatch.
-        # F5: wrap in try/except so a broker failure marks the run terminal
-        # rather than leaving PLANNED units stranded with no follow-up.
         try:
             _schedule_redispatch(sync_run_id)
         except Exception as exc:
-            _mark_dispatch_enqueue_failed(sync_run_id, str(exc))
+            logger.exception(
+                "dispatch_sync_run.redispatch_publish_failed",
+                extra={"sync_run_id": sync_run_id, "error": str(exc)},
+            )
             raise
         logger.info(
             "dispatch_sync_run.noop",
@@ -332,93 +390,13 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
     sync_run_id: str | None = None
     should_finalize = False
     started_at = datetime.now(timezone.utc)
+    lease_owner: str | None = None
+    terminal_txn_started = False
+    heartbeat_stop: threading.Event | None = None
+    heartbeat_thread: threading.Thread | None = None
     # Unit context fields for structured logging — populated once ctx is loaded.
     _log_ctx: dict[str, Any] = {"unit_id": unit_id}
     try:
-        with get_postgres_session_sync() as session:
-            ctx = SyncTaskBootstrap.load(session, unit_id)
-            sync_run_id = ctx.sync_run_id
-            unit = _load_unit(session, unit_id)
-            run = (
-                session.query(SyncRun)
-                .filter(SyncRun.id == unit.sync_run_id)
-                .one_or_none()
-            )
-            if unit.status in {
-                SyncRunUnitStatus.SUCCESS.value,
-                SyncRunUnitStatus.FAILED.value,
-            } or (run is not None and run.status in _TERMINAL_RUN_STATUSES):
-                return {
-                    "status": "skipped",
-                    "unit_id": unit_id,
-                    "reason": "terminal",
-                }
-            unit.status = SyncRunUnitStatus.RUNNING.value
-            unit.attempts = int(unit.attempts or 0) + 1
-            unit.error = None
-            session.flush()
-            should_finalize = True
-            _log_ctx = {
-                "sync_run_id": ctx.sync_run_id,
-                "unit_id": unit_id,
-                "source_id": str(unit.source_id),
-                "dataset_key": ctx.dataset_key,
-                "provider": ctx.provider,
-                "cost_class": ctx.cost_class,
-            }
-
-        logger.info("run_sync_unit.started", extra=_log_ctx)
-
-        runtime = _runtime_cache.get(ctx)
-        result = run_dataset_unit(ctx, runtime)
-
-        completed_at = datetime.now(timezone.utc)
-        duration_seconds = max(0, int((completed_at - started_at).total_seconds()))
-        with get_postgres_session_sync() as session:
-            unit = _load_unit(session, unit_id)
-            run = (
-                session.query(SyncRun)
-                .filter(SyncRun.id == unit.sync_run_id)
-                .one_or_none()
-            )
-            if unit.status in {
-                SyncRunUnitStatus.SUCCESS.value,
-                SyncRunUnitStatus.FAILED.value,
-            } or (run is not None and run.status in _TERMINAL_RUN_STATUSES):
-                return {
-                    "status": "skipped",
-                    "unit_id": unit_id,
-                    "reason": "terminal",
-                }
-            unit.status = SyncRunUnitStatus.SUCCESS.value
-            unit.duration_seconds = duration_seconds
-            unit.result = dict(result or {})
-            unit.error = None
-            if ctx.mode in {
-                SyncRunMode.INCREMENTAL.value,
-                SyncRunMode.FULL_RESYNC.value,  # full_resync stamps watermark on success
-            }:
-                set_watermark(
-                    session,
-                    ctx.org_id,
-                    ctx.source_external_id,
-                    ctx.dataset_key,
-                    started_at,
-                )
-            session.flush()
-        logger.info(
-            "run_sync_unit.success",
-            extra={**_log_ctx, "duration_seconds": duration_seconds},
-        )
-        return {
-            "status": "success",
-            "unit_id": unit_id,
-            "duration_seconds": duration_seconds,
-        }
-    except Exception as exc:
-        completed_at = datetime.now(timezone.utc)
-        duration_seconds = max(0, int((completed_at - started_at).total_seconds()))
-        error_category = _classify_error(exc)
         with get_postgres_session_sync() as session:
             unit = _load_unit(session, unit_id)
             sync_run_id = str(unit.sync_run_id)
@@ -436,12 +414,171 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     "unit_id": unit_id,
                     "reason": "terminal",
                 }
-            unit.status = SyncRunUnitStatus.FAILED.value
-            unit.duration_seconds = duration_seconds
-            unit.error = str(exc)
-            unit.result = {"error_category": error_category}
+            lease_owner = str(uuid.uuid4())
+            lease_expires_at = started_at + timedelta(seconds=_running_lease_seconds())
+            claim_result: Any = session.execute(
+                update(SyncRunUnit)
+                .where(
+                    SyncRunUnit.id == unit.id,
+                    SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value,
+                    SyncRunUnit.sync_run_id.in_(_nonterminal_run_ids_select()),
+                )
+                .values(
+                    status=SyncRunUnitStatus.RUNNING.value,
+                    attempts=SyncRunUnit.attempts + 1,
+                    error=None,
+                    lease_owner=lease_owner,
+                    lease_expires_at=lease_expires_at,
+                    last_heartbeat_at=started_at,
+                    updated_at=started_at,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if int(claim_result.rowcount or 0) == 0:
+                return {
+                    "status": "skipped",
+                    "unit_id": unit_id,
+                    "reason": "not_dispatchable",
+                }
+            session.flush()
+
+        heartbeat_stop, heartbeat_thread = _start_unit_heartbeat(unit_id, lease_owner)
+
+        with get_postgres_session_sync() as session:
+            ctx = SyncTaskBootstrap.load(session, unit_id)
+            sync_run_id = ctx.sync_run_id
+            unit = _load_unit(session, unit_id)
+            _log_ctx = {
+                "sync_run_id": ctx.sync_run_id,
+                "unit_id": unit_id,
+                "source_id": str(unit.source_id),
+                "dataset_key": ctx.dataset_key,
+                "provider": ctx.provider,
+                "cost_class": ctx.cost_class,
+            }
+            now = datetime.now(timezone.utc)
+            live_lease_refresh: Any = session.execute(
+                update(SyncRunUnit)
+                .where(
+                    SyncRunUnit.id == uuid.UUID(str(unit_id)),
+                    SyncRunUnit.status == SyncRunUnitStatus.RUNNING.value,
+                    SyncRunUnit.lease_owner == lease_owner,
+                    SyncRunUnit.lease_expires_at.is_not(None),
+                    SyncRunUnit.lease_expires_at > now,
+                    SyncRunUnit.sync_run_id.in_(_nonterminal_run_ids_select()),
+                )
+                .values(
+                    lease_expires_at=now + timedelta(seconds=_running_lease_seconds()),
+                    last_heartbeat_at=now,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if int(live_lease_refresh.rowcount or 0) == 0:
+                return {
+                    "status": "skipped",
+                    "unit_id": unit_id,
+                    "reason": "lease_lost",
+                }
+
+        logger.info("run_sync_unit.started", extra=_log_ctx)
+
+        runtime = _runtime_cache.get(ctx)
+        result = run_dataset_unit(ctx, runtime)
+
+        completed_at = datetime.now(timezone.utc)
+        duration_seconds = max(0, int((completed_at - started_at).total_seconds()))
+        terminal_txn_started = True
+        with get_postgres_session_sync() as session:
+            terminal_result: Any = session.execute(
+                update(SyncRunUnit)
+                .where(
+                    SyncRunUnit.id == uuid.UUID(str(unit_id)),
+                    SyncRunUnit.status == SyncRunUnitStatus.RUNNING.value,
+                    SyncRunUnit.lease_owner == lease_owner,
+                    SyncRunUnit.lease_expires_at.is_not(None),
+                    SyncRunUnit.lease_expires_at > completed_at,
+                    SyncRunUnit.sync_run_id.in_(_nonterminal_run_ids_select()),
+                )
+                .values(
+                    status=SyncRunUnitStatus.SUCCESS.value,
+                    duration_seconds=duration_seconds,
+                    result=dict(result or {}),
+                    error=None,
+                    lease_owner=None,
+                    lease_expires_at=None,
+                    last_heartbeat_at=completed_at,
+                    updated_at=completed_at,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if int(terminal_result.rowcount or 0) == 0:
+                return {
+                    "status": "skipped",
+                    "unit_id": unit_id,
+                    "reason": "lease_lost",
+                }
+            if ctx.mode in {
+                SyncRunMode.INCREMENTAL.value,
+                SyncRunMode.FULL_RESYNC.value,  # full_resync stamps watermark on success
+            }:
+                set_watermark(
+                    session,
+                    ctx.org_id,
+                    ctx.source_external_id,
+                    ctx.dataset_key,
+                    started_at,
+                )
             session.flush()
             should_finalize = True
+        terminal_txn_started = False
+        logger.info(
+            "run_sync_unit.success",
+            extra={**_log_ctx, "duration_seconds": duration_seconds},
+        )
+        return {
+            "status": "success",
+            "unit_id": unit_id,
+            "duration_seconds": duration_seconds,
+        }
+    except Exception as exc:
+        if terminal_txn_started:
+            raise
+        completed_at = datetime.now(timezone.utc)
+        duration_seconds = max(0, int((completed_at - started_at).total_seconds()))
+        error_category = _classify_error(exc)
+        terminal_txn_started = True
+        with get_postgres_session_sync() as session:
+            terminal_result = session.execute(
+                update(SyncRunUnit)
+                .where(
+                    SyncRunUnit.id == uuid.UUID(str(unit_id)),
+                    SyncRunUnit.status == SyncRunUnitStatus.RUNNING.value,
+                    SyncRunUnit.lease_owner == lease_owner,
+                    SyncRunUnit.lease_expires_at.is_not(None),
+                    SyncRunUnit.lease_expires_at > completed_at,
+                    SyncRunUnit.sync_run_id.in_(_nonterminal_run_ids_select()),
+                )
+                .values(
+                    status=SyncRunUnitStatus.FAILED.value,
+                    duration_seconds=duration_seconds,
+                    error=str(exc),
+                    result={"error_category": error_category},
+                    lease_owner=None,
+                    lease_expires_at=None,
+                    last_heartbeat_at=completed_at,
+                    updated_at=completed_at,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if int(terminal_result.rowcount or 0) == 0:
+                return {
+                    "status": "skipped",
+                    "unit_id": unit_id,
+                    "reason": "lease_lost",
+                }
+            session.flush()
+            should_finalize = True
+        terminal_txn_started = False
         logger.exception(
             "run_sync_unit.failed",
             extra={
@@ -457,6 +594,10 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
             "error_category": error_category,
         }
     finally:
+        if heartbeat_stop is not None:
+            heartbeat_stop.set()
+        if heartbeat_thread is not None:
+            heartbeat_thread.join(timeout=2)
         if should_finalize and sync_run_id is not None:
             try:
                 getattr(finalize_sync_run, "apply_async")(
@@ -675,6 +816,81 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
     }
 
 
+def _run_has_dispatching_or_running_units(session, run_uuid: uuid.UUID) -> bool:
+    return (
+        session.query(SyncRunUnit.id)
+        .filter(
+            SyncRunUnit.sync_run_id == run_uuid,
+            SyncRunUnit.status.in_(
+                {
+                    SyncRunUnitStatus.DISPATCHING.value,
+                    SyncRunUnitStatus.RUNNING.value,
+                }
+            ),
+        )
+        .first()
+        is not None
+    )
+
+
+def _fail_planned_units(session, run_uuid: uuid.UUID, error: str) -> int:
+    now = datetime.now(timezone.utc)
+    result = (
+        session.query(SyncRunUnit)
+        .filter(
+            SyncRunUnit.sync_run_id == run_uuid,
+            SyncRunUnit.status == SyncRunUnitStatus.PLANNED.value,
+        )
+        .update(
+            {
+                SyncRunUnit.status: SyncRunUnitStatus.FAILED.value,
+                SyncRunUnit.error: error,
+                SyncRunUnit.updated_at: now,
+            },
+            synchronize_session=False,
+        )
+    )
+    return int(result or 0)
+
+
+def _fail_stale_dispatching_units(session, run_uuid: uuid.UUID, error: str) -> int:
+    now = datetime.now(timezone.utc)
+    stale_dispatch_cutoff = now - timedelta(seconds=_stale_dispatch_seconds())
+    # Write-time CAS (NOT load-and-mutate): the ``status == 'dispatching'`` predicate
+    # is evaluated by the database at UPDATE time, so a stale row that a delayed
+    # ``run_sync_unit`` concurrently claimed to RUNNING (DISPATCHING->RUNNING + live
+    # lease) between our read and write is EXCLUDED -- we never overwrite a live
+    # worker's claim with FAILED.  ``updated_at <= cutoff`` scopes to genuinely stale
+    # rows exactly as the prior load-and-mutate did, still scoped to this run.
+    result = session.execute(
+        update(SyncRunUnit)
+        .where(
+            SyncRunUnit.sync_run_id == run_uuid,
+            SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value,
+            SyncRunUnit.updated_at <= stale_dispatch_cutoff,
+        )
+        .values(
+            status=SyncRunUnitStatus.FAILED.value,
+            error=error,
+            result={"error_category": "dispatch_denied"},
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    return int(result.rowcount or 0)
+
+
+def _enqueue_denied_active_finalize(sync_run_id: str) -> None:
+    try:
+        getattr(finalize_sync_run, "apply_async")(args=(sync_run_id,), queue="sync")
+    except Exception:
+        logger.exception(
+            "dispatch_sync_run.denied_active_finalize_enqueue_failed",
+            extra={"sync_run_id": sync_run_id},
+        )
+        raise
+
+
 def _claim_units(
     session,
     run_uuid: uuid.UUID,
@@ -727,25 +943,34 @@ def _claim_units(
     # A DISPATCHING unit that is stale means the worker was enqueued but never
     # picked up (e.g. broker restart).  It is safe to re-enqueue because the
     # worker never started the provider call.
+    #
+    # Atomic CAS: this single UPDATE re-checks status='dispatching' AND
+    # updated_at <= stale_dispatch at write time, so a row that a delayed
+    # run_sync_unit concurrently claimed to RUNNING is excluded by
+    # construction -- it can never be reclaimed/requeued, and no status
+    # rewrite of a RUNNING row is possible.  status stays DISPATCHING; only
+    # updated_at is refreshed so a later redispatch re-enqueues the unit.
     stale_dispatch = now - timedelta(seconds=_stale_dispatch_seconds())
-    reclaim_candidates = (
-        session.query(SyncRunUnit)
-        .filter(
-            SyncRunUnit.sync_run_id == run_uuid,
-            SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value,
+    stale_where = [
+        SyncRunUnit.sync_run_id == run_uuid,
+        SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value,
+        SyncRunUnit.updated_at <= stale_dispatch,
+        ~SyncRunUnit.id.in_(claimed_ids),
+    ]
+    if capped_ids:
+        stale_where.append(~SyncRunUnit.id.in_([uuid.UUID(cid) for cid in capped_ids]))
+    stale_reclaimed: set[uuid.UUID] = set(
+        session.execute(
+            update(SyncRunUnit)
+            .where(*stale_where)
+            .values(updated_at=now)
+            .returning(SyncRunUnit.id)
+            .execution_options(synchronize_session=False)
         )
+        .scalars()
         .all()
     )
-    for unit in reclaim_candidates:
-        if unit.id in claimed_ids:
-            continue
-        # Never reclaim a unit that the concurrency guard deferred.
-        if str(unit.id) in capped_ids:
-            continue
-        if _as_aware(unit.updated_at) <= stale_dispatch:
-            unit.status = SyncRunUnitStatus.DISPATCHING.value
-            unit.updated_at = now
-            claimed_ids.add(unit.id)
+    claimed_ids.update(stale_reclaimed)
 
     session.flush()
     if not claimed_ids:
@@ -758,53 +983,16 @@ def _claim_units(
     )
 
 
-def _mark_dispatch_enqueue_failed(sync_run_id: str, error: str) -> None:
-    from dev_health_ops.db import get_postgres_session_sync
-
-    completed_at = datetime.now(timezone.utc)
-    run_uuid = uuid.UUID(str(sync_run_id))
-    with get_postgres_session_sync() as session:
-        run = session.query(SyncRun).filter(SyncRun.id == run_uuid).one_or_none()
-        if run is None:
-            return
-        run.status = SyncRunStatus.FAILED.value
-        run.completed_at = completed_at
-        run.error = error
-        run.result = {"error": error, "phase": "dispatch_enqueue"}
-        units = (
-            session.query(SyncRunUnit).filter(SyncRunUnit.sync_run_id == run_uuid).all()
-        )
-        for unit in units:
-            if unit.status not in {
-                SyncRunUnitStatus.SUCCESS.value,
-                SyncRunUnitStatus.FAILED.value,
-            }:
-                unit.status = SyncRunUnitStatus.FAILED.value
-                unit.error = error
-                unit.updated_at = completed_at
-        run.completed_units = sum(
-            1 for unit in units if unit.status == SyncRunUnitStatus.SUCCESS.value
-        )
-        run.failed_units = sum(
-            1 for unit in units if unit.status == SyncRunUnitStatus.FAILED.value
-        )
-        stamp_sync_run_canonical_config(
-            session,
-            run,
-            completed_at=completed_at,
-            success=False,
-            error=error,
-            stats={"error": error, "phase": "dispatch_enqueue"},
-        )
-        session.flush()
-
-
 def _load_unit(session, unit_id: str) -> SyncRunUnit:
     unit_uuid = uuid.UUID(str(unit_id))
     unit = session.query(SyncRunUnit).filter(SyncRunUnit.id == unit_uuid).one_or_none()
     if unit is None:
         raise ValueError(f"Sync run unit not found: {unit_id}")
     return unit
+
+
+def _nonterminal_run_ids_select():
+    return select(SyncRun.id).where(SyncRun.status.not_in(_TERMINAL_RUN_STATUSES))
 
 
 def _aggregate_run_status(
@@ -821,9 +1009,7 @@ def _aggregate_run_status(
 
 def _stale_dispatch_seconds() -> int:
     try:
-        return max(
-            1, int(__import__("os").getenv("SYNC_UNIT_DISPATCH_STALE_SECONDS", "900"))
-        )
+        return max(1, int(os.getenv("SYNC_UNIT_DISPATCH_STALE_SECONDS", "900")))
     except ValueError:
         return 900
 
@@ -832,7 +1018,7 @@ def _stale_running_seconds() -> int:
     try:
         return max(
             1,
-            int(__import__("os").getenv("SYNC_UNIT_RUNNING_STALE_SECONDS", "3600")),
+            int(os.getenv("SYNC_UNIT_RUNNING_STALE_SECONDS", "3600")),
         )
     except ValueError:
         return 3600
@@ -842,6 +1028,85 @@ def _as_aware(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _running_lease_seconds() -> int:
+    return _stale_running_seconds()
+
+
+def _heartbeat_interval_seconds() -> int:
+    return max(1, min(60, _running_lease_seconds() // 4))
+
+
+def _unit_lease_is_owned_and_live(
+    unit: SyncRunUnit,
+    lease_owner: str | None,
+    now: datetime,
+) -> bool:
+    if lease_owner is None or unit.lease_owner != lease_owner:
+        return False
+    if unit.lease_expires_at is None:
+        return False
+    return _as_aware(unit.lease_expires_at) > now
+
+
+def _start_unit_heartbeat(
+    unit_id: str,
+    lease_owner: str | None,
+) -> tuple[threading.Event, threading.Thread] | tuple[None, None]:
+    if lease_owner is None:
+        return None, None
+    stop_event = threading.Event()
+    thread = threading.Thread(
+        target=_heartbeat_unit_lease,
+        args=(unit_id, lease_owner, stop_event),
+        name=f"sync-unit-heartbeat-{unit_id}",
+        daemon=True,
+    )
+    thread.start()
+    return stop_event, thread
+
+
+def _heartbeat_unit_lease(
+    unit_id: str,
+    lease_owner: str,
+    stop_event: threading.Event,
+) -> None:
+    from dev_health_ops.db import get_postgres_session_sync
+
+    interval = _heartbeat_interval_seconds()
+    lease_seconds = _running_lease_seconds()
+    while not stop_event.wait(interval):
+        now = datetime.now(timezone.utc)
+        lease_expires_at = now + timedelta(seconds=lease_seconds)
+        try:
+            with get_postgres_session_sync() as session:
+                heartbeat_result: Any = session.execute(
+                    update(SyncRunUnit)
+                    .where(
+                        SyncRunUnit.id == uuid.UUID(str(unit_id)),
+                        SyncRunUnit.status == SyncRunUnitStatus.RUNNING.value,
+                        SyncRunUnit.lease_owner == lease_owner,
+                        SyncRunUnit.lease_expires_at > now,
+                        SyncRunUnit.sync_run_id.in_(_nonterminal_run_ids_select()),
+                    )
+                    .values(
+                        lease_expires_at=lease_expires_at,
+                        last_heartbeat_at=now,
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+                if int(heartbeat_result.rowcount or 0) == 0:
+                    logger.info(
+                        "run_sync_unit.heartbeat_lease_lost",
+                        extra={"unit_id": unit_id},
+                    )
+                    stop_event.set()
+        except Exception:
+            logger.exception(
+                "run_sync_unit.heartbeat_failed",
+                extra={"unit_id": unit_id},
+            )
 
 
 def _schedule_redispatch(sync_run_id: str) -> None:
@@ -854,7 +1119,7 @@ def _schedule_redispatch(sync_run_id: str) -> None:
     Raises on broker enqueue failure so the caller can propagate the error
     rather than leaving the run silently non-terminal.
     """
-    countdown = int(__import__("os").getenv("SYNC_DISPATCH_REDISPATCH_COUNTDOWN", "60"))
+    countdown = int(os.getenv("SYNC_DISPATCH_REDISPATCH_COUNTDOWN", "60"))
     try:
         getattr(dispatch_sync_run, "apply_async")(
             args=(sync_run_id,),

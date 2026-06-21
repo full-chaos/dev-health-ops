@@ -238,6 +238,13 @@ class SyncRunUnit(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     processor_flags: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    lease_owner: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -257,6 +264,14 @@ class SyncRunUnit(Base):
         Index("ix_sync_run_units_run_status", "sync_run_id", "status"),
         Index("ix_sync_run_units_source_id", "source_id"),
         Index("ix_sync_run_units_dataset_key", "dataset_key"),
+        Index(
+            "ix_sync_run_units_bucket_status_lease",
+            "org_id",
+            "provider",
+            "cost_class",
+            "status",
+            "lease_expires_at",
+        ),
     )
 
 

@@ -16,18 +16,20 @@ Pipeline:
                                          post-sync metrics via the
                                          SyncRunPostDispatch/outbox ledger
 
-Idempotency rules:
+Idempotency and Durability rules:
   * dispatch_sync_run is redispatchable: it only queues units still in
     planned/stale-dispatching state.
   * finalize_sync_run is a no-op until all units are terminal, and a no-op if
     the run's post-sync outbox row already exists. Each terminal unit enqueues
-    finalize; finalize itself enforces once-only via the unique
+    finalize. Finalize itself enforces once-only via the unique
     (sync_run_id, kind) constraint on SyncRunPostDispatch.
-  * Metrics are NEVER dispatched from individual units. post_sync is relayed
-    at-most-once by the reconciler: mark-before-publish and never re-arm on
-    publish failure because downstream raw-aggregation readers can double-count
-    duplicate computed_at generations (CHAOS-2596 deferred durability).
-
+  * Metrics are never dispatched from individual units. Post-sync durability
+    flows through the sync_dispatch_outbox table and the reconciler relay,
+    rather than only the SyncRunPostDispatch ledger. The post_sync kind is
+    relayed at-most-once by the reconciler. It marks the outbox row dispatched
+    before publishing and never re-arms on publish failure. This prevents
+    downstream metrics readers from double-counting duplicate computed_at
+    generations. Durable exactly-once post-sync is deferred to CHAOS-2596.
 Observability (CHAOS-2519):
   Every structured log line emitted by the three tasks carries the full unit
   context: sync_run_id, unit_id, source_id, dataset_key, provider, cost_class.

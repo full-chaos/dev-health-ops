@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import logging
 import threading
 import uuid
 from collections import OrderedDict
@@ -30,6 +31,9 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -281,6 +285,6 @@ async def _enter_store(store: Any) -> None:
         if aexit is not None:
             try:
                 await aexit(None, None, None)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Best-effort store __aexit__ failed after __aenter__ error", exc_info=exc)
         raise

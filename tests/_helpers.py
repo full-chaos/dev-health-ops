@@ -33,13 +33,14 @@ def tables_of(*models: Any) -> list[Table]:
     return [cast(Table, model.__table__) for model in models]
 
 
-def closing_asyncio_run(
+def closing_coroutine_runner(
     return_value: Any = None, *, raises: BaseException | None = None
 ) -> Callable[..., Any]:
-    """Build a ``side_effect`` for a mocked ``asyncio.run`` that closes the coroutine.
+    """Build a ``side_effect`` for a mocked coroutine runner that closes the coroutine.
 
-    Mocking ``asyncio.run`` leaves the coroutine argument un-awaited, which emits
-    a ``RuntimeWarning: coroutine '...' was never awaited`` at garbage-collection
+    Mocking a coroutine runner (``asyncio.run``, ``workers.async_runner.run_async``,
+    etc.) leaves the coroutine argument un-awaited, which emits a
+    ``RuntimeWarning: coroutine '...' was never awaited`` at garbage-collection
     time. This side_effect closes the coroutine so it is consumed cleanly, while
     the mock still records the call and honours the requested return/raise
     behaviour (CHAOS-2586).

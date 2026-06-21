@@ -21,6 +21,8 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import logging
+import threading
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -29,6 +31,9 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -78,16 +83,27 @@ class ProviderRuntime:
     extra: dict[str, Any] = field(default_factory=dict)
 
     def close(self) -> None:
-        """Close the connector and store. Implemented in CHAOS-2512/2513."""
+        """Close the connector and store (CHAOS-2592).
 
-        for resource in (self.connector, self.store):
-            close = getattr(resource, "close", None)
-            if close is None:
-                continue
+        The store is an async context manager entered once at creation time
+        (see ``_create_store``); exit it so the underlying client (e.g. the
+        ClickHouse connection) is released on cache eviction. The connector
+        is closed via its own ``close`` hook.
+        """
+
+        from dev_health_ops.workers.async_runner import run_async
+
+        store = self.store
+        if store is not None:
+            aexit = getattr(store, "__aexit__", None)
+            if aexit is not None:
+                run_async(aexit(None, None, None))
+
+        connector = self.connector
+        close = getattr(connector, "close", None)
+        if close is not None:
             result = close()
             if inspect.iscoroutine(result):
-                from dev_health_ops.workers.async_runner import run_async
-
                 run_async(result)
 
 
@@ -186,9 +202,17 @@ class ProviderRuntimeCache:
     def __init__(self, max_size: int = 32) -> None:
         self.max_size = max_size
         self._runtimes: OrderedDict[RuntimeCacheKey, ProviderRuntime] = OrderedDict()
+        self._lock = threading.Lock()
 
     def get(self, context: SyncTaskContext) -> ProviderRuntime:
-        """Return a reusable runtime for the context's scope. CHAOS-2512."""
+        """Return a reusable runtime for the context's scope. CHAOS-2512.
+
+        Creation/eviction is serialized (CHAOS-2592): without the lock two
+        worker threads missing the same key could both build and enter a
+        store, leaking the loser's live client. The lock + re-check guarantees
+        exactly one store is entered per key; evicted runtimes are closed
+        outside the lock so their async ``__aexit__`` does not run under it.
+        """
 
         key = RuntimeCacheKey(
             org_id=context.org_id,
@@ -200,16 +224,20 @@ class ProviderRuntimeCache:
             provider=context.provider,
             db_url=context.db_url,
         )
-        runtime = self._runtimes.get(key)
-        if runtime is not None:
-            self._runtimes.move_to_end(key)
-            return runtime
+        evicted_runtimes: list[ProviderRuntime] = []
+        with self._lock:
+            runtime = self._runtimes.get(key)
+            if runtime is not None:
+                self._runtimes.move_to_end(key)
+                return runtime
 
-        runtime = ProviderRuntime(store=_create_store(context))
-        self._runtimes[key] = runtime
-        self._runtimes.move_to_end(key)
-        while len(self._runtimes) > self.max_size:
-            _, evicted = self._runtimes.popitem(last=False)
+            runtime = ProviderRuntime(store=_create_store(context))
+            self._runtimes[key] = runtime
+            self._runtimes.move_to_end(key)
+            while len(self._runtimes) > self.max_size:
+                _, evicted = self._runtimes.popitem(last=False)
+                evicted_runtimes.append(evicted)
+        for evicted in evicted_runtimes:
             evicted.close()
         return runtime
 
@@ -224,8 +252,42 @@ def _credential_fingerprint(credentials: Any) -> str:
 def _create_store(context: SyncTaskContext) -> Any:
     if not context.db_url:
         return None
-    from dev_health_ops.storage import create_store
+    from dev_health_ops.storage import create_store, detect_db_type
+
+    # The runtime cache reuses one store across many units, each run in its own
+    # transient run_async() event loop. Only the ClickHouse client is
+    # loop-agnostic (a sync client wrapped in asyncio.to_thread); SQLAlchemy
+    # stores hold async sessions/connections bound to the loop that opened
+    # them, so entering one here and reusing it from later per-unit loops would
+    # break (CHAOS-2592). Leave non-ClickHouse stores unset so
+    # _run_with_reused_or_new_store falls back to the per-unit run_with_store()
+    # lifecycle (enter + exit within the handler's own loop).
+    if detect_db_type(context.db_url) != "clickhouse":
+        return None
 
     store = create_store(context.db_url)
     setattr(store, "org_id", context.org_id)
+    # Enter the store's async context once so the client is connected before
+    # the cached runtime reuses it across units. If __aenter__ opens the client
+    # and then fails (e.g. table-ensure raises), best-effort exit so this
+    # uncached, failed runtime does not leak a live connection.
+    from dev_health_ops.workers.async_runner import run_async
+
+    run_async(_enter_store(store))
     return store
+
+
+async def _enter_store(store: Any) -> None:
+    try:
+        await store.__aenter__()
+    except BaseException:
+        aexit = getattr(store, "__aexit__", None)
+        if aexit is not None:
+            try:
+                await aexit(None, None, None)
+            except Exception as exc:
+                logger.debug(
+                    "Best-effort store __aexit__ failed after __aenter__ error",
+                    exc_info=exc,
+                )
+        raise

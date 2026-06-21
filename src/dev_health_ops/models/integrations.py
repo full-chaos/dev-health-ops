@@ -202,6 +202,9 @@ class SyncRun(Base):
     post_dispatches: Mapped[list[SyncRunPostDispatch]] = relationship(
         back_populates="sync_run", cascade="all, delete-orphan"
     )
+    dispatch_outbox: Mapped[list[SyncDispatchOutbox]] = relationship(
+        back_populates="sync_run", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         Index(
@@ -294,4 +297,49 @@ class SyncRunPostDispatch(Base):
         UniqueConstraint(
             "sync_run_id", "kind", name="uq_sync_run_post_dispatches_run_kind"
         ),
+    )
+
+
+class SyncDispatchOutbox(Base):
+    __tablename__ = "sync_dispatch_outbox"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    sync_run_id: Mapped[uuid.UUID] = mapped_column(
+        GUID, ForeignKey("sync_runs.id"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dispatched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    claim_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    claim_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    sync_run: Mapped[SyncRun] = relationship(back_populates="dispatch_outbox")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "sync_run_id", "kind", name="uq_sync_dispatch_outbox_run_kind"
+        ),
+        Index("ix_sync_dispatch_outbox_due", "status", "available_at"),
+        Index("ix_sync_dispatch_outbox_org", "org_id"),
     )

@@ -1,0 +1,78 @@
+"""Add sync dispatch outbox.
+
+Revision ID: 0020
+Revises: 0019
+Create Date: 2026-06-21 00:00:00
+
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+
+import sqlalchemy as sa
+from alembic import op
+from sqlalchemy.dialects.postgresql import UUID
+
+revision: str = "0020"
+down_revision: str | None = "0019"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+__all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
+
+
+def upgrade() -> None:
+    if not _table_exists("sync_dispatch_outbox"):
+        op.create_table(
+            "sync_dispatch_outbox",
+            sa.Column("id", UUID(as_uuid=True), nullable=False),
+            sa.Column("org_id", sa.Text(), nullable=False),
+            sa.Column("sync_run_id", UUID(as_uuid=True), nullable=False),
+            sa.Column("kind", sa.String(), nullable=False),
+            sa.Column("status", sa.String(), nullable=False),
+            sa.Column("available_at", sa.DateTime(timezone=True), nullable=False),
+            sa.Column("attempts", sa.Integer(), nullable=False),
+            sa.Column("last_error", sa.Text(), nullable=True),
+            sa.Column("dispatched_at", sa.DateTime(timezone=True), nullable=True),
+            sa.Column("claim_token", sa.Text(), nullable=True),
+            sa.Column("claim_expires_at", sa.DateTime(timezone=True), nullable=True),
+            sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+            sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+            sa.ForeignKeyConstraint(["sync_run_id"], ["sync_runs.id"]),
+            sa.PrimaryKeyConstraint("id"),
+            sa.UniqueConstraint(
+                "sync_run_id", "kind", name="uq_sync_dispatch_outbox_run_kind"
+            ),
+        )
+    _create_index_if_missing(
+        "ix_sync_dispatch_outbox_due",
+        "sync_dispatch_outbox",
+        ["status", "available_at"],
+    )
+    _create_index_if_missing(
+        "ix_sync_dispatch_outbox_org",
+        "sync_dispatch_outbox",
+        ["org_id"],
+    )
+
+
+def downgrade() -> None:
+    if _table_exists("sync_dispatch_outbox"):
+        op.drop_table("sync_dispatch_outbox")
+
+
+def _table_exists(table_name: str) -> bool:
+    bind = op.get_bind()
+    return table_name in sa.inspect(bind).get_table_names()
+
+
+def _create_index_if_missing(
+    index_name: str, table_name: str, columns: list[str]
+) -> None:
+    bind = op.get_bind()
+    existing_indexes = {
+        index["name"] for index in sa.inspect(bind).get_indexes(table_name)
+    }
+    if index_name not in existing_indexes:
+        op.create_index(index_name, table_name, columns)

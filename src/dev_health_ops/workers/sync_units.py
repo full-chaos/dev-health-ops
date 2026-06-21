@@ -12,9 +12,9 @@ Pipeline:
                                          executes ONE dataset, persists unit status,
                                          updates watermark ONLY if mode==incremental
                                          and the unit succeeded
-    finalize_sync_run(run_id)         -> aggregates unit statuses; dispatches
-                                         post-sync metrics EXACTLY ONCE via the
-                                         SyncRunPostDispatch outbox
+    finalize_sync_run(run_id)         -> aggregates unit statuses; materializes
+                                         post-sync metrics via the
+                                         SyncRunPostDispatch/outbox ledger
 
 Idempotency rules:
   * dispatch_sync_run is redispatchable: it only queues units still in
@@ -23,7 +23,10 @@ Idempotency rules:
     the run's post-sync outbox row already exists. Each terminal unit enqueues
     finalize; finalize itself enforces once-only via the unique
     (sync_run_id, kind) constraint on SyncRunPostDispatch.
-  * Metrics are NEVER dispatched from individual units.
+  * Metrics are NEVER dispatched from individual units. post_sync is relayed
+    at-most-once by the reconciler: mark-before-publish and never re-arm on
+    publish failure because downstream raw-aggregation readers can double-count
+    duplicate computed_at generations (CHAOS-2596 deferred durability).
 
 Observability (CHAOS-2519):
   Every structured log line emitted by the three tasks carries the full unit
@@ -536,7 +539,6 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                 )
             session.flush()
             should_finalize = True
-        terminal_txn_started = False
         logger.info(
             "run_sync_unit.success",
             extra={**_log_ctx, "duration_seconds": duration_seconds},
@@ -592,7 +594,6 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                 )
             session.flush()
             should_finalize = True
-        terminal_txn_started = False
         logger.exception(
             "run_sync_unit.failed",
             extra={
@@ -629,8 +630,12 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
     """Aggregate unit statuses and materialize post-sync metrics once per run.
 
     No-op until all units are terminal; once-only via the SyncRunPostDispatch
-    outbox. Maps completed dataset keys back to legacy sync_targets for the
-    reconciler relay, which is the sole post-sync publisher.
+    ledger. The reconciler relay is the sole post-sync publisher. post_sync is
+    at-most-once: the relay marks dispatched before publishing and never re-arms
+    on publish failure because downstream raw-aggregation readers can
+    double-count duplicate computed_at generations. Durable exactly-once
+    post-sync re-drive is deferred to CHAOS-2596; dispatch/finalize wakeups
+    remain at-least-once because their consumers are idempotent.
     """
 
     from dev_health_ops.db import get_postgres_session_sync

@@ -349,34 +349,6 @@ def mark_outbox_dispatched(
     return _rowcount(result) == 1
 
 
-def mark_outbox_dispatched_fastpath(
-    session: Session,
-    *,
-    sync_run_id: str | uuid.UUID,
-    kind: str,
-    now: datetime | None = None,
-) -> bool:
-    run_uuid = uuid.UUID(str(sync_run_id))
-    dispatch_now = _as_aware(now or _utcnow())
-    result = session.execute(
-        update(SyncDispatchOutbox)
-        .where(
-            SyncDispatchOutbox.sync_run_id == run_uuid,
-            SyncDispatchOutbox.kind == kind,
-            SyncDispatchOutbox.status == OUTBOX_STATUS_PENDING,
-            SyncDispatchOutbox.claim_token.is_(None),
-        )
-        .values(
-            status=OUTBOX_STATUS_DISPATCHED,
-            dispatched_at=dispatch_now,
-            updated_at=dispatch_now,
-        )
-        .execution_options(synchronize_session=False)
-    )
-    session.flush()
-    return _rowcount(result) == 1
-
-
 def build_post_sync_dispatch_payload(
     session: Session, sync_run_id: str | uuid.UUID
 ) -> PostSyncDispatchPayload | None:

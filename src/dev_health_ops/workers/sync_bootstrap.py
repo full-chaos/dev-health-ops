@@ -286,5 +286,8 @@ async def _enter_store(store: Any) -> None:
             try:
                 await aexit(None, None, None)
             except Exception as exc:
-                logger.debug("Best-effort store __aexit__ failed after __aenter__ error", exc_info=exc)
+                logger.debug(
+                    "Best-effort store __aexit__ failed after __aenter__ error",
+                    exc_info=exc,
+                )
         raise

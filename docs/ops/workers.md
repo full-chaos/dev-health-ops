@@ -23,11 +23,11 @@ Key implementation details:
 Operators can trigger background operations on-demand through three primary API paths. These paths bypass the periodic scheduler and enqueue tasks directly onto the Celery broker. For detailed API specifications, refer to the [GraphQL API Overview](../api/graphql-overview.md) and the [AI Reports Architecture](../architecture/ai-reports-architecture.md).
 
 1. **Data Sync Trigger**
-   * **Endpoint**: `POST /api/v1/admin/sync-configs/{config_id}/trigger` (defined in `api/admin/routers/sync.py:850-983`)
-   * **Flow**: Creates a `ScheduledJob` and a `PENDING` `JobRun` record, then enqueues either `run_sync_config` or `dispatch_batch_sync` onto the `sync` queue.
+   * **Endpoint**: `POST /api/v1/admin/sync-configs/{config_id}/trigger` (defined in `api/admin/routers/sync.py:997-1164`)
+   * **Flow**: For migrated sync configurations with `sync.migrated_trigger_routing_enabled`, builds a `SyncPlanRequest`, creates a `SyncRun`, and enqueues `dispatch_sync_run` onto the `sync` queue. Legacy configurations still create a `ScheduledJob` and a `PENDING` `JobRun`, then enqueue either `run_sync_config` or `dispatch_batch_sync` onto the `sync` queue.
 
 2. **Historical Backfill Trigger**
-   * **Endpoint**: `POST /api/v1/admin/sync-configs/{config_id}/backfill` (defined in `api/admin/routers/sync.py:986-1045`)
+   * **Endpoint**: `POST /api/v1/admin/sync-configs/{config_id}/backfill` (defined in `api/admin/routers/sync.py:1167-1233`)
    * **Flow**: Creates a `BackfillJob` record and triggers `run_backfill.delay` on the `backfill` queue.
 
 3. **Report Execution Trigger**
@@ -38,10 +38,10 @@ Operators can trigger background operations on-demand through three primary API 
 
 The following table maps bare CLI commands to their Celery task equivalents, trigger paths, and required worker environment variables.
 
-| CLI Command (Inline, May Fail) | Celery Task | Trigger Path | Required Worker Env |
+| CLI Command (Inline, May Fail) | Celery Task Equivalent | Trigger Path | Required Worker Env |
 |---|---|---|---|
-| `dev-hops sync git/prs/cicd/deployments/incidents/security/tests` | `run_sync_config` | `POST /api/v1/admin/sync-configs/{config_id}/trigger` | `GITHUB_TOKEN`, `GITLAB_TOKEN`, `JIRA_API_TOKEN`, `JIRA_EMAIL` |
-| `dev-hops sync work-items` | `run_work_items_sync` | `POST /api/v1/admin/sync-configs/{config_id}/trigger` | `GITHUB_TOKEN`, `GITLAB_TOKEN`, `JIRA_API_TOKEN`, `JIRA_EMAIL` |
+| `dev-hops sync git/prs/cicd/deployments/incidents/security/tests` | Migrated configs: `dispatch_sync_run` → `run_sync_unit` → `finalize_sync_run`; legacy configs: `run_sync_config` / `dispatch_batch_sync` | `POST /api/v1/admin/sync-configs/{config_id}/trigger` | `GITHUB_TOKEN`, `GITLAB_TOKEN`, `JIRA_API_TOKEN`, `JIRA_EMAIL` |
+| `dev-hops sync work-items` | Migrated configs: `dispatch_sync_run` → `run_sync_unit` → `finalize_sync_run`; legacy sync-config trigger: `run_sync_config` / `dispatch_batch_sync` with work-items handled inside the worker; standalone worker wrapper: `run_work_items_sync` | `POST /api/v1/admin/sync-configs/{config_id}/trigger` | `GITHUB_TOKEN`, `GITLAB_TOKEN`, `JIRA_API_TOKEN`, `JIRA_EMAIL` |
 | `dev-hops metrics daily` | `run_daily_metrics` / `dispatch_daily_metrics_partitioned` | Periodic Beat Schedule | `CLICKHOUSE_URI`, `DATABASE_URI` |
 | `dev-hops recommendations compute` | `run_recommendations_job` | Periodic Beat Schedule | `CLICKHOUSE_URI`, `DATABASE_URI` |
 | `dev-hops work-graph build` | `run_work_graph_build` | Periodic Beat Schedule | `CLICKHOUSE_URI`, `DATABASE_URI` |
@@ -112,10 +112,13 @@ celery -A dev_health_ops.workers.celery_app beat --loglevel=INFO
 
 ## Task Registry
 
-The system registers 34 tasks under the `workers/` directory. All registered tasks, their wrapped CLI operations, and their target queues are listed in the table below.
+The system registers Celery tasks under the `workers/` directory. The primary registered tasks, their wrapped CLI-equivalent operations, and their target queues are listed in the table below.
 
 | Task Name | Wrapped CLI Operation | Queue | Description |
 |---|---|---|---|
+| `dispatch_sync_run` | None | `sync` | Authorizes a planned `SyncRun`, routes each pending unit, and fans out `run_sync_unit` tasks. Source: `sync_units.py:113-190`. |
+| `run_sync_unit` | None | `sync` (or `sync.<provider>` / cost-class queue) | Executes exactly one planned source/dataset/window unit and updates its status. Source: `sync_units.py:193-293`. |
+| `finalize_sync_run` | None | `sync` | Aggregates unit statuses and dispatches post-sync work once all units are terminal. Source: `sync_units.py:295-513`. |
 | `run_sync_config` | `sync git/prs/cicd/deployments/incidents/security/tests` + work-items | `sync` (or `sync.<provider>`) | Syncs a single repository configuration. Source: `sync_runtime.py:408-527`. |
 | `dispatch_batch_sync` | None | `sync` | Discovers repositories in an organization and schedules syncs. Source: `sync_batch.py:301`. |
 | `_batch_sync_callback` | None | `sync` | Callback task for batch sync completion. Source: `sync_batch.py:267`. |

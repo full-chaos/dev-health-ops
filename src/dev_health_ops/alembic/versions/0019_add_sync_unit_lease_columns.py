@@ -37,6 +37,7 @@ def upgrade() -> None:
             "sync_run_units",
             ["org_id", "provider", "cost_class", "status", "lease_expires_at"],
             postgresql_concurrently=True,
+            if_not_exists=True,
         )
 
 
@@ -46,6 +47,7 @@ def downgrade() -> None:
             "ix_sync_run_units_bucket_status_lease",
             table_name="sync_run_units",
             postgresql_concurrently=True,
+            if_exists=True,
         )
     op.drop_column("sync_run_units", "last_heartbeat_at")
     op.drop_column("sync_run_units", "lease_expires_at")

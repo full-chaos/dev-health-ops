@@ -1189,7 +1189,12 @@ def test_paused_config_with_running_and_planned_units_does_not_strand(
     db_session.refresh(running)
     db_session.refresh(planned)
     db_session.refresh(config)
-    assert dispatch_result == {"status": "noop", "queued_units": 0}
+    assert dispatch_result == {
+        "status": "denied_active",
+        "reason": "sync configuration is paused",
+        "failed_planned_units": 1,
+        "failed_stale_dispatching_units": 0,
+    }
     assert run.status not in {
         SyncRunStatus.SUCCESS.value,
         SyncRunStatus.PARTIAL_FAILED.value,
@@ -1201,8 +1206,8 @@ def test_paused_config_with_running_and_planned_units_does_not_strand(
     assert planned.error == "sync configuration is paused"
     assert running.status == SyncRunUnitStatus.RUNNING.value
     assert running.lease_owner == "worker-live"
-    assert dispatch_calls == [((str(run.id),), "sync")]
-    assert finalize_calls == []
+    assert dispatch_calls == []
+    assert finalize_calls == [((str(run.id),), "sync")]
     assert chord_calls == []
 
     running.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
@@ -1213,7 +1218,7 @@ def test_paused_config_with_running_and_planned_units_does_not_strand(
     db_session.refresh(running)
     assert reconcile_result["expired_units"] == 1
     assert running.status == SyncRunUnitStatus.FAILED.value
-    assert finalize_calls == [((str(run.id),), "sync")]
+    assert finalize_calls == [((str(run.id),), "sync"), ((str(run.id),), "sync")]
 
     finalize_result = sync_units.finalize_sync_run(str(run.id))
 
@@ -1229,6 +1234,198 @@ def test_paused_config_with_running_and_planned_units_does_not_strand(
     assert run.status == SyncRunStatus.FAILED.value
     assert run.completed_at is not None
     assert run.failed_units == 2
+
+
+def test_paused_config_with_stale_dispatching_does_not_redispatch(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_units
+
+    run, stale_dispatching = _seed_run(db_session)
+    now = datetime.now(timezone.utc)
+    stale_dispatching.status = SyncRunUnitStatus.DISPATCHING.value
+    stale_dispatching.updated_at = now - timedelta(minutes=30)
+    running = SyncRunUnit(
+        org_id=run.org_id,
+        sync_run_id=run.id,
+        integration_id=stale_dispatching.integration_id,
+        source_id=stale_dispatching.source_id,
+        provider="github",
+        dataset_key="prs",
+        cost_class="medium",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunUnitStatus.RUNNING.value,
+        attempts=1,
+        lease_owner="worker-live",
+        lease_expires_at=now + timedelta(minutes=5),
+        last_heartbeat_at=now,
+        processor_flags={"sync_prs": True},
+    )
+    planned = SyncRunUnit(
+        org_id=run.org_id,
+        sync_run_id=run.id,
+        integration_id=stale_dispatching.integration_id,
+        source_id=stale_dispatching.source_id,
+        provider="github",
+        dataset_key="issues",
+        cost_class="medium",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunUnitStatus.PLANNED.value,
+        attempts=0,
+        processor_flags={"sync_issues": True},
+    )
+    config = SyncConfiguration(
+        org_id=run.org_id,
+        name="paused-with-stale-dispatching",
+        provider="github",
+        sync_targets=["git", "prs", "issues"],
+        sync_options={},
+        migrated_integration_id=run.integration_id,
+        is_active=False,
+    )
+    run.status = SyncRunStatus.DISPATCHING.value
+    run.total_units = 3
+    db_session.add_all([running, planned, config])
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    dispatch_calls, finalize_calls, chord_calls = _patch_worker_enqueues(monkeypatch)
+
+    def fail_queue(*_args, **_kwargs):
+        raise AssertionError("paused config must not queue run_sync_unit")
+
+    monkeypatch.setattr(sync_units.run_sync_unit, "s", fail_queue)
+
+    dispatch_result = sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(run)
+    db_session.refresh(stale_dispatching)
+    db_session.refresh(running)
+    db_session.refresh(planned)
+    assert dispatch_result == {
+        "status": "denied_active",
+        "reason": "sync configuration is paused",
+        "failed_planned_units": 1,
+        "failed_stale_dispatching_units": 1,
+    }
+    assert stale_dispatching.status == SyncRunUnitStatus.FAILED.value
+    assert stale_dispatching.error == "sync configuration is paused"
+    assert stale_dispatching.result == {"error_category": "dispatch_denied"}
+    assert planned.status == SyncRunUnitStatus.FAILED.value
+    assert running.status == SyncRunUnitStatus.RUNNING.value
+    assert running.lease_owner == "worker-live"
+    assert run.status not in {
+        SyncRunStatus.SUCCESS.value,
+        SyncRunStatus.PARTIAL_FAILED.value,
+        SyncRunStatus.FAILED.value,
+    }
+    assert run.completed_at is None
+    assert dispatch_calls == []
+    assert finalize_calls == [((str(run.id),), "sync")]
+    assert chord_calls == []
+
+    running.status = SyncRunUnitStatus.FAILED.value
+    running.error = "sync unit lease expired"
+    running.result = {"error_category": "worker_lost"}
+    running.lease_owner = None
+    running.lease_expires_at = None
+    running.updated_at = datetime.now(timezone.utc)
+    db_session.flush()
+
+    finalize_result = sync_units.finalize_sync_run(str(run.id))
+
+    db_session.refresh(run)
+    assert finalize_result["status"] == "finalized"
+    assert run.status == SyncRunStatus.FAILED.value
+    assert run.failed_units == 3
+
+
+def test_total_cap_hard_deny_with_stale_dispatching_does_not_redispatch(
+    db_session, monkeypatch
+):
+    from dev_health_ops.sync.guard import GuardDecision
+    from dev_health_ops.workers import sync_units
+
+    run, stale_dispatching = _seed_run(db_session)
+    now = datetime.now(timezone.utc)
+    stale_dispatching.status = SyncRunUnitStatus.DISPATCHING.value
+    stale_dispatching.updated_at = now - timedelta(minutes=30)
+    running = SyncRunUnit(
+        org_id=run.org_id,
+        sync_run_id=run.id,
+        integration_id=stale_dispatching.integration_id,
+        source_id=stale_dispatching.source_id,
+        provider="github",
+        dataset_key="prs",
+        cost_class="medium",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunUnitStatus.RUNNING.value,
+        attempts=1,
+        lease_owner="worker-live",
+        lease_expires_at=now + timedelta(minutes=5),
+        last_heartbeat_at=now,
+        processor_flags={"sync_prs": True},
+    )
+    planned = SyncRunUnit(
+        org_id=run.org_id,
+        sync_run_id=run.id,
+        integration_id=stale_dispatching.integration_id,
+        source_id=stale_dispatching.source_id,
+        provider="github",
+        dataset_key="issues",
+        cost_class="medium",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunUnitStatus.PLANNED.value,
+        attempts=0,
+        processor_flags={"sync_issues": True},
+    )
+    run.status = SyncRunStatus.DISPATCHING.value
+    run.total_units = 3
+    db_session.add_all([running, planned])
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    dispatch_calls, finalize_calls, chord_calls = _patch_worker_enqueues(monkeypatch)
+    reason = "sync run unit cap exceeded: 3/1"
+    monkeypatch.setattr(
+        sync_units.DispatchGuard,
+        "authorize_run",
+        lambda session, sync_run_id: GuardDecision(
+            False,
+            reason,
+            (str(stale_dispatching.id), str(running.id), str(planned.id)),
+        ),
+    )
+
+    def fail_queue(*_args, **_kwargs):
+        raise AssertionError("total-cap hard-deny must not queue run_sync_unit")
+
+    monkeypatch.setattr(sync_units.run_sync_unit, "s", fail_queue)
+
+    dispatch_result = sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(run)
+    db_session.refresh(stale_dispatching)
+    db_session.refresh(running)
+    db_session.refresh(planned)
+    assert dispatch_result == {
+        "status": "denied_active",
+        "reason": reason,
+        "failed_planned_units": 1,
+        "failed_stale_dispatching_units": 1,
+    }
+    assert stale_dispatching.status == SyncRunUnitStatus.FAILED.value
+    assert stale_dispatching.error == reason
+    assert stale_dispatching.result == {"error_category": "dispatch_denied"}
+    assert planned.status == SyncRunUnitStatus.FAILED.value
+    assert running.status == SyncRunUnitStatus.RUNNING.value
+    assert run.status not in {
+        SyncRunStatus.SUCCESS.value,
+        SyncRunStatus.PARTIAL_FAILED.value,
+        SyncRunStatus.FAILED.value,
+    }
+    assert run.completed_at is None
+    assert dispatch_calls == []
+    assert finalize_calls == [((str(run.id),), "sync")]
+    assert chord_calls == []
 
 
 def test_dispatch_sync_run_denies_inactive_migrated_child_config(

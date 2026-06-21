@@ -147,6 +147,9 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
             error = decision.reason or "sync dispatch denied"
             if _run_has_dispatching_or_running_units(session, run_uuid):
                 failed_planned = _fail_planned_units(session, run_uuid, error)
+                failed_stale_dispatching = _fail_stale_dispatching_units(
+                    session, run_uuid, error
+                )
                 session.flush()
                 logger.warning(
                     "dispatch_sync_run.denied_with_active_units",
@@ -154,8 +157,16 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                         "sync_run_id": sync_run_id,
                         "reason": error,
                         "failed_planned_units": failed_planned,
+                        "failed_stale_dispatching_units": failed_stale_dispatching,
                     },
                 )
+                _enqueue_denied_active_finalize(sync_run_id)
+                return {
+                    "status": "denied_active",
+                    "reason": error,
+                    "failed_planned_units": failed_planned,
+                    "failed_stale_dispatching_units": failed_stale_dispatching,
+                }
             else:
                 completed_at = datetime.now(timezone.utc)
                 run.status = SyncRunStatus.FAILED.value
@@ -209,6 +220,9 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
             error = "sync configuration is paused"
             if _run_has_dispatching_or_running_units(session, run_uuid):
                 failed_planned = _fail_planned_units(session, run_uuid, error)
+                failed_stale_dispatching = _fail_stale_dispatching_units(
+                    session, run_uuid, error
+                )
                 session.flush()
                 logger.warning(
                     "dispatch_sync_run.inactive_config_with_active_units",
@@ -216,8 +230,16 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                         "sync_run_id": sync_run_id,
                         "config_id": str(inactive_config.id),
                         "failed_planned_units": failed_planned,
+                        "failed_stale_dispatching_units": failed_stale_dispatching,
                     },
                 )
+                _enqueue_denied_active_finalize(sync_run_id)
+                return {
+                    "status": "denied_active",
+                    "reason": error,
+                    "failed_planned_units": failed_planned,
+                    "failed_stale_dispatching_units": failed_stale_dispatching,
+                }
             else:
                 completed_at = datetime.now(timezone.utc)
                 run.status = SyncRunStatus.FAILED.value
@@ -829,6 +851,40 @@ def _fail_planned_units(session, run_uuid: uuid.UUID, error: str) -> int:
         )
     )
     return int(result or 0)
+
+
+def _fail_stale_dispatching_units(session, run_uuid: uuid.UUID, error: str) -> int:
+    now = datetime.now(timezone.utc)
+    stale_dispatch_cutoff = now - timedelta(seconds=_stale_dispatch_seconds())
+    stale_units = (
+        session.query(SyncRunUnit)
+        .filter(
+            SyncRunUnit.sync_run_id == run_uuid,
+            SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value,
+        )
+        .all()
+    )
+    failed = 0
+    for unit in stale_units:
+        if _as_aware(unit.updated_at) > stale_dispatch_cutoff:
+            continue
+        unit.status = SyncRunUnitStatus.FAILED.value
+        unit.error = error
+        unit.result = {"error_category": "dispatch_denied"}
+        unit.updated_at = now
+        failed += 1
+    return failed
+
+
+def _enqueue_denied_active_finalize(sync_run_id: str) -> None:
+    try:
+        getattr(finalize_sync_run, "apply_async")(args=(sync_run_id,), queue="sync")
+    except Exception:
+        logger.exception(
+            "dispatch_sync_run.denied_active_finalize_enqueue_failed",
+            extra={"sync_run_id": sync_run_id},
+        )
+        raise
 
 
 def _claim_units(

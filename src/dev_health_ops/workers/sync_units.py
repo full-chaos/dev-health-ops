@@ -44,7 +44,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from celery import chord, group
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from dev_health_ops.models import (
@@ -335,6 +335,7 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
     should_finalize = False
     started_at = datetime.now(timezone.utc)
     lease_owner: str | None = None
+    terminal_txn_started = False
     heartbeat_stop: threading.Event | None = None
     heartbeat_thread: threading.Thread | None = None
     # Unit context fields for structured logging — populated once ctx is loaded.
@@ -342,6 +343,7 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
     try:
         with get_postgres_session_sync() as session:
             unit = _load_unit(session, unit_id)
+            sync_run_id = str(unit.sync_run_id)
             run = (
                 session.query(SyncRun)
                 .filter(SyncRun.id == unit.sync_run_id)
@@ -363,6 +365,7 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                 .where(
                     SyncRunUnit.id == unit.id,
                     SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value,
+                    SyncRunUnit.sync_run_id.in_(_nonterminal_run_ids_select()),
                 )
                 .values(
                     status=SyncRunUnitStatus.RUNNING.value,
@@ -371,6 +374,7 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     lease_owner=lease_owner,
                     lease_expires_at=lease_expires_at,
                     last_heartbeat_at=started_at,
+                    updated_at=started_at,
                 )
                 .execution_options(synchronize_session=False)
             )
@@ -381,8 +385,6 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     "reason": "not_dispatchable",
                 }
             session.flush()
-            session.refresh(unit)
-            should_finalize = True
 
         with get_postgres_session_sync() as session:
             ctx = SyncTaskBootstrap.load(session, unit_id)
@@ -406,35 +408,36 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
 
         completed_at = datetime.now(timezone.utc)
         duration_seconds = max(0, int((completed_at - started_at).total_seconds()))
+        terminal_txn_started = True
         with get_postgres_session_sync() as session:
-            unit = _load_unit(session, unit_id)
-            run = (
-                session.query(SyncRun)
-                .filter(SyncRun.id == unit.sync_run_id)
-                .one_or_none()
+            terminal_result: Any = session.execute(
+                update(SyncRunUnit)
+                .where(
+                    SyncRunUnit.id == uuid.UUID(str(unit_id)),
+                    SyncRunUnit.status == SyncRunUnitStatus.RUNNING.value,
+                    SyncRunUnit.lease_owner == lease_owner,
+                    SyncRunUnit.lease_expires_at.is_not(None),
+                    SyncRunUnit.lease_expires_at > completed_at,
+                    SyncRunUnit.sync_run_id.in_(_nonterminal_run_ids_select()),
+                )
+                .values(
+                    status=SyncRunUnitStatus.SUCCESS.value,
+                    duration_seconds=duration_seconds,
+                    result=dict(result or {}),
+                    error=None,
+                    lease_owner=None,
+                    lease_expires_at=None,
+                    last_heartbeat_at=completed_at,
+                    updated_at=completed_at,
+                )
+                .execution_options(synchronize_session=False)
             )
-            if unit.status in {
-                SyncRunUnitStatus.SUCCESS.value,
-                SyncRunUnitStatus.FAILED.value,
-            } or (run is not None and run.status in _TERMINAL_RUN_STATUSES):
-                return {
-                    "status": "skipped",
-                    "unit_id": unit_id,
-                    "reason": "terminal",
-                }
-            if not _unit_lease_is_owned_and_live(unit, lease_owner, completed_at):
+            if int(terminal_result.rowcount or 0) == 0:
                 return {
                     "status": "skipped",
                     "unit_id": unit_id,
                     "reason": "lease_lost",
                 }
-            unit.status = SyncRunUnitStatus.SUCCESS.value
-            unit.duration_seconds = duration_seconds
-            unit.result = dict(result or {})
-            unit.error = None
-            unit.lease_owner = None
-            unit.lease_expires_at = None
-            unit.last_heartbeat_at = completed_at
             if ctx.mode in {
                 SyncRunMode.INCREMENTAL.value,
                 SyncRunMode.FULL_RESYNC.value,  # full_resync stamps watermark on success
@@ -447,6 +450,8 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     started_at,
                 )
             session.flush()
+            should_finalize = True
+        terminal_txn_started = False
         logger.info(
             "run_sync_unit.success",
             extra={**_log_ctx, "duration_seconds": duration_seconds},
@@ -457,43 +462,44 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
             "duration_seconds": duration_seconds,
         }
     except Exception as exc:
+        if terminal_txn_started:
+            raise
         completed_at = datetime.now(timezone.utc)
         duration_seconds = max(0, int((completed_at - started_at).total_seconds()))
         error_category = _classify_error(exc)
+        terminal_txn_started = True
         with get_postgres_session_sync() as session:
-            unit = _load_unit(session, unit_id)
-            sync_run_id = str(unit.sync_run_id)
-            run = (
-                session.query(SyncRun)
-                .filter(SyncRun.id == unit.sync_run_id)
-                .one_or_none()
+            terminal_result = session.execute(
+                update(SyncRunUnit)
+                .where(
+                    SyncRunUnit.id == uuid.UUID(str(unit_id)),
+                    SyncRunUnit.status == SyncRunUnitStatus.RUNNING.value,
+                    SyncRunUnit.lease_owner == lease_owner,
+                    SyncRunUnit.lease_expires_at.is_not(None),
+                    SyncRunUnit.lease_expires_at > completed_at,
+                    SyncRunUnit.sync_run_id.in_(_nonterminal_run_ids_select()),
+                )
+                .values(
+                    status=SyncRunUnitStatus.FAILED.value,
+                    duration_seconds=duration_seconds,
+                    error=str(exc),
+                    result={"error_category": error_category},
+                    lease_owner=None,
+                    lease_expires_at=None,
+                    last_heartbeat_at=completed_at,
+                    updated_at=completed_at,
+                )
+                .execution_options(synchronize_session=False)
             )
-            if unit.status in {
-                SyncRunUnitStatus.SUCCESS.value,
-                SyncRunUnitStatus.FAILED.value,
-            } or (run is not None and run.status in _TERMINAL_RUN_STATUSES):
-                return {
-                    "status": "skipped",
-                    "unit_id": unit_id,
-                    "reason": "terminal",
-                }
-            if lease_owner is not None and not _unit_lease_is_owned_and_live(
-                unit, lease_owner, completed_at
-            ):
+            if int(terminal_result.rowcount or 0) == 0:
                 return {
                     "status": "skipped",
                     "unit_id": unit_id,
                     "reason": "lease_lost",
                 }
-            unit.status = SyncRunUnitStatus.FAILED.value
-            unit.duration_seconds = duration_seconds
-            unit.error = str(exc)
-            unit.result = {"error_category": error_category}
-            unit.lease_owner = None
-            unit.lease_expires_at = None
-            unit.last_heartbeat_at = completed_at
             session.flush()
             should_finalize = True
+        terminal_txn_started = False
         logger.exception(
             "run_sync_unit.failed",
             extra={
@@ -863,6 +869,10 @@ def _load_unit(session, unit_id: str) -> SyncRunUnit:
     return unit
 
 
+def _nonterminal_run_ids_select():
+    return select(SyncRun.id).where(SyncRun.status.not_in(_TERMINAL_RUN_STATUSES))
+
+
 def _aggregate_run_status(
     total_count: int, success_count: int, failed_count: int
 ) -> str:
@@ -949,13 +959,14 @@ def _heartbeat_unit_lease(
         lease_expires_at = now + timedelta(seconds=lease_seconds)
         try:
             with get_postgres_session_sync() as session:
-                session.execute(
+                heartbeat_result: Any = session.execute(
                     update(SyncRunUnit)
                     .where(
                         SyncRunUnit.id == uuid.UUID(str(unit_id)),
                         SyncRunUnit.status == SyncRunUnitStatus.RUNNING.value,
                         SyncRunUnit.lease_owner == lease_owner,
                         SyncRunUnit.lease_expires_at > now,
+                        SyncRunUnit.sync_run_id.in_(_nonterminal_run_ids_select()),
                     )
                     .values(
                         lease_expires_at=lease_expires_at,
@@ -963,6 +974,12 @@ def _heartbeat_unit_lease(
                     )
                     .execution_options(synchronize_session=False)
                 )
+                if int(heartbeat_result.rowcount or 0) == 0:
+                    logger.info(
+                        "run_sync_unit.heartbeat_lease_lost",
+                        extra={"unit_id": unit_id},
+                    )
+                    stop_event.set()
         except Exception:
             logger.exception(
                 "run_sync_unit.heartbeat_failed",

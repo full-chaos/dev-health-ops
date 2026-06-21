@@ -59,6 +59,43 @@ def _patch_db_session(monkeypatch, session):
     )
 
 
+@contextmanager
+def _new_session_ctx(engine):
+    with Session(engine) as session:
+        try:
+            yield session
+        except Exception:
+            session.rollback()
+            raise
+        else:
+            session.commit()
+
+
+def _patch_db_session_factory(monkeypatch, engine):
+    import dev_health_ops.db as db
+
+    monkeypatch.setattr(
+        db, "get_postgres_session_sync", lambda: _new_session_ctx(engine)
+    )
+
+
+def _file_backed_engine(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'sync-unit-race.db'}")
+    Base.metadata.create_all(engine)
+    return engine
+
+
+def _commit_reconciler_failure(engine, unit_id):
+    with Session(engine) as session:
+        unit = session.query(SyncRunUnit).filter(SyncRunUnit.id == unit_id).one()
+        unit.status = SyncRunUnitStatus.FAILED.value
+        unit.error = "sync unit lease expired"
+        unit.result = {"error_category": "worker_lost"}
+        unit.lease_owner = None
+        unit.lease_expires_at = None
+        session.commit()
+
+
 def _seed_run(session, *, mode=SyncRunMode.INCREMENTAL.value):
     org_id = str(uuid.uuid4())
     integration = Integration(
@@ -390,6 +427,53 @@ def test_heartbeat_extends_live_matching_lease(db_session, monkeypatch):
     assert _aware(last_heartbeat_at) > now
 
 
+def test_heartbeat_loses_after_reconciler_terminalizes(tmp_path, monkeypatch):
+    import threading
+
+    from dev_health_ops.workers import sync_units
+
+    engine = _file_backed_engine(tmp_path)
+    try:
+        with Session(engine) as seed_session:
+            _, unit = _seed_run(seed_session)
+            now = datetime.now(timezone.utc)
+            unit.status = SyncRunUnitStatus.RUNNING.value
+            unit.lease_owner = "worker-1"
+            unit.lease_expires_at = now + timedelta(seconds=30)
+            unit.last_heartbeat_at = now
+            unit_id = unit.id
+            seed_session.commit()
+        _commit_reconciler_failure(engine, unit_id)
+        _patch_db_session_factory(monkeypatch, engine)
+        monkeypatch.setattr(sync_units, "_heartbeat_interval_seconds", lambda: 1)
+        monkeypatch.setattr(sync_units, "_running_lease_seconds", lambda: 120)
+
+        class OneHeartbeatStop(threading.Event):
+            def __init__(self):
+                super().__init__()
+                self.calls = 0
+
+            def wait(self, timeout=None):
+                self.calls += 1
+                return self.calls > 1
+
+        sync_units._heartbeat_unit_lease(str(unit_id), "worker-1", OneHeartbeatStop())
+
+        with Session(engine) as assert_session:
+            unit = (
+                assert_session.query(SyncRunUnit)
+                .filter(SyncRunUnit.id == unit_id)
+                .one()
+            )
+            assert unit.status == SyncRunUnitStatus.FAILED.value
+            assert unit.error == "sync unit lease expired"
+            assert unit.result == {"error_category": "worker_lost"}
+            assert unit.lease_owner is None
+            assert unit.lease_expires_at is None
+    finally:
+        engine.dispose()
+
+
 def test_worker_success_after_reconciler_failed_does_not_overwrite_terminal(
     db_session, monkeypatch
 ):
@@ -420,12 +504,108 @@ def test_worker_success_after_reconciler_failed_does_not_overwrite_terminal(
     assert result == {
         "status": "skipped",
         "unit_id": str(unit.id),
-        "reason": "terminal",
+        "reason": "lease_lost",
     }
     assert unit.status == SyncRunUnitStatus.FAILED.value
     assert unit.error == "sync unit lease expired"
     assert unit.result == {"error_category": "worker_lost"}
-    assert finalize_calls == [((str(run.id),), "sync")]
+    assert finalize_calls == []
+
+
+def test_worker_success_cas_loses_to_reconciler_does_not_overwrite_failed(
+    tmp_path, monkeypatch
+):
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    engine = _file_backed_engine(tmp_path)
+    try:
+        with Session(engine) as seed_session:
+            run, unit = _seed_run(seed_session)
+            _mark_dispatching(seed_session, unit)
+            run_id = run.id
+            unit_id = unit.id
+            seed_session.commit()
+        _patch_db_session_factory(monkeypatch, engine)
+        _patch_runtime(monkeypatch)
+        finalize_calls = _patch_finalize_apply(monkeypatch)
+        monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+        monkeypatch.delenv("DATABASE_URI", raising=False)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+
+        def run_dataset(ctx, runtime):
+            _commit_reconciler_failure(engine, unit_id)
+            return {"ok": True}
+
+        monkeypatch.setattr(dataset_adapters, "run_dataset_unit", run_dataset)
+
+        result = getattr(run_sync_unit, "run")(str(unit_id))
+
+        with Session(engine) as assert_session:
+            unit = (
+                assert_session.query(SyncRunUnit)
+                .filter(SyncRunUnit.id == unit_id)
+                .one()
+            )
+            assert result == {
+                "status": "skipped",
+                "unit_id": str(unit_id),
+                "reason": "lease_lost",
+            }
+            assert unit.status == SyncRunUnitStatus.FAILED.value
+            assert unit.error == "sync unit lease expired"
+            assert unit.result == {"error_category": "worker_lost"}
+            assert unit.lease_owner is None
+            assert unit.lease_expires_at is None
+            assert assert_session.query(SyncWatermark).count() == 0
+            assert assert_session.get(SyncRun, run_id) is not None
+        assert finalize_calls == []
+    finally:
+        engine.dispose()
+
+
+def test_worker_failure_cas_loses_to_reconciler_does_not_overwrite_failed(
+    tmp_path, monkeypatch
+):
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    engine = _file_backed_engine(tmp_path)
+    try:
+        with Session(engine) as seed_session:
+            _, unit = _seed_run(seed_session)
+            _mark_dispatching(seed_session, unit)
+            unit_id = unit.id
+            seed_session.commit()
+        _patch_db_session_factory(monkeypatch, engine)
+        _patch_runtime(monkeypatch)
+        finalize_calls = _patch_finalize_apply(monkeypatch)
+
+        def run_dataset(ctx, runtime):
+            _commit_reconciler_failure(engine, unit_id)
+            raise RuntimeError("adapter failed after lease loss")
+
+        monkeypatch.setattr(dataset_adapters, "run_dataset_unit", run_dataset)
+
+        result = getattr(run_sync_unit, "run")(str(unit_id))
+
+        with Session(engine) as assert_session:
+            unit = (
+                assert_session.query(SyncRunUnit)
+                .filter(SyncRunUnit.id == unit_id)
+                .one()
+            )
+            assert result == {
+                "status": "skipped",
+                "unit_id": str(unit_id),
+                "reason": "lease_lost",
+            }
+            assert unit.status == SyncRunUnitStatus.FAILED.value
+            assert unit.error == "sync unit lease expired"
+            assert unit.result == {"error_category": "worker_lost"}
+        assert finalize_calls == []
+    finally:
+        engine.dispose()
 
 
 def test_run_sync_unit_bootstrap_failure_enqueues_finalize(db_session, monkeypatch):
@@ -490,6 +670,87 @@ def test_run_sync_unit_bootstrap_failure_survives_session_rollback(
     assert dispatch_calls == []
     assert finalize_calls == [((str(run.id),), "sync")]
     assert chord_calls == []
+
+
+def test_bootstrap_failure_cas_loses_to_reconciler(tmp_path, monkeypatch):
+    from dev_health_ops.workers.sync_bootstrap import SyncTaskBootstrap
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    engine = _file_backed_engine(tmp_path)
+    try:
+        with Session(engine) as seed_session:
+            _, unit = _seed_run(seed_session)
+            _mark_dispatching(seed_session, unit)
+            unit_id = unit.id
+            seed_session.commit()
+        _patch_db_session_factory(monkeypatch, engine)
+        dispatch_calls, finalize_calls, chord_calls = _patch_worker_enqueues(
+            monkeypatch
+        )
+
+        def fail_bootstrap(session, unit_id_arg):
+            assert unit_id_arg == str(unit_id)
+            _commit_reconciler_failure(engine, unit_id)
+            raise ValueError("missing source")
+
+        monkeypatch.setattr(SyncTaskBootstrap, "load", fail_bootstrap)
+
+        result = getattr(run_sync_unit, "run")(str(unit_id))
+
+        with Session(engine) as assert_session:
+            unit = (
+                assert_session.query(SyncRunUnit)
+                .filter(SyncRunUnit.id == unit_id)
+                .one()
+            )
+            assert result == {
+                "status": "skipped",
+                "unit_id": str(unit_id),
+                "reason": "lease_lost",
+            }
+            assert unit.status == SyncRunUnitStatus.FAILED.value
+            assert unit.error == "sync unit lease expired"
+            assert unit.result == {"error_category": "worker_lost"}
+        assert dispatch_calls == []
+        assert finalize_calls == []
+        assert chord_calls == []
+    finally:
+        engine.dispose()
+
+
+def test_success_cas_and_watermark_are_one_transaction(db_session, monkeypatch):
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    finalize_calls = _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        dataset_adapters, "run_dataset_unit", lambda ctx, runtime: {"ok": True}
+    )
+
+    def fail_watermark(*_args, **_kwargs):
+        raise RuntimeError("watermark store down")
+
+    monkeypatch.setattr(sync_units, "set_watermark", fail_watermark)
+
+    with pytest.raises(RuntimeError, match="watermark store down"):
+        getattr(sync_units.run_sync_unit, "run")(str(unit.id))
+
+    db_session.refresh(unit)
+    assert unit.status == SyncRunUnitStatus.RUNNING.value
+    assert unit.lease_owner is not None
+    assert unit.lease_expires_at is not None
+    assert unit.result is None
+    assert unit.error is None
+    assert db_session.query(SyncWatermark).count() == 0
+    assert finalize_calls == []
+    assert run.id == unit.sync_run_id
 
 
 def test_run_sync_unit_bootstrap_failure_skips_duplicate_live_running_lease(

@@ -144,20 +144,42 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
 
         # --- Total-cap hard-deny: whole run is over the org unit ceiling ---
         if not decision.allowed:
-            completed_at = datetime.now(timezone.utc)
-            run.status = SyncRunStatus.FAILED.value
-            run.completed_at = completed_at
-            run.error = decision.reason or "sync dispatch denied"
-            run.result = {"capped_unit_ids": list(decision.capped_unit_ids)}
-            session.flush()
+            error = decision.reason or "sync dispatch denied"
+            if _run_has_dispatching_or_running_units(session, run_uuid):
+                failed_planned = _fail_planned_units(session, run_uuid, error)
+                session.flush()
+                logger.warning(
+                    "dispatch_sync_run.denied_with_active_units",
+                    extra={
+                        "sync_run_id": sync_run_id,
+                        "reason": error,
+                        "failed_planned_units": failed_planned,
+                    },
+                )
+            else:
+                completed_at = datetime.now(timezone.utc)
+                run.status = SyncRunStatus.FAILED.value
+                run.completed_at = completed_at
+                run.error = error
+                run.result = {"capped_unit_ids": list(decision.capped_unit_ids)}
+                session.flush()
+                logger.warning(
+                    "dispatch_sync_run.denied",
+                    extra={
+                        "sync_run_id": sync_run_id,
+                        "reason": run.error,
+                    },
+                )
+                return {"status": "denied", "reason": run.error}
+
+        if not decision.allowed:
             logger.warning(
-                "dispatch_sync_run.denied",
+                "dispatch_sync_run.continuing_after_denial_for_active_units",
                 extra={
                     "sync_run_id": sync_run_id,
-                    "reason": run.error,
+                    "reason": decision.reason or "sync dispatch denied",
                 },
             )
-            return {"status": "denied", "reason": run.error}
 
         # --- Concurrency partial-cap: defer overflow units, proceed with rest ---
         capped_ids: frozenset[str] = frozenset()
@@ -184,40 +206,52 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                 inactive_child_configs[0] if inactive_child_configs else None
             )
         if inactive_config is not None:
-            completed_at = datetime.now(timezone.utc)
             error = "sync configuration is paused"
-            run.status = SyncRunStatus.FAILED.value
-            run.completed_at = completed_at
-            run.error = error
-            run.result = {"reason": "inactive_sync_configuration"}
-            session.query(SyncRunUnit).filter(
-                SyncRunUnit.sync_run_id == run_uuid,
-                SyncRunUnit.status == SyncRunUnitStatus.PLANNED.value,
-            ).update(
-                {
-                    SyncRunUnit.status: SyncRunUnitStatus.FAILED.value,
-                    SyncRunUnit.error: error,
-                    SyncRunUnit.updated_at: completed_at,
-                },
-                synchronize_session=False,
-            )
-            stamp_sync_run_canonical_config(
-                session,
-                run,
-                completed_at=completed_at,
-                success=False,
-                error=error,
-                stats={"reason": "inactive_sync_configuration"},
-            )
-            session.flush()
-            logger.warning(
-                "dispatch_sync_run.inactive_config",
-                extra={
-                    "sync_run_id": sync_run_id,
-                    "config_id": str(inactive_config.id),
-                },
-            )
-            return {"status": "denied", "reason": error}
+            if _run_has_dispatching_or_running_units(session, run_uuid):
+                failed_planned = _fail_planned_units(session, run_uuid, error)
+                session.flush()
+                logger.warning(
+                    "dispatch_sync_run.inactive_config_with_active_units",
+                    extra={
+                        "sync_run_id": sync_run_id,
+                        "config_id": str(inactive_config.id),
+                        "failed_planned_units": failed_planned,
+                    },
+                )
+            else:
+                completed_at = datetime.now(timezone.utc)
+                run.status = SyncRunStatus.FAILED.value
+                run.completed_at = completed_at
+                run.error = error
+                run.result = {"reason": "inactive_sync_configuration"}
+                session.query(SyncRunUnit).filter(
+                    SyncRunUnit.sync_run_id == run_uuid,
+                    SyncRunUnit.status == SyncRunUnitStatus.PLANNED.value,
+                ).update(
+                    {
+                        SyncRunUnit.status: SyncRunUnitStatus.FAILED.value,
+                        SyncRunUnit.error: error,
+                        SyncRunUnit.updated_at: completed_at,
+                    },
+                    synchronize_session=False,
+                )
+                stamp_sync_run_canonical_config(
+                    session,
+                    run,
+                    completed_at=completed_at,
+                    success=False,
+                    error=error,
+                    stats={"reason": "inactive_sync_configuration"},
+                )
+                session.flush()
+                logger.warning(
+                    "dispatch_sync_run.inactive_config",
+                    extra={
+                        "sync_run_id": sync_run_id,
+                        "config_id": str(inactive_config.id),
+                    },
+                )
+                return {"status": "denied", "reason": error}
 
         units = _claim_units(session, run_uuid, capped_ids=capped_ids)
         signatures = []
@@ -386,6 +420,8 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                 }
             session.flush()
 
+        heartbeat_stop, heartbeat_thread = _start_unit_heartbeat(unit_id, lease_owner)
+
         with get_postgres_session_sync() as session:
             ctx = SyncTaskBootstrap.load(session, unit_id)
             sync_run_id = ctx.sync_run_id
@@ -398,10 +434,31 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                 "provider": ctx.provider,
                 "cost_class": ctx.cost_class,
             }
+            now = datetime.now(timezone.utc)
+            live_lease_refresh: Any = session.execute(
+                update(SyncRunUnit)
+                .where(
+                    SyncRunUnit.id == uuid.UUID(str(unit_id)),
+                    SyncRunUnit.status == SyncRunUnitStatus.RUNNING.value,
+                    SyncRunUnit.lease_owner == lease_owner,
+                    SyncRunUnit.lease_expires_at.is_not(None),
+                    SyncRunUnit.lease_expires_at > now,
+                    SyncRunUnit.sync_run_id.in_(_nonterminal_run_ids_select()),
+                )
+                .values(
+                    lease_expires_at=now + timedelta(seconds=_running_lease_seconds()),
+                    last_heartbeat_at=now,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if int(live_lease_refresh.rowcount or 0) == 0:
+                return {
+                    "status": "skipped",
+                    "unit_id": unit_id,
+                    "reason": "lease_lost",
+                }
 
         logger.info("run_sync_unit.started", extra=_log_ctx)
-
-        heartbeat_stop, heartbeat_thread = _start_unit_heartbeat(unit_id, lease_owner)
 
         runtime = _runtime_cache.get(ctx)
         result = run_dataset_unit(ctx, runtime)
@@ -735,6 +792,43 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
         "failed_units": failed_count,
         "post_sync_targets": sorted(legacy_targets),
     }
+
+
+def _run_has_dispatching_or_running_units(session, run_uuid: uuid.UUID) -> bool:
+    return (
+        session.query(SyncRunUnit.id)
+        .filter(
+            SyncRunUnit.sync_run_id == run_uuid,
+            SyncRunUnit.status.in_(
+                {
+                    SyncRunUnitStatus.DISPATCHING.value,
+                    SyncRunUnitStatus.RUNNING.value,
+                }
+            ),
+        )
+        .first()
+        is not None
+    )
+
+
+def _fail_planned_units(session, run_uuid: uuid.UUID, error: str) -> int:
+    now = datetime.now(timezone.utc)
+    result = (
+        session.query(SyncRunUnit)
+        .filter(
+            SyncRunUnit.sync_run_id == run_uuid,
+            SyncRunUnit.status == SyncRunUnitStatus.PLANNED.value,
+        )
+        .update(
+            {
+                SyncRunUnit.status: SyncRunUnitStatus.FAILED.value,
+                SyncRunUnit.error: error,
+                SyncRunUnit.updated_at: now,
+            },
+            synchronize_session=False,
+        )
+    )
+    return int(result or 0)
 
 
 def _claim_units(

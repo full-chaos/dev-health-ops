@@ -225,7 +225,7 @@ def _patch_worker_enqueues(monkeypatch):
     monkeypatch.setattr(
         sync_units.dispatch_sync_run,
         "apply_async",
-        lambda args=None, queue=None: dispatch_calls.append((args, queue)),
+        lambda args=None, queue=None, **kwargs: dispatch_calls.append((args, queue)),
     )
     monkeypatch.setattr(
         sync_units.finalize_sync_run,
@@ -718,6 +718,76 @@ def test_bootstrap_failure_cas_loses_to_reconciler(tmp_path, monkeypatch):
         engine.dispose()
 
 
+def test_slow_bootstrap_loses_lease_before_provider_does_not_execute(
+    tmp_path, monkeypatch
+):
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers.sync_bootstrap import SyncTaskBootstrap
+
+    engine = _file_backed_engine(tmp_path)
+    try:
+        with Session(engine) as seed_session:
+            _, unit = _seed_run(seed_session)
+            _mark_dispatching(seed_session, unit)
+            unit_id = unit.id
+            seed_session.commit()
+        _patch_db_session_factory(monkeypatch, engine)
+        dispatch_calls, finalize_calls, chord_calls = _patch_worker_enqueues(
+            monkeypatch
+        )
+        heartbeat_started = []
+        original_load = SyncTaskBootstrap.load
+
+        def start_heartbeat(unit_id_arg, lease_owner):
+            heartbeat_started.append((unit_id_arg, lease_owner))
+            return None, None
+
+        monkeypatch.setattr(
+            sync_units,
+            "_start_unit_heartbeat",
+            start_heartbeat,
+        )
+
+        def load_then_lose_lease(session, unit_id_arg):
+            ctx = original_load(session, unit_id_arg)
+            session.commit()
+            _commit_reconciler_failure(engine, unit_id)
+            return ctx
+
+        def fail_if_provider_called(ctx, runtime):
+            raise AssertionError("provider work must not run after lease loss")
+
+        monkeypatch.setattr(SyncTaskBootstrap, "load", load_then_lose_lease)
+        monkeypatch.setattr(
+            dataset_adapters, "run_dataset_unit", fail_if_provider_called
+        )
+
+        result = getattr(sync_units.run_sync_unit, "run")(str(unit_id))
+
+        with Session(engine) as assert_session:
+            unit = (
+                assert_session.query(SyncRunUnit)
+                .filter(SyncRunUnit.id == unit_id)
+                .one()
+            )
+            assert result == {
+                "status": "skipped",
+                "unit_id": str(unit_id),
+                "reason": "lease_lost",
+            }
+            assert unit.status == SyncRunUnitStatus.FAILED.value
+            assert unit.error == "sync unit lease expired"
+            assert unit.result == {"error_category": "worker_lost"}
+            assert assert_session.query(SyncWatermark).count() == 0
+        assert heartbeat_started and heartbeat_started[0][0] == str(unit_id)
+        assert dispatch_calls == []
+        assert finalize_calls == []
+        assert chord_calls == []
+    finally:
+        engine.dispose()
+
+
 def test_success_cas_and_watermark_are_one_transaction(db_session, monkeypatch):
     from dev_health_ops.processors import dataset_adapters
     from dev_health_ops.workers import sync_units
@@ -1069,6 +1139,96 @@ def test_dispatch_sync_run_denies_inactive_planner_config(db_session, monkeypatc
     assert unit.error == "sync configuration is paused"
     assert config.last_sync_success is False
     assert config.last_sync_error == "sync configuration is paused"
+
+
+def test_paused_config_with_running_and_planned_units_does_not_strand(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler, sync_units
+
+    run, running = _seed_run(db_session)
+    now = datetime.now(timezone.utc)
+    running.status = SyncRunUnitStatus.RUNNING.value
+    running.attempts = 1
+    running.lease_owner = "worker-live"
+    running.lease_expires_at = now + timedelta(minutes=5)
+    running.last_heartbeat_at = now
+    planned = SyncRunUnit(
+        org_id=run.org_id,
+        sync_run_id=run.id,
+        integration_id=running.integration_id,
+        source_id=running.source_id,
+        provider="github",
+        dataset_key="prs",
+        cost_class="medium",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunUnitStatus.PLANNED.value,
+        attempts=0,
+        processor_flags={"sync_prs": True},
+    )
+    config = SyncConfiguration(
+        org_id=run.org_id,
+        name="paused-with-running",
+        provider="github",
+        sync_targets=["git", "prs"],
+        sync_options={},
+        migrated_integration_id=run.integration_id,
+        is_active=False,
+    )
+    run.status = SyncRunStatus.DISPATCHING.value
+    run.total_units = 2
+    db_session.add_all([planned, config])
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    dispatch_calls, finalize_calls, chord_calls = _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setattr(sync_units, "_dispatch_post_sync_tasks", lambda **kwargs: None)
+
+    dispatch_result = sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(run)
+    db_session.refresh(running)
+    db_session.refresh(planned)
+    db_session.refresh(config)
+    assert dispatch_result == {"status": "noop", "queued_units": 0}
+    assert run.status not in {
+        SyncRunStatus.SUCCESS.value,
+        SyncRunStatus.PARTIAL_FAILED.value,
+        SyncRunStatus.FAILED.value,
+    }
+    assert run.completed_at is None
+    assert config.last_sync_at is None
+    assert planned.status == SyncRunUnitStatus.FAILED.value
+    assert planned.error == "sync configuration is paused"
+    assert running.status == SyncRunUnitStatus.RUNNING.value
+    assert running.lease_owner == "worker-live"
+    assert dispatch_calls == [((str(run.id),), "sync")]
+    assert finalize_calls == []
+    assert chord_calls == []
+
+    running.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    db_session.flush()
+
+    reconcile_result = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    db_session.refresh(running)
+    assert reconcile_result["expired_units"] == 1
+    assert running.status == SyncRunUnitStatus.FAILED.value
+    assert finalize_calls == [((str(run.id),), "sync")]
+
+    finalize_result = sync_units.finalize_sync_run(str(run.id))
+
+    db_session.refresh(run)
+    units = (
+        db_session.query(SyncRunUnit).filter(SyncRunUnit.sync_run_id == run.id).all()
+    )
+    assert finalize_result["status"] == "finalized"
+    assert all(
+        unit.status in {SyncRunUnitStatus.SUCCESS.value, SyncRunUnitStatus.FAILED.value}
+        for unit in units
+    )
+    assert run.status == SyncRunStatus.FAILED.value
+    assert run.completed_at is not None
+    assert run.failed_units == 2
 
 
 def test_dispatch_sync_run_denies_inactive_migrated_child_config(

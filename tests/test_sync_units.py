@@ -114,6 +114,11 @@ def _seed_run(session, *, mode=SyncRunMode.INCREMENTAL.value):
     return run, unit
 
 
+def _mark_dispatching(session, unit):
+    unit.status = SyncRunUnitStatus.DISPATCHING.value
+    session.flush()
+
+
 def _seed_zero_unit_run(session):
     org_id = str(uuid.uuid4())
     integration = Integration(
@@ -170,6 +175,7 @@ def test_run_sync_unit_success_persists_status_and_incremental_watermark(
     from dev_health_ops.workers.sync_units import run_sync_unit
 
     run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
     _patch_db_session(monkeypatch, db_session)
     _patch_runtime(monkeypatch)
     finalize_calls = _patch_finalize_apply(monkeypatch)
@@ -204,6 +210,7 @@ def test_run_sync_unit_success_survives_finalize_enqueue_failure(
     from dev_health_ops.workers import sync_units
 
     run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
     _patch_db_session(monkeypatch, db_session)
     _patch_runtime(monkeypatch)
     monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
@@ -233,6 +240,7 @@ def test_run_sync_unit_success_skips_watermark_for_backfill(db_session, monkeypa
     from dev_health_ops.workers.sync_units import run_sync_unit
 
     run, unit = _seed_run(db_session, mode=SyncRunMode.BACKFILL.value)
+    _mark_dispatching(db_session, unit)
     _patch_db_session(monkeypatch, db_session)
     _patch_runtime(monkeypatch)
     finalize_calls = _patch_finalize_apply(monkeypatch)
@@ -257,6 +265,7 @@ def test_run_sync_unit_failure_persists_failed_and_error(db_session, monkeypatch
     from dev_health_ops.workers.sync_units import run_sync_unit
 
     run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
     _patch_db_session(monkeypatch, db_session)
     _patch_runtime(monkeypatch)
     finalize_calls = _patch_finalize_apply(monkeypatch)
@@ -287,6 +296,7 @@ def test_run_sync_unit_sets_and_clears_lease_around_provider_call(
     from dev_health_ops.workers.sync_units import run_sync_unit
 
     run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
     _patch_db_session(monkeypatch, db_session)
     _patch_runtime(monkeypatch)
     _patch_finalize_apply(monkeypatch)
@@ -318,6 +328,7 @@ def test_heartbeat_extends_live_matching_lease(db_session, monkeypatch):
     from dev_health_ops.workers import sync_units
 
     run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
     now = datetime.now(timezone.utc)
     unit.status = SyncRunUnitStatus.RUNNING.value
     unit.lease_owner = "worker-1"
@@ -355,6 +366,7 @@ def test_worker_success_after_reconciler_failed_does_not_overwrite_terminal(
     from dev_health_ops.workers.sync_units import run_sync_unit
 
     run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
     _patch_db_session(monkeypatch, db_session)
     _patch_runtime(monkeypatch)
     finalize_calls = _patch_finalize_apply(monkeypatch)
@@ -437,6 +449,41 @@ def test_run_sync_unit_skips_terminal_run_without_overwriting_unit(
     }
     assert unit.status == SyncRunUnitStatus.DISPATCHING.value
     assert unit.error == "broker down"
+    assert finalize_calls == []
+
+
+def test_run_sync_unit_skips_duplicate_delivery_with_live_running_lease(
+    db_session, monkeypatch
+):
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(db_session)
+    now = datetime.now(timezone.utc)
+    unit.status = SyncRunUnitStatus.RUNNING.value
+    unit.lease_owner = "worker-live"
+    unit.lease_expires_at = now + timedelta(minutes=10)
+    unit.last_heartbeat_at = now
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    finalize_calls = _patch_finalize_apply(monkeypatch)
+
+    def fail_if_called(ctx, runtime):
+        raise AssertionError("duplicate delivery must not execute provider work")
+
+    monkeypatch.setattr(dataset_adapters, "run_dataset_unit", fail_if_called)
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    db_session.refresh(unit)
+    assert result == {
+        "status": "skipped",
+        "unit_id": str(unit.id),
+        "reason": "not_dispatchable",
+    }
+    assert unit.status == SyncRunUnitStatus.RUNNING.value
+    assert unit.lease_owner == "worker-live"
     assert finalize_calls == []
 
 
@@ -860,6 +907,7 @@ def test_run_sync_unit_success_stamps_watermark_for_full_resync(
     from dev_health_ops.workers.sync_units import run_sync_unit
 
     run, unit = _seed_run(db_session, mode=SyncRunMode.FULL_RESYNC.value)
+    _mark_dispatching(db_session, unit)
     _patch_db_session(monkeypatch, db_session)
     _patch_runtime(monkeypatch)
     _patch_finalize_apply(monkeypatch)

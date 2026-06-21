@@ -294,3 +294,43 @@ def test_reconciler_retries_finalizable_run_after_enqueue_failure(
 
     assert second["finalizers_enqueued"] == 1
     assert finalizers == [((str(run.id),), "sync")]
+
+
+def test_reconciler_finalizable_scan_skips_older_nonfinalizable_runs(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler, sync_units
+
+    _, blocker_unit_one, _ = _seed_run(db_session, planned_units=0)
+    _, blocker_unit_two, _ = _seed_run(db_session, planned_units=0)
+    blocker_unit_one.lease_expires_at = datetime.now(timezone.utc) + timedelta(
+        minutes=5
+    )
+    blocker_unit_two.lease_expires_at = datetime.now(timezone.utc) + timedelta(
+        minutes=5
+    )
+    finalizable, final_unit, final_planned = _seed_run(db_session, planned_units=0)
+    final_unit.status = SyncRunUnitStatus.FAILED.value
+    final_unit.error = "sync unit lease expired"
+    final_unit.lease_owner = None
+    final_unit.lease_expires_at = None
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    dispatches = []
+    finalizers = []
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: dispatches.append((args, queue)),
+    )
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: finalizers.append((args, queue)),
+    )
+
+    result = sync_reconciler.reconcile_sync_dispatch(limit=1)
+
+    assert result["finalizers_enqueued"] == 1
+    assert finalizers == [((str(finalizable.id),), "sync")]
+    assert dispatches == []

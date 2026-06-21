@@ -360,13 +360,30 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                 }
             lease_owner = str(uuid.uuid4())
             lease_expires_at = started_at + timedelta(seconds=_running_lease_seconds())
-            unit.status = SyncRunUnitStatus.RUNNING.value
-            unit.attempts = int(unit.attempts or 0) + 1
-            unit.error = None
-            unit.lease_owner = lease_owner
-            unit.lease_expires_at = lease_expires_at
-            unit.last_heartbeat_at = started_at
+            claim_result: Any = session.execute(
+                update(SyncRunUnit)
+                .where(
+                    SyncRunUnit.id == unit.id,
+                    SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value,
+                )
+                .values(
+                    status=SyncRunUnitStatus.RUNNING.value,
+                    attempts=SyncRunUnit.attempts + 1,
+                    error=None,
+                    lease_owner=lease_owner,
+                    lease_expires_at=lease_expires_at,
+                    last_heartbeat_at=started_at,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if int(claim_result.rowcount or 0) == 0:
+                return {
+                    "status": "skipped",
+                    "unit_id": unit_id,
+                    "reason": "not_dispatchable",
+                }
             session.flush()
+            session.refresh(unit)
             should_finalize = True
             _log_ctx = {
                 "sync_run_id": ctx.sync_run_id,

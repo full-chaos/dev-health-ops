@@ -31,18 +31,22 @@ def upgrade() -> None:
         "sync_run_units",
         sa.Column("last_heartbeat_at", sa.DateTime(timezone=True), nullable=True),
     )
-    op.create_index(
-        "ix_sync_run_units_bucket_status_lease",
-        "sync_run_units",
-        ["org_id", "provider", "cost_class", "status", "lease_expires_at"],
-    )
+    with op.get_context().autocommit_block():
+        op.create_index(
+            "ix_sync_run_units_bucket_status_lease",
+            "sync_run_units",
+            ["org_id", "provider", "cost_class", "status", "lease_expires_at"],
+            postgresql_concurrently=True,
+        )
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "ix_sync_run_units_bucket_status_lease",
-        table_name="sync_run_units",
-    )
+    with op.get_context().autocommit_block():
+        op.drop_index(
+            "ix_sync_run_units_bucket_status_lease",
+            table_name="sync_run_units",
+            postgresql_concurrently=True,
+        )
     op.drop_column("sync_run_units", "last_heartbeat_at")
     op.drop_column("sync_run_units", "lease_expires_at")
     op.drop_column("sync_run_units", "lease_owner")

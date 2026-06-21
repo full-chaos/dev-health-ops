@@ -137,25 +137,33 @@ def _dispatchable_run_ids(
 
 
 def _finalizable_run_ids(session, limit: int) -> set[str]:
-    runs = (
-        session.query(SyncRun)
+    terminal_statuses = {
+        SyncRunUnitStatus.SUCCESS.value,
+        SyncRunUnitStatus.FAILED.value,
+    }
+    unit_exists = (
+        session.query(SyncRunUnit.id)
+        .filter(SyncRunUnit.sync_run_id == SyncRun.id)
+        .exists()
+    )
+    nonterminal_unit_exists = (
+        session.query(SyncRunUnit.id)
+        .filter(
+            SyncRunUnit.sync_run_id == SyncRun.id,
+            SyncRunUnit.status.not_in(terminal_statuses),
+        )
+        .exists()
+    )
+    rows = (
+        session.query(SyncRun.id)
         .filter(SyncRun.status.not_in(_TERMINAL_RUN_STATUSES))
+        .filter(unit_exists)
+        .filter(~nonterminal_unit_exists)
         .order_by(SyncRun.created_at.asc(), SyncRun.id.asc())
         .limit(max(1, int(limit)))
         .all()
     )
-    run_ids: set[str] = set()
-    for run in runs:
-        units = (
-            session.query(SyncRunUnit).filter(SyncRunUnit.sync_run_id == run.id).all()
-        )
-        if units and all(
-            unit.status
-            in {SyncRunUnitStatus.SUCCESS.value, SyncRunUnitStatus.FAILED.value}
-            for unit in units
-        ):
-            run_ids.add(str(run.id))
-    return run_ids
+    return {str(run_id) for (run_id,) in rows}
 
 
 def _enqueue_dispatches(task, run_ids: set[str]) -> int:

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -28,6 +29,7 @@ from dev_health_ops.models.integrations import (
     IntegrationDataset,
     IntegrationSource,
     SyncRun,
+    SyncRunStatus,
     SyncRunUnit,
 )
 from dev_health_ops.models.licensing import OrgLicense
@@ -690,8 +692,8 @@ async def test_planner_trigger_creates_jobrun_anchor_visible_in_jobs(
         job_run = await session.get(JobRun, uuid.UUID(job_run_id))
         assert job_run is not None, "trigger must create a JobRun anchor"
         assert job_run.triggered_by == "manual"
-        assert job_run.status == JobRunStatus.SUCCESS.value
-        assert job_run.completed_at is not None
+        assert job_run.status == JobRunStatus.PENDING.value
+        assert job_run.completed_at is None
         assert job_run.result == {
             "sync_run_id": sync_run_id,
             "dispatch_task_id": "task-real",
@@ -704,8 +706,75 @@ async def test_planner_trigger_creates_jobrun_anchor_visible_in_jobs(
     assert job_run_id in ids, f"planner JobRun anchor must appear in jobs: {ids}"
     surfaced = next(job for job in jobs if job["id"] == job_run_id)
     assert surfaced["triggered_by"] == "manual"
+    assert surfaced["status"] == "pending"
+    assert surfaced["started_at"] is None
+    assert surfaced["completed_at"] is None
+    assert surfaced["duration_seconds"] is None
+    assert surfaced["items_synced"] == 0
+    assert surfaced["result"]["sync_run_id"] == sync_run_id
+    assert surfaced["result"]["dispatch_task_id"] == "task-real"
+    assert surfaced["result"]["sync_run_status"] == SyncRunStatus.PLANNED.value
+    assert surfaced["result"]["total_units"] == run.total_units
+    assert surfaced["result"]["completed_units"] == 0
+    assert surfaced["result"]["failed_units"] == 0
+
+    started_at = datetime.now(timezone.utc) - timedelta(seconds=42)
+    async with session_maker() as session:
+        dispatching_run = await session.get(SyncRun, uuid.UUID(sync_run_id))
+        assert dispatching_run is not None
+        dispatching_run.status = SyncRunStatus.DISPATCHING.value
+        dispatching_run.started_at = started_at
+        await session.commit()
+
+    jobs_resp = await ac.get(f"/api/v1/admin/sync-configs/{config_id}/jobs")
+    assert jobs_resp.status_code == 200, jobs_resp.text
+    surfaced = next(job for job in jobs_resp.json() if job["id"] == job_run_id)
+    assert surfaced["status"] == "running"
+    assert surfaced["started_at"] is not None
+    assert surfaced["completed_at"] is None
+    assert surfaced["duration_seconds"] is None
+    assert surfaced["result"]["sync_run_status"] == SyncRunStatus.DISPATCHING.value
+
+    completed_at = datetime.now(timezone.utc)
+    async with session_maker() as session:
+        completed_run = await session.get(SyncRun, uuid.UUID(sync_run_id))
+        assert completed_run is not None
+        completed_run.status = SyncRunStatus.SUCCESS.value
+        completed_run.started_at = started_at
+        completed_run.completed_at = completed_at
+        completed_run.completed_units = 3
+        completed_run.failed_units = 0
+        completed_run.result = {"completed_units": 3, "failed_units": 0}
+        await session.commit()
+
+    jobs_resp = await ac.get(f"/api/v1/admin/sync-configs/{config_id}/jobs")
+    assert jobs_resp.status_code == 200, jobs_resp.text
+    surfaced = next(job for job in jobs_resp.json() if job["id"] == job_run_id)
     assert surfaced["status"] == "success"
-    assert surfaced["result"] == {
-        "sync_run_id": sync_run_id,
-        "dispatch_task_id": "task-real",
-    }
+    assert surfaced["started_at"] is not None
+    assert surfaced["completed_at"] is not None
+    assert surfaced["duration_seconds"] == 42
+    assert surfaced["items_synced"] == 3
+    assert surfaced["result"]["sync_run_status"] == SyncRunStatus.SUCCESS.value
+    assert surfaced["result"]["completed_units"] == 3
+    assert surfaced["result"]["failed_units"] == 0
+
+    async with session_maker() as session:
+        partial_run = await session.get(SyncRun, uuid.UUID(sync_run_id))
+        assert partial_run is not None
+        partial_run.status = SyncRunStatus.PARTIAL_FAILED.value
+        partial_run.completed_units = 1
+        partial_run.failed_units = 2
+        partial_run.error = "unit failure"
+        partial_run.result = {"completed_units": 999, "failed_units": 999}
+        await session.commit()
+
+    jobs_resp = await ac.get(f"/api/v1/admin/sync-configs/{config_id}/jobs")
+    assert jobs_resp.status_code == 200, jobs_resp.text
+    surfaced = next(job for job in jobs_resp.json() if job["id"] == job_run_id)
+    assert surfaced["status"] == "failed"
+    assert surfaced["error"] == "unit failure"
+    assert surfaced["items_synced"] == 1
+    assert surfaced["result"]["sync_run_status"] == SyncRunStatus.PARTIAL_FAILED.value
+    assert surfaced["result"]["completed_units"] == 1
+    assert surfaced["result"]["failed_units"] == 2

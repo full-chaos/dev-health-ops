@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Protocol, TypedDict, TypeVar, cast
+from typing import Any, NoReturn, Protocol, TypedDict, TypeVar, cast
 from urllib.parse import urlparse
 
 from dev_health_ops.connectors.exceptions import (
@@ -329,13 +329,18 @@ class GitHubWorkClient:
 
     def get_repo(self, *, owner: str, repo: str) -> Any:
         operation = f"GET /repos/{owner}/{repo}"
+        return self._call_github(
+            operation, lambda: self.github.get_repo(f"{owner}/{repo}")
+        )
+
+    def _call_github(self, operation: str, call: Callable[[], _TItem]) -> _TItem:
         with gate_call(self.gate):
             try:
-                return self.github.get_repo(f"{owner}/{repo}")
+                return call()
             except Exception as exc:
                 self._raise_github_exception(exc, operation=operation)
 
-    def _raise_github_exception(self, exc: Exception, *, operation: str) -> None:
+    def _raise_github_exception(self, exc: Exception, *, operation: str) -> NoReturn:
         from github import GithubException, RateLimitExceededException
 
         if isinstance(exc, (APIException, AuthenticationException, NotFoundException)):
@@ -427,6 +432,20 @@ class GitHubWorkClient:
             if limit is not None and count >= int(limit):
                 return
 
+    def _iter_github_items(
+        self,
+        source: Iterable[_TItem],
+        *,
+        operation: str,
+        limit: int | None,
+        skip: Callable[[_TItem], bool] | None = None,
+    ) -> Iterable[_TItem]:
+        with gate_call(self.gate):
+            try:
+                yield from self._iter_with_limit(source, limit=limit, skip=skip)
+            except Exception as exc:
+                self._raise_github_exception(exc, operation=operation)
+
     def iter_issues(
         self,
         *,
@@ -437,10 +456,13 @@ class GitHubWorkClient:
         limit: int | None = None,
     ) -> Iterable[_GitHubIssueLike]:
         gh_repo = self.get_repo(owner=owner, repo=repo)
-        with gate_call(self.gate):
-            issues = gh_repo.get_issues(state=state, since=since)
-        yield from self._iter_with_limit(
+        operation = f"GET /repos/{owner}/{repo}/issues"
+        issues = self._call_github(
+            operation, lambda: gh_repo.get_issues(state=state, since=since)
+        )
+        yield from self._iter_github_items(
             issues,
+            operation=operation,
             limit=limit,
             skip=lambda issue: getattr(issue, "pull_request", None) is not None,
         )
@@ -457,16 +479,18 @@ class GitHubWorkClient:
         Accepts both Issues and PullRequests: PyGithub's Issue exposes the
         endpoint as get_events(), PullRequest as get_issue_events().
         """
+        issue_number = getattr(issue, "number", "?")
+        operation = f"GET issue events for #{issue_number}"
         get_events = getattr(issue, "get_events", None)
         if callable(get_events):
-            with gate_call(self.gate):
-                events = get_events()
+            events = self._call_github(operation, get_events)
         else:
             get_issue_events = getattr(issue, "get_issue_events")
-            with gate_call(self.gate):
-                events = get_issue_events()
-        yield from self._iter_with_limit(
-            cast(Iterable[_GitHubEventLike], events), limit=limit
+            events = self._call_github(operation, get_issue_events)
+        yield from self._iter_github_items(
+            cast(Iterable[_GitHubEventLike], events),
+            operation=operation,
+            limit=limit,
         )
 
     def iter_pull_requests(
@@ -483,9 +507,12 @@ class GitHubWorkClient:
         Iterate pull requests in a repository via REST.
         """
         gh_repo = self.get_repo(owner=owner, repo=repo)
-        with gate_call(self.gate):
-            pulls = gh_repo.get_pulls(state=state, sort=sort, direction=direction)
-        yield from self._iter_with_limit(pulls, limit=limit)
+        operation = f"GET /repos/{owner}/{repo}/pulls"
+        pulls = self._call_github(
+            operation,
+            lambda: gh_repo.get_pulls(state=state, sort=sort, direction=direction),
+        )
+        yield from self._iter_github_items(pulls, operation=operation, limit=limit)
 
     def iter_issue_comments(
         self, issue: _GitHubIssueBaseLike, *, limit: int | None = None
@@ -493,9 +520,10 @@ class GitHubWorkClient:
         """
         Iterate comments on an issue via REST.
         """
-        with gate_call(self.gate):
-            comments = issue.get_comments()
-        yield from self._iter_with_limit(comments, limit=limit)
+        issue_number = getattr(issue, "number", "?")
+        operation = f"GET issue comments for #{issue_number}"
+        comments = self._call_github(operation, issue.get_comments)
+        yield from self._iter_github_items(comments, operation=operation, limit=limit)
 
     def iter_pr_comments(
         self, pr: _GitHubPullRequestLike, *, limit: int | None = None
@@ -512,9 +540,10 @@ class GitHubWorkClient:
         """
         Iterate review comments on a pull request.
         """
-        with gate_call(self.gate):
-            comments = pr.get_review_comments()
-        yield from self._iter_with_limit(comments, limit=limit)
+        pr_number = getattr(pr, "number", "?")
+        operation = f"GET pull request review comments for #{pr_number}"
+        comments = self._call_github(operation, pr.get_review_comments)
+        yield from self._iter_github_items(comments, operation=operation, limit=limit)
 
     def iter_pr_social_data_batch(
         self,
@@ -894,9 +923,11 @@ class GitHubWorkClient:
         Iterate milestones in a repository via REST.
         """
         gh_repo = self.get_repo(owner=owner, repo=repo)
-        with gate_call(self.gate):
-            milestones = gh_repo.get_milestones(state=state)
-        yield from self._iter_with_limit(milestones, limit=limit)
+        operation = f"GET /repos/{owner}/{repo}/milestones"
+        milestones = self._call_github(
+            operation, lambda: gh_repo.get_milestones(state=state)
+        )
+        yield from self._iter_github_items(milestones, operation=operation, limit=limit)
 
     def iter_project_v2_items(
         self,

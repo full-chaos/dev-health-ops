@@ -31,6 +31,7 @@ from dev_health_ops.metrics.schemas import (
     InvestmentMetricsRecord,
     IssueTypeMetricsRecord,
     LLMTokenUsageRecord,
+    ManualAttributionFallbackRecord,
     MemberRecord,
     ProjectRecord,
     ReleaseImpactDailyRecord,
@@ -477,6 +478,11 @@ class BaseMetricsSink(ABC):
 
     def write_work_item_team_attributions(
         self, rows: Sequence[WorkItemTeamAttributionRecord]
+    ) -> None:
+        pass
+
+    def write_manual_attribution_fallbacks(
+        self, rows: Sequence[ManualAttributionFallbackRecord]
     ) -> None:
         pass
 

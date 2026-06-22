@@ -21,6 +21,7 @@ from typing import Any
 import clickhouse_connect
 
 from dev_health_ops.metrics.schemas import (
+    ManualAttributionFallbackRecord,
     MemberRecord,
     ProjectRecord,
     TeamMembershipRecord,
@@ -323,6 +324,60 @@ class ClickHouseCore(BaseMetricsSink):
             matrix = [[row[col] for col in column_names] for row in chunk]
             self.client.insert(
                 "work_item_team_attributions", matrix, column_names=column_names
+            )
+
+    def write_manual_attribution_fallbacks(
+        self, rows: Sequence[ManualAttributionFallbackRecord]
+    ) -> None:
+        if not rows:
+            return
+        org_id = getattr(self, "org_id", None) or ""
+        column_names = [
+            "org_id",
+            "provider",
+            "scope_type",
+            "scope_id",
+            "team_id",
+            "team_name",
+            "reason",
+            "priority",
+            "valid_from",
+            "valid_to",
+            "created_by",
+            "created_at",
+            "updated_at",
+        ]
+        data = []
+        for row in rows:
+            updated_at = _dt_to_clickhouse_datetime(row.updated_at)
+            data.append(
+                {
+                    "org_id": row.org_id or org_id,
+                    "provider": row.provider,
+                    "scope_type": row.scope_type,
+                    "scope_id": row.scope_id,
+                    "team_id": row.team_id,
+                    "team_name": row.team_name,
+                    "reason": row.reason,
+                    "priority": row.priority,
+                    # non-nullable DB columns fall back to updated_at when unset
+                    "valid_from": _dt_to_clickhouse_datetime(row.valid_from)
+                    if row.valid_from
+                    else updated_at,
+                    "valid_to": _dt_to_clickhouse_datetime(row.valid_to)
+                    if row.valid_to
+                    else None,
+                    "created_by": row.created_by,
+                    "created_at": _dt_to_clickhouse_datetime(row.created_at)
+                    if row.created_at
+                    else updated_at,
+                    "updated_at": updated_at,
+                }
+            )
+        for chunk in _chunked(data, DEFAULT_BATCH_SIZE):
+            matrix = [[row[col] for col in column_names] for row in chunk]
+            self.client.insert(
+                "manual_attribution_fallbacks", matrix, column_names=column_names
             )
 
     def _apply_sql_migrations(self) -> None:

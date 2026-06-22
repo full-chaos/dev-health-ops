@@ -30,10 +30,8 @@ from dev_health_ops.workers.sync_runtime import (
 from dev_health_ops.workers.sync_scheduler import dispatch_scheduled_syncs
 from dev_health_ops.workers.sync_tasks import (
     dispatch_batch_sync,
-    reconcile_team_members,
     run_backfill,
     run_work_items_sync,
-    sync_team_drift,
 )
 from dev_health_ops.workers.sync_units import (
     dispatch_sync_run,
@@ -88,7 +86,6 @@ __all__ = [
     "phone_home_heartbeat",
     "process_webhook_event",
     "reconcile_sync_dispatch",
-    "reconcile_team_members",
     "dispatch_membership_backfill",
     "run_backfill",
     "run_capacity_forecast_job",
@@ -111,5 +108,4 @@ __all__ = [
     "run_work_graph_build",
     "run_work_items_sync",
     "send_billing_notification",
-    "sync_team_drift",
 ]

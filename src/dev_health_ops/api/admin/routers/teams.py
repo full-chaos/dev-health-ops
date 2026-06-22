@@ -329,17 +329,25 @@ async def import_teams(
     return TeamImportResponse(**result)
 
 
-# --- Team drift review (CHAOS-2600 CS5) ---------------------------------
-# The team drift-review surface (pending/approve/dismiss/trigger) was built on
-# the Postgres ``TeamMapping`` flagged-changes machinery. CS5 makes ClickHouse
-# the team system of record and removes the Postgres team catalog, so there is
-# no ``TeamMapping`` drift state to surface or mutate. These endpoints are
-# explicitly disabled (HTTP 501) rather than returning fake success; the
-# ClickHouse-backed rebuild lands in CS6.
+# --- Team drift review -----------------------------------------------------
+# The drift-review surface was built on the Postgres ``TeamMapping``
+# flagged-changes machinery, which was removed when ClickHouse became the team
+# system of record (CHAOS-2600). The backing service + Postgres tables are gone
+# (CS6), so these endpoints are disabled (HTTP 501) rather than returning fake
+# success; a ClickHouse-backed rebuild is tracked by CHAOS-2622. They remain as
+# pure 501 stubs (no deleted PG code) so the dev-health-web admin keeps getting a
+# clean 501 instead of a bogus 404 from the ``/teams/{team_id}`` fallthrough;
+# the endpoints + their web caller are removed together in CS7.
+#
+# ROUTING: the static paths (``/teams/pending-changes``,
+# ``/teams/trigger-drift-sync``) are declared BEFORE the ``/teams/{team_id}``
+# path-param route so FastAPI matches them rather than treating the literal as a
+# team id.
 
 _DRIFT_DISABLED_DETAIL = (
-    "Team drift review is disabled in CHAOS-2600 CS5; "
-    "the ClickHouse-backed rebuild lands in CS6"
+    "Team drift review is disabled; the Postgres flagged-changes machinery was "
+    "removed in CHAOS-2600 CS6. A ClickHouse-backed rebuild is tracked by "
+    "CHAOS-2622."
 )
 
 

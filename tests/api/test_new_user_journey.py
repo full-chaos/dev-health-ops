@@ -20,12 +20,10 @@ from dev_health_ops.models.email_verification_token import EmailVerificationToke
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.licensing import OrgLicense, TierLimit
 from dev_health_ops.models.settings import (
-    IdentityMapping,
     IntegrationCredential,
     JobRun,
     ScheduledJob,
     SyncConfiguration,
-    TeamMapping,
 )
 from dev_health_ops.models.users import LoginAttempt, Membership, Organization, User
 from tests._clickhouse_team_store import FakeClickHouseTeamStore
@@ -47,8 +45,6 @@ _TABLES = tables_of(
     SyncConfiguration,
     ScheduledJob,
     JobRun,
-    IdentityMapping,
-    TeamMapping,
     OrgLicense,
     TierLimit,
 )

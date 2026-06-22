@@ -30,7 +30,6 @@ from ._helpers import (
     _normalize_credential_keys,
 )
 from .generic import SettingsService
-from .identity_mapping import IdentityMappingService
 from .integration_credentials import (
     AmbiguousCredentialError,
     IntegrationCredentialsService,
@@ -38,21 +37,16 @@ from .integration_credentials import (
 from .jira_activity_inference import JiraActivityInferenceService
 from .sync_configuration import SyncConfigurationService
 from .team_discovery import GitLabDiscoveryResult, TeamDiscoveryService
-from .team_drift_sync import TeamDriftSyncService
-from .team_mapping import TeamMappingService
 from .team_membership import TeamMembershipService
 
 __all__ = [
     "AmbiguousCredentialError",
-    "IdentityMappingService",
     "IntegrationCredentialsService",
     "JiraActivityInferenceService",
     "SettingsService",
     "SyncConfigurationService",
     "GitLabDiscoveryResult",
     "TeamDiscoveryService",
-    "TeamDriftSyncService",
-    "TeamMappingService",
     "TeamMembershipService",
     "decrypt_value",
     "encrypt_value",

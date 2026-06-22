@@ -24,7 +24,7 @@ The org-scoped CLI path reads this registry to log whether a provider is registe
 
 ## Admin team/identity configuration
 
-The admin team and identity surface is ClickHouse-native (CHAOS-2600 CS5): admin team CRUD writes the ClickHouse `teams` table, and identity→team membership is stored in the ClickHouse `identities` table with surgical `teams.members` updates. Admin curation (such as `project_keys` and `repo_patterns`) lives in ClickHouse; no Postgres `team_mappings` / `IdentityMapping` rows are written. The Postgres-`team_mappings` drift-review/`sync_policy` flow is disabled in CS5 (the drift-review endpoints return HTTP 501) pending a ClickHouse-backed rebuild in CS6.
+The admin team and identity surface is ClickHouse-native (CHAOS-2600 CS5): admin team CRUD writes the ClickHouse `teams` table, and identity→team membership is stored in the ClickHouse `identities` table with surgical `teams.members` updates. Admin curation (such as `project_keys` and `repo_patterns`) lives in ClickHouse; no Postgres `team_mappings` / `IdentityMapping` rows are written. The Postgres-`team_mappings` drift-review/`sync_policy` flow is disabled (the drift-review endpoints return HTTP 501). CS6 (CHAOS-2607) deleted the Postgres drift engine; the four 501 stubs remain until CS7 removes them together with the web admin caller (CHAOS-2608), and a ClickHouse-backed rebuild is tracked by CHAOS-2622.
 
 ## Recommended path
 

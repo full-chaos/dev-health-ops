@@ -20,10 +20,10 @@ Dev Health Ops uses a dual-database architecture separating **semantic** (operat
 │   │ • Credentials       │       │ • Deployments       │            │
 │   │ • Sync Configs      │       │ • Incidents         │            │
 │   │ • Alembic Migrations│       │ • Teams + Identities│            │
-│   │ • team_mappings     │       │ • Team ownership    │            │
-│   │   (DEAD, drop CS6)  │       │   dimensions        │            │
-│   │ • identity_mappings │       │ • Daily/DORA Metrics│            │
-│   │   (DEAD, drop CS6)  │       │ • Complexity Data   │            │
+│   │                     │       │ • Team ownership    │            │
+│   │                     │       │   dimensions        │            │
+│   │                     │       │ • Daily/DORA Metrics│            │
+│   │                     │       │ • Complexity Data   │            │
 │   └─────────────────────┘       └─────────────────────┘            │
 │                                                                     │
 └────────────────────────────────────────────────────────────────────┘
@@ -32,9 +32,8 @@ Dev Health Ops uses a dual-database architecture separating **semantic** (operat
 > **Teams & identities live in ClickHouse (CHAOS-2600 CS5).** The team catalog
 > (`teams`), team→repo/project ownership dimensions, and identity→team
 > membership (`identities`) are ClickHouse-resolved at query time. The Postgres
-> `team_mappings` / `identity_mappings` tables are **dead remnants** with no live
-> reader or writer, dropped in CS6 — they are shown above only to mark them as
-> legacy.
+> `team_mappings` / `identity_mappings` tables were **dropped in CS6** (CHAOS-2607);
+> ClickHouse is the sole system of record.
 
 ## Analytics Backend Requirement
 
@@ -61,7 +60,7 @@ SQLite via `aiosqlite` remains allowed only for test fixtures and local-only eph
 |---------|---------|-------|
 | User management | PostgreSQL | Semantic layer |
 | Organization settings | PostgreSQL | Semantic layer |
-| Team & identity mapping (`teams`, `identities`) | ClickHouse | System of record as of CS5 (CHAOS-2606). The Postgres `team_mappings`/`identity_mappings` tables are dead remnants with no live writer, dropped in CS6. |
+| Team & identity mapping (`teams`, `identities`) | ClickHouse | System of record as of CS5 (CHAOS-2606). The Postgres `team_mappings`/`identity_mappings` tables were dropped in CS6 (CHAOS-2607). |
 | Authentication | PostgreSQL | Semantic layer |
 
 ## Environment Variables
@@ -99,8 +98,6 @@ Stores operational data that requires:
 | `settings` | Org-scoped configuration |
 | `integration_credentials` | Encrypted provider credentials |
 | `sync_configurations` | Data sync job configs |
-| `identity_mappings` _(legacy)_ | **Dead remnant** — superseded by the ClickHouse `identities` table in CS5 (CHAOS-2606); no live reader/writer; dropped in CS6. |
-| `team_mappings` _(legacy)_ | **Dead remnant** — superseded by the ClickHouse `teams` table in CS5 (CHAOS-2606); no live reader/writer; dropped in CS6. |
 
 ### ClickHouse (Analytics Layer)
 
@@ -161,7 +158,7 @@ As of CHAOS-2600 CS5, **ClickHouse is the system of record for teams**. Both rou
 - The org-scoped path opens a `ClickHouseStore`, sets `store.org_id`, tags each team with the org id, and calls `insert_teams` — mirroring the no-org path with the org tag added. It does **not** project to PostgreSQL `team_mappings` and does **not** call any Postgres→ClickHouse bridge.
 - A ClickHouse write failure is fatal (exit 1) so callers cannot report a successful sync when analytics has not been updated.
 
-> **Removed in CS5 (CHAOS-2606):** `bridge_teams_to_clickhouse` + `providers/team_bridge.py`, `providers/team_reconcile.py` + the `dev-hops teams reconcile` command, and the `sync_teams_to_analytics` task are **deleted**. The org-scoped path no longer projects to Postgres via `TeamDriftSyncService`. The Postgres `team_mappings` / `identity_mappings` models and the `TeamMappingService` / `TeamDriftSyncService` classes are dropped in **CS6**.
+> **Removed in CS5 (CHAOS-2606):** `bridge_teams_to_clickhouse` + `providers/team_bridge.py`, `providers/team_reconcile.py` + the `dev-hops teams reconcile` command, and the `sync_teams_to_analytics` task are **deleted**. The org-scoped path no longer projects to Postgres. **Removed in CS6 (CHAOS-2607):** the Postgres `team_mappings` / `identity_mappings` models + tables (Alembic `0020`), the `TeamMappingService` / `IdentityMappingService` / `TeamDriftSyncService` classes, the `sync-team-drift` / `reconcile-team-members` tasks, and the Postgres-backed drift engine are **deleted** (the four admin drift-review endpoints remain as HTTP 501 stubs until CS7 removes them with the web caller — CHAOS-2608; a ClickHouse-backed drift-review rebuild is tracked by CHAOS-2622).
 
 #### Team Sync Architecture Diagram (CS5)
 
@@ -175,11 +172,11 @@ graph TD
     Admin -->|surgical team.members updates| CHI[(ClickHouse: identities)]
     AutoImport[Celery: team auto-import] -->|native CH writers| CH
 
-    subgraph "Removed in CS5 (dropped in CS6)"
-        Bridge[bridge_teams_to_clickhouse - DELETED]
-        Reconcile[CLI teams reconcile - DELETED]
-        Drift[sync-team-drift / reconcile-team-members beats - REMOVED, tasks no-op]
-        PG[(PostgreSQL team_mappings / IdentityMapping - dead until CS6)]
+    subgraph "Removed (CS5 + CS6)"
+        Bridge[bridge_teams_to_clickhouse - DELETED CS5]
+        Reconcile[CLI teams reconcile - DELETED CS5]
+        Drift[sync-team-drift / reconcile-team-members tasks - DELETED CS6]
+        PG[(PostgreSQL team_mappings / identity_mappings - DROPPED CS6)]
     end
 ```
 ## API Service Routing

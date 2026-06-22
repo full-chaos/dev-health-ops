@@ -79,7 +79,7 @@ All relational metadata scoped to the organization is explicitly deleted from th
 2. **Schedules and Configurations**: `ScheduledJob` (linked to `SyncConfiguration`), `SyncConfiguration`.
 3. **Reports**: `ReportRun` (linked to `SavedReport`), `SavedReport`.
 4. **Billing and Subscriptions**: `Refund` (linked to `Invoice`/`Subscription`), `InvoiceLineItem` (linked to `Invoice`), `Invoice`, `SubscriptionEvent` (linked to `Subscription`), `Subscription`.
-5. **Access and Identity**: `Membership`, `OrgInvite`, `RefreshToken`, `ImpersonationSession` (target_org_id), and the legacy `IdentityMapping` / `TeamMapping` tables. *(As of CHAOS-2600 CS5 the live team catalog and identity→team membership are ClickHouse-resolved — `IdentityMapping` / `TeamMapping` are dead remnants dropped in CS6; they are still purged here while the tables exist.)*
+5. **Access and Identity**: `Membership`, `OrgInvite`, `RefreshToken`, `ImpersonationSession` (target_org_id). *(The legacy Postgres `IdentityMapping` / `TeamMapping` tables were dropped in CHAOS-2600 CS6 (Alembic `0020`) and org_deletion no longer has Postgres purge targets for them — the team catalog and identity→team membership are ClickHouse-resolved and purged in Phase 4.)*
 6. **Core Organization**: `Organization`, `Setting`, `OrgRetentionPolicy`, `MetricCheckpoint`, `Team`, `AuditLog`, `BillingAuditLog`, `SSOProvider`, `OrgIPAllowlist`, `OrgFeatureOverride`, `OrgLicense`.
 
 *Note: Certain billing and audit logs may be subject to regulatory retention requirements and are handled in accordance with the platform's compliance policies.*

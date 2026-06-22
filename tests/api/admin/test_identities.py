@@ -8,12 +8,10 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.git import Base
-from dev_health_ops.models.settings import IdentityMapping
 from dev_health_ops.models.users import Membership, Organization, User
 from tests._clickhouse_team_store import FakeClickHouseTeamStore
 from tests._helpers import tables_of
@@ -35,7 +33,7 @@ async def session_maker(tmp_path: Path):
         await conn.run_sync(
             lambda sync_conn: Base.metadata.create_all(
                 sync_conn,
-                tables=tables_of(User, Organization, Membership, IdentityMapping),
+                tables=tables_of(User, Organization, Membership),
             )
         )
 
@@ -48,9 +46,9 @@ async def session_maker(tmp_path: Path):
 
 @pytest_asyncio.fixture
 async def client(session_maker):
-    # CHAOS-2600 CS5: identity *reads* (list) stay on Postgres, but identity
-    # *mutations* reflect membership into the ClickHouse team catalog rather
-    # than writing Postgres IdentityMapping rows.
+    # ClickHouse is the system of record for identities (CHAOS-2600 CS5/CS6):
+    # both reads and mutations go through the ClickHouse-native catalog; the
+    # Postgres IdentityMapping table was dropped in CS6.
     ch_store = FakeClickHouseTeamStore()
     app = FastAPI()
     app.include_router(admin_router_module.router)
@@ -160,9 +158,10 @@ async def test_create_identity_returns_response_shape(client):
 
 @pytest.mark.asyncio
 async def test_create_identity_reflects_membership_into_clickhouse(client):
-    # CHAOS-2600 CS5: an identity linked to a team unions its facets into the
-    # ClickHouse team's members; no Postgres IdentityMapping row is written.
-    async_client, session_maker, ch_store = client
+    # CHAOS-2600 CS5/CS6: an identity linked to a team unions its facets into the
+    # ClickHouse team's members and persists to the ClickHouse `identities`
+    # table; there is no Postgres IdentityMapping table anymore.
+    async_client, _session_maker, ch_store = client
     await _seed_ch_team(ch_store, "platform")
     payload = {
         "canonical_id": "bob@example.com",
@@ -177,21 +176,14 @@ async def test_create_identity_reflects_membership_into_clickhouse(client):
     row = ch_store.rows[(ORG_ID, "platform")]
     assert set(row["members"]) == {"bob@example.com", "bob-jira-id"}
 
-    # No Postgres IdentityMapping row was written.
-    async with session_maker() as session:
-        result = await session.execute(
-            select(IdentityMapping).where(
-                IdentityMapping.canonical_id == "bob@example.com",
-                IdentityMapping.org_id == ORG_ID,
-            )
-        )
-        assert result.scalar_one_or_none() is None
+    # The identity is persisted to the ClickHouse-native catalog, not Postgres.
+    assert (ORG_ID, "bob@example.com") in ch_store.identities
 
 
 @pytest.mark.asyncio
 async def test_create_identity_unknown_team_id_404_writes_nothing(client):
-    # CHAOS-2600 CS5: with no Postgres IdentityMapping fallback, an unknown
-    # team_id must 404 rather than silently dropping the membership write.
+    # CHAOS-2600 CS5/CS6: with ClickHouse the sole identity system of record, an
+    # unknown team_id must 404 rather than silently dropping the membership write.
     async_client, _, ch_store = client
     response = await async_client.post(
         "/api/v1/admin/identities",

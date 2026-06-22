@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
@@ -10,8 +11,11 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from dev_health_ops.api.services.configuration.clickhouse_identity_admin import (
+    ClickHouseIdentity,
+    _decode_provider_identities,
+)
 from dev_health_ops.models.settings import (
-    IdentityMapping,
     JobRun,
     JobRunStatus,
     ScheduledJob,
@@ -205,18 +209,47 @@ async def _observed_identities(
 
 async def _mapped_identities(
     context: GraphQLContext, *, org_id: str, team: str
-) -> list[IdentityMapping]:
-    session = _db_session(context)
-    if session is None:
-        return []
-    stmt = select(IdentityMapping).where(
-        IdentityMapping.org_id == org_id,
-        IdentityMapping.is_active.is_(True),
-    )
-    rows = list((await session.execute(stmt)).scalars().all())
+) -> list[ClickHouseIdentity]:
+    """Read the org's active identities from the ClickHouse ``identities`` table.
+
+    ClickHouse is the system of record for identities (CHAOS-2600 CS5/CS6). This
+    goes through the same ``_query_dicts`` path the rest of this resolver uses,
+    which creates a fresh per-thread clickhouse-connect client per call — the
+    process-wide shared client is not thread-safe, so we must not reuse it.
+    """
+    sql = """
+        SELECT canonical_id, email, display_name, provider_identities,
+               team_ids, is_active, org_id
+        FROM identities FINAL
+        WHERE org_id = %(org_id)s AND is_active = 1
+    """
+    rows = await _query_dicts(context, sql, {"org_id": org_id})
+    identities = [_row_to_identity(row, org_id) for row in rows]
     if not team:
-        return rows
-    return [row for row in rows if not row.team_ids or team in row.team_ids]
+        return identities
+    return [
+        identity
+        for identity in identities
+        if not identity.team_ids or team in identity.team_ids
+    ]
+
+
+def _row_to_identity(row: Mapping[str, Any], org_id: str) -> ClickHouseIdentity:
+    canonical_id = str(row.get("canonical_id") or "")
+    row_org_id = str(row.get("org_id") or org_id)
+    return ClickHouseIdentity(
+        canonical_id=canonical_id,
+        identity_uuid=uuid.uuid5(
+            uuid.NAMESPACE_URL, f"identity:{row_org_id}:{canonical_id}"
+        ),
+        display_name=row.get("display_name") or None,
+        email=row.get("email") or None,
+        provider_identities=_decode_provider_identities(row.get("provider_identities")),
+        team_ids=[str(t) for t in (row.get("team_ids") or [])],
+        is_active=bool(row.get("is_active", 1)),
+        updated_at=datetime.now(UTC),
+        org_id=row_org_id,
+    )
 
 
 def _unmapped_identity(row: Mapping[str, Any]) -> UnmappedIdentity:
@@ -230,7 +263,7 @@ def _unmapped_identity(row: Mapping[str, Any]) -> UnmappedIdentity:
     )
 
 
-def _identity_keys(mapped: Sequence[IdentityMapping]) -> set[str]:
+def _identity_keys(mapped: Sequence[ClickHouseIdentity]) -> set[str]:
     keys: set[str] = set()
     for row in mapped:
         for value in [row.canonical_id, row.email, row.display_name]:
@@ -247,9 +280,9 @@ def _is_mapped(identity: UnmappedIdentity, mapped_keys: set[str]) -> bool:
 
 
 def _alias_suggestions(
-    unmapped: Sequence[UnmappedIdentity], mapped: Sequence[IdentityMapping]
+    unmapped: Sequence[UnmappedIdentity], mapped: Sequence[ClickHouseIdentity]
 ) -> list[AliasSuggestion]:
-    by_local: dict[str, IdentityMapping] = {}
+    by_local: dict[str, ClickHouseIdentity] = {}
     for row in mapped:
         for value in [row.email, row.canonical_id]:
             local = _email_local(value)

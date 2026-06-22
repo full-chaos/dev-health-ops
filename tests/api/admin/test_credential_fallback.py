@@ -31,14 +31,14 @@ from dev_health_ops.api.services.configuration import (
     IntegrationCredentialsService,
 )
 from dev_health_ops.models.git import Base
-from dev_health_ops.models.settings import IntegrationCredential, TeamMapping
+from dev_health_ops.models.settings import IntegrationCredential
 from dev_health_ops.models.users import Membership, Organization, User
 from tests._helpers import tables_of
 
 admin_router_module = importlib.import_module("dev_health_ops.api.admin")
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
 
-_TABLES = tables_of(User, Organization, Membership, TeamMapping, IntegrationCredential)
+_TABLES = tables_of(User, Organization, Membership, IntegrationCredential)
 
 ORG_ID = str(uuid.uuid4())
 

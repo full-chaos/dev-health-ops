@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from dev_health_ops.connectors.exceptions import APIException, RateLimitException
+from dev_health_ops.connectors.exceptions import (
+    APIException,
+    AuthenticationException,
+    RateLimitException,
+)
 from dev_health_ops.providers.github.client import GitHubAuth, GitHubWorkClient
 
 
@@ -19,6 +24,99 @@ def _client() -> tuple[GitHubWorkClient, MagicMock, MagicMock]:
     ):
         client = GitHubWorkClient(auth=GitHubAuth(token="token"), gate=gate)
     return client, graphql_cls.return_value, gate
+
+
+def test_work_client_uses_pygithub_token_auth_without_internal_retry() -> None:
+    gate = MagicMock()
+    with (
+        patch("github.Github") as github_cls,
+        patch("dev_health_ops.providers.github.client.GitHubGraphQLClient"),
+    ):
+        GitHubWorkClient(auth=GitHubAuth(token="token"), gate=gate)
+
+    _, kwargs = github_cls.call_args
+    assert kwargs["auth"].__class__.__name__ == "Token"
+    assert kwargs["retry"] is None
+    assert "login_or_token" not in kwargs
+
+
+def test_work_client_uses_pygithub_app_installation_auth_without_internal_retry() -> (
+    None
+):
+    gate = MagicMock()
+    with (
+        patch("github.Github") as github_cls,
+        patch("dev_health_ops.providers.github.client.GitHubGraphQLClient"),
+        patch(
+            "dev_health_ops.providers.github.client.GitHubAppTokenProvider"
+        ) as token_provider_cls,
+    ):
+        token_provider_cls.return_value.get_token.return_value = "installation-token"
+        GitHubWorkClient(
+            auth=GitHubAuth(
+                app_id="123",
+                private_key="not-a-real-private-key",
+                installation_id="456",
+            ),
+            gate=gate,
+        )
+
+    _, kwargs = github_cls.call_args
+    assert kwargs["auth"].__class__.__name__ == "AppInstallationAuth"
+    assert kwargs["auth"].installation_id == 456
+    assert kwargs["retry"] is None
+    assert "login_or_token" not in kwargs
+
+
+def test_work_client_get_repo_classifies_primary_rate_limit_403(monkeypatch) -> None:
+    from github.GithubException import GithubException
+
+    client, _graphql, gate = _client()
+    cast(Any, client.github).get_repo = MagicMock(
+        side_effect=GithubException(
+            403,
+            {"message": "API rate limit exceeded for installation ID 141773132."},
+            {
+                "x-ratelimit-remaining": "0",
+                "x-ratelimit-reset": "105",
+                "x-github-request-id": "REQ:5",
+            },
+        )
+    )
+    monkeypatch.setattr("dev_health_ops.providers.github.client.time.time", lambda: 100)
+
+    with pytest.raises(RateLimitException) as exc_info:
+        client.get_repo(owner="full-chaos", repo="dev-health-web")
+
+    message = str(exc_info.value)
+    assert "GitHub rate limit" in message
+    assert "GET /repos/full-chaos/dev-health-web" in message
+    assert "x-ratelimit-remaining" in message
+    assert "REQ:5" in message
+    assert exc_info.value.retry_after_seconds == pytest.approx(5.0)
+    gate.penalize.assert_called_once_with(5.0)
+
+
+def test_work_client_get_repo_classifies_permission_403() -> None:
+    from github.GithubException import GithubException
+
+    client, _graphql, gate = _client()
+    cast(Any, client.github).get_repo = MagicMock(
+        side_effect=GithubException(
+            403,
+            {"message": "Resource not accessible by integration"},
+            {"x-github-request-id": "REQ:9"},
+        )
+    )
+
+    with pytest.raises(AuthenticationException) as exc_info:
+        client.get_repo(owner="full-chaos", repo="private-repo")
+
+    message = str(exc_info.value)
+    assert "GitHub 403" in message
+    assert "GET /repos/full-chaos/private-repo" in message
+    assert "REQ:9" in message
+    gate.penalize.assert_called_once_with(None)
 
 
 def _pr(number: int) -> MagicMock:

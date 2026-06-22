@@ -396,6 +396,31 @@ class WorkItemTeamAttributionRecord:
 
 
 @dataclass(frozen=True)
+class ManualAttributionFallbackRecord:
+    """Explicit manual fallback attribution record (ClickHouse-only).
+
+    A FALLBACK, never an override: the resolver consults these only after native/imported/linked
+    attribution fails. ``scope_type`` is one of ``repo`` | ``project`` | ``member`` |
+    ``issue_key_prefix`` (an ``issue_key_prefix`` is the only way a bare key prefix may map to a
+    team — and only as ``source = manual_fallback``, never ``linked_issue``).
+    """
+
+    provider: str
+    scope_type: str
+    scope_id: str
+    team_id: str
+    team_name: str
+    reason: str
+    updated_at: datetime
+    priority: int = 100
+    valid_from: datetime | None = None
+    valid_to: datetime | None = None
+    created_by: str | None = None
+    created_at: datetime | None = None
+    org_id: str = ""
+
+
+@dataclass(frozen=True)
 class WorkItemCycleTimeRecord:
     work_item_id: str
     provider: str

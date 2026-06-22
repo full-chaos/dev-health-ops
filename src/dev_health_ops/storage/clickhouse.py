@@ -1757,6 +1757,56 @@ class ClickHouseStore:
             payload,
         )
 
+    async def insert_manual_attribution_fallbacks(self, rows: list[Any]) -> None:
+        if not rows:
+            return
+        now = self._normalize_datetime(datetime.now(timezone.utc))
+        payload: list[dict[str, Any]] = []
+        for item in rows:
+            get = self._item_getter(item)
+            payload.append(
+                {
+                    "org_id": get("org_id") or self.org_id or "",
+                    "provider": str(get("provider") or ""),
+                    "scope_type": str(get("scope_type") or ""),
+                    "scope_id": str(get("scope_id") or ""),
+                    "team_id": str(get("team_id") or ""),
+                    "team_name": str(get("team_name") or ""),
+                    "reason": str(get("reason") or ""),
+                    # Default ONLY on missing/None — an explicit priority=0 must survive
+                    # (lower value = higher precedence; falsy-coercion would corrupt it).
+                    "priority": 100
+                    if get("priority") is None
+                    else int(get("priority")),
+                    # valid_from / created_at / updated_at are non-nullable (DB DEFAULT now64);
+                    # _normalize_datetime(None) is None, so fall back to `now` to avoid a null insert.
+                    "valid_from": self._normalize_datetime(get("valid_from")) or now,
+                    "valid_to": self._normalize_datetime(get("valid_to")),
+                    "created_by": get("created_by"),
+                    "created_at": self._normalize_datetime(get("created_at")) or now,
+                    "updated_at": self._normalize_datetime(get("updated_at")) or now,
+                }
+            )
+        await self._insert_rows(
+            "manual_attribution_fallbacks",
+            [
+                "org_id",
+                "provider",
+                "scope_type",
+                "scope_id",
+                "team_id",
+                "team_name",
+                "reason",
+                "priority",
+                "valid_from",
+                "valid_to",
+                "created_by",
+                "created_at",
+                "updated_at",
+            ],
+            payload,
+        )
+
     async def _insert_team_edge_rows(
         self, table: str, columns: list[str], rows: list[Any]
     ) -> None:

@@ -614,11 +614,11 @@ def test_b6_idempotency_two_reconciler_passes_do_not_double_claim_or_post_sync(
     assert second["relayed_dispatch"] == 0
     assert dispatches == [((str(dispatch_run.id),), "sync")]
     assert chord_calls == ["apply_async"]
-    assert dispatch_row.status == OUTBOX_STATUS_PENDING
+    assert dispatch_row.status == OUTBOX_STATUS_DISPATCHED
     assert dispatch_row.attempts == 1
     assert dispatch_units[0].attempts == 0
     assert dispatch_units[0].status == SyncRunUnitStatus.DISPATCHING.value
-    assert duplicate_dispatch["status"] == "noop"
+    assert duplicate_dispatch["status"] == "waiting_inflight"
     assert first["relayed_post_sync"] == 1
     assert second["relayed_post_sync"] == 0
     assert len(post_sync) == 1

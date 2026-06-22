@@ -268,7 +268,6 @@ def test_finalize_sync_run_terminalizes_backfill_job_and_job_run(
     db_session.add_all([backfill_job, job_run])
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
-    monkeypatch.setattr(sync_units, "_dispatch_post_sync_tasks", lambda **kwargs: None)
 
     result = sync_units.finalize_sync_run(str(run.id))
 

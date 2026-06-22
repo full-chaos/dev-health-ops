@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
@@ -86,6 +87,23 @@ class TeamAttributionCandidate:
 
 
 @dataclass(frozen=True)
+class ManualFallbackRule:
+    """An explicit `manual_attribution_fallbacks` row (rank 6, never an override).
+
+    Used only when no native/imported/linked source resolved. `scope_type` is one
+    of repo | project | member | issue_key_prefix.
+    """
+
+    provider: str
+    scope_type: str
+    scope_id: str
+    team_id: str
+    team_name: str
+    reason: str = ""
+    priority: int = 100
+
+
+@dataclass(frozen=True)
 class TeamAttributionContext:
     project_by_id: dict[tuple[str, str], list[TeamAttributionCandidate]] = field(
         default_factory=dict
@@ -102,6 +120,7 @@ class TeamAttributionContext:
     member_by_identity: dict[tuple[str, str], list[TeamAttributionCandidate]] = field(
         default_factory=dict
     )
+    manual_fallbacks: list[ManualFallbackRule] = field(default_factory=list)
 
 
 # CHAOS-2600: deterministic staged precedence. linked_issue is a TRUE FALLBACK
@@ -118,6 +137,24 @@ _SOURCE_ORDER: dict[TeamAttributionSource, int] = {
     "manual_fallback": 6,
     "unassigned": 7,
 }
+
+# Sources a work item may pass on when it acts as a linked-issue *donor*. A donor
+# may only contribute a team it earned from a first-class attribution fact
+# (sources 0-4). manual_fallback (rank 6) and unassigned are excluded so a
+# fallback rule — especially the provider-neutral `issue_key_prefix` scope —
+# can never be laundered into rank-5 `linked_issue` provenance on a dependent
+# item. linked_issue itself is absent here because donor resolution runs with
+# `linked_issue_resolver=None` (no transitive inheritance). See
+# docs/architecture/team-attribution.md §0.
+_DONOR_SOURCES: frozenset[TeamAttributionSource] = frozenset(
+    {
+        "native_team",
+        "issue_project",
+        "project_ownership",
+        "repo_ownership",
+        "assignee_membership",
+    }
+)
 
 
 def _identity_key(value: str | None) -> str:
@@ -230,6 +267,75 @@ def _issue_project_candidate(
     return None
 
 
+_ISSUE_KEY_RE = re.compile(r"^([A-Za-z]{2,})-\d+$")
+
+
+def _issue_key_prefix(item: WorkItem) -> str | None:
+    """The item's own issue-key prefix, e.g. linear:CHAOS-5 -> CHAOS. None for PRs/MRs."""
+    wid = item.work_item_id or ""
+    if ":" not in wid:
+        return None
+    match = _ISSUE_KEY_RE.match(wid.split(":", 1)[1].strip())
+    return match.group(1).upper() if match else None
+
+
+def _manual_fallback_candidates(
+    item: WorkItem, fallbacks: Sequence[ManualFallbackRule]
+) -> list[TeamAttributionCandidate]:
+    """Build manual_fallback candidates (rank 6) matching the item's scope.
+
+    The precedence loop ensures these only become primary when no native/imported/
+    linked source matched — manual fallback is never an override. An ``issue_key_prefix``
+    rule matches the item's OWN key prefix; it is provider-neutral (a prefix spans
+    providers) and is NEVER linked_issue inheritance.
+    """
+    if not fallbacks:
+        return []
+    repo_ids = {str(v).strip() for v in (item.repo_id, item.project_id) if v}
+    project_ids = {
+        str(v).strip()
+        for v in (item.project_id, item.project_key, item.work_scope_id)
+        if v
+    }
+    member_ids = {_identity_key(a) for a in item.assignees if a}
+    prefix = _issue_key_prefix(item)
+    out: list[TeamAttributionCandidate] = []
+    for rule in fallbacks:
+        # A rule matches its own provider, or any provider when its provider is blank.
+        # issue_key_prefix is provider-neutral, so it is not provider-gated.
+        if (
+            rule.provider
+            and rule.provider != item.provider
+            and rule.scope_type != "issue_key_prefix"
+        ):
+            continue
+        scope_id = rule.scope_id.strip()
+        if rule.scope_type == "repo":
+            matched = scope_id in repo_ids
+        elif rule.scope_type == "project":
+            matched = scope_id in project_ids
+        elif rule.scope_type == "member":
+            matched = _identity_key(scope_id) in member_ids
+        elif rule.scope_type == "issue_key_prefix":
+            matched = prefix is not None and prefix == scope_id.upper()
+        else:
+            matched = False
+        if matched:
+            out.append(
+                TeamAttributionCandidate(
+                    source="manual_fallback",
+                    team_id=rule.team_id,
+                    team_name=rule.team_name or rule.team_id,
+                    confidence="manual",
+                    evidence=f"manual_fallback:{rule.scope_type}={rule.scope_id}"
+                    + (f" ({rule.reason})" if rule.reason else ""),
+                    is_primary=1,
+                    priority=rule.priority,
+                )
+            )
+    return out
+
+
 def resolve_team_attribution(
     item: WorkItem,
     team_resolver: TeamResolver | None,
@@ -328,6 +434,11 @@ def resolve_team_attribution(
                 is_primary=1,
                 specificity=50,
             )
+        )
+
+    if attribution_context is not None and attribution_context.manual_fallbacks:
+        candidates_by_source["manual_fallback"].extend(
+            _manual_fallback_candidates(item, attribution_context.manual_fallbacks)
         )
 
     primary: TeamAttributionCandidate | None = None
@@ -438,7 +549,7 @@ def build_linked_issue_team_resolver(
     for item in work_items:
         wid = item.work_item_id
         native = _native_team_candidate(item, project_key_resolver)
-        team_id, team_name, _ = resolve_team_attribution(
+        team_id, team_name, marked = resolve_team_attribution(
             item,
             team_resolver,
             project_key_resolver,
@@ -446,7 +557,11 @@ def build_linked_issue_team_resolver(
             attribution_context=attribution_context,
         )
         base_resolved[wid] = native.team_id if native is not None else None
-        if team_id:
+        primary_source = next((r.source for r in marked if r.is_primary), None)
+        # Only register a donor when its *primary* team came from a first-class
+        # fact (sources 0-4). A team earned via manual_fallback must never be
+        # relabeled as rank-5 linked_issue inheritance on a dependent item.
+        if team_id and primary_source in _DONOR_SOURCES:
             donor_team[wid] = (team_id, team_name or team_id)
         if item.provider in ("linear", "jira") and ":" in wid:
             k = wid.split(":", 1)[1].strip().upper()

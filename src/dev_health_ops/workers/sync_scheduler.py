@@ -261,7 +261,6 @@ def _maybe_dispatch_config(
     # planner instead of the legacy per-config tasks.
     from dev_health_ops.sync.planner import plan_sync_run
     from dev_health_ops.sync.trigger_routing import (
-        mark_sync_run_failed,
         planner_request_for_config_if_routed,
     )
     from dev_health_ops.workers.sync_units import dispatch_sync_run
@@ -292,18 +291,15 @@ def _maybe_dispatch_config(
                     args=(plan.sync_run_id,), queue="sync"
                 )
             except Exception:
-                logger.exception(
-                    "Fan-out dispatch enqueue failed for config %s "
-                    "(sync_run=%s); marking run failed",
-                    config.id,
-                    plan.sync_run_id,
+                logger.warning(
+                    "sync_scheduler.dispatch_fastpath_failed",
+                    extra={
+                        "config_id": str(config.id),
+                        "sync_run_id": plan.sync_run_id,
+                    },
+                    exc_info=True,
                 )
-                mark_sync_run_failed(
-                    session, plan.sync_run_id, "dispatch enqueue failed"
-                )
-                session.commit()
-                if planner_managed:
-                    return False
+                return True
             else:
                 return True
 

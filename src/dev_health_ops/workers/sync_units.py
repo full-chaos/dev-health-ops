@@ -12,19 +12,24 @@ Pipeline:
                                          executes ONE dataset, persists unit status,
                                          updates watermark ONLY if mode==incremental
                                          and the unit succeeded
-    finalize_sync_run(run_id)         -> aggregates unit statuses; dispatches
-                                         post-sync metrics EXACTLY ONCE via the
-                                         SyncRunPostDispatch outbox
+    finalize_sync_run(run_id)         -> aggregates unit statuses; materializes
+                                         post-sync metrics via the
+                                         SyncRunPostDispatch/outbox ledger
 
-Idempotency rules:
+Idempotency and Durability rules:
   * dispatch_sync_run is redispatchable: it only queues units still in
     planned/stale-dispatching state.
   * finalize_sync_run is a no-op until all units are terminal, and a no-op if
     the run's post-sync outbox row already exists. Each terminal unit enqueues
-    finalize; finalize itself enforces once-only via the unique
+    finalize. Finalize itself enforces once-only via the unique
     (sync_run_id, kind) constraint on SyncRunPostDispatch.
-  * Metrics are NEVER dispatched from individual units.
-
+  * Metrics are never dispatched from individual units. Post-sync durability
+    flows through the sync_dispatch_outbox table and the reconciler relay,
+    rather than only the SyncRunPostDispatch ledger. The post_sync kind is
+    relayed at-most-once by the reconciler. It marks the outbox row dispatched
+    before publishing and never re-arms on publish failure. This prevents
+    downstream metrics readers from double-counting duplicate computed_at
+    generations. Durable exactly-once post-sync is deferred to CHAOS-2596.
 Observability (CHAOS-2519):
   Every structured log line emitted by the three tasks carries the full unit
   context: sync_run_id, unit_id, source_id, dataset_key, provider, cost_class.
@@ -39,7 +44,6 @@ import logging
 import os
 import threading
 import uuid
-from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -51,6 +55,7 @@ from dev_health_ops.models import (
     BackfillJob,
     JobRun,
     JobRunStatus,
+    SyncDispatchOutbox,
     SyncRun,
     SyncRunMode,
     SyncRunPostDispatch,
@@ -58,9 +63,15 @@ from dev_health_ops.models import (
     SyncRunUnit,
     SyncRunUnitStatus,
 )
+from dev_health_ops.sync.dispatch_outbox import (
+    OUTBOX_KIND_DISPATCH,
+    OUTBOX_KIND_FINALIZE,
+    OUTBOX_KIND_POST_SYNC,
+    OUTBOX_STATUS_PENDING,
+    upsert_outbox_wakeup,
+)
 from dev_health_ops.sync.dispatch_policy import route
 from dev_health_ops.sync.guard import DispatchGuard
-from dev_health_ops.sync.planner import map_datasets_to_legacy_targets
 from dev_health_ops.sync.trigger_routing import (
     stamp_sync_run_canonical_config,
 )
@@ -71,7 +82,7 @@ from dev_health_ops.workers.sync_bootstrap import (
     ProviderRuntimeCache,
     SyncTaskBootstrap,
 )
-from dev_health_ops.workers.sync_runtime import _dispatch_post_sync_tasks
+from dev_health_ops.workers.sync_runtime import build_post_sync_dispatch_payload
 
 logger = logging.getLogger(__name__)
 _runtime_cache = ProviderRuntimeCache()
@@ -449,6 +460,13 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     "unit_id": unit_id,
                     "reason": "lease_lost",
                 }
+            upsert_outbox_wakeup(
+                session,
+                sync_run_id=ctx.sync_run_id,
+                kind=OUTBOX_KIND_FINALIZE,
+                available_at=completed_at,
+                now=completed_at,
+            )
             if ctx.mode in {
                 SyncRunMode.INCREMENTAL.value,
                 SyncRunMode.FULL_RESYNC.value,  # full_resync stamps watermark on success
@@ -462,7 +480,6 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                 )
             session.flush()
             should_finalize = True
-        terminal_txn_started = False
         logger.info(
             "run_sync_unit.success",
             extra={**_log_ctx, "duration_seconds": duration_seconds},
@@ -508,9 +525,16 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     "unit_id": unit_id,
                     "reason": "lease_lost",
                 }
+            if sync_run_id is not None:
+                upsert_outbox_wakeup(
+                    session,
+                    sync_run_id=sync_run_id,
+                    kind=OUTBOX_KIND_FINALIZE,
+                    available_at=completed_at,
+                    now=completed_at,
+                )
             session.flush()
             should_finalize = True
-        terminal_txn_started = False
         logger.exception(
             "run_sync_unit.failed",
             extra={
@@ -544,12 +568,15 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
 
 @celery_app.task(queue="sync", name="dev_health_ops.workers.tasks.finalize_sync_run")
 def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
-    """Aggregate unit statuses and dispatch post-sync metrics once per run.
+    """Aggregate unit statuses and materialize post-sync metrics once per run.
 
     No-op until all units are terminal; once-only via the SyncRunPostDispatch
-    outbox. Maps completed dataset keys back to legacy sync_targets via
-    ``planner.map_datasets_to_legacy_targets`` before calling the existing
-    ``_dispatch_post_sync_tasks``. Implemented in CHAOS-2512.
+    ledger. The reconciler relay is the sole post-sync publisher. post_sync is
+    at-most-once: the relay marks dispatched before publishing and never re-arms
+    on publish failure because downstream raw-aggregation readers can
+    double-count duplicate computed_at generations. Durable exactly-once
+    post-sync re-drive is deferred to CHAOS-2596; dispatch/finalize wakeups
+    remain at-least-once because their consumers are idempotent.
     """
 
     from dev_health_ops.db import get_postgres_session_sync
@@ -624,7 +651,7 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
                 SyncRunPostDispatch(
                     org_id=str(run.org_id),
                     sync_run_id=run_uuid,
-                    kind="post_sync",
+                    kind=OUTBOX_KIND_POST_SYNC,
                     dispatched_at=completed_at,
                 )
             )
@@ -633,53 +660,18 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
             nested.rollback()
             return {"status": "already_dispatched", "sync_run_id": sync_run_id}
         else:
-            nested.commit()
-
-        successful_by_provider: dict[str, set[str]] = defaultdict(set)
-        for unit in units:
-            if unit.status == SyncRunUnitStatus.SUCCESS.value:
-                successful_by_provider[str(unit.provider)].add(str(unit.dataset_key))
-
-        legacy_targets: set[str] = set()
-        for provider, dataset_keys in successful_by_provider.items():
-            legacy_targets.update(
-                map_datasets_to_legacy_targets(provider, dataset_keys)
+            upsert_outbox_wakeup(
+                session,
+                sync_run_id=run_uuid,
+                kind=OUTBOX_KIND_POST_SYNC,
+                available_at=completed_at,
+                now=completed_at,
             )
-
-        # --- WS-E / CHAOS-2577: compute covered window from successful units ---
-        # Thread min(since_at)/max(before_at) of successful units into
-        # _dispatch_post_sync_tasks so metrics/work-graph cover the backfilled
-        # range.  Confined to this distinct block; WS-C later advances a
-        # coverage marker in a separate block below.
-        successful_units = [
-            u for u in units if u.status == SyncRunUnitStatus.SUCCESS.value
-        ]
-        covered_since: datetime | None = None
-        covered_before: datetime | None = None
-        if successful_units:
-            # If ANY unit has since_at=None the lower bound is unbounded;
-            # only compute min when ALL units carry an explicit lower bound.
-            any_unbounded_lower = any(u.since_at is None for u in successful_units)
-            any_unbounded_upper = any(u.before_at is None for u in successful_units)
-            if not any_unbounded_lower:
-                since_values = [
-                    _as_aware(u.since_at)
-                    for u in successful_units
-                    if u.since_at is not None
-                ]
-                covered_since = min(since_values)
-            # else: covered_since stays None → unbounded lower
-            if not any_unbounded_upper:
-                before_values = [
-                    _as_aware(u.before_at)
-                    for u in successful_units
-                    if u.before_at is not None
-                ]
-                covered_before = max(before_values)
-            # else: covered_before stays None → unbounded upper
-
-        provider_for_dispatch = next(iter(successful_by_provider), "unknown")
-        run_org_id = str(run.org_id)
+            nested.commit()
+        post_sync_payload = build_post_sync_dispatch_payload(session, run_uuid)
+        post_sync_targets = (
+            post_sync_payload.sync_targets if post_sync_payload is not None else []
+        )
         session.flush()
 
     run_status = _aggregate_run_status(len(units), success_count, failed_count)
@@ -693,59 +685,12 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
         },
     )
 
-    # The outbox claim is now durably committed (the session block exited and
-    # committed). Dispatch post-sync metrics AFTER that commit so a crash
-    # between claim and dispatch cannot roll back the claim and let a later
-    # finalize re-dispatch (at-most-once, not duplicate-on-retry).
-    if legacy_targets:
-        # Thread the covered window so downstream metrics/work-graph tasks
-        # know the exact date range that was backfilled (CHAOS-2577).
-        from_date_str = (
-            covered_since.date().isoformat() if covered_since is not None else None
-        )
-        to_date_str = (
-            covered_before.date().isoformat() if covered_before is not None else None
-        )
-        # F3: pass full ISO datetimes via work_graph_from/to_date so the
-        # work-graph build covers the full final day (not truncated to midnight).
-        # from_date/to_date remain date-only for _parse_materialize_window().
-        # Mirror the precedent in sync_backfill.py:374-383.
-        from datetime import time as _time
-
-        work_graph_from_date_str = (
-            datetime.combine(
-                covered_since.date(),
-                _time.min,
-                tzinfo=timezone.utc,
-            ).isoformat()
-            if covered_since is not None
-            else None
-        )
-        work_graph_to_date_str = (
-            datetime.combine(
-                covered_before.date() + timedelta(days=1),
-                _time.min,
-                tzinfo=timezone.utc,
-            ).isoformat()
-            if covered_before is not None
-            else None
-        )
-        _dispatch_post_sync_tasks(
-            provider=provider_for_dispatch,
-            sync_targets=sorted(legacy_targets),
-            org_id=run_org_id,
-            from_date=from_date_str,
-            to_date=to_date_str,
-            work_graph_from_date=work_graph_from_date_str,
-            work_graph_to_date=work_graph_to_date_str,
-        )
-
     return {
         "status": "finalized",
         "sync_run_id": sync_run_id,
         "completed_units": success_count,
         "failed_units": failed_count,
-        "post_sync_targets": sorted(legacy_targets),
+        "post_sync_targets": post_sync_targets,
     }
 
 
@@ -1129,29 +1074,40 @@ def _heartbeat_unit_lease(
 
 
 def _schedule_redispatch(sync_run_id: str) -> None:
-    """Schedule a delayed redispatch of a run with deferred (PLANNED) units.
-
-    Uses ``apply_async(countdown=...)`` so capped units are retried after
-    in-flight units from other runs have had a chance to complete.
-    This is the D3 deferral mechanism: idempotent, no new status, no Celery retry.
-
-    Raises on broker enqueue failure so the caller can propagate the error
-    rather than leaving the run silently non-terminal.
-    """
-    countdown = int(os.getenv("SYNC_DISPATCH_REDISPATCH_COUNTDOWN", "60"))
     try:
-        getattr(dispatch_sync_run, "apply_async")(
-            args=(sync_run_id,),
-            queue="sync",
-            countdown=countdown,
-        )
+        from dev_health_ops.db import get_postgres_session_sync
+
+        countdown = int(os.getenv("SYNC_DISPATCH_REDISPATCH_COUNTDOWN", "60"))
+        now = datetime.now(timezone.utc)
+        with get_postgres_session_sync() as session:
+            upsert_outbox_wakeup(
+                session,
+                sync_run_id=sync_run_id,
+                kind=OUTBOX_KIND_DISPATCH,
+                available_at=now + timedelta(seconds=countdown),
+                now=now,
+            )
+            session.execute(
+                update(SyncDispatchOutbox)
+                .where(
+                    SyncDispatchOutbox.sync_run_id == uuid.UUID(str(sync_run_id)),
+                    SyncDispatchOutbox.kind == OUTBOX_KIND_DISPATCH,
+                    SyncDispatchOutbox.status == OUTBOX_STATUS_PENDING,
+                    SyncDispatchOutbox.claim_token.is_(None),
+                )
+                .values(
+                    available_at=now + timedelta(seconds=countdown),
+                    updated_at=now,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            session.flush()
         logger.info(
-            "dispatch_sync_run.redispatch_scheduled",
+            "dispatch_sync_run.redispatch_rearmed",
             extra={"sync_run_id": sync_run_id, "countdown": countdown},
         )
     except Exception:
         logger.exception(
-            "dispatch_sync_run.redispatch_schedule_failed",
+            "dispatch_sync_run.redispatch_rearm_failed",
             extra={"sync_run_id": sync_run_id},
         )
-        raise

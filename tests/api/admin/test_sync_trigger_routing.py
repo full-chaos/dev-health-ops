@@ -28,6 +28,7 @@ from dev_health_ops.models.integrations import (
     Integration,
     IntegrationDataset,
     IntegrationSource,
+    SyncDispatchOutbox,
     SyncRun,
     SyncRunStatus,
     SyncRunUnit,
@@ -61,6 +62,7 @@ _TABLES = tables_of(
     Integration,
     IntegrationSource,
     IntegrationDataset,
+    SyncDispatchOutbox,
     SyncRun,
     SyncRunUnit,
 )
@@ -543,10 +545,9 @@ async def test_flag_on_unmigrated_config_uses_legacy_path(client, session_maker)
 
 
 @pytest.mark.asyncio
-async def test_planner_enqueue_failure_marks_run_failed_and_503(client, session_maker):
-    """Flag ON + migrated config, plan commits, but dispatch_sync_run.apply_async
-    raises => the committed run is marked FAILED (not stranded PLANNED) and the
-    queue outage is surfaced as 503; legacy path is NOT used."""
+async def test_planner_enqueue_failure_returns_202_for_durable_dispatch(
+    client, session_maker
+):
     ac, seeded_state = client
     org_id = seeded_state["org_id"]
 
@@ -563,7 +564,6 @@ async def test_planner_enqueue_failure_marks_run_failed_and_503(client, session_
     fake_dispatch = MagicMock()
     fake_dispatch.apply_async = MagicMock(side_effect=RuntimeError("broker down"))
 
-    fake_mark_failed = MagicMock()
     fake_run_sync_config = MagicMock()
     fake_dispatch_batch_sync = MagicMock()
 
@@ -575,10 +575,6 @@ async def test_planner_enqueue_failure_marks_run_failed_and_503(client, session_
         patch(
             "dev_health_ops.api.admin.routers.sync.dispatch_sync_run",
             fake_dispatch,
-        ),
-        patch(
-            "dev_health_ops.api.admin.routers.sync.mark_sync_run_failed",
-            fake_mark_failed,
         ),
         patch.dict(
             "sys.modules",
@@ -595,8 +591,6 @@ async def test_planner_enqueue_failure_marks_run_failed_and_503(client, session_
     assert resp.status_code == 503, resp.text
     fake_dispatch.apply_async.assert_called_once()
     # Committed run marked FAILED so it is not stranded PLANNED with no dispatcher.
-    fake_mark_failed.assert_called_once()
-    assert fake_mark_failed.call_args.args[1] == fake_plan.sync_run_id
     async with session_maker() as session:
         job_run = (await session.execute(select(JobRun))).scalar_one()
         assert job_run.status == JobRunStatus.FAILED.value

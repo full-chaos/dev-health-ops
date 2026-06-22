@@ -17,6 +17,8 @@ This module is the single source of truth for that routing decision so the API
 (async session, via ``run_sync``) and the beat (sync session) share identical
 semantics. Rollback is purely the flag: when it is off, callers fall back to the
 legacy path and this module's :func:`plan_request_for_config` is never reached.
+
+The outbox and reconciler relay now recover committed PLANNED runs. This module's `mark_sync_run_failed` helper is kept as a legacy, best-effort fallback for the non-outbox path.
 """
 
 from __future__ import annotations
@@ -307,9 +309,9 @@ def mark_sync_run_failed(session: Session, sync_run_id: str, error: str) -> None
     Both trigger surfaces (admin "Sync Now" and the scheduled beat) commit the
     planned SyncRun + units before enqueueing ``dispatch_sync_run`` so a separate
     worker session can see them. If that enqueue then fails, the run is committed
-    as PLANNED with no queued dispatcher and there is no periodic reconciler for
-    such runs -- so flip it to FAILED rather than leave it looking perpetually
-    in-flight.
+    as PLANNED. The outbox and reconciler relay will recover and re-drive the run.
+    This helper remains as a legacy, best-effort fallback for the non-outbox path
+    to flip the run to FAILED rather than leave it looking perpetually in-flight.
 
     The update is a CONDITIONAL compare-and-set: it only fires while the run (and
     its units) are still PLANNED. Under an *ambiguous* enqueue failure (the broker

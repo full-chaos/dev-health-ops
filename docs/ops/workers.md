@@ -119,6 +119,7 @@ The system registers Celery tasks under the `workers/` directory. The primary re
 | `dispatch_sync_run` | None | `sync` | Authorizes a planned `SyncRun`, routes each pending unit, and fans out `run_sync_unit` tasks. Source: `sync_units.py:113-190`. |
 | `run_sync_unit` | None | `sync` (or `sync.<provider>` / cost-class queue) | Executes exactly one planned source/dataset/window unit and updates its status. Source: `sync_units.py:193-293`. |
 | `finalize_sync_run` | None | `sync` | Aggregates unit statuses and dispatches post-sync work once all units are terminal. Source: `sync_units.py:295-513`. |
+| `reconcile_sync_dispatch` | None | `sync` (beat, 60s) | Sole durable relay for the dispatch outbox: expires dead-lease RUNNING units, then materializes + relays `dispatch_sync_run`/`finalize_sync_run`/`post_sync` wakeups for stranded runs. See [Dispatch Outbox](../architecture/dispatch-outbox.md) (CHAOS-2581). Source: `sync_reconciler.py`. |
 | `run_sync_config` | `sync git/prs/cicd/deployments/incidents/security/tests` + work-items | `sync` (or `sync.<provider>`) | Syncs a single repository configuration. Source: `sync_runtime.py:408-527`. |
 | `dispatch_batch_sync` | None | `sync` | Discovers repositories in an organization and schedules syncs. Source: `sync_batch.py:301`. |
 | `_batch_sync_callback` | None | `sync` | Callback task for batch sync completion. Source: `sync_batch.py:267`. |

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine
@@ -10,11 +11,17 @@ from dev_health_ops.models import (
     Base,
     Integration,
     IntegrationSource,
+    SyncDispatchOutbox,
     SyncRun,
     SyncRunMode,
     SyncRunStatus,
     SyncRunUnit,
     SyncRunUnitStatus,
+)
+from dev_health_ops.sync.dispatch_outbox import (
+    OUTBOX_KIND_DISPATCH,
+    OUTBOX_STATUS_PENDING,
+    upsert_outbox_wakeup,
 )
 from dev_health_ops.sync.guard import DispatchGuard
 
@@ -204,7 +211,6 @@ def test_concurrency_cap_defers_not_fails(db_session, monkeypatch):
     )
 
     unit_queued = []
-    redispatches = []
 
     class FakeUnitSig:
         def __init__(self, unit_id):
@@ -238,14 +244,6 @@ def test_concurrency_cap_defers_not_fails(db_session, monkeypatch):
     monkeypatch.setattr(
         sync_units, "chord", lambda header, callback: FakeChord(header, callback)
     )
-    monkeypatch.setattr(
-        sync_units.dispatch_sync_run,
-        "apply_async",
-        lambda args=None, queue=None, countdown=None: redispatches.append(
-            (args, countdown)
-        ),
-    )
-
     result = sync_units.dispatch_sync_run(str(run.id))
 
     db_session.refresh(run)
@@ -262,7 +260,12 @@ def test_concurrency_cap_defers_not_fails(db_session, monkeypatch):
     # Dispatched path WITH capped units: a countdown redispatch must also be
     # scheduled so the 2 PLANNED units eventually drain (Fix 1).
     assert result["status"] == "dispatched"
-    assert len(redispatches) == 1, "expected 1 countdown redispatch for capped units"
+    outbox = (
+        db_session.query(SyncDispatchOutbox)
+        .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_DISPATCH)
+        .one()
+    )
+    assert outbox.status == OUTBOX_STATUS_PENDING
 
 
 def test_total_unit_cap_still_hard_denies(db_session, monkeypatch):
@@ -330,7 +333,6 @@ def test_partial_cap_dispatch_schedules_redispatch(db_session, monkeypatch):
     )
 
     unit_queued = []
-    redispatches = []
 
     class FakeUnitSig:
         def __init__(self, unit_id):
@@ -364,14 +366,6 @@ def test_partial_cap_dispatch_schedules_redispatch(db_session, monkeypatch):
     monkeypatch.setattr(
         sync_units, "chord", lambda header, callback: FakeChord(header, callback)
     )
-    monkeypatch.setattr(
-        sync_units.dispatch_sync_run,
-        "apply_async",
-        lambda args=None, queue=None, countdown=None: redispatches.append(
-            (args, countdown)
-        ),
-    )
-
     result = sync_units.dispatch_sync_run(str(run.id))
 
     db_session.refresh(run)
@@ -385,8 +379,12 @@ def test_partial_cap_dispatch_schedules_redispatch(db_session, monkeypatch):
     planned = [u for u in units if u.status == "planned"]
     assert len(planned) == 1
     # A countdown redispatch MUST be scheduled for the capped unit.
-    assert len(redispatches) == 1, "partial cap must schedule countdown redispatch"
-    assert redispatches[0][0] == (str(run.id),)
+    outbox = (
+        db_session.query(SyncDispatchOutbox)
+        .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_DISPATCH)
+        .one()
+    )
+    assert outbox.status == OUTBOX_STATUS_PENDING
 
 
 def test_zero_unit_dispatch_finalizes_not_loops(db_session, monkeypatch):
@@ -457,44 +455,14 @@ def _seed_zero_unit_run(db_session):
     return run
 
 
-def test_redispatch_enqueue_failure_raises(db_session, monkeypatch):
-    """Redispatch enqueue failure must raise, not be swallowed (Fix 3 regression)."""
-    from dev_health_ops.workers import sync_units
-
-    monkeypatch.setenv("SYNC_RUN_MAX_UNITS", "10")
-    monkeypatch.setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "2")
-    # 3 units, 1 active slot consumed → 1 allowed, 2 capped.
-    run, units, integration, source = _seed_run(db_session, unit_count=3)
-    active_run = SyncRun(
-        org_id=run.org_id,
-        integration_id=integration.id,
-        triggered_by="schedule",
-        mode=SyncRunMode.INCREMENTAL.value,
-        status=SyncRunStatus.RUNNING.value,
-        total_units=1,
-        completed_units=0,
-        failed_units=0,
-    )
-    db_session.add(active_run)
-    db_session.flush()
-    active_unit = SyncRunUnit(
-        org_id=run.org_id,
-        sync_run_id=active_run.id,
-        integration_id=integration.id,
-        source_id=source.id,
-        provider="github",
-        dataset_key="commits-active",
-        cost_class="medium",
-        mode=SyncRunMode.INCREMENTAL.value,
-        status=SyncRunUnitStatus.RUNNING.value,
-        attempts=1,
-    )
-    db_session.add(active_unit)
-    db_session.flush()
-
+def test_schedule_redispatch_rearms_outbox_and_never_raises(db_session, monkeypatch):
     from contextlib import contextmanager
 
     import dev_health_ops.db as db
+    from dev_health_ops.workers import sync_units
+
+    run, _, _, _ = _seed_run(db_session, unit_count=1)
+    monkeypatch.setenv("SYNC_DISPATCH_REDISPATCH_COUNTDOWN", "42")
 
     @contextmanager
     def _fake_session_ctx(s):
@@ -504,48 +472,36 @@ def test_redispatch_enqueue_failure_raises(db_session, monkeypatch):
     monkeypatch.setattr(
         db, "get_postgres_session_sync", lambda: _fake_session_ctx(db_session)
     )
-
-    class FakeUnitSig:
-        def __init__(self, unit_id):
-            self.unit_id = unit_id
-
-        def set(self, *, queue):
-            return self
-
-    class FakeFinalizeSig:
-        def __init__(self, run_id):
-            pass
-
-        def set(self, *, queue):
-            return self
-
-    class FakeChord:
-        def __init__(self, header, callback):
-            pass
-
-        def apply_async(self):
-            return None
-
-    monkeypatch.setattr(
-        sync_units.run_sync_unit, "s", lambda unit_id: FakeUnitSig(unit_id)
+    existing_available_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    upsert_outbox_wakeup(
+        db_session,
+        sync_run_id=run.id,
+        kind=OUTBOX_KIND_DISPATCH,
+        available_at=existing_available_at,
+        now=existing_available_at,
     )
-    monkeypatch.setattr(
-        sync_units.finalize_sync_run, "si", lambda run_id: FakeFinalizeSig(run_id)
+    db_session.flush()
+
+    before_call = datetime.now(timezone.utc)
+    sync_units._schedule_redispatch(str(run.id))
+    after_call = datetime.now(timezone.utc)
+    row = (
+        db_session.query(SyncDispatchOutbox)
+        .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_DISPATCH)
+        .one()
     )
-    monkeypatch.setattr(sync_units, "group", list)
-    monkeypatch.setattr(
-        sync_units, "chord", lambda header, callback: FakeChord(header, callback)
-    )
+    row_available_at = row.available_at
+    if row_available_at.tzinfo is None:
+        row_available_at = row_available_at.replace(tzinfo=timezone.utc)
+    assert row.status == OUTBOX_STATUS_PENDING
+    assert row_available_at >= before_call + timedelta(seconds=42)
+    assert row_available_at <= after_call + timedelta(seconds=42)
 
-    def fail_redispatch(*args, **kwargs):
-        raise RuntimeError("broker down")
+    def failing_session_ctx():
+        raise RuntimeError("db down")
 
-    monkeypatch.setattr(sync_units.dispatch_sync_run, "apply_async", fail_redispatch)
-
-    import pytest
-
-    with pytest.raises(RuntimeError, match="broker down"):
-        sync_units.dispatch_sync_run(str(run.id))
+    monkeypatch.setattr(db, "get_postgres_session_sync", failing_session_ctx)
+    sync_units._schedule_redispatch(str(run.id))
 
 
 # ---------------------------------------------------------------------------
@@ -717,7 +673,7 @@ def test_finalize_passes_full_datetime_work_graph_window(db_session, monkeypatch
     """
     from datetime import datetime, timedelta, timezone  # noqa: F401
 
-    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers import sync_reconciler, sync_runtime, sync_units
 
     run, units, integration, source = _seed_run(db_session, unit_count=1)
 
@@ -739,6 +695,7 @@ def test_finalize_passes_full_datetime_work_graph_window(db_session, monkeypatch
     before_dt = datetime(2024, 3, 15, 18, 30, 0, tzinfo=timezone.utc)
     unit = units[0]
     unit.status = SyncRunUnitStatus.SUCCESS.value
+    unit.dataset_key = "commits"
     unit.since_at = since_dt
     unit.before_at = before_dt
     db_session.flush()
@@ -753,16 +710,11 @@ def test_finalize_passes_full_datetime_work_graph_window(db_session, monkeypatch
         captured_kwargs.update(kwargs)
 
     monkeypatch.setattr(
-        sync_units, "_dispatch_post_sync_tasks", fake_dispatch_post_sync
+        sync_runtime, "_dispatch_post_sync_tasks", fake_dispatch_post_sync
     )
-    # Ensure legacy_targets is non-empty so _dispatch_post_sync_tasks is called.
-    monkeypatch.setattr(
-        sync_units,
-        "map_datasets_to_legacy_targets",
-        lambda provider, dataset_keys: frozenset(["git"]),
-    )
-
     sync_units.finalize_sync_run(str(run.id))
+    relay_result = sync_reconciler.reconcile_sync_dispatch(limit=10)
+    assert relay_result["relayed_post_sync"] == 1
 
     # from_date / to_date must be date-only strings.
     assert captured_kwargs.get("from_date") == since_dt.date().isoformat()
@@ -898,16 +850,7 @@ def test_chord_capped_redispatch_failure_preserves_published_work(
     monkeypatch.setattr(
         sync_units, "chord", lambda header, callback: CountingChord(header, callback)
     )
-    monkeypatch.setattr(
-        sync_units.dispatch_sync_run,
-        "apply_async",
-        lambda args=None, queue=None, countdown=None: (_ for _ in ()).throw(
-            RuntimeError("broker down on redispatch")
-        ),
-    )
-
-    with pytest.raises(RuntimeError, match="broker down on redispatch"):
-        sync_units.dispatch_sync_run(str(run.id))
+    result = sync_units.dispatch_sync_run(str(run.id))
 
     db_session.refresh(run)
     for unit in units:
@@ -919,6 +862,13 @@ def test_chord_capped_redispatch_failure_preserves_published_work(
         SyncRunUnitStatus.DISPATCHING.value,
         SyncRunUnitStatus.PLANNED.value,
     ]
+    assert result == {"status": "dispatched", "queued_units": 1}
+    assert call_count[0] == 1
+    assert (
+        db_session.query(SyncDispatchOutbox)
+        .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_DISPATCH)
+        .one()
+    )
 
 
 def test_noop_redispatch_failure_preserves_planned_for_reconciler(
@@ -930,13 +880,7 @@ def test_noop_redispatch_failure_preserves_planned_for_reconciler(
         db_session, monkeypatch, unit_count=1, cap=1, active_slots=1
     )
 
-    def fail_redispatch(*args, **kwargs):
-        raise RuntimeError("broker down noop")
-
-    monkeypatch.setattr(sync_units.dispatch_sync_run, "apply_async", fail_redispatch)
-
-    with pytest.raises(RuntimeError, match="broker down noop"):
-        sync_units.dispatch_sync_run(str(run.id))
+    result = sync_units.dispatch_sync_run(str(run.id))
 
     db_session.refresh(run)
     for unit in units:
@@ -945,6 +889,12 @@ def test_noop_redispatch_failure_preserves_planned_for_reconciler(
     assert run.status == SyncRunStatus.PLANNED.value
     assert run.completed_at is None
     assert units[0].status == SyncRunUnitStatus.PLANNED.value
+    assert result == {"status": "noop", "queued_units": 0}
+    assert (
+        db_session.query(SyncDispatchOutbox)
+        .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_DISPATCH)
+        .one()
+    )
 
 
 def test_fresh_same_run_dispatching_caps_planned_unit(db_session, monkeypatch):

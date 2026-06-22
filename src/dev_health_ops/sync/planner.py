@@ -51,6 +51,10 @@ from dev_health_ops.models import (
     SyncRunUnitStatus,
 )
 from dev_health_ops.sync.datasets import WatermarkBehavior, get_dataset_spec
+from dev_health_ops.sync.dispatch_outbox import (
+    OUTBOX_KIND_DISPATCH,
+    upsert_outbox_wakeup,
+)
 from dev_health_ops.sync.watermarks import get_watermark_with_overlap
 
 if TYPE_CHECKING:
@@ -170,6 +174,13 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
     ]
     session.add_all(unit_rows)
     session.flush()
+    upsert_outbox_wakeup(
+        session,
+        sync_run_id=sync_run.id,
+        kind=OUTBOX_KIND_DISPATCH,
+        available_at=now,
+        now=now,
+    )
 
     return SyncRunPlan(
         sync_run_id=str(sync_run.id),
@@ -325,9 +336,10 @@ def _get_tier_backfill_days_cap(session: Session, org_id: str) -> int | None:
     The only failure this function handles directly is a non-UUID org_id
     (e.g. test fixtures): returns the community default (30) so depth is
     bounded rather than unbounded.
-    Missing-table OperationalErrors are handled inside TierLimitService
-    (_get_db_tier_limits rolls back + falls through to hardcoded tier
-    defaults), so they never surface here.
+    Missing-table OperationalErrors are swallowed inside TierLimitService, but
+    PostgreSQL still marks the transaction failed after the underlying query
+    error. Keep that failure inside a planner-owned savepoint so the outer
+    planning transaction can continue to flush SyncRun/SyncRunUnit rows.
     """
     try:
         import uuid as _uuid
@@ -335,8 +347,15 @@ def _get_tier_backfill_days_cap(session: Session, org_id: str) -> int | None:
         from dev_health_ops.api.services.licensing import TierLimitService
 
         org_uuid = _uuid.UUID(str(org_id))  # raises ValueError for non-UUID strings
-        svc = TierLimitService(session)
-        cap = svc.get_limit(org_uuid, "backfill_days")
+        nested = session.begin_nested()
+        try:
+            svc = TierLimitService(session)
+            cap = svc.get_limit(org_uuid, "backfill_days")
+        except Exception:
+            nested.rollback()
+            return _DEFAULT_INITIAL_SYNC_DEPTH_DAYS
+        else:
+            nested.rollback()
         # None is the SUCCESS value for unlimited/enterprise tiers — do not cap.
         if cap is None:
             return None

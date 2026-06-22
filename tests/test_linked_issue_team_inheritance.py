@@ -214,6 +214,18 @@ def test_ambiguous_extkey_across_providers_is_dropped() -> None:
         assert resolver.resolve(pr.work_item_id) == (None, None)
 
 
+def test_ambiguous_extkey_does_not_fall_back_to_key_prefix() -> None:
+    linear = _wi("linear:CHAOS-1", "linear")
+    jira = _wi("jira:CHAOS-1", "jira")
+    pr = _wi("ghpr:x/y#1", "github", type="pr", project_id="x/y")
+    deps = [WorkItemDependency(pr.work_item_id, "extkey:CHAOS-1", "relates_to", "k")]
+    pkr = ProjectKeyTeamResolver(project_key_to_team={"CHAOS": ("CHAOS", "Chaos Team")})
+    resolver = build_linked_issue_team_resolver(
+        work_items=[linear, jira, pr], dependencies=deps, project_key_resolver=pkr
+    )
+    assert resolver.resolve(pr.work_item_id) == (None, None)
+
+
 def test_unresolvable_extkey_yields_no_inheritance() -> None:
     pr = _wi("ghpr:x/y#1", "github", type="pr", project_id="x/y")
     deps = [
@@ -228,6 +240,62 @@ def test_unresolvable_extkey_yields_no_inheritance() -> None:
         work_items=[pr], dependencies=deps, project_key_resolver=_chaos_resolver()
     )
     assert resolver.resolve(pr.work_item_id) == (None, None)
+
+
+def test_github_pr_inherits_from_extkey_prefix_without_donor_item() -> None:
+    # GitHub-token-only syncs can capture a Linear issue key from the PR body or
+    # branch before the Linear issue itself has been synced into work_items. The
+    # key prefix still maps to a known team, so the PR should inherit that team.
+    pr = _wi(
+        "ghpr:full-chaos/dev-health#12",
+        "github",
+        type="pr",
+        project_id="full-chaos/dev-health",
+    )
+    deps = [WorkItemDependency(pr.work_item_id, "extkey:CHAOS-2400", "relates_to", "k")]
+    resolver = build_linked_issue_team_resolver(
+        work_items=[pr], dependencies=deps, project_key_resolver=_chaos_resolver()
+    )
+    assert resolver.resolve(pr.work_item_id) == ("CHAOS", "Chaos Team")
+
+
+def test_gitlab_mr_inherits_from_extkey_prefix_without_donor_item() -> None:
+    mr = _wi(
+        "gitlab:full-chaos/dev-health!12",
+        "gitlab",
+        type="merge_request",
+        project_id="full-chaos/dev-health",
+    )
+    deps = [WorkItemDependency(mr.work_item_id, "extkey:CHAOS-2400", "relates_to", "k")]
+    resolver = build_linked_issue_team_resolver(
+        work_items=[mr], dependencies=deps, project_key_resolver=_chaos_resolver()
+    )
+    assert resolver.resolve(mr.work_item_id) == ("CHAOS", "Chaos Team")
+
+
+def test_gitlab_mr_prefix_fallback_stamps_cycle_time_team() -> None:
+    day = date(2026, 6, 1)
+    mr = _wi(
+        "gitlab:full-chaos/dev-health!12",
+        "gitlab",
+        type="merge_request",
+        project_id="full-chaos/dev-health",
+    )
+    deps = [WorkItemDependency(mr.work_item_id, "extkey:CHAOS-2400", "relates_to", "k")]
+    pkr = _chaos_resolver()
+    resolver = build_linked_issue_team_resolver(
+        work_items=[mr], dependencies=deps, project_key_resolver=pkr
+    )
+    _, _, cycle_times = compute_work_item_metrics_daily(
+        day=day,
+        work_items=[mr],
+        transitions=[],
+        computed_at=START,
+        project_key_resolver=pkr,
+        linked_issue_resolver=resolver,
+    )
+    assert cycle_times[0].team_id == "CHAOS"
+    assert cycle_times[0].team_name == "Chaos Team"
 
 
 def test_multiple_donors_resolved_deterministically_regardless_of_order() -> None:

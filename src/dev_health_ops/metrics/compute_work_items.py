@@ -433,11 +433,26 @@ def build_linked_issue_team_resolver(
             else:
                 key_index[k] = wid
 
+    def _external_issue_key(target_id: str) -> str | None:
+        if not target_id.startswith("extkey:"):
+            return None
+        return target_id.split(":", 1)[1].strip().upper()
+
     def _canonical_target(target_id: str) -> str | None:
-        if target_id.startswith("extkey:"):
-            # Missing or ambiguous keys both return None → no inheritance.
-            return key_index.get(target_id.split(":", 1)[1].strip().upper())
+        issue_key = _external_issue_key(target_id)
+        if issue_key is not None:
+            # Missing or ambiguous keys both return None → no donor-row lookup.
+            return key_index.get(issue_key)
         return target_id
+
+    def _team_from_issue_key_prefix(issue_key: str) -> tuple[str, str] | None:
+        if project_key_resolver is None or "-" not in issue_key:
+            return None
+        project_key = issue_key.rsplit("-", 1)[0]
+        team_id, team_name = project_key_resolver.resolve(project_key)
+        if team_id is None:
+            return None
+        return team_id, team_name or team_id
 
     def _recency(dep: WorkItemDependency) -> float:
         last = dep.last_synced
@@ -483,11 +498,20 @@ def build_linked_issue_team_resolver(
         if base_resolved.get(source_id) is not None:
             continue
         target_id = _canonical_target(dep.target_work_item_id)
-        if not target_id:
+        if target_id:
+            donor = donor_team.get(target_id)
+            if donor is not None:
+                candidates.setdefault(source_id, []).append((target_id, donor))
             continue
-        donor = donor_team.get(target_id)
+
+        issue_key = _external_issue_key(dep.target_work_item_id)
+        if issue_key is None or issue_key in ambiguous_keys:
+            continue
+        donor = _team_from_issue_key_prefix(issue_key)
         if donor is not None:
-            candidates.setdefault(source_id, []).append((target_id, donor))
+            candidates.setdefault(source_id, []).append(
+                (dep.target_work_item_id, donor)
+            )
 
     inherited: dict[str, tuple[str, str]] = {
         source_id: min(cands, key=lambda c: c[0])[1]

@@ -88,8 +88,10 @@ flowchart TD
 **Invariants:** the **winner is the highest-precedence matching source** (all matching sources are
 still persisted as candidates — precedence decides `is_primary`, not which sources are computed);
 `linked_issue` (5) requires a real `work_item_dependencies` donor row resolving to a `work_items`
-row that itself has a team (a bare prefix falls through to 6); `manual_fallback` (6) can only beat
-`unassigned`; a whole org at `unassigned` usually means the ClickHouse `teams` dimension is empty.
+row whose **own team came from a first-class fact (sources 0–4)** — a donor resolved only by
+`manual_fallback` is NOT a valid donor, so a bare prefix can never be laundered into rank-5
+inheritance (it falls through to 6); `manual_fallback` (6) can only beat `unassigned`; a whole org
+at `unassigned` usually means the ClickHouse `teams` dimension is empty.
 
 ### 0.2 Source reference matrix
 
@@ -112,7 +114,10 @@ row that itself has a team (a bare prefix falls through to 6); `manual_fallback`
 | PR attributed to a surprising team via `linked_issue` | 5 | which `work_item_dependencies` edge? donor's own team? extkey ambiguous? | confirm donor row + `_canonical_target`; check `_INHERITABLE_RELATIONSHIP_TYPES` |
 | `manual_fallback` beats a real team | precedence | `_SOURCE_ORDER` has `manual_fallback=6`? loader merging manual at the wrong rank? | restore rank — manual is the lowest non-unassigned tier |
 | A bare prefix (e.g. `CHAOS`) attributes as `linked_issue` | 5 vs 6 | did a full key resolve to a real `work_items` row, or did a prefix shortcut leak in? | no prefix→team in `linked_issue`; route to manual `issue_key_prefix` |
-| Team flips back and forth after a re-org | RMT dedup | duplicate ownership rows; read lacks `FINAL`/`argMax` | add `FINAL`/`argMax` to ownership + manual reads |
+| A PR inherits via `linked_issue` from a donor that only has a `manual_fallback` (e.g. `issue_key_prefix`) rule | 5 (donor) | is the donor's *primary* source in 0–4? a rank-6 fallback must never be relabeled rank-5 | donors gated to `_DONOR_SOURCES` (0–4) in `build_linked_issue_team_resolver`; a manual-only donor is never a linked_issue donor (done CS3) |
+| Same scope shows duplicate ownership candidates / bloats over time | RMT read | `valid_from` is in the ownership tables' `ORDER BY`, so `FINAL` cannot collapse re-imports (each daily run is a new sort key) | reads dedup per *logical* scope via `argMax((updated_at, valid_from))`, NOT `FINAL` (done CS3, `load_team_attribution_context`); manual-fallback read keeps `FINAL` (its sort key has no `valid_from`) |
+| Team flips / stale team lingers after a re-org | write side | ownership writers set `valid_from=now` but never `valid_to`, so a reassigned scope keeps the old-team row active; readers can't tell stale from co-ownership | needs writer-side `valid_to` expiry on re-derivation — tracked **CHAOS-2610** (read-side `argMax` already makes the newest the primary by recency tiebreak) |
+| `manual_fallback` resolves the wrong team | scope match | which `manual_attribution_fallbacks` row matched (repo/project/member/issue_key_prefix)? | check `_manual_fallback_candidates` scope match + rule `priority`; manual is rank 6 (done CS3) |
 | Provenance absent in the API | GraphQL | resolver SELECTs the provenance columns? SDL has the fields? | expose `source/confidence/evidence` |
 | Web shows a different team than the backend | client recompute | any client-side mapping derived from `evidence`? | render-only; delete client derivation |
 

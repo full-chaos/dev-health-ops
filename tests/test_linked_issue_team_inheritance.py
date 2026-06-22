@@ -17,6 +17,7 @@ from dev_health_ops.metrics.compute_work_item_state_durations import (
     compute_work_item_state_durations_daily,
 )
 from dev_health_ops.metrics.compute_work_items import (
+    ManualFallbackRule,
     TeamAttributionCandidate,
     TeamAttributionContext,
     build_linked_issue_team_resolver,
@@ -722,6 +723,167 @@ def test_gitlab_mr_resolver_precedence_with_gitlab_donor() -> None:
         by_source["linked_issue"].team_id == "svc"
     )  # inherited from the GitLab issue donor
     assert by_source["linked_issue"].is_primary == 0
+
+
+def test_manual_fallback_applies_only_when_nothing_stronger() -> None:
+    # CHAOS-2600 CS3: a repo-scoped manual fallback resolves a PR that has no
+    # native/imported/linked team. It is rank 6 (just above unassigned).
+    item = _wi(
+        "ghpr:full-chaos/ops#30", "github", type="pr", project_id="full-chaos/ops"
+    )
+    ctx = TeamAttributionContext(
+        manual_fallbacks=[
+            ManualFallbackRule(
+                provider="github",
+                scope_type="repo",
+                scope_id="full-chaos/ops",
+                team_id="ops",
+                team_name="Ops",
+                reason="explicit",
+            )
+        ]
+    )
+    team_id, _, candidates = resolve_team_attribution(
+        item, None, None, attribution_context=ctx
+    )
+    by_source = {c.source: c for c in candidates}
+    assert team_id == "ops"
+    assert by_source["manual_fallback"].is_primary == 1
+    assert by_source["manual_fallback"].confidence == "manual"
+
+
+def test_manual_fallback_never_overrides_native_team() -> None:
+    item = _wi("ghpr:x/y#1", "github", project_id="x/y", native_team_key="CHAOS")
+    pkr = ProjectKeyTeamResolver(project_key_to_team={"CHAOS": ("CHAOS", "Chaos")})
+    ctx = TeamAttributionContext(
+        manual_fallbacks=[
+            ManualFallbackRule(
+                provider="github",
+                scope_type="repo",
+                scope_id="x/y",
+                team_id="ops",
+                team_name="Ops",
+            )
+        ]
+    )
+    team_id, _, candidates = resolve_team_attribution(
+        item, None, pkr, attribution_context=ctx
+    )
+    by_source = {c.source: c for c in candidates}
+    assert team_id == "CHAOS"
+    assert by_source["native_team"].is_primary == 1
+    assert by_source["manual_fallback"].is_primary == 0
+
+
+def test_manual_fallback_never_overrides_linked_issue_donor() -> None:
+    # linked_issue (rank 5) beats manual_fallback (rank 6).
+    pr = _wi("ghpr:full-chaos/ops#31", "github", type="pr", project_id="full-chaos/ops")
+    donor = _wi("linear:OTHER-1", "linear", project_key="OTHER")
+    deps = [WorkItemDependency(pr.work_item_id, "extkey:OTHER-1", "relates_to", "k")]
+    pkr = ProjectKeyTeamResolver(project_key_to_team={"OTHER": ("other", "Other")})
+    resolver = build_linked_issue_team_resolver(
+        work_items=[pr, donor], dependencies=deps, project_key_resolver=pkr
+    )
+    ctx = TeamAttributionContext(
+        manual_fallbacks=[
+            ManualFallbackRule(
+                provider="github",
+                scope_type="repo",
+                scope_id="full-chaos/ops",
+                team_id="ops",
+                team_name="Ops",
+            )
+        ]
+    )
+    team_id, _, candidates = resolve_team_attribution(
+        pr, None, pkr, linked_issue_resolver=resolver, attribution_context=ctx
+    )
+    by_source = {c.source: c for c in candidates}
+    assert team_id == "other"
+    assert by_source["linked_issue"].is_primary == 1
+    assert by_source["manual_fallback"].is_primary == 0
+
+
+def test_issue_key_prefix_without_donor_matches_manual_not_linked_issue() -> None:
+    # A Linear issue with key prefix CHAOS, no native/ownership team, no linked donor:
+    # it must NOT become linked_issue; an issue_key_prefix manual fallback resolves it.
+    item = _wi("linear:CHAOS-77", "linear")
+    ctx = TeamAttributionContext(
+        manual_fallbacks=[
+            ManualFallbackRule(
+                provider="linear",
+                scope_type="issue_key_prefix",
+                scope_id="CHAOS",
+                team_id="chaos",
+                team_name="Chaos",
+            )
+        ]
+    )
+    team_id, _, candidates = resolve_team_attribution(
+        item, None, None, attribution_context=ctx
+    )
+    by_source = {c.source: c for c in candidates}
+    assert team_id == "chaos"
+    assert by_source["manual_fallback"].is_primary == 1
+    assert "linked_issue" not in by_source
+
+
+def test_issue_key_prefix_is_provider_neutral_and_only_manual() -> None:
+    # issue_key_prefix is provider-neutral and only ever emits manual_fallback.
+    item = _wi("jira:OPS-5", "jira")
+    ctx = TeamAttributionContext(
+        manual_fallbacks=[
+            ManualFallbackRule(
+                provider="linear",
+                scope_type="issue_key_prefix",
+                scope_id="OPS",
+                team_id="ops",
+                team_name="Ops",
+            )
+        ]
+    )
+    team_id, _, candidates = resolve_team_attribution(
+        item, None, None, attribution_context=ctx
+    )
+    by_source = {c.source: c for c in candidates}
+    assert team_id == "ops"
+    assert by_source["manual_fallback"].source == "manual_fallback"
+
+
+def test_manual_fallback_donor_is_not_laundered_into_linked_issue() -> None:
+    # A donor whose ONLY resolution is manual_fallback (here an issue_key_prefix
+    # rule) must never become a linked-issue donor: that would relabel a rank-6
+    # fallback as rank-5 `linked_issue` provenance on the dependent. The PR links
+    # to that donor but has no team of its own, so it must stay unassigned with
+    # NO linked_issue candidate emitted.
+    donor = _wi("linear:CHAOS-77", "linear")
+    pr = _wi("ghpr:full-chaos/web#9", "github", type="pr", project_id="full-chaos/web")
+    deps = [
+        WorkItemDependency(pr.work_item_id, "extkey:CHAOS-77", "relates_to", "fixes")
+    ]
+    ctx = TeamAttributionContext(
+        manual_fallbacks=[
+            ManualFallbackRule(
+                provider="linear",
+                scope_type="issue_key_prefix",
+                scope_id="CHAOS",
+                team_id="chaos",
+                team_name="Chaos",
+            )
+        ]
+    )
+    resolver = build_linked_issue_team_resolver(
+        work_items=[donor, pr],
+        dependencies=deps,
+        attribution_context=ctx,
+    )
+    team_id, _, candidates = resolve_team_attribution(
+        pr, None, None, linked_issue_resolver=resolver, attribution_context=ctx
+    )
+    by_source = {c.source: c for c in candidates}
+    assert "linked_issue" not in by_source
+    assert team_id != "chaos"
+    assert by_source["unassigned"].is_primary == 1
 
 
 def test_context_project_repo_membership_tiebreak_and_unassigned() -> None:

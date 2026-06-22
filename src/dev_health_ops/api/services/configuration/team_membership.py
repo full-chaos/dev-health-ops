@@ -12,21 +12,16 @@ import difflib
 from typing import TYPE_CHECKING, Any
 
 import requests
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from dev_health_ops.models.settings import IdentityMapping
 
 from ._helpers import (
     _get_discovered_member_cls,
     _get_identity_mapping_response_cls,
     _get_member_match_result_cls,
 )
-from .identity_mapping import IdentityMappingService
 
 if TYPE_CHECKING:
     from dev_health_ops.api.admin.schemas import (
-        ConfirmMemberLink,
         DiscoveredMember,
     )
 
@@ -215,104 +210,12 @@ class TeamMembershipService:
     async def match_members(
         self,
         members: list[DiscoveredMember],
-        identity_store: Any | None = None,
+        identity_store: Any,
     ) -> list[Any]:
-        # CHAOS-2600 CS5: when a ClickHouse identity store is provided, match
-        # against the ClickHouse-native identity catalog (the admin system of
-        # record) instead of Postgres ``IdentityMapping``.
-        if identity_store is not None:
-            return await self._match_members_clickhouse(members, identity_store)
-
-        IdentityMappingResponse = _get_identity_mapping_response_cls()
-        member_match_result_cls = _get_member_match_result_cls()
-        identity_svc = IdentityMappingService(self.session, self.org_id)
-        matched: list[Any] = []
-
-        for member in members:
-            mapping = await identity_svc.find_by_provider_identity(
-                member.provider_type,
-                member.provider_identity,
-            )
-            if mapping is not None:
-                matched.append(
-                    member_match_result_cls(
-                        discovered=member,
-                        match_status="matched",
-                        matched_identity=IdentityMappingResponse.model_validate(
-                            mapping
-                        ),
-                        confidence=1.0,
-                    )
-                )
-                continue
-
-            if member.email:
-                stmt = select(IdentityMapping).where(
-                    IdentityMapping.org_id == self.org_id,
-                    IdentityMapping.email == member.email,
-                    IdentityMapping.is_active == True,  # noqa: E712
-                )
-                email_result = await self.session.execute(stmt)
-                email_match = email_result.scalar_one_or_none()
-                if email_match is not None:
-                    matched.append(
-                        member_match_result_cls(
-                            discovered=member,
-                            match_status="suggested",
-                            matched_identity=IdentityMappingResponse.model_validate(
-                                email_match
-                            ),
-                            confidence=0.95,
-                            suggestion_reason="email_match",
-                        )
-                    )
-                    continue
-
-            if member.display_name:
-                name_stmt = select(IdentityMapping).where(
-                    IdentityMapping.org_id == self.org_id,
-                    IdentityMapping.display_name.isnot(None),
-                    IdentityMapping.is_active == True,  # noqa: E712
-                )
-                name_result = await self.session.execute(name_stmt)
-                best_match: IdentityMapping | None = None
-                best_score = 0.0
-                for candidate in name_result.scalars().all():
-                    if not candidate.display_name:
-                        continue
-                    score = difflib.SequenceMatcher(
-                        a=member.display_name.lower(),
-                        b=candidate.display_name.lower(),
-                    ).ratio()
-                    if score > best_score:
-                        best_score = score
-                        best_match = candidate
-
-                if best_match is not None and best_score >= 0.8:
-                    matched.append(
-                        member_match_result_cls(
-                            discovered=member,
-                            match_status="suggested",
-                            matched_identity=IdentityMappingResponse.model_validate(
-                                best_match
-                            ),
-                            confidence=round(best_score, 2),
-                            suggestion_reason="display_name_similarity",
-                        )
-                    )
-                    continue
-
-            matched.append(
-                member_match_result_cls(
-                    discovered=member,
-                    match_status="unmatched",
-                    matched_identity=None,
-                    confidence=None,
-                    suggestion_reason=None,
-                )
-            )
-
-        return matched
+        # ClickHouse is the identity system of record (CHAOS-2600 CS5/CS6).
+        # Match discovered members against the ClickHouse-native identity
+        # catalog; the live caller always passes a ``ClickHouseIdentityStore``.
+        return await self._match_members_clickhouse(members, identity_store)
 
     async def _match_members_clickhouse(
         self,
@@ -410,54 +313,3 @@ class TeamMembershipService:
             )
 
         return matched
-
-    async def confirm_links(
-        self,
-        team_id: str,
-        links: list[ConfirmMemberLink],
-    ) -> dict[str, int]:
-        identity_svc = IdentityMappingService(self.session, self.org_id)
-        linked = 0
-        created = 0
-        skipped = 0
-
-        for link in links:
-            if link.action == "skip":
-                skipped += 1
-                continue
-
-            if link.action == "link":
-                mapping: Any | None = await identity_svc.get(link.canonical_id)
-                if mapping is None:
-                    skipped += 1
-                    continue
-
-                team_ids = list(mapping.team_ids or [])
-                if team_id not in team_ids:
-                    team_ids.append(team_id)
-                    setattr(mapping, "team_ids", team_ids)
-                await identity_svc.add_provider_identity(
-                    canonical_id=link.canonical_id,
-                    provider=link.provider,
-                    identity=link.provider_identity,
-                )
-                linked += 1
-                continue
-
-            if link.action == "create":
-                await identity_svc.create_or_update(
-                    canonical_id=link.canonical_id,
-                    provider_identities={link.provider: [link.provider_identity]},
-                    team_ids=[team_id],
-                )
-                created += 1
-                continue
-
-            skipped += 1
-
-        await self.session.flush()
-        return {
-            "linked": linked,
-            "created": created,
-            "skipped": skipped,
-        }

@@ -101,7 +101,7 @@ ClickHouse is the system of record for the team catalog AND identity→team memb
 
 The sync flow is structured as follows:
 1. **Direct ClickHouse writes**: `dev-hops sync teams` writes the ClickHouse `teams` table directly via `insert_teams` — org-scoped (`--org`) rows are tagged with `org_id`, no-org rows are untagged. Team auto-import and the admin team CRUD surface (`ClickHouseTeamAdminService`) are native ClickHouse writers too.
-2. **ClickHouse-native identities**: Identity records live in the ClickHouse `identities` table (`ClickHouseIdentityStore`); the admin identity surface updates `teams.members` surgically by facet. The shared `members_by_team` resolver is still used by the (now no-op) reconcile path; live admin/identity writes never touch Postgres `identity_mappings`.
+2. **ClickHouse-native identities**: Identity records live in the ClickHouse `identities` table (`ClickHouseIdentityStore`); the admin identity surface updates `teams.members` surgically by facet. The old Postgres→ClickHouse member-reconcile path (which used `members_by_team`) was deleted in CS6 (CHAOS-2607); live admin/identity writes never touch Postgres `identity_mappings`.
 3. **No Postgres bridge / projection**: `bridge_teams_to_clickhouse`, `providers/team_bridge.py`, `providers/team_reconcile.py` (and `dev-hops teams reconcile`), and the `sync_teams_to_analytics` task are **deleted** in CS5. The org-scoped path does not project to Postgres via `TeamDriftSyncService`. The Postgres `team_mappings` / `identity_mappings` models are dropped in CS6.
 ## History
 

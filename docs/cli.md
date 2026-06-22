@@ -14,9 +14,11 @@ dev-hops sync git --provider local --repo-path /path/to/repo
 ### Sync teams
 
 ```bash
-POSTGRES_URI="postgresql+asyncpg://localhost:5555/postgres" \
+CLICKHOUSE_URI="clickhouse://localhost:8123/default" \
 dev-hops sync teams --provider config --path /path/to/teams.yml
 ```
+
+> ClickHouse is the system of record for the team catalog (CHAOS-2600 CS5); `sync teams` writes ClickHouse directly and does not require `POSTGRES_URI`.
 
 ### Sync work items
 

@@ -313,8 +313,10 @@ async def test_admin_created_team_has_empty_provider(client):
 
 @pytest.mark.asyncio
 async def test_drift_review_endpoints_disabled_501(client):
-    # CHAOS-2600 CS5: the team drift-review surface is disabled (HTTP 501),
-    # not faked as success; the ClickHouse-backed rebuild lands in CS6.
+    # The team drift-review surface is disabled (HTTP 501), not faked as success
+    # and not falling through to GET /teams/{team_id} (which would 404). The
+    # ClickHouse-backed rebuild is tracked by CHAOS-2622. These stubs keep the
+    # dev-health-web admin contract a clean 501 until CS7 removes both sides.
     async_client, _, _ = client
     calls = [
         ("get", "/api/v1/admin/teams/pending-changes"),
@@ -325,4 +327,4 @@ async def test_drift_review_endpoints_disabled_501(client):
     for method, url in calls:
         response = await getattr(async_client, method)(url)
         assert response.status_code == 501, (method, url)
-        assert "CS5" in response.json()["detail"]
+        assert "CHAOS-2622" in response.json()["detail"], (method, url)

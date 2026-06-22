@@ -30,7 +30,6 @@ from dev_health_ops.models.refunds import Refund
 from dev_health_ops.models.reports import ReportRun, SavedReport
 from dev_health_ops.models.retention import OrgRetentionPolicy
 from dev_health_ops.models.settings import (
-    IdentityMapping,
     IntegrationCredential,
     JobRun,
     JobStatus,
@@ -38,7 +37,6 @@ from dev_health_ops.models.settings import (
     Setting,
     SyncConfiguration,
     SyncWatermark,
-    TeamMapping,
 )
 from dev_health_ops.models.sso import SSOProvider
 from dev_health_ops.models.subscriptions import Subscription, SubscriptionEvent
@@ -266,21 +264,10 @@ def _postgres_targets() -> list[PostgresDeletionTarget]:
             ImpersonationSession,
             lambda org_uuid, _org_id: ImpersonationSession.target_org_id == org_uuid,
         ),
-        # NOTE: the `teams` entity is a ClickHouse analytics table (used in
-        # metrics), not a Postgres semantic table. It is org-scoped-purged via
-        # `_purge_clickhouse` (migration 024 adds its org_id column). Do NOT add
-        # a `teams` PostgresDeletionTarget here — it lives in a different layer.
-        # The Postgres semantic team config is `team_mappings`, handled below.
-        PostgresDeletionTarget(
-            "team_mappings",
-            TeamMapping,
-            lambda _org_uuid, org_id: TeamMapping.org_id == org_id,
-        ),
-        PostgresDeletionTarget(
-            "identity_mappings",
-            IdentityMapping,
-            lambda _org_uuid, org_id: IdentityMapping.org_id == org_id,
-        ),
+        # NOTE: team + identity catalogs are ClickHouse-native (CH `teams` /
+        # `identities` tables), purged org-scoped via `_purge_clickhouse`. The
+        # Postgres `team_mappings` / `identity_mappings` tables were dropped in
+        # CHAOS-2600 CS6, so there are no Postgres deletion targets for them.
         PostgresDeletionTarget(
             "memberships",
             Membership,

@@ -34,14 +34,12 @@ from dev_health_ops.models.refunds import Refund
 from dev_health_ops.models.reports import ReportRun, SavedReport
 from dev_health_ops.models.retention import OrgRetentionPolicy
 from dev_health_ops.models.settings import (
-    IdentityMapping,
     IntegrationCredential,
     JobRun,
     ScheduledJob,
     Setting,
     SyncConfiguration,
     SyncWatermark,
-    TeamMapping,
 )
 from dev_health_ops.models.sso import SSOProvider
 from dev_health_ops.models.subscriptions import Subscription, SubscriptionEvent
@@ -63,8 +61,6 @@ _TABLES = tables_of(
     SyncConfiguration,
     ScheduledJob,
     JobRun,
-    IdentityMapping,
-    TeamMapping,
     SyncWatermark,
     SavedReport,
     ReportRun,
@@ -542,13 +538,15 @@ def test_postgres_targets_do_not_overlap_clickhouse_tables():
 
 
 def test_org_deletion_does_not_target_teams_in_postgres():
-    """`teams` is a ClickHouse entity (used in metrics) and is purged via the
-    ClickHouse path; it must not be a Postgres deletion target. The Postgres
-    semantic team representation is `team_mappings`, which remains a target.
+    """The team + identity catalogs are ClickHouse-native (CH `teams` /
+    `identities` tables) and are purged via the ClickHouse path; they must not be
+    Postgres deletion targets. The Postgres `team_mappings` / `identity_mappings`
+    tables were dropped in CHAOS-2600 CS6, so neither is a Postgres target.
     """
     pg_tables = {target.table for target in _postgres_targets()}
     assert "teams" not in pg_tables
-    assert "team_mappings" in pg_tables
+    assert "team_mappings" not in pg_tables
+    assert "identity_mappings" not in pg_tables
 
 
 @pytest.mark.asyncio
@@ -566,7 +564,9 @@ async def test_org_deletion_succeeds_without_postgres_teams_table(session_maker)
         # Must not raise UndefinedTableError for the missing `teams` relation.
         result = await service.delete(org1_id, dry_run=False)
 
-        # `teams` is never counted/deleted on the Postgres session ...
+        # The team/identity catalogs are ClickHouse-native and never counted or
+        # deleted on the Postgres session (the dropped Postgres mapping tables
+        # are not deletion targets either).
         assert "teams" not in result.postgres.tables
-        # ... while the Postgres semantic team config still is.
-        assert "team_mappings" in result.postgres.tables
+        assert "team_mappings" not in result.postgres.tables
+        assert "identity_mappings" not in result.postgres.tables

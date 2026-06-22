@@ -4,7 +4,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.fixtures.generator import SyntheticDataGenerator
 from dev_health_ops.models.teams import JiraProjectOpsTeamLink, Team
@@ -515,43 +514,3 @@ def test_cli_sync_teams_org_scoped_jira_ops_links_written_to_clickhouse():
     assert len(captured) == 1
     assert captured[0].project_key == "OPS"
     assert captured[0].ops_team_id == "team-1"
-
-
-@pytest.mark.asyncio
-async def test_import_ms_teams_uses_prefixed_team_id():
-    from dev_health_ops.api.admin.schemas import DiscoveredTeam
-    from dev_health_ops.api.services.configuration.team_discovery import (
-        TeamDiscoveryService,
-    )
-
-    captured: dict = {}
-
-    class FakeTeamMappingService:
-        def __init__(self, _session, _org_id):
-            pass
-
-        async def get(self, _team_id):
-            return None
-
-        async def create_or_update(self, **kwargs):
-            captured.update(kwargs)
-
-    with patch(
-        "dev_health_ops.api.services.configuration.team_discovery.TeamMappingService",
-        FakeTeamMappingService,
-    ):
-        result = await TeamDiscoveryService(
-            MagicMock(spec=AsyncSession), "org-1"
-        ).import_teams(
-            [
-                DiscoveredTeam(
-                    provider_type="ms-teams",
-                    provider_team_id="graph-team-id",
-                    name="Platform Team",
-                )
-            ]
-        )
-
-    assert result["imported"] == 1
-    assert captured["team_id"] == "ms-teams:graph-team-id"
-    assert captured["extra_data"]["provider_team_id"] == "graph-team-id"

@@ -60,10 +60,12 @@ def _resolve_team(
 
 TeamAttributionSource = Literal[
     "native_team",
-    "linked_issue",
+    "issue_project",
     "project_ownership",
     "repo_ownership",
     "assignee_membership",
+    "linked_issue",
+    "manual_fallback",
     "unassigned",
 ]
 
@@ -102,13 +104,19 @@ class TeamAttributionContext:
     )
 
 
+# CHAOS-2600: deterministic staged precedence. linked_issue is a TRUE FALLBACK
+# (rank 5) below every native/imported fact — it never overrides ownership or
+# assignee membership; it only beats manual_fallback and unassigned. native_team
+# stays top. See docs/architecture/team-attribution.md §0.
 _SOURCE_ORDER: dict[TeamAttributionSource, int] = {
     "native_team": 0,
-    "linked_issue": 1,
+    "issue_project": 1,
     "project_ownership": 2,
     "repo_ownership": 3,
     "assignee_membership": 4,
-    "unassigned": 5,
+    "linked_issue": 5,
+    "manual_fallback": 6,
+    "unassigned": 7,
 }
 
 
@@ -190,10 +198,16 @@ def _native_team_candidate(
     )
 
 
-def _legacy_project_candidate(
+def _issue_project_candidate(
     item: WorkItem,
     project_key_resolver: ProjectKeyTeamResolver | None,
 ) -> TeamAttributionCandidate | None:
+    """The issue's OWN native project key -> owning team (a native WTI fact).
+
+    Distinct from imported ``project_ownership`` (the ``team_project_ownership``
+    edges supplied via ``attribution_context``). CHAOS-2600 ranks this as
+    ``issue_project`` (rank 1), just below ``native_team``.
+    """
     if project_key_resolver is None:
         return None
     keys = [item.work_scope_id or ""]
@@ -205,11 +219,11 @@ def _legacy_project_candidate(
         team_id, team_name = project_key_resolver.resolve(key)
         if team_id is not None:
             return TeamAttributionCandidate(
-                source="project_ownership",
+                source="issue_project",
                 team_id=team_id,
                 team_name=team_name or team_id,
-                confidence="medium",
-                evidence=f"project_key={key}",
+                confidence="high",
+                evidence=f"issue_project_key={key}",
                 is_primary=1,
                 specificity=50,
             )
@@ -227,10 +241,12 @@ def resolve_team_attribution(
         TeamAttributionSource, list[TeamAttributionCandidate]
     ] = {
         "native_team": [],
-        "linked_issue": [],
+        "issue_project": [],
         "project_ownership": [],
         "repo_ownership": [],
         "assignee_membership": [],
+        "linked_issue": [],
+        "manual_fallback": [],
         "unassigned": [],
     }
 
@@ -255,9 +271,9 @@ def resolve_team_attribution(
                 )
             )
 
-    legacy_project = _legacy_project_candidate(item, project_key_resolver)
-    if legacy_project is not None:
-        candidates_by_source["project_ownership"].append(legacy_project)
+    issue_project = _issue_project_candidate(item, project_key_resolver)
+    if issue_project is not None:
+        candidates_by_source["issue_project"].append(issue_project)
 
     if attribution_context is not None:
         candidates_by_source["project_ownership"].extend(
@@ -265,10 +281,20 @@ def resolve_team_attribution(
                 attribution_context.project_by_id, item.provider, item.project_id
             )
         )
+        # Deconflict against issue_project: `team_project_ownership` keyed on the SAME
+        # project key is the imported representation of the same "project key -> team" fact
+        # the issue_project candidate already emitted (via project_key_resolver). Suppress the
+        # duplicate-team row so one fact yields one provenance row; a genuinely DIFFERENT team
+        # claimed by-key is a real lower-precedence signal and is kept.
+        _issue_project_teams = {
+            c.team_id for c in candidates_by_source["issue_project"] if c.team_id
+        }
         candidates_by_source["project_ownership"].extend(
-            _context_candidates(
+            candidate
+            for candidate in _context_candidates(
                 attribution_context.project_by_key, item.provider, item.project_key
             )
+            if candidate.team_id not in _issue_project_teams
         )
         candidates_by_source["repo_ownership"].extend(
             _context_candidates(
@@ -317,7 +343,7 @@ def resolve_team_attribution(
             source="unassigned",
             team_id=None,
             team_name=None,
-            confidence="low",
+            confidence="none",
             evidence="no_candidate",
             is_primary=1,
         )

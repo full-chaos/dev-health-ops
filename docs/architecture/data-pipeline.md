@@ -114,6 +114,12 @@ async def write_batch(records: List[Model], session: AsyncSession) -> int:
 > See [Team Attribution](team-attribution.md) for the full architecture with
 > sequence, flowchart, ER, and component diagrams.
 
+> **CHAOS-2600:** the implemented precedence is the 8-source staged model in
+> [team-attribution.md §0](team-attribution.md) (`native_team > issue_project > project_ownership >
+> repo_ownership > assignee_membership > linked_issue > manual_fallback > unassigned`). The numbered
+> list below is the historical 4-tier cascade — `linked_issue` is a true fallback **below** ownership
+> and assignee membership, not above them.
+
 Every work item is stamped with a `team_id` at compute time
 (`metrics/compute_work_items.py`). Resolution is a fallback cascade
 (`resolve_base_team` + one inheritance tier), first match wins:

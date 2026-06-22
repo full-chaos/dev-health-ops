@@ -100,7 +100,7 @@ row that itself has a team (a bare prefix falls through to 6); `manual_fallback`
 | 2 | `project_ownership` | `team_project_ownership` | high | 3–7 | 0–1 | `project_id, provider` |
 | 3 | `repo_ownership` | `team_repo_ownership` | medium | 4–7 | 0–2 | `repo_full_name` |
 | 4 | `assignee_membership` | `team_memberships` (assignee identity) | medium | 5–7 | 0–3 | `member_id, identity` |
-| 5 | `linked_issue` | `work_item_dependencies` donor → donor's team | high (donor's) | 6–7 | 0–4 | `dependency_type, donor_work_item_id, donor_provider` |
+| 5 | `linked_issue` | `work_item_dependencies` donor → donor's team | medium | 6–7 | 0–4 | `dependency_type, donor_work_item_id, donor_provider` |
 | 6 | `manual_fallback` | `manual_attribution_fallbacks` (repo/project/member/issue_key_prefix) | manual\|low | 7 only | 0–5 | `scope_type, scope_id, reason` |
 | 7 | `unassigned` | — (nothing matched) | none | — (floor) | — | `reason` |
 
@@ -118,9 +118,53 @@ row that itself has a team (a bare prefix falls through to 6); `manual_fallback`
 
 > Full data-flow and data-object-hierarchy diagrams: see the CHAOS-2600 plan §1.6–1.7 / `team-flow.md`.
 
+### 0.4 Provider coverage contract (attribution is provider-agnostic)
+
+Attribution is **provider-agnostic** — the resolver and precedence (§0.1) never branch on provider.
+That is a **testable contract**: every WTI provider × every normalized entity must be covered, not
+just Linear. **Attribution changes MUST keep this matrix green; never add Linear-only coverage.**
+
+| provider \ entity | teams | projects | members | issues |
+|---|---|---|---|---|
+| jira   | partial | partial | partial | yes |
+| gitlab | partial | yes     | **no**  | yes |
+| github | yes     | n/a¹    | yes     | yes |
+| linear | yes     | partial | yes     | yes |
+
+`yes` = normalized in src AND asserted in tests · `partial` = only sink/integration assertion (no
+unit test of the normalizer) · `no` = normalized but output never asserted · `n/a` = provider does
+not natively produce this entity. ¹ GitHub has no native Project entity (the repo is the scope).
+
+- **Resolver row (CS2):** the precedence resolver (`resolve_team_attribution`) is exercised for all
+  four providers — Linear (`test_issue_project_wins_over_linked_issue`,
+  `test_assignee_membership_wins_over_linked_issue`), GitHub (`gh:` items in
+  `test_project_ownership_wins_over_linked_issue` / `test_repo_ownership_wins_over_linked_issue`),
+  GitLab (`test_gitlab_mr_resolver_precedence_with_gitlab_donor` — MR as item + GitLab issue as
+  same-provider donor), Jira (`test_jira_issue_project_wins_over_linked_issue`,
+  `test_assignee_membership_wins_over_jira_linked_donor`). (Provider *link-capture* — distinct from
+  the resolver — is also tested per provider, e.g. `test_gitlab_captures_external_key_*`.)
+- **Why it matters:** the team/project/member **dimension** is populated by the per-provider
+  team/project/member sync. **"Auto Import" is a UX option** (checkboxes to import teams, projects,
+  and members from an integration → `run_team_autoimport`, writing ClickHouse directly); manual
+  fallback is the separate explicit-override option. Because jira/github/gitlab work items carry
+  `native_team_key = None` (only Linear sets it real), non-Linear attribution depends *entirely* on
+  this dimension — so its coverage cells are the highest-risk. (CHAOS-2600 does not change these
+  sync ops; CS5 removes only the Postgres bridge.)
+- **Open gaps → CHAOS-2609 (CS-COV):** the dimension has holes — **gitlab/members normalized but
+  never asserted (high)**, gitlab epics untested (high), jira team/project/member sink-only
+  (medium), linear native projects not ingested (medium). Until those land, do **not** assume
+  non-Linear dimension coverage. The matrix above is the source of truth for what is/ isn't proven.
+
 ---
 
 ## 1. Attribution cascade (decision flow)
+
+> **Implemented model: see §0 (CHAOS-2600).** As of CS2 the resolver applies the 8-source staged
+> precedence in §0 (`native_team > issue_project > project_ownership > repo_ownership >
+> assignee_membership > linked_issue > manual_fallback > unassigned`) — `linked_issue` is now a true
+> fallback below ownership/assignee, and the issue's own project key resolves as `issue_project`.
+> The 4-tier cascade below predates that change and is kept for historical context; where they
+> differ, **§0 governs**.
 
 `resolve_base_team()` runs tiers 1–3; the linked-issue resolver is tier 4. The
 first match wins and nothing ever overrides a real team.

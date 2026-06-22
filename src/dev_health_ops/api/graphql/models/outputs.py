@@ -518,6 +518,56 @@ class WorkGraphProvenance(Enum):
     HEURISTIC = "heuristic"
 
 
+@strawberry.enum
+class TeamAttributionSource(Enum):
+    """Which signal attributed a work item to a team (CHAOS-2600).
+
+    Listed strongest-first (native_team) to the floor (unassigned). Mirrors
+    ``work_item_team_attributions.source`` (ClickHouse Enum8) and
+    ``compute_work_items.TeamAttributionSource`` — keep all three in lockstep.
+    """
+
+    NATIVE_TEAM = "native_team"
+    ISSUE_PROJECT = "issue_project"
+    PROJECT_OWNERSHIP = "project_ownership"
+    REPO_OWNERSHIP = "repo_ownership"
+    ASSIGNEE_MEMBERSHIP = "assignee_membership"
+    LINKED_ISSUE = "linked_issue"
+    MANUAL_FALLBACK = "manual_fallback"
+    UNASSIGNED = "unassigned"
+
+
+@strawberry.enum
+class TeamAttributionConfidence(Enum):
+    """Confidence of a team attribution. Mirrors
+    ``work_item_team_attributions.confidence`` (ClickHouse Enum8)."""
+
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    MANUAL = "manual"
+    NONE = "none"
+
+
+@strawberry.type
+class WorkItemTeamAttribution:
+    """One team-attribution candidate for a work item, with provenance (CHAOS-2600).
+
+    Every applicable source is persisted as a candidate; ``is_primary`` marks the
+    winner the precedence resolver selected. The web renders this to explain *why*
+    a work item maps to a team (replacing its client-side attribution).
+    """
+
+    work_item_id: str
+    provider: str
+    team_id: str | None
+    team_name: str | None
+    source: TeamAttributionSource
+    confidence: TeamAttributionConfidence
+    is_primary: bool
+    evidence: str
+
+
 @strawberry.type
 class WorkGraphEdgeResult:
     """A single edge in the work graph.

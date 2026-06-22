@@ -52,6 +52,7 @@ from .models.outputs import (
     WorkGraphArtifactsResult,
     WorkGraphEdgesResult,
     WorkGraphFlowResult,
+    WorkItemTeamAttribution,
 )
 from .models.recommendations import (
     Recommendation,
@@ -293,6 +294,28 @@ class Query:
 
         context = get_context(info)
         return await resolve_work_graph_artifacts(context, filters)
+
+    @strawberry.field(
+        description=(
+            "Team-attribution provenance per work item (source/confidence/"
+            "evidence/is_primary) — CHAOS-2600"
+        )
+    )
+    async def work_item_team_attributions(
+        self,
+        info: Info,
+        org_id: str,
+        work_item_ids: list[str] | None = None,
+        team_id: str | None = None,
+    ) -> list[WorkItemTeamAttribution]:
+        from .resolvers.team_attribution import (
+            resolve_work_item_team_attributions,
+        )
+
+        context = get_context(info)
+        return await resolve_work_item_team_attributions(
+            context, work_item_ids=work_item_ids, team_id=team_id
+        )
 
     @strawberry.field(description="Paginated list of security alerts")
     async def security_alerts(

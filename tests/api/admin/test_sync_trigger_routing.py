@@ -144,6 +144,7 @@ async def _seed_config(
     *,
     migrated_integration_id: uuid.UUID | None = None,
     planner_managed: bool = False,
+    credential_id: uuid.UUID | None = None,
 ) -> str:
     """Seed a SyncConfiguration and return its id."""
     async with session_maker() as session:
@@ -152,6 +153,7 @@ async def _seed_config(
             provider="github",
             org_id=org_id,
             sync_targets=["git"],
+            credential_id=credential_id,
             migrated_integration_id=migrated_integration_id,
             planner_managed=planner_managed,
         )
@@ -280,6 +282,47 @@ async def test_flag_on_migrated_config_uses_planner_path(client, session_maker):
     # Legacy tasks were NOT called
     fake_run_sync_config.apply_async.assert_not_called()
     fake_dispatch_batch_sync.apply_async.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_planner_trigger_rejects_known_bad_credential_before_planning(
+    client, session_maker
+):
+    ac, seeded_state = client
+    org_id = seeded_state["org_id"]
+    integration_id = uuid.uuid4()
+    credential_id = uuid.uuid4()
+    async with session_maker() as session:
+        credential = IntegrationCredential(
+            provider="github",
+            name="bad-github",
+            org_id=org_id,
+            is_active=True,
+        )
+        credential.id = credential_id
+        credential.last_test_success = False
+        credential.last_test_error = "GitHub authentication failed"
+        session.add(credential)
+        await session.commit()
+
+    config_id = await _seed_config(
+        session_maker,
+        org_id,
+        migrated_integration_id=integration_id,
+        credential_id=credential_id,
+    )
+    await _seed_source(session_maker, org_id, integration_id)
+    await _seed_planner_flag(session_maker, org_id, value="true")
+
+    with patch("dev_health_ops.api.admin.routers.sync.plan_sync_run") as plan_mock:
+        resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "GitHub authentication failed"
+    plan_mock.assert_not_called()
+    async with session_maker() as session:
+        sync_runs = (await session.execute(select(SyncRun))).scalars().all()
+        assert sync_runs == []
 
 
 @pytest.mark.asyncio

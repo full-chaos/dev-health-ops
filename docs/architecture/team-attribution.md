@@ -28,6 +28,98 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 
 ---
 
+## 0. Target state (CHAOS-2600) — ClickHouse-only team attribution
+
+> **Governing target contract.** This §0 is the source of truth for the intended model and the
+> debugging navigation aid; **new code must follow it.** It is implemented across CHAOS-2600
+> CS1–CS7 — the ClickHouse enum widening lands in **CS1** (see *Schema prerequisite* below), the
+> precedence tests are inverted in **CS2**, and the legacy Postgres bridge path is removed in
+> **CS5/CS6**. Until then, §1 below still describes the live (pre-CHAOS-2600) cascade and the
+> existing tests still encode the old precedence.
+
+**ClickHouse is the only source used for analytics attribution. Postgres does not store or resolve
+team attribution mappings.** Manual mappings are ClickHouse fallback records only — never overrides,
+never outranking WTI-native facts. PR/MR attribution comes from an **actual linked issue donor**; an
+external issue-key *prefix* alone is not linked-issue inheritance.
+
+Every final attribution carries provenance: `org_id, work_item_id, provider, team_id, team_name,
+source, confidence, evidence, is_primary, computed_at`.
+`source ∈ {native_team, issue_project, project_ownership, repo_ownership, assignee_membership,
+linked_issue, manual_fallback, unassigned}`; `confidence ∈ {high, medium, low, manual, none}`.
+
+> **Schema prerequisite (CS1).** The `issue_project` / `manual_fallback` sources and the `manual` /
+> `none` confidence values require the ClickHouse `Enum8` widening on `work_item_team_attributions`
+> (migration 053) to land **before** any resolver emits them — emitting an unknown enum value fails
+> the insert. This is CHAOS-2600 ordering rule §4.1: migrate enums (CS1) → then emit (CS2/CS3).
+
+### 0.1 Resolution decision tree
+
+Resolution is **staged by precedence**. The resolver evaluates the applicable sources and persists
+**all** matching ones as candidates; the *winner* (`is_primary`) is the highest-precedence source
+present. "Wins" means *primary selection* — it does not mean lower-precedence sources go
+unevaluated or unrecorded. **To debug:** read `team_attribution_source` (the winner) from
+provenance, jump to that node, and verify no higher-precedence stage matched.
+
+```mermaid
+flowchart TD
+    Start(["Work item"]) --> COLLECT["Evaluate EVERY applicable source → persist a candidate row per match (provenance).<br/>The linked_issue candidate requires a real work_item_dependencies donor row resolving to a team;<br/>a bare issue-key prefix produces NO linked_issue candidate (it may match a manual_fallback instead)."]
+    COLLECT --> SEL{{"Select winner: is_primary = the highest-precedence candidate present"}}
+    SEL --> NT{"0 · native_team candidate?"}
+    NT -->|"yes"| Win["is_primary = matched source"]
+    NT -->|"no"| IP{"1 · issue_project candidate?"}
+    IP -->|"yes"| Win
+    IP -->|"no"| PO{"2 · project_ownership candidate?"}
+    PO -->|"yes"| Win
+    PO -->|"no"| RO{"3 · repo_ownership candidate?"}
+    RO -->|"yes"| Win
+    RO -->|"no"| AM{"4 · assignee_membership candidate?"}
+    AM -->|"yes"| Win
+    AM -->|"no"| LK{"5 · linked_issue candidate?<br/>(real donor row resolving to a team)"}
+    LK -->|"yes"| Win
+    LK -->|"no"| MF{"6 · manual_fallback candidate?<br/>repo / project / member / issue_key_prefix"}
+    MF -->|"yes"| Win
+    MF -->|"no"| UN["is_primary = unassigned (7)"]
+    Win --> P["Persist work_item_team_attributions:<br/>ALL candidate rows; is_primary on the winner"]
+    UN --> P
+    P --> API["Expose source / confidence / evidence via GraphQL"]
+    API --> UI["Frontend renders only — no recompute"]
+```
+
+**Invariants:** the **winner is the highest-precedence matching source** (all matching sources are
+still persisted as candidates — precedence decides `is_primary`, not which sources are computed);
+`linked_issue` (5) requires a real `work_item_dependencies` donor row resolving to a `work_items`
+row that itself has a team (a bare prefix falls through to 6); `manual_fallback` (6) can only beat
+`unassigned`; a whole org at `unassigned` usually means the ClickHouse `teams` dimension is empty.
+
+### 0.2 Source reference matrix
+
+| # | `source` | Resolves from (ClickHouse) | Confidence | Beats | Never overrides | Evidence keys |
+|--:|---|---|---|---|---|---|
+| 0 | `native_team` | `WorkItem.native_team_key` → `teams` | high | all below | — (top) | `native_team_key` |
+| 1 | `issue_project` | native issue project → owning team | high | 2–7 | 0 | `project_id, owner_team` |
+| 2 | `project_ownership` | `team_project_ownership` | high | 3–7 | 0–1 | `project_id, provider` |
+| 3 | `repo_ownership` | `team_repo_ownership` | medium | 4–7 | 0–2 | `repo_full_name` |
+| 4 | `assignee_membership` | `team_memberships` (assignee identity) | medium | 5–7 | 0–3 | `member_id, identity` |
+| 5 | `linked_issue` | `work_item_dependencies` donor → donor's team | high (donor's) | 6–7 | 0–4 | `dependency_type, donor_work_item_id, donor_provider` |
+| 6 | `manual_fallback` | `manual_attribution_fallbacks` (repo/project/member/issue_key_prefix) | manual\|low | 7 only | 0–5 | `scope_type, scope_id, reason` |
+| 7 | `unassigned` | — (nothing matched) | none | — (floor) | — | `reason` |
+
+### 0.3 Off-the-rails matrix (symptom → diagnosis → fix)
+
+| Symptom | Likely stage | Diagnose | Fix |
+|---|---|---|---|
+| A whole org is `unassigned` | 7 (floor) | `get_all_teams()` empty? CH `teams` populated for `org_id`? | re-home teams population; verify daily-chain order |
+| PR attributed to a surprising team via `linked_issue` | 5 | which `work_item_dependencies` edge? donor's own team? extkey ambiguous? | confirm donor row + `_canonical_target`; check `_INHERITABLE_RELATIONSHIP_TYPES` |
+| `manual_fallback` beats a real team | precedence | `_SOURCE_ORDER` has `manual_fallback=6`? loader merging manual at the wrong rank? | restore rank — manual is the lowest non-unassigned tier |
+| A bare prefix (e.g. `CHAOS`) attributes as `linked_issue` | 5 vs 6 | did a full key resolve to a real `work_items` row, or did a prefix shortcut leak in? | no prefix→team in `linked_issue`; route to manual `issue_key_prefix` |
+| Team flips back and forth after a re-org | RMT dedup | duplicate ownership rows; read lacks `FINAL`/`argMax` | add `FINAL`/`argMax` to ownership + manual reads |
+| Provenance absent in the API | GraphQL | resolver SELECTs the provenance columns? SDL has the fields? | expose `source/confidence/evidence` |
+| Web shows a different team than the backend | client recompute | any client-side mapping derived from `evidence`? | render-only; delete client derivation |
+
+> Full data-flow and data-object-hierarchy diagrams: see the CHAOS-2600 plan §1.6–1.7 / `team-flow.md`.
+
+---
+
 ## 1. Attribution cascade (decision flow)
 
 `resolve_base_team()` runs tiers 1–3; the linked-issue resolver is tier 4. The

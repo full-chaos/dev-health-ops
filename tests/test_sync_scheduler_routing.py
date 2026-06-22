@@ -445,11 +445,7 @@ class TestPlannerFailureFallback:
 
 
 class TestDispatchEnqueueFailure:
-    """Flag ON + migrated config, plan commits, but dispatch_sync_run.apply_async
-    raises (e.g. broker down). The committed run must not be left silently
-    PLANNED: it is marked FAILED and the tick falls through to legacy dispatch."""
-
-    def test_enqueue_failure_marks_run_failed_and_falls_back(
+    def test_enqueue_failure_returns_success_without_legacy_fallback(
         self, monkeypatch, db_session
     ):
         from dev_health_ops.models.integrations import (
@@ -523,16 +519,14 @@ class TestDispatchEnqueueFailure:
         ):
             result = _call_maybe_dispatch(monkeypatch, db_session, config, now)
 
-        # Enqueue failed => fell back to legacy, sync still attempted this tick.
         assert result is True
         dispatch_sync_run_mock.apply_async.assert_called_once()
-        run_sync_config_mock.apply_async.assert_called_once()
-        # The committed run must be marked FAILED, not left PLANNED.
+        run_sync_config_mock.apply_async.assert_not_called()
         run = db_session.get(SyncRun, uuid.UUID(captured["run_id"]))
         assert run is not None
-        assert run.status == SyncRunStatus.FAILED.value
+        assert run.status == SyncRunStatus.PLANNED.value
 
-    def test_planner_managed_enqueue_failure_marks_run_failed_without_legacy_dispatch(
+    def test_planner_managed_enqueue_failure_returns_success_without_legacy_dispatch(
         self, monkeypatch, db_session
     ):
         from dev_health_ops.models.integrations import (
@@ -605,10 +599,10 @@ class TestDispatchEnqueueFailure:
         ):
             result = _call_maybe_dispatch(monkeypatch, db_session, config, now)
 
-        assert result is False
+        assert result is True
         dispatch_sync_run_mock.apply_async.assert_called_once()
         run_sync_config_mock.apply_async.assert_not_called()
         batch_sync_mock.apply_async.assert_not_called()
         run = db_session.get(SyncRun, uuid.UUID(captured["run_id"]))
         assert run is not None
-        assert run.status == SyncRunStatus.FAILED.value
+        assert run.status == SyncRunStatus.PLANNED.value

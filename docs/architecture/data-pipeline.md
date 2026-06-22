@@ -290,6 +290,18 @@ residual below would require such a marker and is deliberately deferred
    incremental; the user chose a historical window, and auto-filling to now
    would be surprising and expensive. This is **intended**, not a gap to close.
 
+## Durable Dispatch & Reconciliation
+
+A committed `SyncRun` cannot strand if a Celery publish failed, a worker died,
+the broker purged a message, or finalization was never enqueued. Producers write
+a durable `sync_dispatch_outbox` row **in the same transaction** as the
+run/units/terminal-writes, and the periodic `reconcile_sync_dispatch` beat is the
+sole durable relay that re-drives due rows. Dispatch and finalize are
+at-least-once (idempotent via the unit claim guard and the post-sync ledger);
+post-sync fanout is at-most-once (never double-counts). See
+[Dispatch Outbox](dispatch-outbox.md) for the full design, crash-window flow,
+and per-kind delivery semantics (CHAOS-2581).
+
 ## Storage Schema Highlights
 
 ### ClickHouse Tables

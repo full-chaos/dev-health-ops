@@ -342,8 +342,6 @@ def test_finalize_sync_run_emits_structured_log(db_session, monkeypatch, caplog)
     unit.status = SyncRunUnitStatus.SUCCESS.value
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
-    monkeypatch.setattr(sync_units, "_dispatch_post_sync_tasks", lambda **kwargs: None)
-
     with caplog.at_level(logging.INFO, logger="dev_health_ops.workers.sync_units"):
         result = sync_units.finalize_sync_run(str(run.id))
 

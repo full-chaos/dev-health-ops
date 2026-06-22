@@ -33,12 +33,13 @@ from dev_health_ops.api.services.integrations import (
 )
 from dev_health_ops.sync.discovery import discover_sources_for_integration
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
-from dev_health_ops.sync.trigger_routing import map_sync_mode, mark_sync_run_failed
+from dev_health_ops.sync.trigger_routing import map_sync_mode
 from dev_health_ops.workers.sync_units import dispatch_sync_run
 
 from .common import get_session
 
 logger = logging.getLogger(__name__)
+
 
 router = APIRouter()
 
@@ -259,7 +260,10 @@ async def discover_integration_sources(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
-        logger.exception("Discovery failed for integration %s: %s", integration_id, exc)
+        logger.exception(
+            "integration_discovery.failed",
+            extra={"error_type": type(exc).__name__},
+        )
         raise HTTPException(status_code=503, detail=f"Discovery failed: {exc}")
 
     return DiscoverResponse(
@@ -419,15 +423,13 @@ async def trigger_integration_sync(
             queue="sync",
         )
     except Exception as exc:
-        error = f"Task queue unavailable: {exc}"
-        await session.run_sync(
-            lambda sync_session: mark_sync_run_failed(
-                sync_session,
-                plan.sync_run_id,
-                error,
-            )
+        logger.warning(
+            "integration_sync.dispatch_fastpath_failed",
+            extra={
+                "sync_run_id": plan.sync_run_id,
+                "error_type": type(exc).__name__,
+            },
         )
-        raise HTTPException(status_code=503, detail=error)
 
     return SyncTriggerResponse(
         status="accepted",
@@ -484,15 +486,13 @@ async def trigger_integration_backfill(
             queue="sync",
         )
     except Exception as exc:
-        error = f"Task queue unavailable: {exc}"
-        await session.run_sync(
-            lambda sync_session: mark_sync_run_failed(
-                sync_session,
-                plan.sync_run_id,
-                error,
-            )
+        logger.warning(
+            "integration_backfill.dispatch_fastpath_failed",
+            extra={
+                "sync_run_id": plan.sync_run_id,
+                "error_type": type(exc).__name__,
+            },
         )
-        raise HTTPException(status_code=503, detail=error)
 
     return SyncTriggerResponse(
         status="accepted",

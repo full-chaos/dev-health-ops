@@ -114,6 +114,29 @@ def _mark_backfill_job_failed(
     sync_session.flush()
 
 
+def _preflight_planner_credential(sync_session, config) -> None:
+    credential_id = getattr(config, "credential_id", None)
+    if credential_id is None:
+        return
+    from dev_health_ops.models.settings import IntegrationCredential
+
+    credential = (
+        sync_session.query(IntegrationCredential)
+        .filter(
+            IntegrationCredential.id == credential_id,
+            IntegrationCredential.org_id == getattr(config, "org_id"),
+        )
+        .one_or_none()
+    )
+    if credential is None:
+        raise HTTPException(status_code=400, detail="Credential not found")
+    if not bool(credential.is_active):
+        raise HTTPException(status_code=409, detail="Credential is inactive")
+    if credential.last_test_success is False:
+        detail = credential.last_test_error or "Credential preflight failed"
+        raise HTTPException(status_code=409, detail=detail)
+
+
 def _ensure_pending_sync_job_run(
     sync_session,
     config,
@@ -1367,6 +1390,9 @@ async def trigger_sync_config(
         )
     )
     if plan_request is not None:
+        await session.run_sync(
+            lambda sync_session: _preflight_planner_credential(sync_session, config)
+        )
         try:
             plan = await session.run_sync(
                 lambda sync_session: plan_sync_run(sync_session, plan_request)
@@ -1506,6 +1532,10 @@ async def trigger_sync_config_backfill(
         )
     )
     fanout_backfill = planner_backfill_request is not None
+    if fanout_backfill:
+        await session.run_sync(
+            lambda sync_session: _preflight_planner_credential(sync_session, config)
+        )
     backfill_job = BackfillJobModel(
         org_id=org_id,
         sync_config_id=uuid.UUID(config_id),

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime, time, timedelta, timezone
 from typing import Any
 
 from celery import chain
@@ -16,6 +17,7 @@ from dev_health_ops.exceptions import (
     AuthenticationException,
     ConnectorException,
 )
+from dev_health_ops.models import SyncRun, SyncRunUnit, SyncRunUnitStatus
 from dev_health_ops.utils.datetime import utc_today
 from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
@@ -51,6 +53,23 @@ logger = logging.getLogger(__name__)
 
 class _TerminalSyncError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class PostSyncDispatchPayload:
+    provider: str
+    sync_targets: list[str]
+    org_id: str
+    from_date: str | None
+    to_date: str | None
+    work_graph_from_date: str | None
+    work_graph_to_date: str | None
+
+
+def _as_aware(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _sync_launchdarkly_feature_flags(
@@ -303,6 +322,90 @@ def _sync_gitlab_feature_flags(
     }
 
 
+def build_post_sync_dispatch_payload(
+    session: Any, sync_run_id: str | uuid.UUID
+) -> PostSyncDispatchPayload | None:
+    from dev_health_ops.sync.planner import map_datasets_to_legacy_targets
+
+    run_uuid = uuid.UUID(str(sync_run_id))
+    run = session.query(SyncRun).filter(SyncRun.id == run_uuid).one_or_none()
+    if run is None:
+        return None
+
+    units = (
+        session.query(SyncRunUnit)
+        .filter(SyncRunUnit.sync_run_id == run_uuid)
+        .order_by(SyncRunUnit.id)
+        .all()
+    )
+    successful_by_provider: dict[str, set[str]] = {}
+    successful_units: list[SyncRunUnit] = []
+    for unit in units:
+        if unit.status != SyncRunUnitStatus.SUCCESS.value:
+            continue
+        provider = str(unit.provider)
+        successful_by_provider.setdefault(provider, set()).add(str(unit.dataset_key))
+        successful_units.append(unit)
+    if not successful_units:
+        return None
+
+    legacy_targets: set[str] = set()
+    for provider, dataset_keys in successful_by_provider.items():
+        legacy_targets.update(map_datasets_to_legacy_targets(provider, dataset_keys))
+    if not legacy_targets:
+        return None
+
+    covered_since: datetime | None = None
+    covered_before: datetime | None = None
+    any_unbounded_lower = any(u.since_at is None for u in successful_units)
+    any_unbounded_upper = any(u.before_at is None for u in successful_units)
+    if not any_unbounded_lower:
+        since_values = [
+            _as_aware(u.since_at) for u in successful_units if u.since_at is not None
+        ]
+        covered_since = min(since_values)
+    if not any_unbounded_upper:
+        before_values = [
+            _as_aware(u.before_at) for u in successful_units if u.before_at is not None
+        ]
+        covered_before = max(before_values)
+
+    from_date_str = (
+        covered_since.date().isoformat() if covered_since is not None else None
+    )
+    to_date_str = (
+        covered_before.date().isoformat() if covered_before is not None else None
+    )
+    work_graph_from_date_str = (
+        datetime.combine(
+            covered_since.date(),
+            time.min,
+            tzinfo=timezone.utc,
+        ).isoformat()
+        if covered_since is not None
+        else None
+    )
+    work_graph_to_date_str = (
+        datetime.combine(
+            covered_before.date() + timedelta(days=1),
+            time.min,
+            tzinfo=timezone.utc,
+        ).isoformat()
+        if covered_before is not None
+        else None
+    )
+
+    return PostSyncDispatchPayload(
+        provider=next(iter(successful_by_provider), "unknown"),
+        sync_targets=sorted(legacy_targets),
+        org_id=str(run.org_id),
+        from_date=from_date_str,
+        to_date=to_date_str,
+        work_graph_from_date=work_graph_from_date_str,
+        work_graph_to_date=work_graph_to_date_str,
+    )
+
+
 def _dispatch_post_sync_tasks(
     *,
     provider: str,
@@ -430,7 +533,7 @@ def _dispatch_post_sync_tasks(
 
 
 def _is_terminal_sync_error(exc: Exception) -> bool:
-    return isinstance(exc, (_TerminalSyncError, ValueError))
+    return isinstance(exc, (_TerminalSyncError, ValueError, AuthenticationException))
 
 
 def _run_team_autoimport_for_sync_config(

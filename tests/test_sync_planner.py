@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
+import uuid
 from datetime import datetime, timezone
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
 from dev_health_ops.models import (
@@ -11,11 +13,19 @@ from dev_health_ops.models import (
     Integration,
     IntegrationDataset,
     IntegrationSource,
+    SyncDispatchOutbox,
     SyncRun,
     SyncRunMode,
     SyncRunStatus,
     SyncRunUnit,
     SyncRunUnitStatus,
+    SyncWatermark,
+)
+from dev_health_ops.models.licensing import OrgLicense
+from dev_health_ops.models.users import Organization
+from dev_health_ops.sync.dispatch_outbox import (
+    OUTBOX_KIND_DISPATCH,
+    OUTBOX_STATUS_PENDING,
 )
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
 from dev_health_ops.sync.watermarks import get_watermark, set_watermark
@@ -124,6 +134,11 @@ def test_enabled_sources_and_enabled_datasets_fan_out_to_units(db_session):
 
     sync_run = db_session.get(SyncRun, plan.sync_run_id)
     units = _planned_units(db_session, plan.sync_run_id)
+    outbox = (
+        db_session.query(SyncDispatchOutbox)
+        .filter_by(sync_run_id=plan.sync_run_id, kind=OUTBOX_KIND_DISPATCH)
+        .one()
+    )
 
     assert plan.total_units == 4
     assert len(plan.unit_ids) == 4
@@ -137,6 +152,8 @@ def test_enabled_sources_and_enabled_datasets_fan_out_to_units(db_session):
     }
     assert {unit.status for unit in units} == {SyncRunUnitStatus.PLANNED.value}
     assert {unit.mode for unit in units} == {SyncRunMode.INCREMENTAL.value}
+    assert outbox.status == OUTBOX_STATUS_PENDING
+    assert outbox.claim_token is None
 
 
 def test_unsupported_provider_dataset_pairs_are_skipped(db_session):
@@ -598,6 +615,116 @@ def test_plan_sync_run_succeeds_when_tier_limits_unavailable(db_session, monkeyp
     assert abs((since - expected_start).total_seconds()) < 2, (
         f"Expected depth=30 (community default), got since_at={since}"
     )
+
+
+@pytest.mark.skipif(
+    not os.getenv("DEV_HEALTH_POSTGRES_TEST_URI"),
+    reason="requires DEV_HEALTH_POSTGRES_TEST_URI",
+)
+def test_postgres_missing_tier_limits_stays_inside_planner_savepoint():
+    """CHAOS-2580: a pre-migration Postgres tier_limits miss must not poison planning.
+
+    PostgreSQL marks the whole transaction failed after a missing-table error.
+    The planner owns a SAVEPOINT around tier-limit resolution so the swallowed
+    TierLimitService fallback does not prevent later SyncRun/SyncRunUnit/outbox
+    flushes in the same transaction.
+    """
+    from tests._helpers import tables_of
+
+    uri = os.environ["DEV_HEALTH_POSTGRES_TEST_URI"]
+    schema = f"chaos_2580_{uuid.uuid4().hex}"
+    engine = create_engine(uri)
+    connection = engine.connect()
+    try:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+        connection.execute(text(f'SET search_path TO "{schema}"'))
+        connection.commit()
+        Base.metadata.create_all(
+            connection,
+            tables=tables_of(
+                Organization,
+                OrgLicense,
+                Integration,
+                IntegrationSource,
+                IntegrationDataset,
+                SyncRun,
+                SyncRunUnit,
+                SyncDispatchOutbox,
+                SyncWatermark,
+            ),
+        )
+        with Session(bind=connection) as session:
+            org_id = uuid.uuid4()
+            session.add(
+                Organization(
+                    id=org_id,
+                    slug=f"chaos-2580-{org_id.hex[:8]}",
+                    name="CHAOS 2580",
+                    tier="community",
+                )
+            )
+            session.flush()
+            integration = Integration(
+                org_id=str(org_id),
+                provider="github",
+                name="Github integration",
+                config={"initial_sync_depth": 90},
+                is_active=True,
+            )
+            session.add(integration)
+            session.flush()
+            source = IntegrationSource(
+                org_id=str(org_id),
+                integration_id=integration.id,
+                provider="github",
+                source_type="repo",
+                external_id="owner/repo",
+                name="repo",
+                full_name="owner/repo",
+                metadata_={},
+                is_enabled=True,
+                discovered_at=datetime.now(timezone.utc),
+                last_seen_at=datetime.now(timezone.utc),
+            )
+            dataset = IntegrationDataset(
+                org_id=str(org_id),
+                integration_id=integration.id,
+                dataset_key="commits",
+                is_enabled=True,
+                options={},
+            )
+            session.add_all([source, dataset])
+            session.flush()
+
+            plan = plan_sync_run(
+                session,
+                SyncPlanRequest(
+                    integration_id=str(integration.id),
+                    org_id=str(org_id),
+                    mode=SyncRunMode.INCREMENTAL.value,
+                    triggered_by="test",
+                ),
+            )
+            session.flush()
+
+            run = session.get(SyncRun, plan.sync_run_id)
+            units = _planned_units(session, plan.sync_run_id)
+            outbox = (
+                session.query(SyncDispatchOutbox)
+                .filter_by(sync_run_id=plan.sync_run_id, kind=OUTBOX_KIND_DISPATCH)
+                .one()
+            )
+            assert run is not None
+            assert run.status == SyncRunStatus.PLANNED.value
+            assert len(units) == 1
+            assert outbox.status == OUTBOX_STATUS_PENDING
+            session.execute(text("SELECT 1"))
+    finally:
+        connection.rollback()
+        connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        connection.commit()
+        connection.close()
+        engine.dispose()
 
 
 # ---------------------------------------------------------------------------

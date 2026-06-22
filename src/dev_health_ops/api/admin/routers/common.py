@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncIterator
 from typing import Annotated
 
 from fastapi import Header, HTTPException
@@ -15,13 +16,26 @@ from dev_health_ops.api.middleware.rate_limit import (
 )
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.users import MembershipService
+from dev_health_ops.db import require_clickhouse_uri
 from dev_health_ops.models.users import Membership, User
+from dev_health_ops.storage.clickhouse import ClickHouseStore
 
 
 def get_user_id(
     x_user_id: Annotated[str | None, Header(alias="X-User-Id")] = None,
 ) -> str | None:
     return x_user_id
+
+
+async def get_clickhouse_store() -> AsyncIterator[ClickHouseStore]:
+    """Yield an open ClickHouse store for admin team/identity endpoints.
+
+    ClickHouse is the system of record for the team catalog (CHAOS-2600 CS5);
+    the admin team/identity surface reads and writes it directly. Tests
+    override this dependency with a store wrapping a mock client.
+    """
+    async with ClickHouseStore(require_clickhouse_uri()) as store:
+        yield store
 
 
 async def _ensure_user_in_scope(
@@ -71,6 +85,7 @@ __all__ = [
     "_ensure_user_in_scope",
     "_get_org_id_for_non_superuser",
     "get_admin_user_key",
+    "get_clickhouse_store",
     "get_session",
     "get_user_id",
     "limiter",

@@ -4,7 +4,6 @@ from dev_health_ops.api.services.configuration.team_member_resolver import (
     members_by_team,
 )
 from dev_health_ops.models.settings import IdentityMapping
-from dev_health_ops.providers.team_bridge import _members_by_team
 
 
 def test_members_by_team_preserves_confirmed_identity_facets():
@@ -28,7 +27,6 @@ def test_members_by_team_preserves_confirmed_identity_facets():
 
     resolved = members_by_team(identities)
 
-    assert resolved == _members_by_team(identities)
     assert resolved["gh:platform"] == {
         "u1",
         "alice@example.com",

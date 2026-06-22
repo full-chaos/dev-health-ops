@@ -34,8 +34,8 @@ For commercial licensing: [fullchaos.studio/pricing](https://fullchaos.studio/pr
 **Components:**
 - **dev-health-web**: Next.js frontend (port 3000)
 - **dev-health-ops**: FastAPI backend + CLI (port 8000)
-- **ClickHouse**: Analytics database (port 8123)
-- **PostgreSQL**: Application state, users, teams (port 5432)
+- **ClickHouse**: Analytics database + team catalog and identity→team membership (port 8123)
+- **PostgreSQL**: Application state — users, orgs, memberships, settings, credentials (port 5432)
 - **Grafana**: Optional dashboards (port 3001)
 
 ---

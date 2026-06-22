@@ -140,16 +140,21 @@ beat_schedule = {
         "schedule": crontab(hour=1, minute=30),
         "options": {"queue": "default"},
     },
-    "sync-team-drift": {
-        "task": "dev_health_ops.workers.tasks.sync_team_drift",
-        "schedule": crontab(hour=2, minute=30),
-        "options": {"queue": "sync"},
-    },
-    "reconcile-team-members": {
-        "task": "dev_health_ops.workers.tasks.reconcile_team_members",
-        "schedule": crontab(hour=3, minute=0),
-        "options": {"queue": "sync"},
-    },
+    # sync-team-drift is intentionally NOT scheduled (CHAOS-2600 CS5). The drift
+    # engine (TeamDriftSyncService) writes Postgres ``TeamMapping`` rows, and the
+    # bridge that projected those into ClickHouse is removed in CS5 — so its
+    # output is orphaned and the admin drift-review surface is a no-op. Leaving
+    # the beat entry would keep an orphaned Postgres writer firing daily, which
+    # violates the "ClickHouse is the only team system of record" invariant. The
+    # task + service classes are deleted in CS6 (Postgres mapping removal); the
+    # beat entry is dropped here so no live writer remains.
+    #
+    # reconcile-team-members is ALSO intentionally NOT scheduled (CHAOS-2600 CS5).
+    # The nightly reconcile read Postgres ``IdentityMapping`` and REPLACED every
+    # ClickHouse team's ``members``. After CS5 the admin endpoints write CH
+    # members directly and no longer write Postgres ``IdentityMapping``, so a
+    # blank-org nightly run would wipe admin-written members across every tenant.
+    # The task is a fail-closed no-op now; CS6 deletes it.
     "reconcile-sync-dispatch": {
         "task": "dev_health_ops.workers.tasks.reconcile_sync_dispatch",
         "schedule": 60.0,

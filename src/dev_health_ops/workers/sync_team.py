@@ -2,27 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
-from datetime import datetime, timezone
 from typing import Any
 
-from dev_health_ops.db import require_clickhouse_uri
-from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
-
-
-def _uuid_value(value: object) -> uuid.UUID:
-    if isinstance(value, uuid.UUID):
-        return value
-    return uuid.UUID(str(value))
-
-
-def _string_or_none(value: object | None) -> str | None:
-    if value is None:
-        return None
-    return value if isinstance(value, str) else str(value)
 
 
 async def _discover_and_sync_all(org_id: str | None) -> dict:
@@ -181,11 +165,22 @@ async def _discover_and_sync_all(org_id: str | None) -> dict:
     name="dev_health_ops.workers.tasks.sync_team_drift",
 )
 def sync_team_drift(self, org_id: str | None = None) -> dict:
-    try:
-        return run_async(_discover_and_sync_all(org_id))
-    except Exception as exc:
-        logger.exception("sync_team_drift failed: %s", exc)
-        raise self.retry(exc=exc, countdown=300)
+    # Fail-closed no-op (CHAOS-2600 CS5). The drift engine
+    # (``_discover_and_sync_all`` -> ``TeamDriftSyncService.run_drift_sync``)
+    # writes Postgres ``TeamMapping`` rows, and the bridge projecting those into
+    # ClickHouse is removed in CS5 — so any output is orphaned and the admin
+    # drift-review surface is disabled. The beat schedule is dropped; this
+    # entrypoint no-ops so a stray queued/manual dispatch cannot write Postgres.
+    # ``_discover_and_sync_all`` is retained as a function (the CHAOS-2066
+    # connection-hygiene invariant test exercises it directly). The task +
+    # service classes are deleted in CS6.
+    return {
+        "status": "deprecated",
+        "reason": (
+            "ClickHouse is the team system of record; the Postgres team drift "
+            "engine is disabled in CHAOS-2600 CS5"
+        ),
+    }
 
 
 @celery_app.task(
@@ -195,71 +190,16 @@ def sync_team_drift(self, org_id: str | None = None) -> dict:
     name="dev_health_ops.workers.tasks.reconcile_team_members",
 )
 def reconcile_team_members(self, org_id: str | None = None) -> dict:
-    from dev_health_ops.api.services.configuration.team_member_resolver import (
-        members_by_team,
-    )
-    from dev_health_ops.db import get_postgres_session_sync
-    from dev_health_ops.models.settings import IdentityMapping
-
-    if org_id is not None:
-        from dev_health_ops.providers.team_bridge import bridge_teams_to_clickhouse
-
-        teams_synced = bridge_teams_to_clickhouse(
-            org_id=org_id, db_url=require_clickhouse_uri()
-        )
-        return {
-            "status": "success",
-            "teams_scanned": teams_synced,
-            "teams_updated": teams_synced,
-            "mapped_teams": teams_synced,
-        }
-
-    with get_postgres_session_sync() as session:
-        identity_mappings = (
-            session.query(IdentityMapping)
-            .filter(IdentityMapping.org_id == org_id)
-            .filter(IdentityMapping.is_active.is_(True))
-            .all()
-        )
-        team_members = members_by_team(identity_mappings)
-
-    async def _run() -> dict:
-        from dev_health_ops.models.teams import Team
-        from dev_health_ops.storage.clickhouse import ClickHouseStore
-
-        async with ClickHouseStore(require_clickhouse_uri()) as store:
-            teams = await store.get_all_teams()
-            if org_id is not None:
-                teams = [
-                    team
-                    for team in teams
-                    if str(getattr(team, "org_id", "") or "") == str(org_id)
-                ]
-            now = datetime.now(timezone.utc)
-            updated_teams = [
-                Team(
-                    id=str(team.id),
-                    team_uuid=_uuid_value(team.team_uuid),
-                    name=str(team.name),
-                    description=_string_or_none(team.description),
-                    members=sorted(team_members.get(str(team.id), set())),
-                    updated_at=now,
-                    org_id=str(getattr(team, "org_id", "") or ""),
-                )
-                for team in teams
-            ]
-            if updated_teams:
-                await store.insert_teams(updated_teams)
-
-            return {
-                "status": "success",
-                "teams_scanned": len(teams),
-                "teams_updated": len(updated_teams),
-                "mapped_teams": len(team_members),
-            }
-
-    try:
-        return run_async(_run())
-    except Exception as exc:
-        logger.exception("reconcile_team_members failed: %s", exc)
-        raise self.retry(exc=exc, countdown=300)
+    # Fail-closed no-op (CHAOS-2600 CS5). This previously read Postgres
+    # ``IdentityMapping`` and REPLACED every ClickHouse team's ``members``. After
+    # CS5 the admin endpoints write CH members directly and no longer write
+    # Postgres ``IdentityMapping``, so running this would wipe admin-written
+    # members. It does not read Postgres nor call ``insert_teams``. CS6 deletes
+    # it.
+    return {
+        "status": "deprecated",
+        "reason": (
+            "ClickHouse is the team system of record; the Postgres->ClickHouse "
+            "member reconcile is removed in CHAOS-2600 CS5"
+        ),
+    }

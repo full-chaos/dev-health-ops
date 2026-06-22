@@ -1,4 +1,4 @@
-from .common import get_session, get_user_id
+from .common import get_clickhouse_store, get_session, get_user_id
 from .credentials import (
     _test_github_connection,
     _test_gitlab_connection,
@@ -23,6 +23,7 @@ from .users import router as users_router
 __all__ = [
     "credentials_router",
     "features_router",
+    "get_clickhouse_store",
     "get_session",
     "get_user_id",
     "github_app_router",

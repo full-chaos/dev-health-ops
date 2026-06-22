@@ -215,7 +215,14 @@ class TeamMembershipService:
     async def match_members(
         self,
         members: list[DiscoveredMember],
+        identity_store: Any | None = None,
     ) -> list[Any]:
+        # CHAOS-2600 CS5: when a ClickHouse identity store is provided, match
+        # against the ClickHouse-native identity catalog (the admin system of
+        # record) instead of Postgres ``IdentityMapping``.
+        if identity_store is not None:
+            return await self._match_members_clickhouse(members, identity_store)
+
         IdentityMappingResponse = _get_identity_mapping_response_cls()
         member_match_result_cls = _get_member_match_result_cls()
         identity_svc = IdentityMappingService(self.session, self.org_id)
@@ -281,6 +288,103 @@ class TeamMembershipService:
                         best_score = score
                         best_match = candidate
 
+                if best_match is not None and best_score >= 0.8:
+                    matched.append(
+                        member_match_result_cls(
+                            discovered=member,
+                            match_status="suggested",
+                            matched_identity=IdentityMappingResponse.model_validate(
+                                best_match
+                            ),
+                            confidence=round(best_score, 2),
+                            suggestion_reason="display_name_similarity",
+                        )
+                    )
+                    continue
+
+            matched.append(
+                member_match_result_cls(
+                    discovered=member,
+                    match_status="unmatched",
+                    matched_identity=None,
+                    confidence=None,
+                    suggestion_reason=None,
+                )
+            )
+
+        return matched
+
+    async def _match_members_clickhouse(
+        self,
+        members: list[DiscoveredMember],
+        identity_store: Any,
+    ) -> list[Any]:
+        """ClickHouse-backed variant of ``match_members`` (CHAOS-2600 CS5).
+
+        Same three strategies as the Postgres path — provider-identity exact,
+        email exact, then display-name similarity — but candidates come from
+        the ClickHouse-native identity catalog. Loads the org's active
+        identities once and matches in memory.
+        """
+        IdentityMappingResponse = _get_identity_mapping_response_cls()
+        member_match_result_cls = _get_member_match_result_cls()
+        candidates = await identity_store.list_all(active_only=True)
+        matched: list[Any] = []
+
+        for member in members:
+            provider_match = next(
+                (
+                    c
+                    for c in candidates
+                    if member.provider_identity
+                    in c.provider_identities.get(member.provider_type, [])
+                ),
+                None,
+            )
+            if provider_match is not None:
+                matched.append(
+                    member_match_result_cls(
+                        discovered=member,
+                        match_status="matched",
+                        matched_identity=IdentityMappingResponse.model_validate(
+                            provider_match
+                        ),
+                        confidence=1.0,
+                    )
+                )
+                continue
+
+            if member.email:
+                email_match = next(
+                    (c for c in candidates if c.email == member.email), None
+                )
+                if email_match is not None:
+                    matched.append(
+                        member_match_result_cls(
+                            discovered=member,
+                            match_status="suggested",
+                            matched_identity=IdentityMappingResponse.model_validate(
+                                email_match
+                            ),
+                            confidence=0.95,
+                            suggestion_reason="email_match",
+                        )
+                    )
+                    continue
+
+            if member.display_name:
+                best_match = None
+                best_score = 0.0
+                for candidate in candidates:
+                    if not candidate.display_name:
+                        continue
+                    score = difflib.SequenceMatcher(
+                        a=member.display_name.lower(),
+                        b=candidate.display_name.lower(),
+                    ).ratio()
+                    if score > best_score:
+                        best_score = score
+                        best_match = candidate
                 if best_match is not None and best_score >= 0.8:
                     matched.append(
                         member_match_result_cls(

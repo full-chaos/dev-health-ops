@@ -11,7 +11,6 @@ from dev_health_ops.workers.metrics_tasks import (
 )
 from dev_health_ops.workers.product_tasks import (
     run_capacity_forecast_job,
-    sync_teams_to_analytics,
 )
 from dev_health_ops.workers.queue_monitor import monitor_queue_depths
 from dev_health_ops.workers.recommendations_tasks import run_recommendations_job
@@ -113,5 +112,4 @@ __all__ = [
     "run_work_items_sync",
     "send_billing_notification",
     "sync_team_drift",
-    "sync_teams_to_analytics",
 ]

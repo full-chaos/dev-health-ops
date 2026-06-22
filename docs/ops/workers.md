@@ -124,8 +124,8 @@ The system registers Celery tasks under the `workers/` directory. The primary re
 | `_batch_sync_callback` | None | `sync` | Callback task for batch sync completion. Source: `sync_batch.py:267`. |
 | `_run_sync_for_repo` | None | `sync` | Runs sync for a single repository within a batch. Source: `sync_batch.py:550`. |
 | `run_work_items_sync` | `sync work-items` | `sync` | Syncs work items from a provider. Source: `sync_misc.py:12-68`. |
-| `sync_team_drift` | None | `sync` | Detects and reconciles team membership drift. Source: `sync_team.py:188-266`. |
-| `reconcile_team_members` | None | `sync` | Reconciles team members from provider sources. Source: `sync_team.py:188-266`. |
+| `sync_team_drift` | None | `sync` | **Fail-closed no-op (CHAOS-2600 CS5).** Returns a `deprecated` status without touching Postgres; the Postgres drift engine is removed (`TeamDriftSyncService` is dead until CS6). Source: `sync_team.py`. |
+| `reconcile_team_members` | None | `sync` | **Fail-closed no-op (CHAOS-2600 CS5).** Returns a `deprecated` status; the Postgres→ClickHouse member reconcile is removed (ClickHouse is the team/identity system of record). Source: `sync_team.py`. |
 | `run_daily_metrics` | `metrics daily` | `metrics` | Computes daily repository and user metrics. Source: `metrics_daily.py`. |
 | `dispatch_daily_metrics_partitioned` | `metrics daily` (partitioned) | `default` | Partitions daily metrics across organizations and fans out. Source: `metrics_partitioned.py`. |
 | `run_daily_metrics_batch` | None | `metrics` | Processes a batch of repositories for daily metrics. Source: `metrics_partitioned.py`. |
@@ -139,7 +139,6 @@ The system registers Celery tasks under the `workers/` directory. The primary re
 | `run_membership_backfill` | None | `metrics` | Backfills work unit membership. Source: `work_graph_tasks.py`. |
 | `dispatch_membership_backfill` | None | `default` | Fans out membership backfill. Source: `work_graph_tasks.py`. |
 | `run_capacity_forecast_job` | None | `metrics` | Computes weekly capacity forecasting. Source: `product_tasks.py`. |
-| `sync_teams_to_analytics` | None | `metrics` | Syncs teams to the analytics database. Source: `product_tasks.py`. |
 | `run_recommendations_job` | `recommendations compute` | `metrics` | Computes recommendations for organizations. Source: `recommendations_tasks.py:249-333`. |
 | `process_webhook_event` | None | `webhooks` | Processes inbound webhook events. Source: `system_webhooks.py`. |
 | `send_billing_notification` | None | `webhooks` | Sends billing-related email notifications. Source: `system_ops.py`. |
@@ -164,8 +163,6 @@ The system registers Celery tasks under the `workers/` directory. The primary re
 | `run-daily-metrics` | `dispatch_daily_metrics_partitioned` | Daily at 01:00 UTC | `default` |
 | `run-recommendations` | `run_recommendations_job` | Daily at 02:00 UTC | `metrics` |
 | `run-release-impact-daily` | `dispatch_release_impact` | Daily at 01:30 UTC | `default` |
-| `sync-team-drift` | `sync_team_drift` | Daily at 02:30 UTC | `sync` |
-| `reconcile-team-members` | `reconcile_team_members` | Daily at 03:00 UTC | `sync` |
 | `run-capacity-forecast` | `run_capacity_forecast_job` | Mondays at 04:00 UTC | `metrics` |
 | `process-ingest-streams` | `run_ingest_consumer` | Every 30 seconds | `ingest` |
 | `process-product-telemetry-streams` | `run_product_telemetry_consumer` | Every 30 seconds | `ingest` |
@@ -173,6 +170,8 @@ The system registers Celery tasks under the `workers/` directory. The primary re
 | `dispatch-scheduled-reports` | `dispatch_scheduled_reports` | Every 300 seconds (5 minutes) | `default` |
 | `monitor-queue-depths` | `monitor_queue_depths` | Every 60 seconds | `monitoring` |
 | `run-membership-backfill-daily` | `dispatch_membership_backfill` | Daily at 03:30 UTC | `default` |
+
+> **Removed in CHAOS-2600 CS5:** the `sync-team-drift` and `reconcile-team-members` beat schedules are no longer registered (they wrote Postgres `team_mappings` / replaced ClickHouse `teams.members` from Postgres). Their Celery tasks remain registered as fail-closed no-ops; the `sync_teams_to_analytics` task is deleted. ClickHouse is the team/identity system of record; the admin surface and `sync teams` write it directly.
 ---
 ## Configuration
 

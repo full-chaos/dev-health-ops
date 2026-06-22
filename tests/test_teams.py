@@ -338,7 +338,38 @@ def test_cli_sync_teams_allow_empty_overrides_zero_persisted(tmp_path):
     assert result == 0
 
 
-def test_cli_sync_teams_org_bridge_failure_exits_one(tmp_path):
+class _RecordingCHStore:
+    """ClickHouseStore stand-in recording org_id + inserted teams (CS5)."""
+
+    last: "_RecordingCHStore | None" = None
+
+    def __init__(self, db_uri, *args, **kwargs):
+        self.db_uri = db_uri
+        self.org_id = None
+        self.inserted_teams: list = []
+        self.inserted_ops_links: list = []
+        _RecordingCHStore.last = self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+    async def insert_teams(self, teams):
+        self.inserted_teams.extend(teams)
+
+    async def insert_jira_project_ops_team_links(self, links):
+        self.inserted_ops_links.extend(links)
+
+    async def get_all_teams(self):
+        return [
+            MagicMock(id=getattr(t, "id", None), org_id=self.org_id)
+            for t in self.inserted_teams
+        ]
+
+
+def test_cli_sync_teams_org_scoped_write_failure_exits_one(tmp_path):
     import yaml
 
     from dev_health_ops.providers.teams import sync_teams as _cmd_sync_teams
@@ -348,9 +379,13 @@ def test_cli_sync_teams_org_bridge_failure_exits_one(tmp_path):
         yaml.dump({"teams": [{"team_id": "team-a", "team_name": "Team A"}]})
     )
 
+    class _FailingStore(_RecordingCHStore):
+        async def insert_teams(self, teams):
+            raise RuntimeError("clickhouse down")
+
     with patch(
-        "dev_health_ops.providers.teams._project_teams_to_postgres",
-        side_effect=RuntimeError("bridge down"),
+        "dev_health_ops.storage.clickhouse.ClickHouseStore",
+        _FailingStore,
     ):
         ns = MagicMock()
         ns.provider = "config"
@@ -366,10 +401,11 @@ def test_cli_sync_teams_org_bridge_failure_exits_one(tmp_path):
     assert result == 1
 
 
-def test_cli_sync_teams_org_scoped_routes_through_postgres_then_clickhouse(tmp_path):
-    """Org-scoped sync must write Postgres first, then bridge to ClickHouse.
+def test_cli_sync_teams_org_scoped_writes_clickhouse_directly(tmp_path):
+    """Org-scoped sync writes ClickHouse directly (CS5).
 
-    Direct ClickHouse write (run_with_store) must NOT be called for org-scoped runs.
+    No Postgres projection and no run_with_store (the no-org branch) for an
+    org-scoped run; the store is tagged with the org_id.
     """
     import yaml
 
@@ -380,14 +416,12 @@ def test_cli_sync_teams_org_scoped_routes_through_postgres_then_clickhouse(tmp_p
         yaml.dump({"teams": [{"team_id": "team-a", "team_name": "Team A"}]})
     )
 
+    _RecordingCHStore.last = None
     with (
         patch(
-            "dev_health_ops.providers.teams._project_teams_to_postgres",
-            return_value={"projected": 1},
-        ) as mock_projection,
-        patch(
-            "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
-        ) as mock_ch_bridge,
+            "dev_health_ops.storage.clickhouse.ClickHouseStore",
+            _RecordingCHStore,
+        ),
         patch("dev_health_ops.storage.run_with_store") as mock_run_with_store,
     ):
         ns = MagicMock()
@@ -402,50 +436,14 @@ def test_cli_sync_teams_org_scoped_routes_through_postgres_then_clickhouse(tmp_p
         result = _cmd_sync_teams(ns)
 
     assert result == 0
-    mock_projection.assert_called_once()
-    mock_ch_bridge.assert_called_once_with(
-        org_id="org-1",
-        db_url=ns.analytics_db,
-        postgres_db_url="sqlite+aiosqlite:///semantic.db",
-    )
     mock_run_with_store.assert_not_called()
+    store = _RecordingCHStore.last
+    assert store is not None
+    assert store.org_id == "org-1"
+    assert {getattr(t, "id", None) for t in store.inserted_teams} == {"team-a"}
 
 
-def test_cli_sync_teams_org_scoped_ch_bridge_failure_exits_one(tmp_path):
-    import yaml
-
-    from dev_health_ops.providers.teams import sync_teams as _cmd_sync_teams
-
-    config_file = tmp_path / "teams.yaml"
-    config_file.write_text(
-        yaml.dump({"teams": [{"team_id": "team-a", "team_name": "Team A"}]})
-    )
-
-    with (
-        patch(
-            "dev_health_ops.providers.teams._project_teams_to_postgres",
-            return_value={"projected": 1},
-        ),
-        patch(
-            "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
-            side_effect=RuntimeError("ch unavailable"),
-        ),
-    ):
-        ns = MagicMock()
-        ns.provider = "config"
-        ns.path = str(config_file)
-        ns.org = "org-1"
-        ns.db = "sqlite:///semantic.db"
-        ns.allow_empty = False
-        ns.sink = "clickhouse"
-        ns.analytics_db = "clickhouse://example.test:8123/default"
-
-        result = _cmd_sync_teams(ns)
-
-    assert result == 1
-
-
-def test_cli_sync_teams_org_scoped_jira_ops_links_written_after_bridge():
+def test_cli_sync_teams_org_scoped_jira_ops_links_written_to_clickhouse():
     from atlassian.canonical_models import (
         CanonicalProjectWithOpsgenieTeams,
         JiraProject,
@@ -462,10 +460,10 @@ def test_cli_sync_teams_org_scoped_jira_ops_links_written_after_bridge():
     captured: list[JiraProjectOpsTeamLink] = []
 
     class FakeClickHouseStore:
-        org_id = None
-
-        def __init__(self, db_uri):
+        def __init__(self, db_uri, *args, **kwargs):
             self.db_uri = db_uri
+            self.org_id = None
+            self._inserted_teams: list = []
 
         async def __aenter__(self):
             return self
@@ -473,8 +471,17 @@ def test_cli_sync_teams_org_scoped_jira_ops_links_written_after_bridge():
         async def __aexit__(self, *args):
             return None
 
+        async def insert_teams(self, teams):
+            self._inserted_teams.extend(teams)
+
         async def insert_jira_project_ops_team_links(self, links):
             captured.extend(links)
+
+        async def get_all_teams(self):
+            return [
+                MagicMock(id=getattr(t, "id", None), org_id=self.org_id)
+                for t in self._inserted_teams
+            ]
 
     with (
         patch(
@@ -487,14 +494,6 @@ def test_cli_sync_teams_org_scoped_jira_ops_links_written_after_bridge():
         patch(
             "atlassian.graph.api.jira_projects.iter_projects_with_opsgenie_linkable_teams",
             return_value=iter([project]),
-        ),
-        patch(
-            "dev_health_ops.providers.teams._project_teams_to_postgres",
-            return_value={"projected": 1},
-        ),
-        patch(
-            "dev_health_ops.providers.team_bridge.bridge_teams_to_clickhouse",
-            return_value=1,
         ),
         patch(
             "dev_health_ops.storage.clickhouse.ClickHouseStore",

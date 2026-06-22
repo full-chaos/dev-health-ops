@@ -9,7 +9,7 @@ Complete reference for the dev-health-ops command-line interface.
 The CLI entry point is `dev-hops` (module `dev_health_ops.cli`). Command groups:
 
 - `sync` : ingest provider data (git, prs, blame, cicd, deployments, incidents, security, tests, teams, work-items)
-- `teams` : team catalog operations (reconcile)
+- `teams` : team catalog operations (ClickHouse-backed sync)
 - `metrics` — compute analytics (daily, rebuild, dora, complexity, capacity, release-impact, validate-flags, compounding-risk)
 - `audit` — diagnostics (completeness, schema, perf, coverage)
 - `fixtures` — synthetic/demo data (generate, validate, product-telemetry)
@@ -264,12 +264,12 @@ Accepts the same provider/auth/batch options as [`sync git`](#sync-git). Provide
 
 ### `sync teams`
 
-Sync team definitions. The behavior depends on whether `--org` is provided:
+Sync team definitions. ClickHouse is the system of record for teams (CHAOS-2600 CS5); both paths write ClickHouse directly. The only difference is org tagging:
 
-- **Managed (org-scoped, `--org ORG`)**: The provider data is projected into PostgreSQL `team_mappings` via the shared `TeamDriftSyncService.project_provider_teams` (which preserves admin-curated configurations and flags changes for review if `sync_policy == 1`). Then, `bridge_teams_to_clickhouse(org_id)` is called to write the resolved teams and members to ClickHouse. The CLI org path never writes ClickHouse directly.
-- **Unmanaged (no `--org`)**: The provider data is written directly to ClickHouse (preserving synthetic/local seeding).
+- **Org-scoped (`--org ORG`)**: The provider data is written **directly to ClickHouse** via `insert_teams`, with each team row tagged with `org_id` (and any Jira ops links inserted). It does **not** project to PostgreSQL `team_mappings` and does **not** call any Postgres→ClickHouse bridge.
+- **No-org (no `--org`)**: The provider data is written directly to ClickHouse (preserving synthetic/local seeding), untagged.
 
-`CLICKHOUSE_URI` (or `--analytics-db`) is required. For managed syncs, `POSTGRES_URI` (or `--db`) is also required.
+`CLICKHOUSE_URI` (or `--analytics-db`) is required. `POSTGRES_URI` / `--db` is **not** required for `sync teams` (no Postgres team write).
 
 ```bash
 # From config file
@@ -298,22 +298,7 @@ The bundled `src/dev_health_ops/config/team_mapping.yaml` is intentionally empty
 
 ## Teams Commands
 
-Team catalog operations.
-
-### `teams reconcile`
-
-Reconcile org-scoped ClickHouse teams into PostgreSQL `team_mappings`. This command is idempotent and re-runnable.
-
-```bash
-dev-hops teams reconcile --org ORG_ID
-```
-
-For each org-scoped team in ClickHouse, this command ensures a corresponding `TeamMapping` exists in PostgreSQL (creating one with `sync_policy=2` if missing). It then runs `bridge_teams_to_clickhouse(org_id)` to re-bridge the teams and their members from `IdentityMapping` back to ClickHouse.
-
-Requires:
-- ClickHouse (`--analytics-db` / `CLICKHOUSE_URI`)
-- PostgreSQL (`--db` / `POSTGRES_URI`)
-- Organization (`--org` / `ORG_ID`)
+> **Removed in CHAOS-2600 CS5:** the `dev-hops teams reconcile` command is **deleted**. It reconciled org-scoped ClickHouse teams back into PostgreSQL `team_mappings` and re-bridged via `bridge_teams_to_clickhouse` — both the Postgres team control plane and the bridge are gone. ClickHouse is now the system of record for teams, written directly by `sync teams` and the admin team surface, so no reconcile step is needed.
 
 ---
 
@@ -654,9 +639,9 @@ dev-hops fixtures validate --sink "clickhouse://localhost:8123/default"
 |--------|-------------|
 | `--sink` | Analytics sink URI (required, ClickHouse only) |
 
-Checks raw data counts, team mappings, cycle time metrics, work graph edges,
-connected components, security alert fixture coverage, AI fixture/rollup tables,
-and evidence bundle quality.
+Checks raw data counts, the ClickHouse team catalog, cycle time metrics, work
+graph edges, connected components, security alert fixture coverage, AI
+fixture/rollup tables, and evidence bundle quality.
 
 ### `fixtures product-telemetry`
 

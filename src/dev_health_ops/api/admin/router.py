@@ -7,6 +7,7 @@ from dev_health_ops.api.admin.middleware import require_admin
 from .routers import (
     credentials_router,
     features_router,
+    get_clickhouse_store,
     get_session,
     get_user_id,
     github_app_router,
@@ -49,6 +50,7 @@ router.include_router(integrations_router)
 
 __all__ = [
     "router",
+    "get_clickhouse_store",
     "get_session",
     "get_user_id",
     "_test_github_connection",

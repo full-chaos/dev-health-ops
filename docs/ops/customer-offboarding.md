@@ -79,7 +79,7 @@ All relational metadata scoped to the organization is explicitly deleted from th
 2. **Schedules and Configurations**: `ScheduledJob` (linked to `SyncConfiguration`), `SyncConfiguration`.
 3. **Reports**: `ReportRun` (linked to `SavedReport`), `SavedReport`.
 4. **Billing and Subscriptions**: `Refund` (linked to `Invoice`/`Subscription`), `InvoiceLineItem` (linked to `Invoice`), `Invoice`, `SubscriptionEvent` (linked to `Subscription`), `Subscription`.
-5. **Access and Identity**: `Membership`, `OrgInvite`, `RefreshToken`, `ImpersonationSession` (target_org_id), `IdentityMapping`, `TeamMapping`.
+5. **Access and Identity**: `Membership`, `OrgInvite`, `RefreshToken`, `ImpersonationSession` (target_org_id), and the legacy `IdentityMapping` / `TeamMapping` tables. *(As of CHAOS-2600 CS5 the live team catalog and identity→team membership are ClickHouse-resolved — `IdentityMapping` / `TeamMapping` are dead remnants dropped in CS6; they are still purged here while the tables exist.)*
 6. **Core Organization**: `Organization`, `Setting`, `OrgRetentionPolicy`, `MetricCheckpoint`, `Team`, `AuditLog`, `BillingAuditLog`, `SSOProvider`, `OrgIPAllowlist`, `OrgFeatureOverride`, `OrgLicense`.
 
 *Note: Certain billing and audit logs may be subject to regulatory retention requirements and are handled in accordance with the platform's compliance policies.*
@@ -90,6 +90,7 @@ All analytics data, raw logs, and derived metrics are purged from the ClickHouse
 - **Investment & Work Graph**: `investment_classifications_daily`, `investment_metrics_daily`, `work_unit_investments`, `work_unit_investment_quotes`, `investment_explanations`, and all `work_graph` cached analysis tables.
 - **AI & Governance**: `ai_attribution`, `ai_impact_metrics_daily`, `ai_policy_events`, `ai_governance_coverage_daily`, `recommendations_daily`.
 - **Raw Logs & Security**: `security_alerts`, `backfill_log`, `teams`, `repos`.
+- **Team catalog & identities** (the CS5 system of record): `teams`, `identities` (both org-scoped by `org_id`).
 
 ### Phase 5: Invalidate Access
 All active sessions, tokens, and membership records are invalidated. Stale browser sessions or API clients are immediately blocked by the platform's central middleware and auth guards, redirecting users to the sign-in page.

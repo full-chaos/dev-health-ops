@@ -2,29 +2,29 @@
 
 This guide covers the fastest path to mapping repositories and providers to teams.
 
-## Managed vs Unmanaged Sync Modes
+## Org-scoped vs No-org Sync (ClickHouse is the system of record)
 
-The team sync behavior depends on whether the `--org` flag is provided:
+As of CHAOS-2600 CS5, **ClickHouse is the system of record for the team catalog** — both sync paths write ClickHouse directly via `insert_teams`. There is no Postgres team projection and no Postgres-first control plane. The only difference between the paths is org tagging:
 
-- **Managed Mode (org-scoped, `--org ORG`)**: Provider data is projected into PostgreSQL `team_mappings` via the shared `TeamDriftSyncService`. This is a Postgres-first control plane. The sync preserves admin-curated configurations (such as `project_keys` and `repo_patterns`) and flags changes for review if `sync_policy == 1`. The CLI org path never writes ClickHouse directly; instead, it calls `bridge_teams_to_clickhouse(org_id)` to write the resolved teams and members to ClickHouse.
-- **Unmanaged Mode (no `--org`)**: Provider data is written directly to ClickHouse, preserving synthetic/local seeding.
+- **Org-scoped (`--org ORG`)**: Provider data is written directly to ClickHouse with each team row tagged with `org_id` (multi-tenant scoping). It does **not** project to PostgreSQL `team_mappings` and does **not** call any Postgres→ClickHouse bridge.
+- **No-org (no `--org`)**: Provider data is written directly to ClickHouse with no org tag, preserving synthetic/local seeding.
+
+> The legacy "Managed Mode" that projected into PostgreSQL `team_mappings` via `TeamDriftSyncService` and then bridged into ClickHouse was **removed in CS5**. The Postgres mapping models/services are dropped in CS6.
 
 ## Provider Capability Registry
 
-The shared provider capability registry (`providers/team_capabilities.py`) defines which providers support org-scoped drift discovery. The supported providers are:
+The shared provider capability registry (`providers/team_capabilities.py`) defines which providers are registered for org-scoped drift discovery. The supported providers are:
 - GitHub
 - GitLab
 - Jira
 - Linear
 - Microsoft Teams
 
-Both the worker drift path and the CLI org path read from this registry.
+The org-scoped CLI path reads this registry to log whether a provider is registered for drift discovery, then writes ClickHouse directly regardless.
 
-## Admin-Curated Configuration Preservation
+## Admin team/identity configuration
 
-When syncing teams in managed mode, the sync process preserves admin-curated configurations:
-- Empty provider values do not overwrite non-empty curated `project_keys` or `repo_patterns`.
-- If `sync_policy == 1`, changes are flagged for admin review rather than being silently merged.
+The admin team and identity surface is ClickHouse-native (CHAOS-2600 CS5): admin team CRUD writes the ClickHouse `teams` table, and identity→team membership is stored in the ClickHouse `identities` table with surgical `teams.members` updates. Admin curation (such as `project_keys` and `repo_patterns`) lives in ClickHouse; no Postgres `team_mappings` / `IdentityMapping` rows are written. The Postgres-`team_mappings` drift-review/`sync_policy` flow is disabled in CS5 (the drift-review endpoints return HTTP 501) pending a ClickHouse-backed rebuild in CS6.
 
 ## Recommended path
 

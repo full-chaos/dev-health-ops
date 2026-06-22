@@ -95,14 +95,14 @@ in a follow-up. New consumers should use the GraphQL `catalog` field.
 - `src/dev_health_ops/api/graphql/sql/validate.py` : `Dimension.TEAM`
 - `tests/graphql/test_compiler.py` : `TestCompileCatalogValues::test_team_catalog_uses_teams_table_as_source_of_truth`
 
-## Dual-Database Architecture and Sync Flow
+## Sync Flow — ClickHouse is the system of record (CHAOS-2600 CS5)
 
-While ClickHouse remains the analytics read source of truth for the team catalog, PostgreSQL serves as the Postgres-first control plane for org-scoped team configurations.
+ClickHouse is the system of record for the team catalog AND identity→team membership. There is no PostgreSQL team control plane and no Postgres team projection.
 
 The sync flow is structured as follows:
-1. **Shared Projection Service**: The CLI and Celery/admin paths use the shared `TeamDriftSyncService` to project provider-discovered teams into PostgreSQL `team_mappings`. This ensures consistent merge semantics and flags changes for review if `sync_policy == 1`.
-2. **Single Member Resolver**: A single shared member resolver (`members_by_team`) resolves member identities from PostgreSQL `identity_mappings` to populate ClickHouse `teams.members`.
-3. **Sole ClickHouse Writer**: The `bridge_teams_to_clickhouse` function is the sole writer for org-scoped ClickHouse teams, ensuring that the analytics layer is always populated from the PostgreSQL control plane.
+1. **Direct ClickHouse writes**: `dev-hops sync teams` writes the ClickHouse `teams` table directly via `insert_teams` — org-scoped (`--org`) rows are tagged with `org_id`, no-org rows are untagged. Team auto-import and the admin team CRUD surface (`ClickHouseTeamAdminService`) are native ClickHouse writers too.
+2. **ClickHouse-native identities**: Identity records live in the ClickHouse `identities` table (`ClickHouseIdentityStore`); the admin identity surface updates `teams.members` surgically by facet. The shared `members_by_team` resolver is still used by the (now no-op) reconcile path; live admin/identity writes never touch Postgres `identity_mappings`.
+3. **No Postgres bridge / projection**: `bridge_teams_to_clickhouse`, `providers/team_bridge.py`, `providers/team_reconcile.py` (and `dev-hops teams reconcile`), and the `sync_teams_to_analytics` task are **deleted** in CS5. The org-scoped path does not project to Postgres via `TeamDriftSyncService`. The Postgres `team_mappings` / `identity_mappings` models are dropped in CS6.
 ## History
 
 - CHAOS-1751: Established `teams` as the source of truth for the TEAM

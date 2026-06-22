@@ -1586,6 +1586,59 @@ class ClickHouseStore:
             rows,
         )
 
+    async def insert_identities(self, mappings: list[Any]) -> None:
+        """Insert ClickHouse-native identity rows (CHAOS-2600 CS5).
+
+        Writes the CH ``identities`` table (named to avoid colliding with the
+        Postgres ``identity_mappings`` table). ``provider_identities`` is a
+        JSON-encoded ``dict[str, list[str]]``. ReplacingMergeTree(updated_at)
+        keyed on ``(org_id, canonical_id)`` — the caller supplies a fresh
+        ``updated_at`` so the latest write wins.
+        """
+        if not mappings:
+            return
+        synced_at = self._normalize_datetime(datetime.now(timezone.utc))
+        rows: list[dict[str, Any]] = []
+        for item in mappings:
+            get = self._item_getter(item)
+            canonical_id = str(get("canonical_id") or "")
+            org_id = str(get("org_id") or self.org_id or "")
+            rows.append(
+                {
+                    "org_id": org_id,
+                    "canonical_id": canonical_id,
+                    "identity_uuid": self._normalize_uuid(
+                        get("identity_uuid")
+                        or uuid.uuid5(
+                            uuid.NAMESPACE_URL,
+                            f"identity:{org_id}:{canonical_id}",
+                        )
+                    ),
+                    "display_name": get("display_name"),
+                    "email": get("email"),
+                    "provider_identities": str(get("provider_identities") or "{}"),
+                    "team_ids": list(get("team_ids") or []),
+                    "is_active": int(get("is_active", 1) or 0),
+                    "updated_at": self._normalize_datetime(get("updated_at"))
+                    or synced_at,
+                }
+            )
+        await self._insert_rows(
+            "identities",
+            [
+                "org_id",
+                "canonical_id",
+                "identity_uuid",
+                "display_name",
+                "email",
+                "provider_identities",
+                "team_ids",
+                "is_active",
+                "updated_at",
+            ],
+            rows,
+        )
+
     async def insert_projects(self, rows: list[Any]) -> None:
         if not rows:
             return

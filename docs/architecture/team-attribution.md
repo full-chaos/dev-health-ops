@@ -37,6 +37,20 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 > **CS5/CS6**. Until then, §1 below still describes the live (pre-CHAOS-2600) cascade and the
 > existing tests still encode the old precedence.
 
+> **CS5 reality (CHAOS-2606).** As of CS5, ClickHouse is the system of record for **both** the team
+> catalog **and** identity→team membership. No live scheduled beat or admin/inference path writes
+> Postgres `TeamMapping` or `IdentityMapping` anymore: the Postgres→ClickHouse team bridge
+> (`providers/team_bridge.py`) and `providers/team_reconcile.py` are **deleted**; the `sync-team-drift`
+> and `reconcile-team-members` beats are **removed** and their Celery tasks are fail-closed no-ops
+> (returning a `deprecated` status without touching Postgres). Admin team/identity CRUD now goes
+> through `ClickHouseTeamAdminService` + the new `ClickHouseIdentityStore`, writing the ClickHouse
+> `teams` and `identities` tables directly (the CH identity table is `identities`, not
+> `identity_mappings` — that name belongs to the unchanged Postgres table, kept distinct per layer
+> for org-deletion purge). Identity membership uses **surgical replacement**
+> semantics: updating an identity removes its facets from teams it left and replaces changed facets in
+> teams it stayed in, editing `teams.members` add/remove-by-facet (never a full recompute) so Auto
+> Import / catalog members are preserved. See *CS5 status / deferred to CS6* at the end of §4.
+
 **ClickHouse is the only source used for analytics attribution. Postgres does not store or resolve
 team attribution mappings.** Manual mappings are ClickHouse fallback records only — never overrides,
 never outranking WTI-native facts. PR/MR attribution comes from an **actual linked issue donor**; an
@@ -180,7 +194,7 @@ flowchart TD
     B -- match --> T["team_id"]
     B -- miss --> C{"Tier 2: retry with project_key<br/>(Linear TEAM key)"}
     C -- match --> T
-    C -- miss --> D{"Tier 3: TeamResolver<br/>assignee in IdentityMapping?"}
+    C -- miss --> D{"Tier 3: assignee membership<br/>assignee in ClickHouse teams.members?"}
     D -- match --> T
     D -- miss --> E{"Tier 4: LinkedIssueTeamResolver<br/>linked donor issue has a team?"}
     E -- match --> T
@@ -344,8 +358,7 @@ flowchart LR
 
     D1 --> D2 --> D3 --> D4 --> D5
 
-    CH[("ClickHouse:<br/>work_items,<br/>work_item_dependencies,<br/>work_item_cycle_times")]
-    PG[("Postgres:<br/>TeamMapping,<br/>IdentityMapping")]
+    CH[("ClickHouse:<br/>work_items, work_item_dependencies,<br/>work_item_cycle_times,<br/>teams, identities")]
 
     S2 -->|write| CH
     S3 -->|read| CH
@@ -354,9 +367,18 @@ flowchart LR
     D2 -->|read| CH
     D3 -->|read| CH
     D5 -->|write| CH
-    PG -. team resolvers .-> S4
-    PG -. team resolvers .-> D4
+    CH -. team resolvers .-> S4
+    CH -. team resolvers .-> D4
 ```
+
+> **CS5 (CHAOS-2606): no Postgres in the team/identity path.** The team resolvers read ClickHouse
+> `teams` / `identities` (and the ownership dimensions) — **not** Postgres `TeamMapping` /
+> `IdentityMapping`. (The CH identity table is `identities`; `identity_mappings` is the unchanged
+> Postgres table.) The Postgres→ClickHouse bridge (`team_bridge.py`) and `team_reconcile.py` are
+> deleted; the `sync-team-drift` and `reconcile-team-members` beats are removed and their tasks
+> no-op. Admin team/identity CRUD writes ClickHouse via `ClickHouseTeamAdminService` /
+> `ClickHouseIdentityStore`; identity membership is edited surgically (add/remove-by-facet) so
+> Auto Import members are preserved.
 
 **Key boundary differences**
 
@@ -404,6 +426,28 @@ does not collapse to `unassigned`.
 > standalone `job_daily` recompute between syncs can keep honoring it until the
 > next sync re-extracts the source. A link-lifecycle/tombstone (which also
 > affects the work-graph) is a tracked follow-up.
+
+### CS5 status / deferred to CS6
+
+- **Drift review is off.** The admin drift-review endpoints (`GET /teams/pending-changes`,
+  `POST /teams/{id}/approve-changes`, `/dismiss-changes`, `/teams/trigger-drift-sync`) return
+  **HTTP 501**. They were built on the Postgres `TeamMapping` flagged-changes machinery, which CS5
+  removes; the ClickHouse-backed rebuild is **CS6**.
+- **Postgres mapping deletion is CS6.** The `TeamMappingService` / `TeamDriftSyncService` classes,
+  the dead `JiraActivityInferenceService.match_and_confirm` / `TeamMembershipService.confirm_links`
+  paths (no live caller after CS5), and the Postgres `TeamMapping` / `IdentityMapping` models + tables
+  are deleted in **CS6** (plus the Alembic drop). CS5 only stops reading/writing them from live paths.
+- **Known limitations.** (1) `ClickHouseTeamAdminService.add_members` has a read-modify-write
+  lost-update window under concurrent admin edits (deferred — admin surface is low-concurrency).
+  (2) The surgical facet remove can rarely over-remove a **shared facet** when two distinct
+  identities share a facet value and one is updated — for a shared **`email`** (the common case,
+  e.g. two records carrying the same address) or, for email-less identities, a shared
+  **`display_name`**; provider-ids (which are unique per identity, enforced by the confirm-path
+  409 check) are unaffected. Same CS6 bucket as the lost-update.
+  (3) Confirm-path membership writes are **non-transactional across teams**: ClickHouse has no
+  multi-statement transactions, so the two-pass design makes only the **validation** all-or-nothing
+  (a 409/404 leaves zero mutations). A ClickHouse error *mid-apply* (PASS 2) returns 500 with a
+  possible partial `team.members` / identity-record update; re-running the confirm is idempotent.
 
 ---
 

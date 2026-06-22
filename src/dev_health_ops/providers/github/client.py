@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Protocol, TypedDict, TypeVar, cast
+from typing import Any, NoReturn, Protocol, TypedDict, TypeVar, cast
 from urllib.parse import urlparse
 
+from dev_health_ops.connectors.exceptions import (
+    APIException,
+    AuthenticationException,
+    NotFoundException,
+    RateLimitException,
+)
 from dev_health_ops.connectors.utils.github_app import GitHubAppTokenProvider
 from dev_health_ops.connectors.utils.graphql import GitHubGraphQLClient
 from dev_health_ops.connectors.utils.rate_limit_queue import (
@@ -23,6 +30,14 @@ from dev_health_ops.credentials.types import GitHubCredentials
 from dev_health_ops.providers._ratelimit import gate_call
 
 logger = logging.getLogger(__name__)
+
+_DIAGNOSTIC_HEADER_NAMES = (
+    "x-ratelimit-remaining",
+    "x-ratelimit-reset",
+    "retry-after",
+    "x-github-request-id",
+    "x-accepted-github-permissions",
+)
 
 _TItem = TypeVar("_TItem")
 
@@ -41,6 +56,40 @@ def _parse_github_datetime(value: object) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _diagnostic_headers(headers: object) -> dict[str, str]:
+    if not isinstance(headers, dict):
+        return {}
+    lowered = {str(k).lower(): str(v) for k, v in headers.items()}
+    return {name: lowered[name] for name in _DIAGNOSTIC_HEADER_NAMES if name in lowered}
+
+
+def _github_error_message(data: object) -> str:
+    if isinstance(data, dict):
+        message = data.get("message")
+        if message is not None:
+            return str(message)
+    if data is None:
+        return ""
+    return str(data)
+
+
+def _retry_after_seconds(headers: dict[str, str]) -> float | None:
+    retry_after = headers.get("retry-after")
+    if retry_after is not None:
+        try:
+            return float(retry_after)
+        except ValueError:
+            return None
+
+    reset = headers.get("x-ratelimit-reset")
+    if reset is not None:
+        try:
+            return max(0.0, float(reset) - time.time())
+        except ValueError:
+            return None
+    return None
 
 
 class _GitHubLabelLike(Protocol):
@@ -206,7 +255,7 @@ class GitHubWorkClient:
         gate: RateLimitGate | None = None,
         org_id: str | None = None,
     ) -> None:
-        from github import Github  # PyGithub
+        from github import Auth, Github  # PyGithub
 
         self.auth = auth
         self.per_page = max(1, min(100, int(per_page)))
@@ -221,29 +270,39 @@ class GitHubWorkClient:
         self._app_token_provider: GitHubAppTokenProvider | None = None
 
         token = auth.token
+        pygithub_auth: Any | None = None
         if auth.is_app_auth:
             assert auth.app_id is not None
             assert auth.private_key is not None
             assert auth.installation_id is not None
+            app_auth = Auth.AppAuth(auth.app_id, auth.private_key)
+            pygithub_auth = Auth.AppInstallationAuth(
+                app_auth, int(auth.installation_id)
+            )
             self._app_token_provider = GitHubAppTokenProvider(
                 app_id=auth.app_id,
                 private_key=auth.private_key,
                 installation_id=auth.installation_id,
+                api_base_url=base_url,
             )
             token = self._app_token_provider.get_token()
+        elif token:
+            pygithub_auth = Auth.Token(token)
         if not token:
             raise ValueError("GitHubWorkClient requires token or GitHub App auth")
 
         if auth.base_url:
             self.github = Github(
                 base_url=auth.base_url,
-                login_or_token=token,
+                auth=pygithub_auth,
                 per_page=self.per_page,
+                retry=None,
             )
         else:
             self.github = Github(
-                login_or_token=token,
+                auth=pygithub_auth,
                 per_page=self.per_page,
+                retry=None,
             )
 
         # GraphQL client (api.github.com only for now).
@@ -269,8 +328,86 @@ class GitHubWorkClient:
         return cls(auth=GitHubAuth.from_credentials(credentials), org_id=org_id)
 
     def get_repo(self, *, owner: str, repo: str) -> Any:
+        operation = f"GET /repos/{owner}/{repo}"
+        return self._call_github(
+            operation, lambda: self.github.get_repo(f"{owner}/{repo}")
+        )
+
+    def _call_github(self, operation: str, call: Callable[[], _TItem]) -> _TItem:
         with gate_call(self.gate):
-            return self.github.get_repo(f"{owner}/{repo}")
+            try:
+                return call()
+            except Exception as exc:
+                self._raise_github_exception(exc, operation=operation)
+
+    def _raise_github_exception(self, exc: Exception, *, operation: str) -> NoReturn:
+        from github import GithubException, RateLimitExceededException
+
+        if isinstance(exc, (APIException, AuthenticationException, NotFoundException)):
+            raise exc
+        if isinstance(exc, RateLimitException):
+            raise exc
+        if isinstance(exc, RateLimitExceededException):
+            raise RateLimitException(
+                f"GitHub rate limit on {operation}: {exc}",
+                retry_after_seconds=self._rate_limit_reset_delay_seconds(),
+            )
+        if not isinstance(exc, GithubException):
+            raise APIException(f"GitHub API error on {operation}: {exc}") from exc
+
+        status = getattr(exc, "status", None)
+        headers = _diagnostic_headers(getattr(exc, "headers", None))
+        message = _github_error_message(getattr(exc, "data", None))
+        if status == 401:
+            raise AuthenticationException(
+                f"GitHub authentication failed on {operation}: {message} (headers={headers})"
+            ) from exc
+        if status == 404:
+            raise NotFoundException(
+                f"GitHub resource not found on {operation}: {message} (headers={headers})"
+            ) from exc
+        if status == 403:
+            lowered = message.lower()
+            is_rate_limit = (
+                headers.get("x-ratelimit-remaining") == "0"
+                or "retry-after" in headers
+                or "rate limit" in lowered
+                or "abuse" in lowered
+                or "secondary" in lowered
+            )
+            if is_rate_limit:
+                retry_after = _retry_after_seconds(headers)
+                logger.warning(
+                    "GitHub rate limit (403) on %s headers=%s message=%s",
+                    operation,
+                    headers,
+                    message,
+                )
+                raise RateLimitException(
+                    f"GitHub rate limit (403) on {operation}: {message} (headers={headers})",
+                    retry_after_seconds=retry_after,
+                ) from exc
+            logger.warning(
+                "GitHub 403 on %s headers=%s message=%s",
+                operation,
+                headers,
+                message,
+            )
+            raise AuthenticationException(
+                f"GitHub 403 on {operation}: {message} (headers={headers})"
+            ) from exc
+        raise APIException(
+            f"GitHub API error on {operation}: HTTP {status} {message} (headers={headers})"
+        ) from exc
+
+    def _rate_limit_reset_delay_seconds(self) -> float | None:
+        reset = getattr(self.github, "rate_limiting_resettime", None)
+        if reset is None:
+            return None
+        try:
+            return max(0.0, float(reset) - time.time())
+        except (TypeError, ValueError):
+            return None
 
     def _iter_with_limit(
         self,
@@ -295,6 +432,20 @@ class GitHubWorkClient:
             if limit is not None and count >= int(limit):
                 return
 
+    def _iter_github_items(
+        self,
+        source: Iterable[_TItem],
+        *,
+        operation: str,
+        limit: int | None,
+        skip: Callable[[_TItem], bool] | None = None,
+    ) -> Iterable[_TItem]:
+        with gate_call(self.gate):
+            try:
+                yield from self._iter_with_limit(source, limit=limit, skip=skip)
+            except Exception as exc:
+                self._raise_github_exception(exc, operation=operation)
+
     def iter_issues(
         self,
         *,
@@ -305,10 +456,13 @@ class GitHubWorkClient:
         limit: int | None = None,
     ) -> Iterable[_GitHubIssueLike]:
         gh_repo = self.get_repo(owner=owner, repo=repo)
-        with gate_call(self.gate):
-            issues = gh_repo.get_issues(state=state, since=since)
-        yield from self._iter_with_limit(
+        operation = f"GET /repos/{owner}/{repo}/issues"
+        issues = self._call_github(
+            operation, lambda: gh_repo.get_issues(state=state, since=since)
+        )
+        yield from self._iter_github_items(
             issues,
+            operation=operation,
             limit=limit,
             skip=lambda issue: getattr(issue, "pull_request", None) is not None,
         )
@@ -325,16 +479,18 @@ class GitHubWorkClient:
         Accepts both Issues and PullRequests: PyGithub's Issue exposes the
         endpoint as get_events(), PullRequest as get_issue_events().
         """
+        issue_number = getattr(issue, "number", "?")
+        operation = f"GET issue events for #{issue_number}"
         get_events = getattr(issue, "get_events", None)
         if callable(get_events):
-            with gate_call(self.gate):
-                events = get_events()
+            events = self._call_github(operation, get_events)
         else:
             get_issue_events = getattr(issue, "get_issue_events")
-            with gate_call(self.gate):
-                events = get_issue_events()
-        yield from self._iter_with_limit(
-            cast(Iterable[_GitHubEventLike], events), limit=limit
+            events = self._call_github(operation, get_issue_events)
+        yield from self._iter_github_items(
+            cast(Iterable[_GitHubEventLike], events),
+            operation=operation,
+            limit=limit,
         )
 
     def iter_pull_requests(
@@ -351,9 +507,12 @@ class GitHubWorkClient:
         Iterate pull requests in a repository via REST.
         """
         gh_repo = self.get_repo(owner=owner, repo=repo)
-        with gate_call(self.gate):
-            pulls = gh_repo.get_pulls(state=state, sort=sort, direction=direction)
-        yield from self._iter_with_limit(pulls, limit=limit)
+        operation = f"GET /repos/{owner}/{repo}/pulls"
+        pulls = self._call_github(
+            operation,
+            lambda: gh_repo.get_pulls(state=state, sort=sort, direction=direction),
+        )
+        yield from self._iter_github_items(pulls, operation=operation, limit=limit)
 
     def iter_issue_comments(
         self, issue: _GitHubIssueBaseLike, *, limit: int | None = None
@@ -361,9 +520,10 @@ class GitHubWorkClient:
         """
         Iterate comments on an issue via REST.
         """
-        with gate_call(self.gate):
-            comments = issue.get_comments()
-        yield from self._iter_with_limit(comments, limit=limit)
+        issue_number = getattr(issue, "number", "?")
+        operation = f"GET issue comments for #{issue_number}"
+        comments = self._call_github(operation, issue.get_comments)
+        yield from self._iter_github_items(comments, operation=operation, limit=limit)
 
     def iter_pr_comments(
         self, pr: _GitHubPullRequestLike, *, limit: int | None = None
@@ -380,9 +540,10 @@ class GitHubWorkClient:
         """
         Iterate review comments on a pull request.
         """
-        with gate_call(self.gate):
-            comments = pr.get_review_comments()
-        yield from self._iter_with_limit(comments, limit=limit)
+        pr_number = getattr(pr, "number", "?")
+        operation = f"GET pull request review comments for #{pr_number}"
+        comments = self._call_github(operation, pr.get_review_comments)
+        yield from self._iter_github_items(comments, operation=operation, limit=limit)
 
     def iter_pr_social_data_batch(
         self,
@@ -762,9 +923,11 @@ class GitHubWorkClient:
         Iterate milestones in a repository via REST.
         """
         gh_repo = self.get_repo(owner=owner, repo=repo)
-        with gate_call(self.gate):
-            milestones = gh_repo.get_milestones(state=state)
-        yield from self._iter_with_limit(milestones, limit=limit)
+        operation = f"GET /repos/{owner}/{repo}/milestones"
+        milestones = self._call_github(
+            operation, lambda: gh_repo.get_milestones(state=state)
+        )
+        yield from self._iter_github_items(milestones, operation=operation, limit=limit)
 
     def iter_project_v2_items(
         self,

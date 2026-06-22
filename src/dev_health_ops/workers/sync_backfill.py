@@ -5,6 +5,7 @@ import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
+from dev_health_ops.exceptions import AuthenticationException
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.task_utils import (
     _as_str_list,
@@ -14,6 +15,10 @@ from dev_health_ops.workers.task_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _is_terminal_backfill_error(exc: Exception) -> bool:
+    return isinstance(exc, (ValueError, AuthenticationException))
 
 
 def _mark_backfill_job_running(backfill_job_id: str, started_at: datetime) -> None:
@@ -101,7 +106,9 @@ def _mark_sync_job_run_running(
 
 
 def _mark_sync_job_run_success(
-    pending_run_id: str | None, completed_at: datetime
+    pending_run_id: str | None,
+    completed_at: datetime,
+    result: dict[str, Any] | None = None,
 ) -> None:
     if pending_run_id is None:
         return
@@ -118,9 +125,36 @@ def _mark_sync_job_run_success(
             if run:
                 setattr(run, "status", JobRunStatus.SUCCESS.value)
                 setattr(run, "completed_at", completed_at)
+                if result is not None:
+                    current = run.result if isinstance(run.result, dict) else {}
+                    setattr(run, "result", {**current, **result})
                 session.flush()
     except Exception:
         logger.debug("Failed to mark sync job run success: %s", pending_run_id)
+
+
+def _merge_sync_job_run_result(
+    pending_run_id: str | None,
+    result: dict[str, Any],
+) -> None:
+    if pending_run_id is None:
+        return
+    try:
+        from dev_health_ops.db import get_postgres_session_sync
+        from dev_health_ops.models.settings import JobRun
+
+        with get_postgres_session_sync() as session:
+            run = (
+                session.query(JobRun)
+                .filter(JobRun.id == uuid.UUID(pending_run_id))
+                .one_or_none()
+            )
+            if run:
+                current = run.result if isinstance(run.result, dict) else {}
+                setattr(run, "result", {**current, **result})
+                session.flush()
+    except Exception:
+        logger.debug("Failed to merge sync job run result: %s", pending_run_id)
 
 
 def _mark_sync_job_run_failed(
@@ -277,8 +311,8 @@ def run_backfill(
                 dataset_keys=planner_dataset_keys,
                 triggered_by="backfill",
             )
+            unit_count = int(result_payload.get("unit_count") or 0)
             if backfill_job_id:
-                unit_count = int(result_payload.get("unit_count") or 0)
                 status = "completed" if unit_count == 0 else "running"
                 _update_backfill_job_counts(
                     backfill_job_id,
@@ -293,6 +327,17 @@ def run_backfill(
                     completed_at=(
                         datetime.now(timezone.utc) if status == "completed" else None
                     ),
+                )
+            if unit_count == 0:
+                _mark_sync_job_run_success(
+                    pending_run_id,
+                    datetime.now(timezone.utc),
+                    {"sync_run_id": str(result_payload["sync_run_id"])},
+                )
+            else:
+                _merge_sync_job_run_result(
+                    pending_run_id,
+                    {"sync_run_id": str(result_payload["sync_run_id"])},
                 )
             return {
                 "status": "success",
@@ -423,4 +468,6 @@ def run_backfill(
                 logger.debug("Failed to mark backfill job failed: %s", backfill_job_id)
         _mark_sync_job_run_failed(pending_run_id, str(exc), completed_at)
 
+        if _is_terminal_backfill_error(exc):
+            raise
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))

@@ -8,6 +8,9 @@ from typing import Any
 from sqlalchemy import select, update
 
 from dev_health_ops.models import (
+    BackfillJob,
+    JobRun,
+    JobRunStatus,
     SyncDispatchOutbox,
     SyncRun,
     SyncRunPostDispatch,
@@ -51,6 +54,7 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
         _stale_dispatch_seconds,
         dispatch_sync_run,
         finalize_sync_run,
+        sync_observers_for_terminal_sync_run,
     )
 
     now = datetime.now(timezone.utc)
@@ -116,6 +120,11 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
         session.flush()
         session.commit()
         session.expire_all()
+        repaired_observers = 0
+        for run in _terminal_runs_with_stale_observers(session, limit):
+            sync_observers_for_terminal_sync_run(session, run)
+            repaired_observers += 1
+        session.flush()
         finalize_run_ids = _finalizable_run_ids(session, limit)
         for run_id in expired_run_ids:
             if _run_is_finalizable(session, run_id):
@@ -249,6 +258,7 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
         "relayed_finalize": relayed_finalize,
         "relayed_post_sync": relayed_post_sync,
         "publish_failures": publish_failures,
+        "observer_repairs": repaired_observers,
     }
 
 
@@ -350,6 +360,73 @@ def _materialize_outbox_wakeups(
         )
         count += 1
     return count
+
+
+def _terminal_runs_with_stale_observers(session, limit: int) -> list[SyncRun]:
+    max_repairs = max(1, int(limit))
+    runs: list[SyncRun] = []
+    seen_run_ids: set[uuid.UUID] = set()
+
+    job_runs = (
+        session.query(JobRun)
+        .filter(
+            JobRun.status.in_({JobRunStatus.PENDING.value, JobRunStatus.RUNNING.value})
+        )
+        .order_by(JobRun.created_at.asc(), JobRun.id.asc())
+        .all()
+    )
+    for job_run in job_runs:
+        result = job_run.result if isinstance(job_run.result, dict) else {}
+        sync_run_id = result.get("sync_run_id")
+        if sync_run_id is None:
+            continue
+        _append_terminal_observer_run(session, runs, seen_run_ids, sync_run_id)
+        if len(runs) >= max_repairs:
+            break
+
+    if len(runs) < max_repairs:
+        backfill_jobs = (
+            session.query(BackfillJob)
+            .filter(BackfillJob.status.in_({"pending", "running"}))
+            .order_by(BackfillJob.created_at.asc(), BackfillJob.id.asc())
+            .all()
+        )
+        for job in backfill_jobs:
+            sync_run_id = _backfill_job_sync_run_id(job)
+            if sync_run_id is None:
+                continue
+            _append_terminal_observer_run(session, runs, seen_run_ids, sync_run_id)
+            if len(runs) >= max_repairs:
+                break
+
+    return runs
+
+
+def _append_terminal_observer_run(
+    session,
+    runs: list[SyncRun],
+    seen_run_ids: set[uuid.UUID],
+    sync_run_id: object,
+) -> None:
+    try:
+        run_id = uuid.UUID(str(sync_run_id))
+    except ValueError:
+        return
+    if run_id in seen_run_ids:
+        return
+    run = session.get(SyncRun, run_id)
+    if run is None or run.status not in _TERMINAL_RUN_STATUSES:
+        return
+    seen_run_ids.add(run_id)
+    runs.append(run)
+
+
+def _backfill_job_sync_run_id(job: BackfillJob) -> str | None:
+    task_id = str(job.celery_task_id or "")
+    marker = "sync_run:"
+    if marker not in task_id:
+        return None
+    return task_id.rsplit(marker, 1)[-1] or None
 
 
 def _publish_claimed_outbox_row(

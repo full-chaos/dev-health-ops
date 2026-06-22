@@ -6,16 +6,42 @@ import os
 import uuid
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
+_PLACEHOLDER_CLICKHOUSE_HOSTS = {"fake", "test"}
+
+
+def _placeholder_clickhouse_uri_allowed() -> bool:
+    return os.getenv("PYTEST_CURRENT_TEST") is not None or os.getenv(
+        "DEV_HEALTH_ALLOW_PLACEHOLDER_CLICKHOUSE_URI", ""
+    ).strip().lower() in {"1", "true", "yes"}
+
+
+def _validate_worker_clickhouse_uri(db_url: str) -> str:
+    if not db_url:
+        raise RuntimeError(
+            "ClickHouse URI not configured for analytics worker task. "
+            "Set CLICKHOUSE_URI."
+        )
+
+    from dev_health_ops.db import validate_sink_uri_scheme
+
+    validate_sink_uri_scheme(db_url)
+    host = (urlparse(db_url).hostname or "").strip().lower()
+    if (
+        host in _PLACEHOLDER_CLICKHOUSE_HOSTS
+        and not _placeholder_clickhouse_uri_allowed()
+    ):
+        raise RuntimeError(
+            f"Refusing placeholder ClickHouse URI host '{host}' for analytics "
+            "worker task. Set CLICKHOUSE_URI to the real ClickHouse endpoint."
+        )
+    return db_url
+
 
 def _get_db_url() -> str:
-    """Get data-store URL from environment.
-
-    Prefers CLICKHOUSE_URI (the primary data store for sync/metrics),
-    falling back to DATABASE_URI which may point to Postgres (admin DB).
-    """
     return (
         os.getenv("CLICKHOUSE_URI")
         or os.getenv("DATABASE_URI")

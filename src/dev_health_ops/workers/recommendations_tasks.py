@@ -6,7 +6,10 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 from dev_health_ops.workers.celery_app import celery_app
-from dev_health_ops.workers.task_utils import _get_db_url
+from dev_health_ops.workers.task_utils import (
+    _get_db_url,
+    _validate_worker_clickhouse_uri,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -288,7 +291,7 @@ def run_recommendations_job(
     Returns:
         dict with job status and per-org fired counts.
     """
-    db_url = db_url or _get_db_url()
+    db_url = _validate_worker_clickhouse_uri(db_url or _get_db_url())
     if as_of:
         # The finalized partition is ``as_of_day``; the readiness gate keys on
         # it. The engine derives its exclusive ``window_end`` from ``now.date()``

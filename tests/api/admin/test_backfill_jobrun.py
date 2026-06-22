@@ -3,7 +3,7 @@
 Covers:
 - Endpoint (legacy path): creates PENDING JobRun anchored to sync ScheduledJob.
 - Endpoint (legacy path): passes pending_run_id to run_backfill.delay().
-- Endpoint (fanout path): does NOT create a JobRun (passes pending_run_id=None).
+- Endpoint (fanout path): creates a JobRun anchor and passes pending_run_id.
 - Worker: run_backfill transitions JobRun RUNNING→SUCCESS on success.
 - Worker: run_backfill transitions JobRun RUNNING→FAILED on exception.
 """
@@ -316,10 +316,9 @@ async def test_backfill_legacy_enqueue_failure_marks_committed_records_failed(
 
 
 @pytest.mark.asyncio
-async def test_backfill_fanout_does_not_create_job_run(
+async def test_backfill_fanout_creates_job_run_anchor(
     client, session_maker, seeded_state
 ):
-    """Fan-out backfill must NOT create a JobRun (passes pending_run_id=None)."""
     ac, _ = client
 
     create_resp = await _create_sync_config(
@@ -359,15 +358,16 @@ async def test_backfill_fanout_does_not_create_job_run(
     data = resp.json()
     assert data["mode"] == "fanout"
 
-    # pending_run_id must be None for the fanout path.
     call_kwargs = mock_run_backfill.delay.call_args.kwargs
-    assert call_kwargs.get("pending_run_id") is None
+    pending_run_id = call_kwargs.get("pending_run_id")
+    assert pending_run_id is not None
 
-    # No JobRun rows should exist.
     async with session_maker() as session:
-        jr_result = await session.execute(select(JobRun))
-        runs = list(jr_result.scalars().all())
-    assert runs == []
+        run = await session.get(JobRun, uuid.UUID(pending_run_id))
+        assert run is not None
+        assert run.status == JobRunStatus.PENDING.value
+        assert run.triggered_by == "backfill"
+        assert run.result == {"planner_managed": True}
 
 
 @pytest.mark.asyncio
@@ -485,7 +485,10 @@ async def test_backfill_fanout_enqueue_failure_marks_backfill_job_failed(
     assert backfill_job.error_message == "enqueue failed: broker down"
     assert backfill_job.completed_at is not None
     assert backfill_job.celery_task_id is None
-    assert job_runs == []
+    assert len(job_runs) == 1
+    assert job_runs[0].status == JobRunStatus.FAILED.value
+    assert job_runs[0].error == "enqueue failed: broker down"
+    assert job_runs[0].completed_at is not None
     assert sync_runs == []
 
 
@@ -530,7 +533,14 @@ async def test_backfill_planner_managed_config_routes_to_fanout_without_flag(
     assert resp.status_code == 202, resp.text
     assert resp.json()["mode"] == "fanout"
     call_kwargs = mock_run_backfill.delay.call_args.kwargs
-    assert call_kwargs.get("pending_run_id") is None
+    pending_run_id = call_kwargs.get("pending_run_id")
+    assert pending_run_id is not None
+    async with session_maker() as session:
+        run = await session.get(JobRun, uuid.UUID(pending_run_id))
+        assert run is not None
+        assert run.status == JobRunStatus.PENDING.value
+        assert run.triggered_by == "backfill"
+        assert run.result == {"planner_managed": True}
 
 
 @pytest.mark.asyncio
@@ -664,6 +674,7 @@ async def test_run_backfill_worker_transitions_job_run_running_then_success(
             triggered_by="backfill",
             status=JobRunStatus.PENDING.value,
         )
+        run.result = {"planner_managed": True}
         session.add(run)
         session.commit()
         pending_run_id = str(run.id)
@@ -697,7 +708,11 @@ async def test_run_backfill_worker_transitions_job_run_running_then_success(
         "dev_health_ops.db.get_postgres_session_sync",
         _fake_pg_session,
     ):
-        _mark_sync_job_run_success(pending_run_id, completed_at)
+        _mark_sync_job_run_success(
+            pending_run_id,
+            completed_at,
+            {"sync_run_id": "planner-sync-run"},
+        )
 
     with SessionFactory() as session:
         run_row = (
@@ -705,6 +720,10 @@ async def test_run_backfill_worker_transitions_job_run_running_then_success(
         )
         assert run_row.status == JobRunStatus.SUCCESS.value
         assert run_row.completed_at is not None
+        assert run_row.result == {
+            "planner_managed": True,
+            "sync_run_id": "planner-sync-run",
+        }
 
     engine.dispose()
 

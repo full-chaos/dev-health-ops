@@ -198,6 +198,7 @@ class JobRunResponse(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     duration_seconds: int | None = None
+    items_synced: int = 0
     result: dict[str, Any] | None = None
     error: str | None = None
     triggered_by: str

@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime, timezone
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from dev_health_ops.connectors.exceptions import APIException, RateLimitException
+from dev_health_ops.connectors.exceptions import (
+    APIException,
+    AuthenticationException,
+    RateLimitException,
+)
 from dev_health_ops.providers.github.client import GitHubAuth, GitHubWorkClient
 
 
@@ -19,6 +25,226 @@ def _client() -> tuple[GitHubWorkClient, MagicMock, MagicMock]:
     ):
         client = GitHubWorkClient(auth=GitHubAuth(token="token"), gate=gate)
     return client, graphql_cls.return_value, gate
+
+
+def test_work_client_uses_pygithub_token_auth_without_internal_retry() -> None:
+    gate = MagicMock()
+    with (
+        patch("github.Github") as github_cls,
+        patch("dev_health_ops.providers.github.client.GitHubGraphQLClient"),
+    ):
+        GitHubWorkClient(auth=GitHubAuth(token="token"), gate=gate)
+
+    _, kwargs = github_cls.call_args
+    assert kwargs["auth"].__class__.__name__ == "Token"
+    assert kwargs["retry"] is None
+    assert "login_or_token" not in kwargs
+
+
+def test_work_client_uses_pygithub_app_installation_auth_without_internal_retry() -> (
+    None
+):
+    gate = MagicMock()
+    with (
+        patch("github.Github") as github_cls,
+        patch("dev_health_ops.providers.github.client.GitHubGraphQLClient"),
+        patch(
+            "dev_health_ops.providers.github.client.GitHubAppTokenProvider"
+        ) as token_provider_cls,
+    ):
+        token_provider_cls.return_value.get_token.return_value = "installation-token"
+        GitHubWorkClient(
+            auth=GitHubAuth(
+                app_id="123",
+                private_key="not-a-real-private-key",
+                installation_id="456",
+            ),
+            gate=gate,
+        )
+
+    _, kwargs = github_cls.call_args
+    assert kwargs["auth"].__class__.__name__ == "AppInstallationAuth"
+    assert kwargs["auth"].installation_id == 456
+    assert kwargs["retry"] is None
+    assert "login_or_token" not in kwargs
+
+
+def test_work_client_get_repo_classifies_primary_rate_limit_403(monkeypatch) -> None:
+    from github.GithubException import GithubException
+
+    client, _graphql, gate = _client()
+    cast(Any, client.github).get_repo = MagicMock(
+        side_effect=GithubException(
+            403,
+            {"message": "API rate limit exceeded for installation ID 141773132."},
+            {
+                "x-ratelimit-remaining": "0",
+                "x-ratelimit-reset": "105",
+                "x-github-request-id": "REQ:5",
+            },
+        )
+    )
+    monkeypatch.setattr("dev_health_ops.providers.github.client.time.time", lambda: 100)
+
+    with pytest.raises(RateLimitException) as exc_info:
+        client.get_repo(owner="full-chaos", repo="dev-health-web")
+
+    message = str(exc_info.value)
+    assert "GitHub rate limit" in message
+    assert "GET /repos/full-chaos/dev-health-web" in message
+    assert "x-ratelimit-remaining" in message
+    assert "REQ:5" in message
+    assert exc_info.value.retry_after_seconds == pytest.approx(5.0)
+    gate.penalize.assert_called_once_with(5.0)
+
+
+def test_work_client_get_repo_classifies_permission_403() -> None:
+    from github.GithubException import GithubException
+
+    client, _graphql, gate = _client()
+    cast(Any, client.github).get_repo = MagicMock(
+        side_effect=GithubException(
+            403,
+            {"message": "Resource not accessible by integration"},
+            {"x-github-request-id": "REQ:9"},
+        )
+    )
+
+    with pytest.raises(AuthenticationException) as exc_info:
+        client.get_repo(owner="full-chaos", repo="private-repo")
+
+    message = str(exc_info.value)
+    assert "GitHub 403" in message
+    assert "GET /repos/full-chaos/private-repo" in message
+    assert "REQ:9" in message
+    gate.penalize.assert_called_once_with(None)
+
+
+def _lazy_rate_limit_iterable() -> Iterable[object]:
+    from github.GithubException import GithubException
+
+    raise GithubException(
+        403,
+        {"message": "API rate limit exceeded for installation ID 141773132."},
+        {
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": "105",
+            "x-github-request-id": "REQ:lazy",
+        },
+    )
+    yield object()
+
+
+def test_work_client_iter_issues_classifies_lazy_primary_rate_limit_403(
+    monkeypatch,
+) -> None:
+    client, _graphql, gate = _client()
+    repo = MagicMock()
+    repo.get_issues.return_value = _lazy_rate_limit_iterable()
+    cast(Any, client.github).get_repo.return_value = repo
+    monkeypatch.setattr("dev_health_ops.providers.github.client.time.time", lambda: 100)
+
+    with pytest.raises(RateLimitException) as exc_info:
+        list(client.iter_issues(owner="full-chaos", repo="dev-health-web"))
+
+    message = str(exc_info.value)
+    assert "GitHub rate limit" in message
+    assert "GET /repos/full-chaos/dev-health-web/issues" in message
+    assert "REQ:lazy" in message
+    assert exc_info.value.retry_after_seconds == pytest.approx(5.0)
+    gate.penalize.assert_called_once_with(5.0)
+
+
+def test_work_client_iter_milestones_classifies_lazy_primary_rate_limit_403(
+    monkeypatch,
+) -> None:
+    client, _graphql, gate = _client()
+    repo = MagicMock()
+    repo.get_milestones.return_value = _lazy_rate_limit_iterable()
+    cast(Any, client.github).get_repo.return_value = repo
+    monkeypatch.setattr("dev_health_ops.providers.github.client.time.time", lambda: 100)
+
+    with pytest.raises(RateLimitException) as exc_info:
+        list(client.iter_repo_milestones(owner="full-chaos", repo="dev-health-ops"))
+
+    message = str(exc_info.value)
+    assert "GitHub rate limit" in message
+    assert "GET /repos/full-chaos/dev-health-ops/milestones" in message
+    assert "REQ:lazy" in message
+    assert exc_info.value.retry_after_seconds == pytest.approx(5.0)
+    gate.penalize.assert_called_once_with(5.0)
+
+
+def test_work_client_iter_pull_requests_classifies_lazy_primary_rate_limit_403(
+    monkeypatch,
+) -> None:
+    client, _graphql, gate = _client()
+    repo = MagicMock()
+    repo.get_pulls.return_value = _lazy_rate_limit_iterable()
+    cast(Any, client.github).get_repo.return_value = repo
+    monkeypatch.setattr("dev_health_ops.providers.github.client.time.time", lambda: 100)
+
+    with pytest.raises(RateLimitException) as exc_info:
+        list(client.iter_pull_requests(owner="full-chaos", repo="dev-health-web"))
+
+    message = str(exc_info.value)
+    assert "GET /repos/full-chaos/dev-health-web/pulls" in message
+    assert "REQ:lazy" in message
+    gate.penalize.assert_called_once_with(5.0)
+
+
+def test_work_client_iter_issue_events_classifies_lazy_primary_rate_limit_403(
+    monkeypatch,
+) -> None:
+    client, _graphql, gate = _client()
+    issue = MagicMock()
+    issue.number = 123
+    issue.get_events.return_value = _lazy_rate_limit_iterable()
+    monkeypatch.setattr("dev_health_ops.providers.github.client.time.time", lambda: 100)
+
+    with pytest.raises(RateLimitException) as exc_info:
+        list(client.iter_issue_events(issue))
+
+    message = str(exc_info.value)
+    assert "GET issue events for #123" in message
+    assert "REQ:lazy" in message
+    gate.penalize.assert_called_once_with(5.0)
+
+
+def test_work_client_iter_issue_comments_classifies_lazy_primary_rate_limit_403(
+    monkeypatch,
+) -> None:
+    client, _graphql, gate = _client()
+    issue = MagicMock()
+    issue.number = 456
+    issue.get_comments.return_value = _lazy_rate_limit_iterable()
+    monkeypatch.setattr("dev_health_ops.providers.github.client.time.time", lambda: 100)
+
+    with pytest.raises(RateLimitException) as exc_info:
+        list(client.iter_issue_comments(issue))
+
+    message = str(exc_info.value)
+    assert "GET issue comments for #456" in message
+    assert "REQ:lazy" in message
+    gate.penalize.assert_called_once_with(5.0)
+
+
+def test_work_client_iter_pr_review_comments_classifies_lazy_primary_rate_limit_403(
+    monkeypatch,
+) -> None:
+    client, _graphql, gate = _client()
+    pr = MagicMock()
+    pr.number = 789
+    pr.get_review_comments.return_value = _lazy_rate_limit_iterable()
+    monkeypatch.setattr("dev_health_ops.providers.github.client.time.time", lambda: 100)
+
+    with pytest.raises(RateLimitException) as exc_info:
+        list(client.iter_pr_review_comments(pr))
+
+    message = str(exc_info.value)
+    assert "GET pull request review comments for #789" in message
+    assert "REQ:lazy" in message
+    gate.penalize.assert_called_once_with(5.0)
 
 
 def _pr(number: int) -> MagicMock:

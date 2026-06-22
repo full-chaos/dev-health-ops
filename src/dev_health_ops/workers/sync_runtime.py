@@ -540,7 +540,7 @@ def _dispatch_post_sync_tasks(
 
 
 def _is_terminal_sync_error(exc: Exception) -> bool:
-    return isinstance(exc, (_TerminalSyncError, ValueError))
+    return isinstance(exc, (_TerminalSyncError, ValueError, AuthenticationException))
 
 
 def _run_team_autoimport_for_sync_config(

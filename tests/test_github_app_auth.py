@@ -124,6 +124,7 @@ def test_github_work_client_branches_to_app_token_provider() -> None:
         app_id="12345",
         private_key="synthetic-private-key",
         installation_id="67890",
+        api_base_url="https://api.github.com",
     )
     github_cls.assert_called_once()
     graphql_cls.assert_called_once()

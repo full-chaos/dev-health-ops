@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any, Protocol, cast
 
@@ -32,6 +33,7 @@ from dev_health_ops.models.integrations import (
     Integration,
     IntegrationDataset,
     IntegrationSource,
+    SyncRunStatus,
 )
 from dev_health_ops.models.settings import (
     JobRun,
@@ -43,6 +45,7 @@ from dev_health_ops.models.settings import (
 from dev_health_ops.sync.datasets import supported_datasets, supported_legacy_targets
 from dev_health_ops.sync.planner import plan_sync_run
 from dev_health_ops.sync.trigger_routing import (
+    mark_sync_run_failed,
     planner_request_for_config_if_routed,
 )
 from dev_health_ops.workers.queues import sync_queue_for_provider
@@ -76,6 +79,23 @@ def _mark_job_run_failed(sync_session, run_id: str, error: str) -> None:
     sync_session.flush()
 
 
+def _merge_job_run_result(
+    sync_session, run_id: str, result: dict[str, Any] | None = None
+) -> None:
+    if result is None:
+        return
+    run = (
+        sync_session.query(JobRun)
+        .filter(JobRun.id == uuid.UUID(str(run_id)))
+        .one_or_none()
+    )
+    if run is None:
+        return
+    current = run.result if isinstance(run.result, dict) else {}
+    run.result = {**current, **result}
+    sync_session.flush()
+
+
 def _mark_backfill_job_failed(
     sync_session, backfill_job_id: str, error: str, completed_at: datetime
 ) -> None:
@@ -94,8 +114,35 @@ def _mark_backfill_job_failed(
     sync_session.flush()
 
 
+def _preflight_planner_credential(sync_session, config) -> None:
+    credential_id = getattr(config, "credential_id", None)
+    if credential_id is None:
+        return
+    from dev_health_ops.models.settings import IntegrationCredential
+
+    credential = (
+        sync_session.query(IntegrationCredential)
+        .filter(
+            IntegrationCredential.id == credential_id,
+            IntegrationCredential.org_id == getattr(config, "org_id"),
+        )
+        .one_or_none()
+    )
+    if credential is None:
+        raise HTTPException(status_code=400, detail="Credential not found")
+    if not bool(credential.is_active):
+        raise HTTPException(status_code=409, detail="Credential is inactive")
+    if credential.last_test_success is False:
+        detail = credential.last_test_error or "Credential preflight failed"
+        raise HTTPException(status_code=409, detail=detail)
+
+
 def _ensure_pending_sync_job_run(
-    sync_session, config, org_id: str, triggered_by: str
+    sync_session,
+    config,
+    org_id: str,
+    triggered_by: str,
+    result: dict[str, Any] | None = None,
 ) -> str:
     """Find-or-create the ScheduledJob anchor and create a PENDING JobRun.
 
@@ -146,6 +193,7 @@ def _ensure_pending_sync_job_run(
         triggered_by=triggered_by,
         status=JobRunStatus.PENDING.value,
     )
+    run.result = result
     sync_session.add(run)
     sync_session.flush()
     return str(run.id)
@@ -276,18 +324,129 @@ def _sync_config_to_response(
     )
 
 
-def _job_run_response(run: object) -> JobRunResponse:
+def _aware_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _elapsed_seconds(
+    started_at: datetime | None, completed_at: datetime | None
+) -> int | None:
+    started = _aware_datetime(started_at)
+    completed = _aware_datetime(completed_at)
+    if started is None or completed is None:
+        return None
+    return max(0, int((completed - started).total_seconds()))
+
+
+def _items_synced_from_result(result: dict[str, Any] | None) -> int:
+    if not result:
+        return 0
+    for key in ("items_synced", "rows_ingested", "rows", "items", "count"):
+        if key in result:
+            try:
+                return int(result.get(key) or 0)
+            except (TypeError, ValueError):
+                return 0
+    return 0
+
+
+def _planner_job_run_sync_run_id(run: object) -> uuid.UUID | None:
+    result = getattr(run, "result", None)
+    if not isinstance(result, dict):
+        return None
+    sync_run_id = result.get("sync_run_id")
+    if sync_run_id is None:
+        return None
+    try:
+        return uuid.UUID(str(sync_run_id))
+    except ValueError:
+        return None
+
+
+def _planner_job_run_status(run_status: str) -> int:
+    if run_status == SyncRunStatus.PLANNED.value:
+        return JobRunStatus.PENDING.value
+    if run_status in {
+        SyncRunStatus.DISPATCHING.value,
+        SyncRunStatus.RUNNING.value,
+    }:
+        return JobRunStatus.RUNNING.value
+    if run_status == SyncRunStatus.SUCCESS.value:
+        return JobRunStatus.SUCCESS.value
+    if run_status in {
+        SyncRunStatus.PARTIAL_FAILED.value,
+        SyncRunStatus.FAILED.value,
+    }:
+        return JobRunStatus.FAILED.value
+    return JobRunStatus.RUNNING.value
+
+
+async def _planner_sync_runs_for_job_runs(
+    session: AsyncSession, runs: Sequence[object], org_id: str
+) -> dict[str, SyncRun]:
+    sync_run_ids = {
+        sync_run_id
+        for run in runs
+        if (sync_run_id := _planner_job_run_sync_run_id(run)) is not None
+    }
+    if not sync_run_ids:
+        return {}
+    result = await session.execute(
+        select(SyncRun).where(
+            SyncRun.id.in_(sync_run_ids),
+            SyncRun.org_id == org_id,
+        )
+    )
+    return {str(sync_run.id): sync_run for sync_run in result.scalars().all()}
+
+
+def _job_run_response(
+    run: object, planner_sync_run: SyncRun | None = None
+) -> JobRunResponse:
     status_value = int(getattr(run, "status"))
+    started_at = getattr(run, "started_at")
+    completed_at = getattr(run, "completed_at")
+    duration_seconds = getattr(run, "duration_seconds")
+    error = getattr(run, "error")
+    result = getattr(run, "result")
+    items_synced = _items_synced_from_result(
+        result if isinstance(result, dict) else None
+    )
+
+    if planner_sync_run is not None:
+        # Planner-managed JobRun rows are visibility anchors for Job History.
+        # The linked SyncRun owns execution lifecycle and runtime stats.
+        sync_result = getattr(planner_sync_run, "result")
+        result = {
+            **(result if isinstance(result, dict) else {}),
+            **(sync_result if isinstance(sync_result, dict) else {}),
+            "sync_run_status": str(getattr(planner_sync_run, "status")),
+            "total_units": int(getattr(planner_sync_run, "total_units")),
+            "completed_units": int(getattr(planner_sync_run, "completed_units")),
+            "failed_units": int(getattr(planner_sync_run, "failed_units")),
+        }
+        status_value = _planner_job_run_status(str(getattr(planner_sync_run, "status")))
+        started_at = getattr(planner_sync_run, "started_at")
+        completed_at = getattr(planner_sync_run, "completed_at")
+        duration_seconds = _elapsed_seconds(started_at, completed_at)
+        error = getattr(planner_sync_run, "error") or error
+        items_synced = int(getattr(planner_sync_run, "completed_units"))
+
     return JobRunResponse.model_validate(
         {
             "id": str(getattr(run, "id")),
             "job_id": str(getattr(run, "job_id")),
             "status": JOB_RUN_STATUS_LABELS.get(status_value, "unknown"),
-            "started_at": getattr(run, "started_at"),
-            "completed_at": getattr(run, "completed_at"),
-            "duration_seconds": getattr(run, "duration_seconds"),
-            "result": getattr(run, "result"),
-            "error": getattr(run, "error"),
+            "started_at": started_at,
+            "completed_at": completed_at,
+            "duration_seconds": duration_seconds,
+            "items_synced": items_synced,
+            "result": result,
+            "error": error,
             "triggered_by": getattr(run, "triggered_by"),
             "created_at": getattr(run, "created_at"),
         }
@@ -1231,30 +1390,57 @@ async def trigger_sync_config(
         )
     )
     if plan_request is not None:
+        await session.run_sync(
+            lambda sync_session: _preflight_planner_credential(sync_session, config)
+        )
         try:
             plan = await session.run_sync(
                 lambda sync_session: plan_sync_run(sync_session, plan_request)
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+        planner_pending_run_id = await session.run_sync(
+            lambda sync_session: _ensure_pending_sync_job_run(
+                sync_session,
+                config,
+                org_id,
+                "manual",
+                {"sync_run_id": plan.sync_run_id},
+            )
+        )
         await session.commit()
         try:
-            getattr(dispatch_sync_run, "apply_async")(
+            dispatch_result = getattr(dispatch_sync_run, "apply_async")(
                 args=(plan.sync_run_id,), queue="sync"
             )
         except Exception as exc:
-            logger.warning(
-                "sync_config.dispatch_fastpath_failed",
-                extra={
-                    "config_id": str(config.id),
-                    "sync_run_id": plan.sync_run_id,
-                    "error": str(exc),
-                },
+            error_message = f"dispatch enqueue failed: {exc}"
+            await session.run_sync(
+                lambda s: mark_sync_run_failed(
+                    s, plan.sync_run_id, "dispatch enqueue failed"
+                )
             )
+            await session.run_sync(
+                lambda s: _mark_job_run_failed(s, planner_pending_run_id, error_message)
+            )
+            await session.commit()
+            raise HTTPException(
+                status_code=503, detail=f"Task queue unavailable: {exc}"
+            )
+        dispatch_task_id = str(getattr(dispatch_result, "id", "") or "")
+        await session.run_sync(
+            lambda s: _merge_job_run_result(
+                s,
+                planner_pending_run_id,
+                {"dispatch_task_id": dispatch_task_id} if dispatch_task_id else None,
+            )
+        )
+        await session.commit()
         return {
             "status": "triggered",
             "config_id": str(config.id),
             "sync_run_id": plan.sync_run_id,
+            "run_id": planner_pending_run_id,
             "total_units": plan.total_units,
         }
 
@@ -1346,6 +1532,10 @@ async def trigger_sync_config_backfill(
         )
     )
     fanout_backfill = planner_backfill_request is not None
+    if fanout_backfill:
+        await session.run_sync(
+            lambda sync_session: _preflight_planner_credential(sync_session, config)
+        )
     backfill_job = BackfillJobModel(
         org_id=org_id,
         sync_config_id=uuid.UUID(config_id),
@@ -1361,16 +1551,15 @@ async def trigger_sync_config_backfill(
     try:
         from dev_health_ops.workers.sync_tasks import run_backfill
 
-        # For the legacy path only: create a PENDING JobRun so the sync-activity
-        # list shows the backfill immediately (CHAOS-2536).  The fan-out path
-        # already produces a visible SyncRun, so we skip this there.
-        pending_run_id: str | None = None
-        if not fanout_backfill:
-            pending_run_id = await session.run_sync(
-                lambda sync_session: _ensure_pending_sync_job_run(
-                    sync_session, config, org_id, "backfill"
-                )
+        pending_run_id = await session.run_sync(
+            lambda sync_session: _ensure_pending_sync_job_run(
+                sync_session,
+                config,
+                org_id,
+                "backfill",
+                {"planner_managed": fanout_backfill},
             )
+        )
 
         await session.commit()
 
@@ -1452,8 +1641,16 @@ async def list_sync_config_jobs(
     )
     runs_result = await session.execute(runs_stmt)
     runs = list(runs_result.scalars().all())
+    planner_sync_runs = await _planner_sync_runs_for_job_runs(session, runs, org_id)
 
-    return [_job_run_response(run) for run in runs]
+    return [
+        _job_run_response(
+            run,
+            planner_sync_runs.get(str(sync_run_id)) if sync_run_id else None,
+        )
+        for run in runs
+        for sync_run_id in [_planner_job_run_sync_run_id(run)]
+    ]
 
 
 @router.get("/backfill-jobs")

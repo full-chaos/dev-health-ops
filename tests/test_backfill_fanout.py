@@ -226,6 +226,67 @@ def test_run_backfill_via_planner_creates_backfill_units_per_source_dataset_wind
     }
 
 
+def test_finalize_sync_run_terminalizes_backfill_job_and_job_run(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_single_unit_run(db_session, mode=SyncRunMode.BACKFILL.value)
+    unit.status = SyncRunUnitStatus.FAILED.value
+    unit.error = "bad credentials"
+    unit.result = {"error_category": "auth"}
+    backfill_job = BackfillJob(
+        org_id=ORG_ID,
+        sync_config_id=uuid.uuid4(),
+        celery_task_id=f"worker|sync_run:{run.id}",
+        status="running",
+        since_date=date(2026, 6, 1),
+        before_date=date(2026, 6, 7),
+        total_chunks=1,
+        completed_chunks=0,
+        failed_chunks=0,
+    )
+    scheduled = ScheduledJob(
+        org_id=ORG_ID,
+        name=f"sync-config-{uuid.uuid4()}",
+        job_type="sync",
+        provider="github",
+        schedule_cron="0 * * * *",
+        job_config={},
+        sync_config_id=backfill_job.sync_config_id,
+        tz="UTC",
+        status=1,
+    )
+    db_session.add(scheduled)
+    db_session.flush()
+    job_run = JobRun(
+        job_id=scheduled.id,
+        triggered_by="backfill",
+        status=JobRunStatus.RUNNING.value,
+    )
+    job_run.result = {"sync_run_id": str(run.id)}
+    db_session.add_all([backfill_job, job_run])
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setattr(sync_units, "_dispatch_post_sync_tasks", lambda **kwargs: None)
+
+    result = sync_units.finalize_sync_run(str(run.id))
+
+    db_session.refresh(run)
+    db_session.refresh(backfill_job)
+    db_session.refresh(job_run)
+    assert result["status"] == "finalized"
+    assert run.status == SyncRunStatus.FAILED.value
+    assert backfill_job.status == "failed"
+    assert backfill_job.total_chunks == 1
+    assert backfill_job.failed_chunks == 1
+    assert backfill_job.completed_at is not None
+    assert job_run.status == JobRunStatus.FAILED.value
+    assert job_run.completed_at is not None
+    job_run_result: dict[str, object] = dict(job_run.result or {})
+    assert job_run_result.get("sync_run_status") == SyncRunStatus.FAILED.value
+
+
 def test_backfill_unit_does_not_write_watermark(db_session, monkeypatch):
     from dev_health_ops.processors import dataset_adapters
     from dev_health_ops.workers import sync_units
@@ -542,6 +603,84 @@ def test_run_backfill_task_fanout_resolves_migrated_integration_id(
     assert captured["since"] == date(2026, 6, 1)
     assert captured["before"] == date(2026, 6, 7)
     assert captured["triggered_by"] == "backfill"
+
+
+def test_run_backfill_task_fanout_job_run_remains_running_after_planning(
+    db_session, monkeypatch
+):
+    from dev_health_ops.backfill import runner
+    from dev_health_ops.workers import sync_backfill
+
+    integration = _create_integration(db_session)
+    _create_source(db_session, integration, "full-chaos/dev-health")
+    _create_dataset(db_session, integration, "commits")
+    config = SyncConfiguration(
+        name="migrated parent backfill jobrun",
+        provider="github",
+        org_id=ORG_ID,
+        sync_targets=["git"],
+        sync_options={},
+        is_active=True,
+        migrated_integration_id=integration.id,
+        planner_managed=True,
+    )
+    scheduled = ScheduledJob(
+        org_id=ORG_ID,
+        name=f"sync-config-{uuid.uuid4()}",
+        job_type="sync",
+        provider="github",
+        schedule_cron="0 * * * *",
+        job_config={},
+        sync_config_id=uuid.uuid4(),
+        tz="UTC",
+        status=1,
+    )
+    db_session.add_all([config, scheduled])
+    db_session.flush()
+    job_run = JobRun(
+        job_id=scheduled.id,
+        triggered_by="backfill",
+        status=JobRunStatus.PENDING.value,
+    )
+    backfill_job = BackfillJob(
+        org_id=ORG_ID,
+        sync_config_id=config.id,
+        status="pending",
+        since_date=date(2026, 6, 1),
+        before_date=date(2026, 6, 7),
+    )
+    db_session.add_all([job_run, backfill_job])
+    db_session.flush()
+    sync_run_id = str(uuid.uuid4())
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setattr(
+        runner,
+        "run_backfill_via_planner",
+        lambda *args, **kwargs: {
+            "status": "success",
+            "sync_run_id": sync_run_id,
+            "unit_count": 1,
+        },
+    )
+
+    run_backfill_task = getattr(sync_backfill.run_backfill, "run")
+    result = run_backfill_task(
+        sync_config_id=str(config.id),
+        since="2026-06-01",
+        before="2026-06-07",
+        org_id=ORG_ID,
+        backfill_job_id=str(backfill_job.id),
+        pending_run_id=str(job_run.id),
+    )
+
+    db_session.refresh(backfill_job)
+    db_session.refresh(job_run)
+    assert result["status"] == "success"
+    assert backfill_job.status == "running"
+    assert backfill_job.total_chunks == 1
+    assert job_run.status == JobRunStatus.RUNNING.value
+    assert job_run.completed_at is None
+    assert dict(job_run.result or {})["sync_run_id"] == sync_run_id
 
 
 def test_run_backfill_task_fanout_child_config_scopes_source(db_session, monkeypatch):

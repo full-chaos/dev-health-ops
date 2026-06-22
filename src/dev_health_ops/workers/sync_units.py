@@ -48,6 +48,9 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from dev_health_ops.models import (
+    BackfillJob,
+    JobRun,
+    JobRunStatus,
     SyncRun,
     SyncRunMode,
     SyncRunPostDispatch,
@@ -59,8 +62,6 @@ from dev_health_ops.sync.dispatch_policy import route
 from dev_health_ops.sync.guard import DispatchGuard
 from dev_health_ops.sync.planner import map_datasets_to_legacy_targets
 from dev_health_ops.sync.trigger_routing import (
-    canonical_sync_config_for_sync_run,
-    inactive_child_configs_for_sync_run,
     stamp_sync_run_canonical_config,
 )
 from dev_health_ops.sync.watermarks import set_watermark
@@ -173,6 +174,7 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                 run.completed_at = completed_at
                 run.error = error
                 run.result = {"capped_unit_ids": list(decision.capped_unit_ids)}
+                sync_observers_for_terminal_sync_run(session, run)
                 session.flush()
                 logger.warning(
                     "dispatch_sync_run.denied",
@@ -204,76 +206,6 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                     "reason": decision.reason,
                 },
             )
-
-        canonical_config = canonical_sync_config_for_sync_run(session, run)
-        inactive_config = (
-            canonical_config
-            if canonical_config is not None and not bool(canonical_config.is_active)
-            else None
-        )
-        if inactive_config is None:
-            inactive_child_configs = inactive_child_configs_for_sync_run(session, run)
-            inactive_config = (
-                inactive_child_configs[0] if inactive_child_configs else None
-            )
-        if inactive_config is not None:
-            error = "sync configuration is paused"
-            if _run_has_dispatching_or_running_units(session, run_uuid):
-                failed_planned = _fail_planned_units(session, run_uuid, error)
-                failed_stale_dispatching = _fail_stale_dispatching_units(
-                    session, run_uuid, error
-                )
-                session.flush()
-                logger.warning(
-                    "dispatch_sync_run.inactive_config_with_active_units",
-                    extra={
-                        "sync_run_id": sync_run_id,
-                        "config_id": str(inactive_config.id),
-                        "failed_planned_units": failed_planned,
-                        "failed_stale_dispatching_units": failed_stale_dispatching,
-                    },
-                )
-                _enqueue_denied_active_finalize(sync_run_id)
-                return {
-                    "status": "denied_active",
-                    "reason": error,
-                    "failed_planned_units": failed_planned,
-                    "failed_stale_dispatching_units": failed_stale_dispatching,
-                }
-            else:
-                completed_at = datetime.now(timezone.utc)
-                run.status = SyncRunStatus.FAILED.value
-                run.completed_at = completed_at
-                run.error = error
-                run.result = {"reason": "inactive_sync_configuration"}
-                session.query(SyncRunUnit).filter(
-                    SyncRunUnit.sync_run_id == run_uuid,
-                    SyncRunUnit.status == SyncRunUnitStatus.PLANNED.value,
-                ).update(
-                    {
-                        SyncRunUnit.status: SyncRunUnitStatus.FAILED.value,
-                        SyncRunUnit.error: error,
-                        SyncRunUnit.updated_at: completed_at,
-                    },
-                    synchronize_session=False,
-                )
-                stamp_sync_run_canonical_config(
-                    session,
-                    run,
-                    completed_at=completed_at,
-                    success=False,
-                    error=error,
-                    stats={"reason": "inactive_sync_configuration"},
-                )
-                session.flush()
-                logger.warning(
-                    "dispatch_sync_run.inactive_config",
-                    extra={
-                        "sync_run_id": sync_run_id,
-                        "config_id": str(inactive_config.id),
-                    },
-                )
-                return {"status": "denied", "reason": error}
 
         units = _claim_units(session, run_uuid, capped_ids=capped_ids)
         signatures = []
@@ -327,22 +259,8 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
     #      call finalize directly; redispatching would loop forever.
     with get_postgres_session_sync() as session:
         run_uuid_check = uuid.UUID(str(sync_run_id))
-        pending_count = (
-            session.query(SyncRunUnit)
-            .filter(
-                SyncRunUnit.sync_run_id == run_uuid_check,
-                SyncRunUnit.status.in_(
-                    {
-                        SyncRunUnitStatus.PLANNED.value,
-                        SyncRunUnitStatus.DISPATCHING.value,
-                        SyncRunUnitStatus.RUNNING.value,
-                        SyncRunUnitStatus.RETRYING.value,
-                    }
-                ),
-            )
-            .count()
-        )
-    if pending_count > 0:
+        pending_counts = _pending_unit_counts(session, run_uuid_check)
+    if pending_counts["dispatchable"] > 0:
         try:
             _schedule_redispatch(sync_run_id)
         except Exception as exc:
@@ -356,10 +274,24 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
             extra={
                 "sync_run_id": sync_run_id,
                 "queued_units": 0,
-                "pending_units": pending_count,
+                "pending_units": pending_counts["dispatchable"],
             },
         )
         return {"status": "noop", "queued_units": 0}
+    if pending_counts["in_flight"] > 0:
+        logger.info(
+            "dispatch_sync_run.waiting_inflight",
+            extra={
+                "sync_run_id": sync_run_id,
+                "queued_units": 0,
+                "in_flight_units": pending_counts["in_flight"],
+            },
+        )
+        return {
+            "status": "waiting_inflight",
+            "queued_units": 0,
+            "in_flight_units": pending_counts["in_flight"],
+        }
     # No pending work — finalize (idempotent; handles zero-unit and already-finalized).
     logger.info(
         "dispatch_sync_run.noop_finalize",
@@ -683,6 +615,7 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
             error=run_error,
             stats=result_payload,
         )
+        sync_observers_for_terminal_sync_run(session, run)
         session.flush()
 
         nested = session.begin_nested()
@@ -831,6 +764,92 @@ def _run_has_dispatching_or_running_units(session, run_uuid: uuid.UUID) -> bool:
         .first()
         is not None
     )
+
+
+def _pending_unit_counts(session, run_uuid: uuid.UUID) -> dict[str, int]:
+    now = datetime.now(timezone.utc)
+    stale_dispatch_cutoff = now - timedelta(seconds=_stale_dispatch_seconds())
+    units = (
+        session.query(SyncRunUnit.status, SyncRunUnit.updated_at)
+        .filter(
+            SyncRunUnit.sync_run_id == run_uuid,
+            SyncRunUnit.status.in_(
+                {
+                    SyncRunUnitStatus.PLANNED.value,
+                    SyncRunUnitStatus.DISPATCHING.value,
+                    SyncRunUnitStatus.RUNNING.value,
+                    SyncRunUnitStatus.RETRYING.value,
+                }
+            ),
+        )
+        .all()
+    )
+    dispatchable = 0
+    in_flight = 0
+    for status, updated_at in units:
+        if status == SyncRunUnitStatus.PLANNED.value:
+            dispatchable += 1
+        elif status == SyncRunUnitStatus.DISPATCHING.value:
+            if (
+                updated_at is not None
+                and _as_aware(updated_at) <= stale_dispatch_cutoff
+            ):
+                dispatchable += 1
+            else:
+                in_flight += 1
+        else:
+            in_flight += 1
+    return {"dispatchable": dispatchable, "in_flight": in_flight}
+
+
+def sync_observers_for_terminal_sync_run(session, run: SyncRun) -> None:
+    if run.status not in _TERMINAL_RUN_STATUSES:
+        return
+    completed_at = run.completed_at or datetime.now(timezone.utc)
+    run.completed_at = completed_at
+    success = run.status == SyncRunStatus.SUCCESS.value
+    job_run_status = (
+        JobRunStatus.SUCCESS.value if success else JobRunStatus.FAILED.value
+    )
+    backfill_status = "completed" if success else "failed"
+    error = None if success else (run.error or "Sync run completed with failed units")
+    result_patch = {
+        "sync_run_status": run.status,
+        "total_units": int(run.total_units or 0),
+        "completed_units": int(run.completed_units or 0),
+        "failed_units": int(run.failed_units or 0),
+    }
+
+    marker = f"sync_run:{run.id}"
+    backfill_jobs = (
+        session.query(BackfillJob)
+        .filter(BackfillJob.org_id == str(run.org_id))
+        .filter(BackfillJob.celery_task_id.contains(marker))
+        .all()
+    )
+    for job in backfill_jobs:
+        job.status = backfill_status
+        job.total_chunks = int(run.total_units or 0)
+        job.completed_chunks = int(run.completed_units or 0)
+        job.failed_chunks = int(run.failed_units or 0)
+        job.completed_at = completed_at
+        job.error_message = error
+
+    job_runs = (
+        session.query(JobRun)
+        .filter(
+            JobRun.status.in_({JobRunStatus.PENDING.value, JobRunStatus.RUNNING.value})
+        )
+        .all()
+    )
+    for job_run in job_runs:
+        result = job_run.result if isinstance(job_run.result, dict) else {}
+        if str(result.get("sync_run_id") or "") != str(run.id):
+            continue
+        job_run.status = job_run_status
+        job_run.completed_at = completed_at
+        job_run.error = error
+        job_run.result = {**result, **result_patch}
 
 
 def _fail_planned_units(session, run_uuid: uuid.UUID, error: str) -> int:

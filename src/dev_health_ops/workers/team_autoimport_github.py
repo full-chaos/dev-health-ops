@@ -15,6 +15,7 @@ from dev_health_ops.api.services.configuration.team_membership import (
 )
 from dev_health_ops.metrics.schemas import TeamMembershipRecord, TeamRepoOwnershipRecord
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+from dev_health_ops.providers.identity import IdentityResolver, load_identity_resolver
 from dev_health_ops.providers.team_capabilities import team_provider_capabilities
 
 logger = logging.getLogger(__name__)
@@ -64,15 +65,22 @@ async def _populate_async(
         return _zero_summary(org_id=org_id, reason="no_provider_teams")
 
     now = datetime.now(timezone.utc)
+    # Same alias map the assignee/compute path uses (load_identity_resolver in
+    # job_work_items / providers.base), so an aliased member resolves to the SAME
+    # canonical identity an aliased assignee does (CHAOS-2609).
+    resolver = load_identity_resolver()
     team_rows = _team_rows(org_id=org_id, teams=teams, now=now)
     repo_rows = _repo_ownership_rows(org_id=org_id, teams=teams, now=now)
-    membership_rows = await _membership_rows(
+    membership_rows, member_roster = await _membership_rows(
         org_id=org_id,
         token=token,
         org_name=org_name,
         teams=teams,
         now=now,
+        resolver=resolver,
     )
+    for team_row in team_rows:
+        team_row["members"] = member_roster.get(str(team_row["id"]), [])
 
     sink = _sink(scope)
     await sink.insert_teams(team_rows)
@@ -194,9 +202,11 @@ async def _membership_rows(
     org_name: str,
     teams: Iterable[Any],
     now: datetime,
-) -> list[TeamMembershipRecord]:
+    resolver: IdentityResolver,
+) -> tuple[list[TeamMembershipRecord], dict[str, list[str]]]:
     service = TeamMembershipService(session=cast(Any, None), org_id=org_id)
     rows: list[TeamMembershipRecord] = []
+    roster: dict[str, list[str]] = {}
     seen: set[tuple[str, str]] = set()
     for team in teams:
         team_slug = str(getattr(team, "provider_team_id"))
@@ -224,13 +234,30 @@ async def _membership_rows(
             if key in seen:
                 continue
             seen.add(key)
+            # Resolve the member through the SAME org alias map an assignee uses:
+            # facets[0] is the alias-resolved identity (canonical email when the
+            # github:<login> is aliased, else github:<login>) — the facet a
+            # no-email assignee resolves to. It goes into raw_provider_user_id
+            # (the only member_by_identity slot free; member_id is the PK and
+            # keeps the bare login) AND, with the provider-qualified id, into the
+            # teams.members roster so BOTH attribution paths match aliased and
+            # non-aliased members (CHAOS-2609).
+            facets = resolver.membership_facets(
+                provider=PROVIDER,
+                username=raw_identity,
+                email=getattr(member, "email", None),
+            ) or [raw_identity]
+            roster_for_team = roster.setdefault(team_id, [])
+            for facet in facets:
+                if facet not in roster_for_team:
+                    roster_for_team.append(facet)
             rows.append(
                 TeamMembershipRecord(
                     org_id=org_id,
                     provider=PROVIDER,
                     team_id=team_id,
                     member_id=member_id,
-                    raw_provider_user_id=raw_identity,
+                    raw_provider_user_id=facets[0],
                     raw_email=getattr(member, "email", None),
                     source="provider_access",
                     is_primary=0,
@@ -240,7 +267,7 @@ async def _membership_rows(
                     updated_at=now,
                 )
             )
-    return rows
+    return rows, roster
 
 
 def _sink(scope: Mapping[str, Any]) -> ClickHouseMetricsSink:

@@ -166,7 +166,12 @@ def test_jira_comment_to_interaction_event() -> None:
     assert event.provider == "jira"
     assert event.interaction_type == "comment"
     assert event.body_length == 5
-    assert event.actor == "Alice"
+    # CHAOS-2609: a no-email Jira actor now resolves to the STABLE, provider-
+    # qualified accountId facet (jira:accountid:<id>) rather than the unreliable
+    # display name. This is the same identity team auto-import writes into
+    # team_memberships, so actors/assignees can be attributed to a team; the
+    # display name could collide or change and never matched membership.
+    assert event.actor == "jira:accountid:acct-123"
 
 
 def test_jira_sprint_payload_to_model() -> None:

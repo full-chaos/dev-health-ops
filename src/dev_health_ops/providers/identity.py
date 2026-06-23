@@ -4,6 +4,7 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import yaml
 
@@ -18,6 +19,34 @@ def _norm_key(value: str) -> str:
 
 def _norm_email(email: str) -> str:
     return (email or "").strip().lower()
+
+
+def provider_qualified_identity(
+    provider: WorkItemProvider | str,
+    *,
+    username: str | None = None,
+    account_id: str | None = None,
+) -> str | None:
+    """The provider-qualified identity for a user lacking a usable email.
+
+    Single source of truth shared by two sides that MUST agree (CHAOS-2609):
+
+    * the work-item assignee path — ``IdentityResolver.resolve`` returns this
+      string as its stable fallback when no email/alias matches; and
+    * team auto-import — writes this exact string into
+      ``team_memberships.raw_provider_user_id`` (a facet the canonical ladder's
+      ``member_by_identity`` indexes) and the ``teams.members`` roster (read by
+      the secondary ``TeamResolver``).
+
+    Priority mirrors ``resolve``: ``provider:username`` before
+    ``provider:accountid:account_id`` (GitHub/GitLab carry a username; Jira
+    carries only an accountId). Returns ``None`` when neither is present.
+    """
+    if username and str(username).strip():
+        return f"{provider}:{str(username).strip()}"
+    if account_id and str(account_id).strip():
+        return f"{provider}:accountid:{str(account_id).strip()}"
+    return None
 
 
 @dataclass(frozen=True)
@@ -66,12 +95,70 @@ class IdentityResolver:
             if mapped:
                 return mapped
 
-        # Stable fallbacks.
-        if username:
-            return f"{provider}:{username}"
+        # Stable fallbacks. A provider-qualified identity (username, then
+        # accountId) takes precedence over the unreliable display name so a
+        # no-email assignee resolves to the SAME facet team auto-import writes
+        # into team_memberships / teams.members — otherwise member-based
+        # attribution silently misses for no-email assignees (CHAOS-2609). This
+        # mirrors the candidate priority above (provider:accountid: outranks
+        # display_name) and shares provider_qualified_identity as the single
+        # derivation used by the auto-import writer.
+        qualified = provider_qualified_identity(
+            provider, username=username, account_id=account_id
+        )
+        if qualified:
+            return qualified
         if display_name:
             return display_name.strip() or "unknown"
         return "unknown"
+
+    def membership_facets(
+        self,
+        *,
+        provider: WorkItemProvider | str,
+        username: str | None = None,
+        account_id: str | None = None,
+        email: str | None = None,
+    ) -> list[str]:
+        """Every identity an assignee for this member could resolve to — under
+        THIS org's alias map — so both attribution paths match.
+
+        Order (de-duplicated, ``unknown``/empty dropped):
+
+        1. The **no-email** identity FIRST — what an assignee WITHOUT an email
+           resolves to: the alias-resolved canonical (``lead@example.com`` when
+           ``github:lead`` is aliased) else the provider-qualified id. This is the
+           element auto-import stores in the single ``raw_provider_user_id`` edge
+           facet (``raw_email`` already covers the email case on the ladder).
+        2. The provider-qualified id (``github:lead``) as a robustness fallback.
+        3. If the member has an email: what an assignee WITH that email resolves
+           to (``resolve(email=…)`` — alias-mapped if the email is aliased) AND
+           the normalized raw email — so the ``teams.members`` roster (read by
+           ``TeamResolver``) matches an email-bearing assignee too. Without this,
+           an email+provider-id member matched on the ladder via ``raw_email`` but
+           MISSED on the roster (CHAOS-2609).
+
+        ``display_name`` is intentionally omitted — never a stable facet.
+        """
+        no_email_identity = self.resolve(
+            provider=cast(WorkItemProvider, provider),
+            username=username,
+            account_id=account_id,
+        )
+        qualified = provider_qualified_identity(
+            provider, username=username, account_id=account_id
+        )
+        candidates = [no_email_identity, qualified]
+        if email:
+            candidates.append(
+                self.resolve(provider=cast(WorkItemProvider, provider), email=email)
+            )
+            candidates.append(_norm_email(email))
+        facets: list[str] = []
+        for candidate in candidates:
+            if candidate and candidate != "unknown" and candidate not in facets:
+                facets.append(candidate)
+        return facets
 
 
 def load_identity_resolver(path: Path | None = None) -> IdentityResolver:

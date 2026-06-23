@@ -21,6 +21,7 @@ from dev_health_ops.metrics.compute_work_items import (
     TeamAttributionCandidate,
     TeamAttributionContext,
     TeamAttributionSource,
+    resolve_team_attribution,
 )
 from dev_health_ops.metrics.schemas import (
     MemberRecord,
@@ -36,6 +37,8 @@ from dev_health_ops.models.work_items import (
     WorkItemProvider,
     WorkItemStatusTransition,
 )
+from dev_health_ops.providers.identity import load_identity_resolver
+from dev_health_ops.providers.teams import TeamResolver, _build_member_to_team
 from dev_health_ops.workers import (
     sync_runtime,
     team_autoimport_github,
@@ -613,4 +616,169 @@ def test_chaos_2401_2466_regression_work_item_sync_cannot_skip_autoimport_owners
     assert sink.memberships, (
         "CHAOS-2401/2466 regression: auto-import dispatch must write "
         "team_memberships for attribution"
+    )
+
+
+# CHAOS-2609: a no-email assignee carries the resolver-consumed identity — the
+# string IdentityResolver.resolve returns UNDER THE ORG'S ALIAS MAP. With no
+# alias that is the provider-qualified id (github:<login> / gitlab:<username> /
+# jira:accountid:<id>); with an alias mapping that id to a canonical email, it is
+# that email. Auto-import must store whatever the resolver produces, so the
+# match holds either way. Each entry: the resolve() kwargs for a no-email
+# assignee, the no-alias identity, the alias key + canonical the alias maps it
+# to, and the team auto-import created for that member in _patch_provider_stubs.
+_NO_EMAIL_ASSIGNEE: dict[str, dict[str, Any]] = {
+    "github": {
+        "resolve_kwargs": {"provider": "github", "username": "platform-lead"},
+        "no_alias_identity": "github:platform-lead",
+        "alias_key": "github:platform-lead",
+        "canonical": "gh-lead@example.com",
+        # The member's email from _patch_provider_stubs.discover_members_github.
+        "member_email": "platform@example.com",
+        "team_id": "gh:platform",
+    },
+    "gitlab": {
+        "resolve_kwargs": {"provider": "gitlab", "username": "dev-health-maintainer"},
+        "no_alias_identity": "gitlab:dev-health-maintainer",
+        "alias_key": "gitlab:dev-health-maintainer",
+        "canonical": "gl-lead@example.com",
+        "member_email": "gitlab@example.com",
+        "team_id": "gl:full-chaos/dev-health",
+    },
+    "jira": {
+        "resolve_kwargs": {"provider": "jira", "account_id": "jira-ops-account"},
+        "no_alias_identity": "jira:accountid:jira-ops-account",
+        "alias_key": "jira:accountid:jira-ops-account",
+        "canonical": "jira-lead@example.com",
+        "member_email": "jira-ops@example.com",
+        "team_id": "OPS",
+    },
+}
+
+
+def _write_identity_mapping(path: Any, *, aliased: bool) -> None:
+    """Write the global identity_mapping.yaml that BOTH the auto-import path and
+    the assignee path read via load_identity_resolver() (IDENTITY_MAPPING_PATH)."""
+    if not aliased:
+        path.write_text("identities: []\n")
+        return
+    lines = ["identities:"]
+    for spec in _NO_EMAIL_ASSIGNEE.values():
+        lines.append(f"  - canonical: {spec['canonical']}")
+        lines.append("    aliases:")
+        lines.append(f"      - {spec['alias_key']}")
+    path.write_text("\n".join(lines) + "\n")
+
+
+def _membership_probe_work_item(provider: str, assignee: str) -> WorkItem:
+    """A work item whose ONLY attribution signal is its assignee — project_key,
+    project_id and repo deliberately match no ownership row, so the resolution
+    winner can only be assignee_membership."""
+    return WorkItem(
+        work_item_id=f"{provider}:no-email-assignee-probe#1",
+        provider=cast(WorkItemProvider, provider),
+        title="No-email assignee attribution probe",
+        type="task",
+        status="done",
+        status_raw="Done",
+        assignees=[assignee],
+        reporter=None,
+        created_at=NOW - timedelta(days=1),
+        updated_at=NOW,
+        started_at=NOW - timedelta(hours=2),
+        completed_at=NOW,
+        closed_at=NOW,
+        labels=[],
+        project_key=None,
+        project_id="zzz-unowned-scope-no-ownership-match",
+    )
+
+
+# scenario → (alias file aliased?, builds an email-bearing assignee?)
+#   no_alias : no alias map, no-email assignee → resolves to provider-qualified id
+#   aliased  : alias map present, no-email assignee → resolves to canonical email
+#   email    : no alias map, assignee carries the member's EMAIL → resolves to that
+#              email (regression for the email+provider-id member: the ladder
+#              matched via raw_email but the roster used to MISS — CHAOS-2609 r4)
+_E2E_SCENARIOS = ["no_alias", "aliased", "email"]
+
+
+@pytest.mark.parametrize("scenario", _E2E_SCENARIOS, ids=_E2E_SCENARIOS)
+@pytest.mark.parametrize("provider", ["github", "gitlab", "jira"])
+def test_chaos_2609_no_email_assignee_resolves_to_autoimported_team_via_both_paths(
+    provider: str,
+    scenario: str,
+    monkeypatch: pytest.MonkeyPatch,
+    sync_session_factory: Callable[[], Any],
+    tmp_path: Any,
+) -> None:
+    # The org's alias map drives BOTH sides: auto-import resolves members through
+    # it, and the assignee path resolves the assignee through it. Point both at
+    # the SAME file via IDENTITY_MAPPING_PATH so the aliased case is faithful.
+    mapping_path = tmp_path / "identity_mapping.yaml"
+    _write_identity_mapping(mapping_path, aliased=(scenario == "aliased"))
+    monkeypatch.setenv("IDENTITY_MAPPING_PATH", str(mapping_path))
+
+    sink = RecordingClickHouseSink()
+    result = _run_sync_surface(
+        provider=provider,
+        monkeypatch=monkeypatch,
+        session_factory=sync_session_factory,
+        sink=sink,
+    )
+    assert result["status"] == "success"
+    assert sink.memberships, "auto-import must populate team_memberships"
+
+    spec = _NO_EMAIL_ASSIGNEE[provider]
+    if scenario == "email":
+        # An assignee that carries the member's email — resolves BY email.
+        resolve_kwargs = {**spec["resolve_kwargs"], "email": spec["member_email"]}
+        expected_identity = spec["member_email"]
+    elif scenario == "aliased":
+        resolve_kwargs = spec["resolve_kwargs"]
+        expected_identity = spec["canonical"]
+    else:
+        resolve_kwargs = spec["resolve_kwargs"]
+        expected_identity = spec["no_alias_identity"]
+
+    # 1. The REAL resolver (same alias map auto-import used) turns the assignee
+    #    into the identity it resolves to: provider-qualified id (no_alias),
+    #    canonical email (aliased), or the member's email (email scenario).
+    assignee = load_identity_resolver().resolve(**resolve_kwargs)
+    assert assignee == expected_identity
+
+    item = _membership_probe_work_item(provider, assignee)
+
+    # 2. Canonical ladder: member_by_identity built EXACTLY as production builds
+    #    it (member_id / raw_provider_user_id / raw_email) resolves the assignee
+    #    to the auto-imported team via assignee_membership.
+    context = _attribution_context_from_sink(sink)
+    ladder_team_id, ladder_team_name, candidates = resolve_team_attribution(
+        item,
+        team_resolver=None,
+        project_key_resolver=None,
+        attribution_context=context,
+    )
+    assert ladder_team_id == spec["team_id"], (
+        f"{provider} ({scenario}): assignee {assignee!r} must resolve to the "
+        f"auto-imported team via the canonical ladder"
+    )
+    assert ladder_team_name
+    assert any(c.source == "assignee_membership" for c in candidates)
+
+    # 3. Secondary TeamResolver: the teams.members roster resolves the SAME
+    #    assignee to the SAME team (the path the cosmetic roster fix missed, and
+    #    the path the email-bearing member used to miss before r4).
+    team_resolver = TeamResolver(
+        member_to_team=_build_member_to_team(list(sink.teams.values()))
+    )
+    roster_team_id, _, _ = resolve_team_attribution(
+        item,
+        team_resolver=team_resolver,
+        project_key_resolver=None,
+        attribution_context=None,
+    )
+    assert roster_team_id == spec["team_id"], (
+        f"{provider} ({scenario}): teams.members roster must resolve assignee "
+        f"{assignee!r} to the auto-imported team via TeamResolver"
     )

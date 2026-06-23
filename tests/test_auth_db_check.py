@@ -99,6 +99,38 @@ async def test_get_current_user_rejects_nonexistent_user(auth_service):
 
 
 @pytest.mark.asyncio
+async def test_get_current_user_returns_503_for_db_connect_timeout(auth_service):
+    from contextlib import asynccontextmanager
+
+    from fastapi import HTTPException
+
+    from dev_health_ops.api.auth.router import get_current_user
+
+    token = _make_token(auth_service)
+    header = f"Bearer {token}"
+    session = _mock_session(_FakeResult(row=None))
+    session.execute = AsyncMock(
+        side_effect=TimeoutError("asyncpg connect timeout while opening SSL connection")
+    )
+
+    @asynccontextmanager
+    async def fake_ctx():
+        yield session
+
+    with (
+        patch(
+            "dev_health_ops.api.auth.router.get_auth_service", return_value=auth_service
+        ),
+        patch("dev_health_ops.api.auth.router.get_postgres_session", fake_ctx),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(authorization=header)
+
+    assert exc_info.value.status_code == 503
+    assert "Database temporarily unavailable" in _detail_message(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_get_current_user_rejects_inactive_user(auth_service):
     from fastapi import HTTPException
 

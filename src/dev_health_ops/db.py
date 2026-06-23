@@ -12,6 +12,7 @@ Environment Variables:
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
@@ -31,6 +32,7 @@ from sqlalchemy.pool import NullPool
 
 _postgres_engine: AsyncEngine | None = None
 _clickhouse_engine: AsyncEngine | None = None
+logger = logging.getLogger(__name__)
 
 
 def _is_truthy(value: str | None) -> bool:
@@ -46,6 +48,21 @@ def _pgbouncer_transaction_mode() -> bool:
     prepared statements. See docs/ops/database-connection-pooling.md.
     """
     return _is_truthy(os.getenv("PGBOUNCER_TRANSACTION_MODE"))
+
+
+def _transaction_pooler_mode() -> bool:
+    return _pgbouncer_transaction_mode()
+
+
+def _postgres_connect_timeout_seconds() -> float:
+    raw = os.getenv("POSTGRES_CONNECT_TIMEOUT_SECONDS")
+    if not raw:
+        return 10.0
+    try:
+        timeout = float(raw)
+    except ValueError:
+        return 10.0
+    return timeout if timeout > 0 else 10.0
 
 
 def _pg_pool_size() -> tuple[int, int]:
@@ -71,31 +88,60 @@ def _async_postgres_engine_kwargs(uri: str) -> dict[str, Any]:
     Otherwise: a SQLAlchemy QueuePool with pre-ping and env-tunable sizing.
     """
     is_postgres = uri.startswith("postgresql+")
-    if is_postgres and _pgbouncer_transaction_mode():
-        return {
-            "poolclass": NullPool,
-            "connect_args": {
+    if not is_postgres:
+        return {"pool_pre_ping": True}
+
+    connect_args: dict[str, Any] = {"timeout": _postgres_connect_timeout_seconds()}
+    if _transaction_pooler_mode():
+        connect_args.update(
+            {
                 "statement_cache_size": 0,
                 "prepared_statement_name_func": lambda: f"__asyncpg_{uuid4()}__",
-            },
+            }
+        )
+        return {
+            "poolclass": NullPool,
+            "connect_args": connect_args,
         }
-    kwargs: dict[str, Any] = {"pool_pre_ping": True}
-    if is_postgres:
-        pool_size, max_overflow = _pg_pool_size()
-        kwargs["pool_size"] = pool_size
-        kwargs["max_overflow"] = max_overflow
+
+    pool_size, max_overflow = _pg_pool_size()
+    kwargs: dict[str, Any] = {
+        "pool_pre_ping": True,
+        "pool_size": pool_size,
+        "max_overflow": max_overflow,
+        "connect_args": connect_args,
+    }
     return kwargs
+
+
+def _log_postgres_connection_posture(uri: str, kwargs: dict[str, Any]) -> None:
+    url = make_url(uri)
+    connect_args = kwargs.get("connect_args") or {}
+    uses_null_pool = kwargs.get("poolclass") is NullPool
+    logger.info(
+        "postgres_connection_posture",
+        extra={
+            "driver": url.drivername,
+            "host": url.host,
+            "database": url.database,
+            "transaction_pooler_mode": _transaction_pooler_mode(),
+            "null_pool": uses_null_pool,
+            "pool_size": None if uses_null_pool else kwargs.get("pool_size"),
+            "max_overflow": None if uses_null_pool else kwargs.get("max_overflow"),
+            "connect_timeout_seconds": connect_args.get("timeout"),
+        },
+    )
 
 
 def get_postgres_uri() -> str | None:
     """Get PostgreSQL connection URI with fallback chain."""
     uri = os.getenv("POSTGRES_URI")
     if uri:
-        return _ensure_async_postgres(uri)
+        return normalize_async_postgres_uri(uri)
 
     fallback = os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
     if fallback:
-        return _ensure_async_postgres(fallback)
+        return normalize_async_postgres_uri(fallback)
 
     return None
 
@@ -105,10 +151,12 @@ def get_clickhouse_uri() -> str | None:
     return os.getenv("CLICKHOUSE_URI")
 
 
-def _ensure_async_postgres(uri: str) -> str:
-    """Ensure semantic DB URIs use an async driver."""
+def normalize_async_postgres_uri(uri: str) -> str:
     if uri.startswith("postgresql://"):
-        uri = uri.replace("postgresql://", "postgresql+asyncpg://", 1)
+        url = make_url(uri)
+        uri = url.set(drivername="postgresql+asyncpg").render_as_string(
+            hide_password=False
+        )
     elif uri.startswith("sqlite://") and not uri.startswith("sqlite+aiosqlite://"):
         return uri.replace("sqlite://", "sqlite+aiosqlite://", 1)
     return _normalize_asyncpg_postgres_query(uri)
@@ -133,6 +181,29 @@ def _normalize_asyncpg_postgres_query(uri: str) -> str:
     return url.set(query=query).render_as_string(hide_password=False)
 
 
+def _ensure_async_postgres(uri: str) -> str:
+    return normalize_async_postgres_uri(uri)
+
+
+def normalize_sync_postgres_uri(uri: str) -> str:
+    if uri.startswith("postgresql"):
+        url = make_url(uri)
+        query = dict(url.query)
+        ssl = query.pop("ssl", None)
+        query.pop("channel_binding", None)
+        if ssl is not None and "sslmode" not in query:
+            query["sslmode"] = ssl
+        drivername = (
+            "postgresql" if url.drivername == "postgresql+asyncpg" else url.drivername
+        )
+        return url.set(drivername=drivername, query=query).render_as_string(
+            hide_password=False
+        )
+    if uri.startswith("sqlite+aiosqlite://"):
+        return uri.replace("sqlite+aiosqlite://", "sqlite://", 1)
+    return uri
+
+
 def get_postgres_engine() -> AsyncEngine:
     """Get or create the PostgreSQL async engine."""
     global _postgres_engine
@@ -142,9 +213,9 @@ def get_postgres_engine() -> AsyncEngine:
             raise RuntimeError(
                 "PostgreSQL URI not configured. Set POSTGRES_URI environment variable."
             )
-        _postgres_engine = create_async_engine(
-            uri, **_async_postgres_engine_kwargs(uri)
-        )
+        kwargs = _async_postgres_engine_kwargs(uri)
+        _log_postgres_connection_posture(uri, kwargs)
+        _postgres_engine = create_async_engine(uri, **kwargs)
     return _postgres_engine
 
 
@@ -253,7 +324,7 @@ def require_clickhouse_uri() -> str:
 def resolve_db_uri(ns) -> str:
     uri = getattr(ns, "db", None)
     if uri:
-        return _ensure_async_postgres(uri)
+        return normalize_async_postgres_uri(uri)
     return require_postgres_uri()
 
 
@@ -289,32 +360,24 @@ _postgres_sync_engine: Engine | None = None
 def _get_sync_postgres_uri() -> str | None:
     uri = os.getenv("POSTGRES_URI")
     if uri:
-        if uri.startswith("postgresql+asyncpg://"):
-            return uri.replace("postgresql+asyncpg://", "postgresql://", 1)
-        return uri
+        return normalize_sync_postgres_uri(uri)
 
     fallback = os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
     if fallback:
-        if "asyncpg" in fallback:
-            return fallback.replace("+asyncpg", "", 1)
-        return fallback
+        return normalize_sync_postgres_uri(fallback)
 
     return None
 
 
 def _ensure_sync_postgres(uri: str) -> str:
-    if uri.startswith("postgresql+asyncpg://"):
-        return uri.replace("postgresql+asyncpg://", "postgresql://", 1)
-    if uri.startswith("sqlite+aiosqlite://"):
-        return uri.replace("sqlite+aiosqlite://", "sqlite://", 1)
-    return uri
+    return normalize_sync_postgres_uri(uri)
 
 
 def get_postgres_sync_engine(uri: str | None = None) -> Engine:
     global _postgres_sync_engine
     if uri is not None:
         sync_uri = _ensure_sync_postgres(uri)
-        if _pgbouncer_transaction_mode():
+        if _transaction_pooler_mode():
             return create_engine(sync_uri, poolclass=NullPool)
         if not sync_uri.startswith("postgresql"):
             return create_engine(sync_uri)
@@ -331,7 +394,7 @@ def get_postgres_sync_engine(uri: str | None = None) -> Engine:
             raise RuntimeError(
                 "PostgreSQL URI not configured. Set POSTGRES_URI environment variable."
             )
-        if _pgbouncer_transaction_mode():
+        if _transaction_pooler_mode():
             # PgBouncer owns the pool; psycopg keeps no server-side prepared
             # statements by default, so only the pool class needs to change.
             _postgres_sync_engine = create_engine(uri, poolclass=NullPool)

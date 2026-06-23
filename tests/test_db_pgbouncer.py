@@ -8,6 +8,8 @@ naming -- otherwise pooled server connections raise
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from sqlalchemy.pool import NullPool
 
@@ -18,6 +20,7 @@ from dev_health_ops import db
 def _clear_pool_env(monkeypatch):
     for var in (
         "PGBOUNCER_TRANSACTION_MODE",
+        "POSTGRES_CONNECT_TIMEOUT_SECONDS",
         "POSTGRES_POOL_SIZE",
         "POSTGRES_MAX_OVERFLOW",
     ):
@@ -38,11 +41,19 @@ class TestPgbouncerTransactionModeFlag:
         monkeypatch.setenv("PGBOUNCER_TRANSACTION_MODE", val)
         assert db._pgbouncer_transaction_mode() is False
 
+    def test_pooler_hostname_does_not_enable_transaction_pooler_mode(self):
+        assert db._transaction_pooler_mode() is False
+
 
 class TestAsyncEngineKwargs:
     def test_direct_postgres_uses_queue_pool(self):
         kw = db._async_postgres_engine_kwargs("postgresql+asyncpg://u:p@h:5432/d")
-        assert kw == {"pool_pre_ping": True, "pool_size": 20, "max_overflow": 10}
+        assert kw == {
+            "pool_pre_ping": True,
+            "pool_size": 20,
+            "max_overflow": 10,
+            "connect_args": {"timeout": 10.0},
+        }
         assert "poolclass" not in kw
 
     def test_pgbouncer_uses_nullpool_and_disables_prepared_statements(
@@ -56,6 +67,7 @@ class TestAsyncEngineKwargs:
         assert "pool_size" not in kw and "max_overflow" not in kw
 
         connect_args = kw["connect_args"]
+        assert connect_args["timeout"] == 10.0
         assert connect_args["statement_cache_size"] == 0
         name_func = connect_args["prepared_statement_name_func"]
         # Unique per call so names never collide across multiplexed server conns.
@@ -75,6 +87,65 @@ class TestAsyncEngineKwargs:
         assert kw["pool_size"] == 50
         assert kw["max_overflow"] == 25
 
+    def test_connect_timeout_env_overridable(self, monkeypatch):
+        monkeypatch.setenv("POSTGRES_CONNECT_TIMEOUT_SECONDS", "15")
+
+        kw = db._async_postgres_engine_kwargs("postgresql+asyncpg://u:p@h/d")
+
+        assert kw["connect_args"]["timeout"] == 15.0
+
+    def test_invalid_connect_timeout_falls_back(self, monkeypatch):
+        monkeypatch.setenv("POSTGRES_CONNECT_TIMEOUT_SECONDS", "nope")
+
+        kw = db._async_postgres_engine_kwargs("postgresql+asyncpg://u:p@h/d")
+
+        assert kw["connect_args"]["timeout"] == 10.0
+
+    def test_pooler_hostname_without_flag_uses_queue_pool(self):
+        uri = "postgresql+asyncpg://u:p@pooler.example.com/d"
+
+        kw = db._async_postgres_engine_kwargs(uri)
+
+        assert "poolclass" not in kw
+        assert kw["pool_pre_ping"] is True
+        assert "statement_cache_size" not in kw["connect_args"]
+
+    def test_pooler_flag_uses_nullpool_for_sync_engine(self, monkeypatch):
+        captured: dict[str, object] = {}
+
+        def create_engine(dsn: str, **kwargs):
+            captured["dsn"] = dsn
+            captured.update(kwargs)
+            return object()
+
+        monkeypatch.setattr(db, "create_engine", create_engine)
+        monkeypatch.setenv("PGBOUNCER_TRANSACTION_MODE", "true")
+
+        db.get_postgres_sync_engine(
+            "postgresql+asyncpg://u:p@pooler.example.com/d?ssl=require"
+        )
+
+        assert captured["poolclass"] is NullPool
+
+    def test_connection_posture_log_is_sanitized(self, monkeypatch, caplog):
+        monkeypatch.setenv("PGBOUNCER_TRANSACTION_MODE", "true")
+        uri = "postgresql+asyncpg://u:secret@pooler.example.com/d"
+        kw = db._async_postgres_engine_kwargs(uri)
+
+        with caplog.at_level(logging.INFO, logger="dev_health_ops.db"):
+            db._log_postgres_connection_posture(uri, kw)
+
+        record = next(
+            r for r in caplog.records if r.message == "postgres_connection_posture"
+        )
+        assert record.driver == "postgresql+asyncpg"
+        assert record.host == "pooler.example.com"
+        assert record.database == "d"
+        assert record.transaction_pooler_mode is True
+        assert record.null_pool is True
+        assert record.connect_timeout_seconds == 10.0
+        assert "secret" not in caplog.text
+
 
 class TestAsyncPostgresUrlNormalization:
     def test_converts_plain_postgres_to_asyncpg(self):
@@ -82,7 +153,7 @@ class TestAsyncPostgresUrlNormalization:
 
         assert db._ensure_async_postgres(uri) == "postgresql+asyncpg://u:p@h/d"
 
-    def test_translates_neon_sslmode_for_asyncpg(self):
+    def test_translates_sslmode_for_asyncpg(self):
         uri = "postgresql://u:p@h/d?sslmode=require&channel_binding=require"
 
         assert (

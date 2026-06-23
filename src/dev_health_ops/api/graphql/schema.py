@@ -53,6 +53,7 @@ from .models.outputs import (
     WorkGraphEdgesResult,
     WorkGraphFlowResult,
     WorkItemTeamAttribution,
+    WorkUnitTeamAttribution,
 )
 from .models.recommendations import (
     Recommendation,
@@ -315,6 +316,28 @@ class Query:
         context = get_context(info)
         return await resolve_work_item_team_attributions(
             context, work_item_ids=work_item_ids, team_id=team_id
+        )
+
+    @strawberry.field(
+        description=(
+            "The owning team per work UNIT (investment cluster), collapsed from "
+            "its member work-item attributions by source precedence — CHAOS-2600"
+        )
+    )
+    async def work_unit_team_attributions(
+        self,
+        info: Info,
+        org_id: str,
+        work_unit_ids: list[str] | None = None,
+        team_id: str | None = None,
+    ) -> list[WorkUnitTeamAttribution]:
+        from .resolvers.team_attribution import (
+            resolve_work_unit_team_attributions,
+        )
+
+        context = get_context(info)
+        return await resolve_work_unit_team_attributions(
+            context, work_unit_ids=work_unit_ids, team_id=team_id
         )
 
     @strawberry.field(description="Paginated list of security alerts")

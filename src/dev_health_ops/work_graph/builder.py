@@ -562,6 +562,12 @@ class WorkGraphBuilder:
         gh_issue_lookup: dict[tuple[str, str], str] = {}
         gl_issue_lookup: dict[tuple[str, str], str] = {}
 
+        # Providers not covered by PR text parsing (notably Linear): their
+        # issue<->PR links arrive as native attachments and become edges via
+        # the work_item_dependencies pass (_build_issue_issue_edges), not here.
+        # Counted so this log does not imply they were silently dropped.
+        non_text_path_counts: dict[str, int] = {}
+
         for wi_row in wi_rows:
             repo_id = wi_row.get("repo_id")
             work_item_id = wi_row.get("work_item_id")
@@ -581,12 +587,18 @@ class WorkGraphBuilder:
                 if "#" in str(work_item_id):
                     issue_num = str(work_item_id).split("#")[-1]
                     gl_issue_lookup[(str(repo_id), issue_num)] = str(work_item_id)
+            elif provider and provider not in ("jira", "github", "gitlab"):
+                non_text_path_counts[str(provider)] = (
+                    non_text_path_counts.get(str(provider), 0) + 1
+                )
 
         logger.info(
-            "Built lookups: jira=%d, github=%d, gitlab=%d",
+            "Built text-parse lookups: jira=%d, github=%d, gitlab=%d; "
+            "non-text-path providers (edges via dependency pass): %s",
             len(jira_key_lookup),
             len(gh_issue_lookup),
             len(gl_issue_lookup),
+            non_text_path_counts or "none",
         )
 
         # Collect unique repo_ids from PRs for comparison

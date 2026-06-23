@@ -121,6 +121,11 @@ def test_github_org_import_writes_provider_access_repo_grants_and_nested_specifi
     )
     assert child_row.repo_full_name == parent_row.repo_full_name
     assert child_row.specificity > parent_row.specificity
+    # CHAOS-2609 (CS-COV) Part B: github teams also carry a non-empty members
+    # roster (teams.members), not just team_memberships edges.
+    rosters = {row["id"]: row["members"] for row in sink.teams}
+    assert rosters["gh:platform"] == ["platform-lead"]
+    assert rosters["gh:platform-api"] == ["platform-api-lead"]
 
 
 def test_gitlab_group_import_writes_provider_access_project_ownership(
@@ -204,6 +209,33 @@ def test_gitlab_group_import_writes_provider_access_project_ownership(
         "full-chaos/platform",
         "full-chaos/dev-health/api",
     }
+    # CHAOS-2609 (CS-COV) item 1: gitlab members are normalized AND asserted.
+    assert summary["team_memberships_imported"] == 2
+    assert summary["members_imported"] == 2
+    assert {row.member_id for row in sink.memberships} == {
+        "gl:full-chaos",
+        "gl:full-chaos-dev-health",
+    }
+    assert {row.source for row in sink.memberships} == {"provider_access"}
+    assert {row.priority for row in sink.memberships} == {
+        team_autoimport_gitlab.PROVIDER_ACCESS_PRIORITY
+    }
+    # CHAOS-2609 (CS-COV) Part B: gitlab teams also carry a non-empty members
+    # roster (teams.members), not just team_memberships edges.
+    rosters = {row["id"]: row["members"] for row in sink.teams}
+    assert rosters["gl:full-chaos"] == ["full-chaos"]
+    assert rosters["gl:full-chaos/dev-health"] == ["full-chaos-dev-health"]
+    # CHAOS-2609 (CS-COV) item 7: a nested subgroup's ownership is more specific
+    # than its parent group's, so it wins on specificity tie-breaks.
+    parent_proj = next(
+        row for row in sink.project_ownership if row.team_id == "gl:full-chaos"
+    )
+    subgroup_proj = next(
+        row
+        for row in sink.project_ownership
+        if row.team_id == "gl:full-chaos/dev-health"
+    )
+    assert subgroup_proj.specificity > parent_proj.specificity
 
 
 def test_github_personal_account_or_unsupported_response_skips_without_touching_manual_rows(

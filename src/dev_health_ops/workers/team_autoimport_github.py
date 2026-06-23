@@ -73,6 +73,7 @@ async def _populate_async(
         teams=teams,
         now=now,
     )
+    _apply_member_roster(team_rows=team_rows, membership_rows=membership_rows)
 
     sink = _sink(scope)
     await sink.insert_teams(team_rows)
@@ -241,6 +242,27 @@ async def _membership_rows(
                 )
             )
     return rows
+
+
+def _apply_member_roster(
+    *,
+    team_rows: list[dict[str, Any]],
+    membership_rows: Iterable[TeamMembershipRecord],
+) -> None:
+    """Populate each team row's ``members`` roster from discovered memberships.
+
+    Mirrors the linear/jira auto-import (which set ``teams.members`` from the
+    discovered roster) so github teams also carry a non-empty roster column, not
+    just the ``team_memberships`` edge rows.
+    """
+    roster: dict[str, list[str]] = {}
+    for row in membership_rows:
+        identity = row.raw_provider_user_id
+        if not identity:
+            continue
+        roster.setdefault(row.team_id, []).append(identity)
+    for team_row in team_rows:
+        team_row["members"] = roster.get(str(team_row["id"]), [])
 
 
 def _sink(scope: Mapping[str, Any]) -> ClickHouseMetricsSink:

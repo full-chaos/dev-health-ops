@@ -177,6 +177,12 @@ def test_jira_populate_writes_native_and_jira_legacy_ownership_without_touching_
         "jira_legacy",
     ) in sink.ownership
     assert ("org-1", "jira:account-1") in sink.members
+    # CHAOS-2609 (CS-COV) item 6: assert the emitted native ProjectRecord fields.
+    project = sink.projects[("org-1", "jira", "org-1:jira:OPS")]
+    assert project.project_key == "OPS"
+    assert project.name == "Ops Project"
+    assert project.org_id == "org-1"
+    assert project.provider == "jira"
 
 
 def test_chaos_2547_2544_jira_autoimport_uses_analytics_db_url_with_env_unset(
@@ -338,3 +344,141 @@ def test_jira_populate_preserves_manual_project_ownership_row(
         "OPS",
         "native",
     ) in sink.ownership
+
+
+def test_jira_discovery_failure_does_not_clobber_manual_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-2609 (CS-COV) item 3: a jira team-discovery failure (e.g. HTTP 403)
+    surfaces and writes nothing, so a pre-existing manual ownership row is left
+    intact (populate fails before any sink write; run_team_autoimport wraps the
+    error into a skipped sync result)."""
+
+    async def discover_jira(
+        self: object, email: str, api_token: str, url: str
+    ) -> list[DiscoveredTeam]:
+        raise RuntimeError("403")
+
+    monkeypatch.setattr(
+        team_autoimport_jira.TeamDiscoveryService,
+        "discover_jira",
+        discover_jira,
+    )
+    sink = _fake_sink()
+    manual = TeamProjectOwnershipRecord(
+        org_id="org-1",
+        provider="jira",
+        team_id="manual-team",
+        project_id="org-1:jira:OPS",
+        project_key="OPS",
+        source="manual",
+        is_primary=1,
+        specificity=100,
+        priority=0,
+        valid_from=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    sink.write_team_project_ownership([manual])
+
+    with pytest.raises(RuntimeError, match="403"):
+        team_autoimport_jira.populate(
+            org_id="org-1",
+            credentials={
+                "email": "jira@example.com",
+                "api_token": "jira-token",
+                "base_url": "https://jira.example.com",
+            },
+            scope={"mode": "sync_config"},
+            sink=sink,
+        )
+
+    # The manual ownership row is untouched and no native rows were written.
+    assert (
+        "org-1",
+        "jira",
+        "org-1:jira:OPS",
+        "manual-team",
+        "manual",
+    ) in sink.ownership
+    assert len(sink.ownership) == 1
+    assert sink.teams == {}
+
+
+def test_jira_members_dedupe_to_one_row_per_member_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-2609 (CS-COV) item 4: the same account_id surfaced for multiple
+    projects de-dupes to a single member/membership row with a stable
+    ``jira:<account_id>`` id, and an email-less member is still imported."""
+
+    async def discover_jira(
+        self: object, email: str, api_token: str, url: str
+    ) -> list[DiscoveredTeam]:
+        return [
+            DiscoveredTeam(
+                provider_type="jira",
+                provider_team_id="OPS",
+                name="Ops Project",
+                associations={"project_keys": ["PROJ1", "PROJ2"]},
+            )
+        ]
+
+    async def discover_members_jira_bulk(
+        self: object,
+        *,
+        email: str,
+        api_token: str,
+        url: str,
+        project_keys: list[str],
+    ) -> list[DiscoveredMember]:
+        # Same account_id seen across two projects, plus an email-less member.
+        return [
+            DiscoveredMember(
+                provider_type="jira",
+                provider_identity="acc-1",
+                display_name="Shared Member",
+                email="shared@example.com",
+            ),
+            DiscoveredMember(
+                provider_type="jira",
+                provider_identity="acc-1",
+                display_name="Shared Member",
+                email="shared@example.com",
+            ),
+            DiscoveredMember(
+                provider_type="jira",
+                provider_identity="acc-2",
+                display_name="No Email Member",
+                email=None,
+            ),
+        ]
+
+    monkeypatch.setattr(
+        team_autoimport_jira.TeamDiscoveryService,
+        "discover_jira",
+        discover_jira,
+    )
+    monkeypatch.setattr(
+        team_autoimport_jira.TeamMembershipService,
+        "discover_members_jira_bulk",
+        discover_members_jira_bulk,
+    )
+    sink = _fake_sink()
+
+    summary = team_autoimport_jira.populate(
+        org_id="org-1",
+        credentials={
+            "email": "jira@example.com",
+            "api_token": "jira-token",
+            "base_url": "https://jira.example.com",
+        },
+        scope={"mode": "sync_config"},
+        sink=sink,
+    )
+
+    assert summary["members_imported"] == 2
+    assert summary["team_memberships_imported"] == 2
+    assert set(sink.members) == {("org-1", "jira:acc-1"), ("org-1", "jira:acc-2")}
+    assert sink.members[("org-1", "jira:acc-2")].email is None
+    assert ("org-1", "jira", "OPS", "jira:acc-1", "native") in sink.memberships
+    assert ("org-1", "jira", "OPS", "jira:acc-2", "native") in sink.memberships

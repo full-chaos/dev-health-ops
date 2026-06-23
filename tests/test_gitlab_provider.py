@@ -11,6 +11,7 @@ from dev_health_ops.providers.gitlab.normalize import (
     detect_gitlab_reopen_events,
     enrich_work_item_with_priority,
     extract_gitlab_dependencies,
+    gitlab_epic_to_work_item,
     gitlab_issue_to_work_item,
     gitlab_milestone_to_sprint,
     gitlab_mr_to_work_item,
@@ -149,6 +150,120 @@ class TestGitLabIssueToWorkItem:
         assert work_item.sprint_id == "5"
         assert work_item.sprint_name == "Sprint 1"
         assert work_item.closed_at is not None
+
+
+class TestGitLabEpicToWorkItem:
+    """Tests for gitlab_epic_to_work_item (CHAOS-2609 CS-COV item 2).
+
+    Epics are gated behind GITLAB_FETCH_EPICS (default true) and were previously
+    untested. Epics are group-level, so the work item is keyed by group path.
+    """
+
+    def test_basic_epic_type_and_ids(
+        self, mock_identity: IdentityResolver, mock_status_mapping: StatusMapping
+    ) -> None:
+        epic = {
+            "iid": 7,
+            "title": "Platform Epic",
+            "description": "Epic body",
+            "state": "opened",
+            "created_at": "2025-01-01T10:00:00Z",
+            "updated_at": "2025-01-15T12:00:00Z",
+            "labels": ["roadmap"],
+            "author": {"username": "lead1", "name": "Lead One"},
+            "web_url": "https://gitlab.com/groups/my-group/-/epics/7",
+        }
+
+        work_item, transitions = gitlab_epic_to_work_item(
+            epic=epic,
+            group_full_path="my-group",
+            status_mapping=mock_status_mapping,
+            identity=mock_identity,
+        )
+
+        assert work_item.work_item_id == "gitlab:my-group:epic:7"
+        assert work_item.type == "epic"
+        assert work_item.provider == "gitlab"
+        assert work_item.project_id == "my-group"
+        assert work_item.repo_id is None
+        assert work_item.reporter == "user:lead1"
+        assert transitions == []
+
+    def test_state_event_status_mapping_closed_and_opened(
+        self, mock_identity: IdentityResolver, mock_status_mapping: StatusMapping
+    ) -> None:
+        epic = {
+            "iid": 8,
+            "title": "Lifecycle Epic",
+            "state": "closed",
+            "created_at": "2025-01-01T10:00:00Z",
+            "updated_at": "2025-02-01T10:00:00Z",
+            "closed_at": "2025-02-01T10:00:00Z",
+            "labels": [],
+            "author": None,
+        }
+        state_events = [
+            {"state": "opened", "created_at": "2025-01-01T10:00:00Z"},
+            {"state": "closed", "created_at": "2025-02-01T10:00:00Z"},
+        ]
+
+        work_item, transitions = gitlab_epic_to_work_item(
+            epic=epic,
+            group_full_path="my-group",
+            status_mapping=mock_status_mapping,
+            identity=mock_identity,
+            state_events=state_events,
+        )
+
+        assert work_item.work_item_id == "gitlab:my-group:epic:8"
+        assert [t.to_status for t in transitions] == ["todo", "done"]
+        assert [t.to_status_raw for t in transitions] == ["opened", "closed"]
+
+    def test_epic_id_parent_linkage(
+        self, mock_identity: IdentityResolver, mock_status_mapping: StatusMapping
+    ) -> None:
+        epic = {
+            "iid": 9,
+            "title": "Child Epic",
+            "state": "opened",
+            "created_at": "2025-01-01T10:00:00Z",
+            "updated_at": "2025-01-02T10:00:00Z",
+            "labels": [],
+            "author": None,
+            "parent_iid": 3,
+        }
+
+        work_item, _ = gitlab_epic_to_work_item(
+            epic=epic,
+            group_full_path="my-group",
+            status_mapping=mock_status_mapping,
+            identity=mock_identity,
+        )
+
+        assert work_item.epic_id == "gitlab:my-group:epic:3"
+
+    def test_priority_from_labels(
+        self, mock_identity: IdentityResolver, mock_status_mapping: StatusMapping
+    ) -> None:
+        epic = {
+            "iid": 10,
+            "title": "Urgent Epic",
+            "state": "opened",
+            "created_at": "2025-01-01T10:00:00Z",
+            "updated_at": "2025-01-02T10:00:00Z",
+            "labels": ["priority::high"],
+            "author": None,
+        }
+
+        work_item, _ = gitlab_epic_to_work_item(
+            epic=epic,
+            group_full_path="my-group",
+            status_mapping=mock_status_mapping,
+            identity=mock_identity,
+        )
+
+        assert work_item.priority_raw == "high"
+        assert work_item.service_class == "fixed_date"
 
 
 class TestGitLabMRToWorkItem:

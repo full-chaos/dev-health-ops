@@ -144,14 +144,27 @@ just Linear. **Attribution changes MUST keep this matrix green; never add Linear
 
 | provider \ entity | teams | projects | members | issues |
 |---|---|---|---|---|
-| jira   | partial | partial | partial | yes |
-| gitlab | partial | yes     | **no**  | yes |
+| jira   | yes | yes | yes | yes |
+| gitlab | yes | yes     | yes  | yes |
 | github | yes     | n/a¹    | yes     | yes |
-| linear | yes     | partial | yes     | yes |
+| linear | yes     | yes | yes     | yes |
 
 `yes` = normalized in src AND asserted in tests · `partial` = only sink/integration assertion (no
 unit test of the normalizer) · `no` = normalized but output never asserted · `n/a` = provider does
 not natively produce this entity. ¹ GitHub has no native Project entity (the repo is the scope).
+
+> **The matrix above tracks TEST coverage, not whether the data is pulled.** Functionally we ingest teams, projects, and members for *every* provider that supports them (auto-import, when the option is selected). Don't read a `partial`/`no` cell as "not consumed" — it means "not yet asserted."
+
+#### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
+
+| provider | teams | projects | members | repo ownership | member store written |
+|---|---|---|---|---|---|
+| linear | ✓ `discover_linear` | ✓ `associations.project_keys` | ✓ `discover_members_linear` | — | edges **+ roster** |
+| jira   | ✓ `discover_jira` | ✓ `associations.project_keys` | ✓ `discover_members_jira_bulk` | — | edges **+ roster** |
+| github | ✓ `discover_github` | n/a (repo = scope) | ✓ `discover_members_github` | ✓ `team_repo_ownership` | edges **+ roster** (this CS) |
+| gitlab | ✓ `discover_gitlab` | ✓ (GitLab project paths) | ✓ `discover_members_gitlab` | — | edges **+ roster** (this CS) |
+
+One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → `discover_*` → ClickHouse. (`LinearClient.iter_projects` is vestigial dead code, never a path.) **Two member representations — do not conflate:** `team_memberships` (edges) = canonical attribution source, read by the ladder, all 4 providers; `teams.members` (roster) = secondary resolver + admin/display, this CS populates it for github/gitlab too. **Chain:** members → assignee identity → issues → PRs/MRs → (maybe) commits; commit authors are a separate git-side source, member↔author reconciliation deferred (not CHAOS-2600).
 
 - **Resolver row (CS2):** the precedence resolver (`resolve_team_attribution`) is exercised for all
   four providers — Linear (`test_issue_project_wins_over_linked_issue`,
@@ -168,10 +181,12 @@ not natively produce this entity. ¹ GitHub has no native Project entity (the re
   `native_team_key = None` (only Linear sets it real), non-Linear attribution depends *entirely* on
   this dimension — so its coverage cells are the highest-risk. (CHAOS-2600 does not change these
   sync ops; CS5 removes only the Postgres bridge.)
-- **Open gaps → CHAOS-2609 (CS-COV):** the dimension has holes — **gitlab/members normalized but
-  never asserted (high)**, gitlab epics untested (high), jira team/project/member sink-only
-  (medium), linear native projects not ingested (medium). Until those land, do **not** assume
-  non-Linear dimension coverage. The matrix above is the source of truth for what is/ isn't proven.
+- **Open gaps → CLOSED by CHAOS-2609 (CS-COV):** the dimension's test holes are now asserted —
+  gitlab/members (was normalized but never asserted), gitlab epics (`gitlab_epic_to_work_item`), jira
+  team/member coverage (403-skip + member de-dupe), linear **and** jira native `ProjectRecord` fields
+  (linear native projects ARE ingested via `team.associations.project_keys` — the prior "not ingested"
+  note was wrong; it was only a *test* gap, now closed), and gitlab nested-subgroup specificity. The
+  matrix above is the source of truth for what is/ isn't proven.
 
 ---
 

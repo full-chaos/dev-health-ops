@@ -144,6 +144,14 @@ def test_linear_populate_writes_projects_memberships_and_project_ownership(
         "native",
     ) in sink.ownership
     assert sink.teams[("org-1", "ENG")]["native_team_key"] == "ENG"
+    # CHAOS-2609 (CS-COV) item 5: linear native projects ARE ingested via
+    # team.associations.project_keys — assert the emitted ProjectRecord fields.
+    project = sink.projects[("org-1", "linear", "org-1:linear:ENG")]
+    assert project.id == "org-1:linear:ENG"
+    assert project.project_key == "ENG"
+    assert project.name == "Engineering"
+    assert project.org_id == "org-1"
+    assert project.provider == "linear"
 
 
 def test_chaos_2547_2544_autoimport_uses_analytics_db_url_with_env_unset(

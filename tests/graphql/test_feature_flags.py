@@ -52,16 +52,19 @@ async def test_feature_flags_query_scopes_org_filters_and_orders(
         "dev_health_ops.api.queries.client.query_dicts",
         new_callable=AsyncMock,
     ) as mock_query:
-        mock_query.return_value = [
-            {
-                "provider": "launchdarkly",
-                "flag_key": "checkout-v2",
-                "project_key": "web",
-                "environment": "prod",
-                "flag_type": "boolean",
-                "created_at": created_at,
-                "archived_at": None,
-            }
+        # The resolver issues two queries: the row listing then the count.
+        mock_query.side_effect = [
+            [
+                {
+                    "provider": "launchdarkly",
+                    "flag_key": "checkout-v2",
+                    "project_key": "web",
+                    "flag_type": "boolean",
+                    "created_at": created_at,
+                    "archived_at": None,
+                }
+            ],
+            [{"total": 1}],
         ]
 
         result = await resolve_feature_flags(
@@ -72,8 +75,9 @@ async def test_feature_flags_query_scopes_org_filters_and_orders(
             limit=25,
         )
 
-    sql = mock_query.call_args[0][1]
-    params = mock_query.call_args[0][2]
+    list_call = mock_query.call_args_list[0]
+    sql = list_call[0][1]
+    params = list_call[0][2]
     assert "FROM feature_flag FINAL" in sql
     assert "WHERE org_id = %(org_id)s" in sql
     assert "provider = %(provider)s" in sql
@@ -81,18 +85,68 @@ async def test_feature_flags_query_scopes_org_filters_and_orders(
     assert "archived_at IS NULL" in sql
     assert "ORDER BY provider, project_key, flag_key" in sql
     assert "LIMIT %(limit)s" in sql
+    # Registry is one-row-per-(provider, project, flag); environment is NOT
+    # surfaced (CHAOS-2632 — FINAL over an env-agnostic key collapsed envs).
+    assert "environment" not in sql
     assert params == {
         "org_id": "test-org",
         "provider": "launchdarkly",
         "project": "web",
         "limit": 25,
     }
+
+    # The count query reuses the filters but drops the limit so totalCount
+    # reflects the true number of matching flags, not the count-after-limit.
+    count_call = mock_query.call_args_list[1]
+    count_sql = count_call[0][1]
+    count_params = count_call[0][2]
+    assert "SELECT count() AS total" in count_sql
+    assert "FROM feature_flag FINAL" in count_sql
+    assert "LIMIT" not in count_sql
+    assert count_params == {
+        "org_id": "test-org",
+        "provider": "launchdarkly",
+        "project": "web",
+    }
+
     assert result.total_count == 1
     assert result.flags[0].flag_id == generate_feature_flag_id(
         "test-org", "launchdarkly", "web", "checkout-v2"
     )
     assert result.flags[0].created_at == created_at.isoformat()
     assert result.flags[0].archived_at is None
+    assert not hasattr(result.flags[0], "environment")
+
+
+@pytest.mark.asyncio
+async def test_feature_flags_total_count_is_true_count_not_count_after_limit(
+    mock_context: GraphQLContext,
+) -> None:
+    """totalCount must come from a dedicated count() query, so a limited page
+    still reports the full population (CHAOS-2632 bug #2)."""
+    created_at = datetime(2026, 6, 1, 10, 0, tzinfo=timezone.utc)
+    with patch(
+        "dev_health_ops.api.queries.client.query_dicts",
+        new_callable=AsyncMock,
+    ) as mock_query:
+        mock_query.side_effect = [
+            [
+                {
+                    "provider": "launchdarkly",
+                    "flag_key": "checkout-v2",
+                    "project_key": "web",
+                    "flag_type": "boolean",
+                    "created_at": created_at,
+                    "archived_at": None,
+                }
+            ],
+            [{"total": 57}],
+        ]
+
+        result = await resolve_feature_flags(mock_context, limit=1)
+
+    assert len(result.flags) == 1
+    assert result.total_count == 57
 
 
 @pytest.mark.asyncio
@@ -103,12 +157,13 @@ async def test_feature_flags_include_archived_omits_archived_filter(
         "dev_health_ops.api.queries.client.query_dicts",
         new_callable=AsyncMock,
     ) as mock_query:
-        mock_query.return_value = []
+        mock_query.side_effect = [[], [{"total": 0}]]
 
         await resolve_feature_flags(mock_context, include_archived=True)
 
-    sql = mock_query.call_args[0][1]
-    params = mock_query.call_args[0][2]
+    list_call = mock_query.call_args_list[0]
+    sql = list_call[0][1]
+    params = list_call[0][2]
     assert "archived_at IS NULL" not in sql
     assert params == {"org_id": "test-org", "limit": 1000}
 
@@ -121,12 +176,13 @@ async def test_feature_flags_clamps_out_of_range_limits(
         "dev_health_ops.api.queries.client.query_dicts",
         new_callable=AsyncMock,
     ) as mock_query:
-        mock_query.return_value = []
+        # Two resolve calls, each issuing a list + count query.
+        mock_query.side_effect = [[], [{"total": 0}], [], [{"total": 0}]]
         await resolve_feature_flags(mock_context, limit=10_000)
         await resolve_feature_flags(mock_context, limit=-5)
 
     huge_params = mock_query.call_args_list[0][0][2]
-    negative_params = mock_query.call_args_list[1][0][2]
+    negative_params = mock_query.call_args_list[2][0][2]
     assert huge_params["limit"] == 1000
     assert negative_params["limit"] == 1
 
@@ -139,12 +195,12 @@ async def test_feature_flag_events_clamps_out_of_range_limits(
         "dev_health_ops.api.queries.client.query_dicts",
         new_callable=AsyncMock,
     ) as mock_query:
-        mock_query.return_value = []
+        mock_query.side_effect = [[], [{"total": 0}], [], [{"total": 0}]]
         await resolve_feature_flag_events(mock_context, limit=10_000)
         await resolve_feature_flag_events(mock_context, limit=0)
 
     huge_params = mock_query.call_args_list[0][0][2]
-    zero_params = mock_query.call_args_list[1][0][2]
+    zero_params = mock_query.call_args_list[2][0][2]
     assert huge_params["limit"] == 1000
     assert zero_params["limit"] == 1
 
@@ -158,16 +214,19 @@ async def test_feature_flag_events_query_scopes_org_filters_and_orders(
         "dev_health_ops.api.queries.client.query_dicts",
         new_callable=AsyncMock,
     ) as mock_query:
-        mock_query.return_value = [
-            {
-                "flag_key": "checkout-v2",
-                "event_type": "enabled",
-                "prev_state": "off",
-                "next_state": "on",
-                "actor_type": "user",
-                "environment": "prod",
-                "event_ts": event_ts,
-            }
+        mock_query.side_effect = [
+            [
+                {
+                    "flag_key": "checkout-v2",
+                    "event_type": "enabled",
+                    "prev_state": "off",
+                    "next_state": "on",
+                    "actor_type": "user",
+                    "environment": "prod",
+                    "event_ts": event_ts,
+                }
+            ],
+            [{"total": 1}],
         ]
 
         result = await resolve_feature_flag_events(
@@ -177,8 +236,9 @@ async def test_feature_flag_events_query_scopes_org_filters_and_orders(
             limit=10,
         )
 
-    sql = mock_query.call_args[0][1]
-    params = mock_query.call_args[0][2]
+    list_call = mock_query.call_args_list[0]
+    sql = list_call[0][1]
+    params = list_call[0][2]
     assert "FROM feature_flag_event" in sql
     assert "FROM feature_flag_event FINAL" not in sql
     assert "WHERE org_id = %(org_id)s" in sql
@@ -193,8 +253,51 @@ async def test_feature_flag_events_query_scopes_org_filters_and_orders(
         "environment": "prod",
         "limit": 10,
     }
+
+    count_call = mock_query.call_args_list[1]
+    count_sql = count_call[0][1]
+    count_params = count_call[0][2]
+    assert "SELECT count() AS total" in count_sql
+    assert "FROM feature_flag_event" in count_sql
+    assert "FINAL" not in count_sql
+    assert count_params == {
+        "org_id": "test-org",
+        "flag_key": "checkout-v2",
+        "environment": "prod",
+    }
+
     assert result.total_count == 1
     assert result.events[0].event_ts == event_ts.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_feature_flag_events_total_count_is_true_count_not_count_after_limit(
+    mock_context: GraphQLContext,
+) -> None:
+    event_ts = datetime(2026, 6, 1, 10, 1, tzinfo=timezone.utc)
+    with patch(
+        "dev_health_ops.api.queries.client.query_dicts",
+        new_callable=AsyncMock,
+    ) as mock_query:
+        mock_query.side_effect = [
+            [
+                {
+                    "flag_key": "checkout-v2",
+                    "event_type": "enabled",
+                    "prev_state": "off",
+                    "next_state": "on",
+                    "actor_type": "user",
+                    "environment": "prod",
+                    "event_ts": event_ts,
+                }
+            ],
+            [{"total": 99}],
+        ]
+
+        result = await resolve_feature_flag_events(mock_context, limit=1)
+
+    assert len(result.events) == 1
+    assert result.total_count == 99
 
 
 @pytest.mark.asyncio
@@ -277,6 +380,21 @@ async def test_feature_flag_registry_and_events_live_clickhouse() -> None:
             base_ts,
             None,
             base_ts,
+        ],
+        # Same (provider, project, flag) in a second environment. The registry
+        # key is env-agnostic, so this MUST collapse into the single
+        # checkout-v2 flag rather than surfacing two rows (CHAOS-2632 bug #1).
+        [
+            org_id,
+            "launchdarkly",
+            "checkout-v2",
+            "web",
+            repo_id,
+            "staging",
+            "boolean",
+            base_ts,
+            None,
+            base_ts + timedelta(minutes=5),
         ],
         [
             org_id,
@@ -376,11 +494,15 @@ async def test_feature_flag_registry_and_events_live_clickhouse() -> None:
         registry = await resolve_feature_flags(context, limit=10)
         events = await resolve_feature_flag_events(context, limit=10)
 
+        # Two distinct flags despite checkout-v2 existing in two environments.
         assert registry.total_count == 2
         assert {(f.provider, f.flag_key) for f in registry.flags} == {
             ("gitlab", "search-rollout"),
             ("launchdarkly", "checkout-v2"),
         }
+        # checkout-v2 collapses to exactly one registry row.
+        checkout_rows = [f for f in registry.flags if f.flag_key == "checkout-v2"]
+        assert len(checkout_rows) == 1
         assert [event.flag_key for event in events.events] == [
             "checkout-v2",
             "search-rollout",

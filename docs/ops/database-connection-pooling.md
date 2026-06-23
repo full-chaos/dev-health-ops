@@ -10,9 +10,11 @@
 
 ## TL;DR
 
-- Put **PgBouncer (transaction pooling)** in front of Postgres.
-- Point the app's `DATABASE_URI` / `POSTGRES_URI` at PgBouncer and set
-  **`PGBOUNCER_TRANSACTION_MODE=true`**.
+- Put a **transaction pooler** in front of Postgres. This can be a local
+  PgBouncer service, a sidecar/shared PgBouncer tier, or a managed hosted
+  pooler such as Neon `-pooler`.
+- Point the app's `DATABASE_URI` / `POSTGRES_URI` at that transaction-pooling
+  endpoint and set **`PGBOUNCER_TRANSACTION_MODE=true`**.
 - Run **schema migrations against Postgres directly** (bypass PgBouncer).
 
 ## The connection-budget math
@@ -51,16 +53,21 @@ large and cheap.
 ## App configuration
 
 `src/dev_health_ops/db.py` chooses the engine strategy from
-`PGBOUNCER_TRANSACTION_MODE`:
+`PGBOUNCER_TRANSACTION_MODE` or, unless disabled, a Neon `-pooler` hostname:
 
-- **`true`** (behind PgBouncer transaction mode): the async engine uses
-  `NullPool` (PgBouncer owns the pool) and disables asyncpg prepared-statement
-  caching/naming via
-  `connect_args={"statement_cache_size": 0, "prepared_statement_name_func": <uuid>}`.
+- **`true`** / Neon `-pooler` (upstream endpoint behaves like transaction
+  pooling): the async engine uses `NullPool` and disables asyncpg
+  prepared-statement caching/naming via
+  `connect_args={"timeout": 10.0, "statement_cache_size": 0, "prepared_statement_name_func": <uuid>}`.
   The sync engine uses `NullPool`.
 - **unset / `false`** (direct connection): the async/sync engines use a
   SQLAlchemy `QueuePool` with `pool_pre_ping` and `POSTGRES_POOL_SIZE` /
   `POSTGRES_MAX_OVERFLOW` (defaults 20 / 10).
+
+`POSTGRES_CONNECT_TIMEOUT_SECONDS` controls the asyncpg connection timeout
+(default `10`). Invalid or non-positive values fall back to `10`. Set
+`POSTGRES_DISABLE_POOLER_AUTODETECT=true` only if a `-pooler` hostname should not
+trigger transaction-pooler-safe asyncpg settings.
 
 ### Why prepared statements must be disabled
 
@@ -105,9 +112,27 @@ The same pattern is mirrored in the platform stack (`dev-health/compose.yml`).
 
 ## Production topology
 
-Production typically uses a **managed Postgres**; deploy PgBouncer either as a
-sidecar next to each app/worker node or as a small shared tier, in transaction
-mode, in front of it. Required PgBouncer settings:
+Production typically uses a **managed Postgres**. If the provider has a hosted
+transaction pooler, point the app directly at that hosted endpoint. For Neon,
+the hostname includes `-pooler`; a local `pgbouncer` compose service is not
+required.
+
+For Neon hosted pooler:
+
+```env
+POSTGRES_URI=postgresql+asyncpg://neondb_owner:<pw>@<neon-pooler-host>/devhealth?sslmode=require
+DATABASE_URI=postgresql+asyncpg://neondb_owner:<pw>@<neon-pooler-host>/devhealth?sslmode=require
+PGBOUNCER_TRANSACTION_MODE=true
+POSTGRES_CONNECT_TIMEOUT_SECONDS=10
+```
+
+`PGBOUNCER_TRANSACTION_MODE=true` means the upstream endpoint behaves like
+transaction pooling. It does not mean a local `pgbouncer` container must be
+running.
+
+If you operate PgBouncer yourself, deploy it either as a sidecar next to each
+app/worker node or as a small shared tier, in transaction mode, in front of
+managed Postgres. Required PgBouncer settings:
 
 ```ini
 pool_mode = transaction
@@ -116,11 +141,15 @@ default_pool_size = 25        ; size so Σ server pools < Postgres max_connectio
 auth_type = scram-sha-256
 ```
 
-Set the app's `DATABASE_URI` / `POSTGRES_URI` to the PgBouncer endpoint and
-`PGBOUNCER_TRANSACTION_MODE=true`. If the managed provider already offers a
-transaction-mode pooler (e.g. RDS Proxy, Supabase pooler, Neon pooler), point at
-that instead and still set `PGBOUNCER_TRANSACTION_MODE=true` so asyncpg prepared
-statements are disabled.
+Set the app's `DATABASE_URI` / `POSTGRES_URI` to the transaction-pooling endpoint
+and `PGBOUNCER_TRANSACTION_MODE=true` so asyncpg prepared statements are
+disabled. Prefer `sslmode=require` in shared environment URLs: async app paths
+normalize it to asyncpg's `ssl=require`, while sync worker/helper paths keep or
+translate it to libpq-compatible `sslmode=require`.
+
+Production Docker readiness should call `/ready`. `/health` remains a deep
+dependency check for observability and may return 503 while Postgres,
+ClickHouse, or Redis is temporarily unavailable.
 
 ## Validation
 

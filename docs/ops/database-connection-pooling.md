@@ -12,7 +12,7 @@
 
 - Put a **transaction pooler** in front of Postgres. This can be a local
   PgBouncer service, a sidecar/shared PgBouncer tier, or a managed hosted
-  pooler such as Neon `-pooler`.
+  pooler.
 - Point the app's `DATABASE_URI` / `POSTGRES_URI` at that transaction-pooling
   endpoint and set **`PGBOUNCER_TRANSACTION_MODE=true`**.
 - Run **schema migrations against Postgres directly** (bypass PgBouncer).
@@ -53,11 +53,10 @@ large and cheap.
 ## App configuration
 
 `src/dev_health_ops/db.py` chooses the engine strategy from
-`PGBOUNCER_TRANSACTION_MODE` or, unless disabled, a Neon `-pooler` hostname:
+`PGBOUNCER_TRANSACTION_MODE`:
 
-- **`true`** / Neon `-pooler` (upstream endpoint behaves like transaction
-  pooling): the async engine uses `NullPool` and disables asyncpg
-  prepared-statement caching/naming via
+- **`true`** (upstream endpoint behaves like transaction pooling): the async
+  engine uses `NullPool` and disables asyncpg prepared-statement caching/naming via
   `connect_args={"timeout": 10.0, "statement_cache_size": 0, "prepared_statement_name_func": <uuid>}`.
   The sync engine uses `NullPool`.
 - **unset / `false`** (direct connection): the async/sync engines use a
@@ -65,9 +64,7 @@ large and cheap.
   `POSTGRES_MAX_OVERFLOW` (defaults 20 / 10).
 
 `POSTGRES_CONNECT_TIMEOUT_SECONDS` controls the asyncpg connection timeout
-(default `10`). Invalid or non-positive values fall back to `10`. Set
-`POSTGRES_DISABLE_POOLER_AUTODETECT=true` only if a `-pooler` hostname should not
-trigger transaction-pooler-safe asyncpg settings.
+(default `10`). Invalid or non-positive values fall back to `10`.
 
 ### Why prepared statements must be disabled
 
@@ -113,15 +110,14 @@ The same pattern is mirrored in the platform stack (`dev-health/compose.yml`).
 ## Production topology
 
 Production typically uses a **managed Postgres**. If the provider has a hosted
-transaction pooler, point the app directly at that hosted endpoint. For Neon,
-the hostname includes `-pooler`; a local `pgbouncer` compose service is not
-required.
+transaction pooler, point the app directly at that hosted endpoint. A local
+`pgbouncer` compose service is not required in that topology.
 
-For Neon hosted pooler:
+For a hosted transaction pooler:
 
 ```env
-POSTGRES_URI=postgresql+asyncpg://neondb_owner:<pw>@<neon-pooler-host>/devhealth?sslmode=require
-DATABASE_URI=postgresql+asyncpg://neondb_owner:<pw>@<neon-pooler-host>/devhealth?sslmode=require
+POSTGRES_URI=postgresql+asyncpg://<user>:<pw>@<db-host>/devhealth?sslmode=require
+DATABASE_URI=postgresql+asyncpg://<user>:<pw>@<db-host>/devhealth?sslmode=require
 PGBOUNCER_TRANSACTION_MODE=true
 POSTGRES_CONNECT_TIMEOUT_SECONDS=10
 ```

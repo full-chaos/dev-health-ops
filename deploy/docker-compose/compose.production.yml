@@ -274,8 +274,9 @@ services:
 
   pgbouncer:
     # CHAOS-2065: optional transaction-mode pooler in front of a managed
-    # Postgres. Do not enable this for Neon hosted -pooler endpoints; point
-    # app services directly at Neon and set PGBOUNCER_TRANSACTION_MODE=true.
+    # Postgres. If the provider already supplies a hosted transaction pooler,
+    # point app services directly at that endpoint and set
+    # PGBOUNCER_TRANSACTION_MODE=true.
     # Disabled unless explicitly enabled:
     #   docker compose --profile pooler up -d
     # Then point Postgres consumers at it and flip the app flag:

@@ -166,6 +166,17 @@ not natively produce this entity. ¹ GitHub has no native Project entity (the re
 
 One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → `discover_*` → ClickHouse. (`LinearClient.iter_projects` is vestigial dead code, never a path.) **Two member representations — do not conflate:** `team_memberships` (edges) = canonical attribution source, read by the ladder, all 4 providers; `teams.members` (roster) = secondary resolver + admin/display, this CS populates it for github/gitlab too. **Chain:** members → assignee identity → issues → PRs/MRs → (maybe) commits; commit authors are a separate git-side source, member↔author reconciliation deferred (not CHAOS-2600).
 
+> **Identity must match what the assignee path produces (CHAOS-2609).** Both consumers key on the
+> *resolver-consumed* identity, so auto-import writes that exact string — `github:<login>` /
+> `gitlab:<username>` / `jira:accountid:<account_id>`, the same value `IdentityResolver.resolve`
+> returns for a no-email assignee (single source: `providers/identity.py::provider_qualified_identity`).
+> It lands in **both** `team_memberships.raw_provider_user_id` (a facet the ladder's
+> `member_by_identity` indexes) **and** the `teams.members` roster (read by `TeamResolver`). The
+> `member_id` **primary** keeps its `gh:`/`gl:`/`jira:<id>` form (untouched — it is the
+> ReplacingMergeTree dedup key). A `members` cell is `yes` only when this end-to-end resolution is
+> **proven** (a no-email assignee resolves to the auto-imported team via *both* paths —
+> `tests/workers/test_team_autoimport_e2e_sync_surface.py`), not when a row is merely written.
+
 - **Resolver row (CS2):** the precedence resolver (`resolve_team_attribution`) is exercised for all
   four providers — Linear (`test_issue_project_wins_over_linked_issue`,
   `test_assignee_membership_wins_over_linked_issue`), GitHub (`gh:` items in
@@ -185,8 +196,12 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   gitlab/members (was normalized but never asserted), gitlab epics (`gitlab_epic_to_work_item`), jira
   team/member coverage (403-skip + member de-dupe), linear **and** jira native `ProjectRecord` fields
   (linear native projects ARE ingested via `team.associations.project_keys` — the prior "not ingested"
-  note was wrong; it was only a *test* gap, now closed), and gitlab nested-subgroup specificity. The
-  matrix above is the source of truth for what is/ isn't proven.
+  note was wrong; it was only a *test* gap, now closed), and gitlab nested-subgroup specificity.
+  **Plus an attribution-correctness fix:** github/gitlab/jira auto-import now write the
+  *resolver-consumed* member identity (see the §0.4a identity callout), so a no-email assignee actually
+  resolves to its team via both the canonical ladder and the roster — previously the roster stored a
+  bare login the resolver never matched, so member attribution silently missed for no-email
+  github/gitlab/jira assignees. The matrix above is the source of truth for what is/ isn't proven.
 
 ---
 

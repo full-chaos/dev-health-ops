@@ -21,6 +21,7 @@ from dev_health_ops.metrics.compute_work_items import (
     TeamAttributionCandidate,
     TeamAttributionContext,
     TeamAttributionSource,
+    resolve_team_attribution,
 )
 from dev_health_ops.metrics.schemas import (
     MemberRecord,
@@ -36,6 +37,8 @@ from dev_health_ops.models.work_items import (
     WorkItemProvider,
     WorkItemStatusTransition,
 )
+from dev_health_ops.providers.identity import IdentityResolver
+from dev_health_ops.providers.teams import TeamResolver, _build_member_to_team
 from dev_health_ops.workers import (
     sync_runtime,
     team_autoimport_github,
@@ -613,4 +616,115 @@ def test_chaos_2401_2466_regression_work_item_sync_cannot_skip_autoimport_owners
     assert sink.memberships, (
         "CHAOS-2401/2466 regression: auto-import dispatch must write "
         "team_memberships for attribution"
+    )
+
+
+# CHAOS-2609: a no-email assignee carries the resolver-consumed, provider-
+# qualified identity (github:<login> / gitlab:<username> / jira:accountid:<id>),
+# NOT a bare login or email. The auto-import writer must put that SAME identity
+# into the team_memberships facet the canonical ladder indexes AND the
+# teams.members roster the secondary TeamResolver reads — otherwise member-based
+# attribution silently misses for no-email assignees. Each entry pairs the
+# IdentityResolver kwargs for a no-email assignee with the team that auto-import
+# created for that member in _patch_provider_stubs.
+_NO_EMAIL_ASSIGNEE: dict[str, dict[str, Any]] = {
+    "github": {
+        "resolve_kwargs": {"provider": "github", "username": "platform-lead"},
+        "expected_identity": "github:platform-lead",
+        "team_id": "gh:platform",
+    },
+    "gitlab": {
+        "resolve_kwargs": {"provider": "gitlab", "username": "dev-health-maintainer"},
+        "expected_identity": "gitlab:dev-health-maintainer",
+        "team_id": "gl:full-chaos/dev-health",
+    },
+    "jira": {
+        "resolve_kwargs": {"provider": "jira", "account_id": "jira-ops-account"},
+        "expected_identity": "jira:accountid:jira-ops-account",
+        "team_id": "OPS",
+    },
+}
+
+
+def _membership_probe_work_item(provider: str, assignee: str) -> WorkItem:
+    """A work item whose ONLY attribution signal is its assignee — project_key,
+    project_id and repo deliberately match no ownership row, so the resolution
+    winner can only be assignee_membership."""
+    return WorkItem(
+        work_item_id=f"{provider}:no-email-assignee-probe#1",
+        provider=cast(WorkItemProvider, provider),
+        title="No-email assignee attribution probe",
+        type="task",
+        status="done",
+        status_raw="Done",
+        assignees=[assignee],
+        reporter=None,
+        created_at=NOW - timedelta(days=1),
+        updated_at=NOW,
+        started_at=NOW - timedelta(hours=2),
+        completed_at=NOW,
+        closed_at=NOW,
+        labels=[],
+        project_key=None,
+        project_id="zzz-unowned-scope-no-ownership-match",
+    )
+
+
+@pytest.mark.parametrize("provider", ["github", "gitlab", "jira"])
+def test_chaos_2609_no_email_assignee_resolves_to_autoimported_team_via_both_paths(
+    provider: str,
+    monkeypatch: pytest.MonkeyPatch,
+    sync_session_factory: Callable[[], Any],
+) -> None:
+    sink = RecordingClickHouseSink()
+
+    result = _run_sync_surface(
+        provider=provider,
+        monkeypatch=monkeypatch,
+        session_factory=sync_session_factory,
+        sink=sink,
+    )
+    assert result["status"] == "success"
+    assert sink.memberships, "auto-import must populate team_memberships"
+
+    spec = _NO_EMAIL_ASSIGNEE[provider]
+
+    # 1. The REAL IdentityResolver turns a no-email assignee into the
+    #    provider-qualified facet (proves what the assignee path produces).
+    assignee = IdentityResolver(alias_to_canonical={}).resolve(**spec["resolve_kwargs"])
+    assert assignee == spec["expected_identity"]
+
+    item = _membership_probe_work_item(provider, assignee)
+
+    # 2. Canonical ladder: member_by_identity built EXACTLY as production builds
+    #    it (member_id / raw_provider_user_id / raw_email) resolves the assignee
+    #    to the auto-imported team via assignee_membership.
+    context = _attribution_context_from_sink(sink)
+    ladder_team_id, ladder_team_name, candidates = resolve_team_attribution(
+        item,
+        team_resolver=None,
+        project_key_resolver=None,
+        attribution_context=context,
+    )
+    assert ladder_team_id == spec["team_id"], (
+        f"{provider}: no-email assignee {assignee!r} must resolve to the "
+        f"auto-imported team via the canonical ladder"
+    )
+    assert ladder_team_name
+    assert any(c.source == "assignee_membership" for c in candidates)
+
+    # 3. Secondary TeamResolver: the teams.members roster resolves the SAME
+    #    assignee to the SAME team (the path the cosmetic roster fix missed).
+    team_resolver = TeamResolver(
+        member_to_team=_build_member_to_team(list(sink.teams.values()))
+    )
+    roster_team_id, _, _ = resolve_team_attribution(
+        item,
+        team_resolver=team_resolver,
+        project_key_resolver=None,
+        attribution_context=None,
+    )
+    assert roster_team_id == spec["team_id"], (
+        f"{provider}: teams.members roster must resolve no-email assignee "
+        f"{assignee!r} to the auto-imported team via TeamResolver"
     )

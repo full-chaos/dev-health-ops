@@ -18,6 +18,7 @@ from dev_health_ops.metrics.schemas import (
     TeamProjectOwnershipRecord,
 )
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+from dev_health_ops.providers.identity import provider_qualified_identity
 from dev_health_ops.providers.team_capabilities import team_provider_capabilities
 
 logger = logging.getLogger(__name__)
@@ -244,13 +245,22 @@ async def _membership_rows(
             if key in seen:
                 continue
             seen.add(key)
+            # raw_provider_user_id carries the RESOLVER-CONSUMED identity
+            # (gitlab:<username>), not the bare username: that is the facet a
+            # no-email assignee resolves to (IdentityResolver fallback) and the
+            # only member_by_identity slot free to hold it (member_id is the PK).
+            # The bare username is still preserved inside member_id. (CHAOS-2609)
+            qualified_identity = (
+                provider_qualified_identity(PROVIDER, username=raw_identity)
+                or raw_identity
+            )
             rows.append(
                 TeamMembershipRecord(
                     org_id=org_id,
                     provider=PROVIDER,
                     team_id=team_id,
                     member_id=member_id,
-                    raw_provider_user_id=raw_identity,
+                    raw_provider_user_id=qualified_identity,
                     raw_email=getattr(member, "email", None),
                     source="provider_access",
                     is_primary=0,

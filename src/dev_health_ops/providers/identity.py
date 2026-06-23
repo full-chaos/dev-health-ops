@@ -20,6 +20,34 @@ def _norm_email(email: str) -> str:
     return (email or "").strip().lower()
 
 
+def provider_qualified_identity(
+    provider: WorkItemProvider | str,
+    *,
+    username: str | None = None,
+    account_id: str | None = None,
+) -> str | None:
+    """The provider-qualified identity for a user lacking a usable email.
+
+    Single source of truth shared by two sides that MUST agree (CHAOS-2609):
+
+    * the work-item assignee path — ``IdentityResolver.resolve`` returns this
+      string as its stable fallback when no email/alias matches; and
+    * team auto-import — writes this exact string into
+      ``team_memberships.raw_provider_user_id`` (a facet the canonical ladder's
+      ``member_by_identity`` indexes) and the ``teams.members`` roster (read by
+      the secondary ``TeamResolver``).
+
+    Priority mirrors ``resolve``: ``provider:username`` before
+    ``provider:accountid:account_id`` (GitHub/GitLab carry a username; Jira
+    carries only an accountId). Returns ``None`` when neither is present.
+    """
+    if username and str(username).strip():
+        return f"{provider}:{str(username).strip()}"
+    if account_id and str(account_id).strip():
+        return f"{provider}:accountid:{str(account_id).strip()}"
+    return None
+
+
 @dataclass(frozen=True)
 class IdentityResolver:
     """
@@ -66,9 +94,19 @@ class IdentityResolver:
             if mapped:
                 return mapped
 
-        # Stable fallbacks.
-        if username:
-            return f"{provider}:{username}"
+        # Stable fallbacks. A provider-qualified identity (username, then
+        # accountId) takes precedence over the unreliable display name so a
+        # no-email assignee resolves to the SAME facet team auto-import writes
+        # into team_memberships / teams.members — otherwise member-based
+        # attribution silently misses for no-email assignees (CHAOS-2609). This
+        # mirrors the candidate priority above (provider:accountid: outranks
+        # display_name) and shares provider_qualified_identity as the single
+        # derivation used by the auto-import writer.
+        qualified = provider_qualified_identity(
+            provider, username=username, account_id=account_id
+        )
+        if qualified:
+            return qualified
         if display_name:
             return display_name.strip() or "unknown"
         return "unknown"

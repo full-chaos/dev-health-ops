@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from collections.abc import Coroutine, Sequence
 from datetime import datetime, timezone
@@ -24,6 +25,7 @@ from dev_health_ops.metrics.schemas import (
     TeamProjectOwnershipRecord,
 )
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+from dev_health_ops.providers.identity import provider_qualified_identity
 
 _T = TypeVar("_T")
 
@@ -159,13 +161,34 @@ def populate(
     now = datetime.now(timezone.utc)
     discovery = TeamDiscoveryService(None, org_id)
     membership = TeamMembershipService(cast(AsyncSession, None), org_id)
-    teams = _run(
-        discovery.discover_jira(
-            email=jira_credentials.email,
-            api_token=jira_credentials.api_token,
-            url=jira_credentials.base_url,
+    try:
+        teams = _run(
+            discovery.discover_jira(
+                email=jira_credentials.email,
+                api_token=jira_credentials.api_token,
+                url=jira_credentials.base_url,
+            )
         )
-    )
+    except Exception as exc:
+        # Mirror github/gitlab: a discovery failure (e.g. HTTP 403) skips the
+        # import INTERNALLY without writing anything, so a manual ownership row
+        # is never clobbered and the sync stays successful (CHAOS-2609).
+        logging.getLogger(__name__).info(
+            "Skipping Jira team auto-import for org_id=%s: discovery failed: %s",
+            org_id,
+            exc,
+        )
+        return {
+            "status": "skipped",
+            "reason": "provider_discovery_skipped",
+            "teams_imported": 0,
+            "projects_imported": 0,
+            "members_imported": 0,
+            "team_memberships_imported": 0,
+            "team_project_ownership_imported": 0,
+            "team_repo_ownership_imported": 0,
+            "work_item_team_attributions_imported": 0,
+        }
 
     team_rows: list[dict[str, Any]] = []
     project_rows: list[ProjectRecord] = []
@@ -234,11 +257,20 @@ def populate(
                 project_keys=project_keys,
             )
         )
+        # Roster carries the RESOLVER-CONSUMED identity (jira:accountid:<id>) so
+        # the secondary TeamResolver matches a no-email assignee, which
+        # IdentityResolver resolves to that same facet (CHAOS-2609).
         team_rows[-1]["members"] = [
-            member.provider_identity for member in discovered_members
+            provider_qualified_identity("jira", account_id=member.provider_identity)
+            or member.provider_identity
+            for member in discovered_members
         ]
         for member in discovered_members:
             member_id = _member_id("jira", member.provider_identity)
+            qualified_identity = (
+                provider_qualified_identity("jira", account_id=member.provider_identity)
+                or member.provider_identity
+            )
             member_rows.append(
                 MemberRecord(
                     org_id=org_id,
@@ -258,7 +290,7 @@ def populate(
                     provider="jira",
                     team_id=team_id,
                     member_id=member_id,
-                    raw_provider_user_id=member.provider_identity,
+                    raw_provider_user_id=qualified_identity,
                     raw_email=member.email,
                     source="native",
                     is_primary=1 if member.role == "lead" else 0,

@@ -346,13 +346,13 @@ def test_jira_populate_preserves_manual_project_ownership_row(
     ) in sink.ownership
 
 
-def test_jira_discovery_failure_does_not_clobber_manual_ownership(
+def test_jira_discovery_failure_skips_internally_without_clobbering_manual_ownership(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """CHAOS-2609 (CS-COV) item 3: a jira team-discovery failure (e.g. HTTP 403)
-    surfaces and writes nothing, so a pre-existing manual ownership row is left
-    intact (populate fails before any sink write; run_team_autoimport wraps the
-    error into a skipped sync result)."""
+    is caught INSIDE populate (matching github/gitlab) and returns a skipped
+    summary with reason ``provider_discovery_skipped`` — nothing is written, so a
+    pre-existing manual ownership row is left intact."""
 
     async def discover_jira(
         self: object, email: str, api_token: str, url: str
@@ -380,18 +380,20 @@ def test_jira_discovery_failure_does_not_clobber_manual_ownership(
     )
     sink.write_team_project_ownership([manual])
 
-    with pytest.raises(RuntimeError, match="403"):
-        team_autoimport_jira.populate(
-            org_id="org-1",
-            credentials={
-                "email": "jira@example.com",
-                "api_token": "jira-token",
-                "base_url": "https://jira.example.com",
-            },
-            scope={"mode": "sync_config"},
-            sink=sink,
-        )
+    summary = team_autoimport_jira.populate(
+        org_id="org-1",
+        credentials={
+            "email": "jira@example.com",
+            "api_token": "jira-token",
+            "base_url": "https://jira.example.com",
+        },
+        scope={"mode": "sync_config"},
+        sink=sink,
+    )
 
+    assert summary["status"] == "skipped"
+    assert summary["reason"] == "provider_discovery_skipped"
+    assert summary["team_project_ownership_imported"] == 0
     # The manual ownership row is untouched and no native rows were written.
     assert (
         "org-1",
@@ -482,3 +484,11 @@ def test_jira_members_dedupe_to_one_row_per_member_id(
     assert sink.members[("org-1", "jira:acc-2")].email is None
     assert ("org-1", "jira", "OPS", "jira:acc-1", "native") in sink.memberships
     assert ("org-1", "jira", "OPS", "jira:acc-2", "native") in sink.memberships
+    # CHAOS-2609: the canonical-ladder facet carries the resolver-consumed
+    # identity jira:accountid:<account_id> (member_id PK keeps the jira:<id> form).
+    assert (
+        sink.memberships[
+            ("org-1", "jira", "OPS", "jira:acc-2", "native")
+        ].raw_provider_user_id
+        == "jira:accountid:acc-2"
+    )

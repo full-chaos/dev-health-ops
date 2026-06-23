@@ -121,11 +121,16 @@ def test_github_org_import_writes_provider_access_repo_grants_and_nested_specifi
     )
     assert child_row.repo_full_name == parent_row.repo_full_name
     assert child_row.specificity > parent_row.specificity
-    # CHAOS-2609 (CS-COV) Part B: github teams also carry a non-empty members
-    # roster (teams.members), not just team_memberships edges.
+    # CHAOS-2609 (CS-COV): github teams carry a non-empty members roster whose
+    # entries are the RESOLVER-CONSUMED identity (github:<login>) — exactly what
+    # a no-email assignee resolves to — so the secondary TeamResolver matches.
     rosters = {row["id"]: row["members"] for row in sink.teams}
-    assert rosters["gh:platform"] == ["platform-lead"]
-    assert rosters["gh:platform-api"] == ["platform-api-lead"]
+    assert rosters["gh:platform"] == ["github:platform-lead"]
+    assert rosters["gh:platform-api"] == ["github:platform-api-lead"]
+    # The canonical-ladder facet (member_by_identity indexes raw_provider_user_id)
+    # carries the same github:<login> identity; member_id (PK) keeps the gh: form.
+    by_member = {row.member_id: row for row in sink.memberships}
+    assert by_member["gh:platform-lead"].raw_provider_user_id == "github:platform-lead"
 
 
 def test_gitlab_group_import_writes_provider_access_project_ownership(
@@ -220,11 +225,14 @@ def test_gitlab_group_import_writes_provider_access_project_ownership(
     assert {row.priority for row in sink.memberships} == {
         team_autoimport_gitlab.PROVIDER_ACCESS_PRIORITY
     }
-    # CHAOS-2609 (CS-COV) Part B: gitlab teams also carry a non-empty members
-    # roster (teams.members), not just team_memberships edges.
+    # CHAOS-2609 (CS-COV): gitlab teams carry a non-empty members roster whose
+    # entries are the RESOLVER-CONSUMED identity (gitlab:<username>), and the
+    # canonical-ladder facet (raw_provider_user_id) carries the same identity.
     rosters = {row["id"]: row["members"] for row in sink.teams}
-    assert rosters["gl:full-chaos"] == ["full-chaos"]
-    assert rosters["gl:full-chaos/dev-health"] == ["full-chaos-dev-health"]
+    assert rosters["gl:full-chaos"] == ["gitlab:full-chaos"]
+    assert rosters["gl:full-chaos/dev-health"] == ["gitlab:full-chaos-dev-health"]
+    by_member = {row.member_id: row for row in sink.memberships}
+    assert by_member["gl:full-chaos"].raw_provider_user_id == "gitlab:full-chaos"
     # CHAOS-2609 (CS-COV) item 7: a nested subgroup's ownership is more specific
     # than its parent group's, so it wins on specificity tie-breaks.
     parent_proj = next(

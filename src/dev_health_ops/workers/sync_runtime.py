@@ -111,7 +111,10 @@ def _sync_launchdarkly_feature_flags(
             api_key=api_key, project_key=project_key
         ) as connector:
             raw_flags = await connector.get_flags(project_key)
-            raw_events = await connector.get_audit_log(since=since_dt, limit=200)
+            # LaunchDarkly caps each audit-log page at 20 entries; the
+            # connector paginates via _links.next to assemble full history
+            # since the last watermark.
+            raw_events = await connector.get_audit_log(since=since_dt, limit=1000)
 
         flags = normalize_flags(raw_flags, org_id)
         if environment:

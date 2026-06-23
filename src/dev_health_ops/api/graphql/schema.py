@@ -42,6 +42,8 @@ from .models.outputs import (
     CapacityForecast,
     CapacityForecastConnection,
     CatalogResult,
+    FeatureFlagEventsResult,
+    FeatureFlagRegistryResult,
     HomeResult,
     OperatingReview,
     ProductTelemetryDashboardType,
@@ -295,6 +297,46 @@ class Query:
 
         context = get_context(info)
         return await resolve_work_graph_artifacts(context, filters)
+
+    @strawberry.field(description="List feature flags from the ClickHouse registry")
+    async def feature_flags(
+        self,
+        info: Info,
+        org_id: str,
+        provider: str | None = None,
+        project: str | None = None,
+        include_archived: bool | None = False,
+        limit: int = 1000,
+    ) -> FeatureFlagRegistryResult:
+        from .resolvers.feature_flags import resolve_feature_flags
+
+        context = get_context(info)
+        return await resolve_feature_flags(
+            context,
+            provider=provider,
+            project=project,
+            include_archived=bool(include_archived),
+            limit=limit,
+        )
+
+    @strawberry.field(description="List feature flag state-change events")
+    async def feature_flag_events(
+        self,
+        info: Info,
+        org_id: str,
+        flag_key: str | None = None,
+        environment: str | None = None,
+        limit: int = 1000,
+    ) -> FeatureFlagEventsResult:
+        from .resolvers.feature_flags import resolve_feature_flag_events
+
+        context = get_context(info)
+        return await resolve_feature_flag_events(
+            context,
+            flag_key=flag_key,
+            environment=environment,
+            limit=limit,
+        )
 
     @strawberry.field(
         description=(

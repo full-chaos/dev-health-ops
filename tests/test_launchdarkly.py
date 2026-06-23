@@ -158,6 +158,69 @@ class TestLaunchDarklyConnector:
         assert params["limit"] == 20
 
     @pytest.mark.asyncio
+    async def test_get_audit_log_clamps_limit_to_api_max(self, connector):
+        # LaunchDarkly returns HTTP 400 if `limit` exceeds 20; the connector
+        # must clamp any larger caller value to the API's supported range.
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {}
+        mock_response.json.return_value = {"items": []}
+
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.is_closed = False
+        mock_client.request = AsyncMock(return_value=mock_response)
+        connector._client = mock_client
+
+        await connector.get_audit_log(limit=200)
+
+        call_kwargs = mock_client.request.call_args
+        params = call_kwargs.kwargs.get("params") or call_kwargs[1].get("params")
+        assert params["limit"] == 20
+
+    @pytest.mark.asyncio
+    async def test_get_audit_log_paginates_via_next_link(self, connector):
+        # LaunchDarkly returns at most 20 entries per page; the connector must
+        # follow _links.next (with the /api/v2 prefix stripped) to assemble the
+        # full history.
+        def _page(items: list[dict], next_href: str | None = None) -> MagicMock:
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.headers = {}
+            body: dict[str, object] = {"items": items}
+            if next_href is not None:
+                body["_links"] = {"next": {"href": next_href}}
+            resp.json.return_value = body
+            return resp
+
+        page1 = _page(
+            [{"_id": f"a{i}"} for i in range(20)],
+            "/api/v2/auditlog?limit=20&before=2000",
+        )
+        page2 = _page(
+            [{"_id": f"b{i}"} for i in range(20)],
+            "/api/v2/auditlog?limit=20&before=1000",
+        )
+        page3 = _page([{"_id": f"c{i}"} for i in range(5)])
+
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.is_closed = False
+        mock_client.request = AsyncMock(side_effect=[page1, page2, page3])
+        connector._client = mock_client
+
+        events = await connector.get_audit_log(limit=1000)
+
+        assert len(events) == 45
+        assert mock_client.request.await_count == 3
+        # First request caps the page at 20 entries.
+        first_call = mock_client.request.call_args_list[0]
+        first_params = first_call.kwargs.get("params") or first_call[1].get("params")
+        assert first_params["limit"] == 20
+        # Pagination follows _links.next with the /api/v2 prefix stripped.
+        assert mock_client.request.call_args_list[1].args[1] == (
+            "/auditlog?limit=20&before=2000"
+        )
+
+    @pytest.mark.asyncio
     async def test_close_closes_client(self, connector):
         mock_client = AsyncMock(spec=httpx.AsyncClient)
         mock_client.is_closed = False

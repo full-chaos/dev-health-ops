@@ -706,6 +706,43 @@ class WorkGraphArtifactsResult:
     degraded_reason: str | None = None
 
 
+@strawberry.type
+class FeatureFlagItem:
+    flag_id: str
+    flag_key: str
+    provider: str
+    project_key: str
+    environment: str
+    flag_type: str
+    created_at: str
+    archived_at: str | None = None
+
+
+@strawberry.type
+class FeatureFlagRegistryResult:
+    flags: list[FeatureFlagItem]
+    total_count: int
+    degraded_reason: str | None = None
+
+
+@strawberry.type
+class FeatureFlagEventItem:
+    flag_key: str
+    event_type: str
+    prev_state: str
+    next_state: str
+    actor_type: str
+    environment: str
+    event_ts: str
+
+
+@strawberry.type
+class FeatureFlagEventsResult:
+    events: list[FeatureFlagEventItem]
+    total_count: int
+    degraded_reason: str | None = None
+
+
 # =============================================================================
 # Capacity Planning types
 # =============================================================================

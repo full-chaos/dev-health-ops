@@ -22,6 +22,11 @@ logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://app.launchdarkly.com/api/v2"
 
+# LaunchDarkly hard-caps the audit-log `limit` at 20 entries per request; full
+# history is assembled by following the `_links.next` cursor across pages.
+_AUDIT_LOG_PAGE_SIZE = 20
+_API_V2_PREFIX = "/api/v2"
+
 
 def _parse_rate_limit_remaining(response: httpx.Response) -> int | None:
     """Extract remaining rate-limit budget from LD response headers."""
@@ -203,24 +208,55 @@ class LaunchDarklyConnector:
     async def get_audit_log(
         self,
         since: datetime | None = None,
-        limit: int = 20,
+        limit: int = 1000,
     ) -> list[dict]:
-        """Fetch audit log entries.
+        """Fetch audit log entries, paginating to assemble full history.
 
-        :param since: Only return entries after this timestamp.
-        :param limit: Maximum entries to return (LD default is 20).
+        LaunchDarkly caps the audit-log endpoint at 20 entries per request, so
+        this pages via the ``_links.next`` cursor until the log is exhausted or
+        ``limit`` total entries have been collected.
+
+        :param since: Only return entries occurring after this timestamp.
+        :param limit: Maximum total entries to return across all pages.
         :returns: List of raw audit-log entry dicts.
         """
-        params: dict[str, Any] = {"limit": limit}
-        if since is not None:
-            # LD expects epoch milliseconds for date filters
-            epoch_ms = int(since.timestamp() * 1000)
-            params["after"] = epoch_ms
+        max_total = max(0, int(limit))
+        if max_total == 0:
+            return []
 
+        params: dict[str, Any] = {"limit": _AUDIT_LOG_PAGE_SIZE}
+        if since is not None:
+            # LD expects epoch milliseconds for date filters.
+            params["after"] = int(since.timestamp() * 1000)
+
+        all_items: list[dict] = []
+        # Bound the page count defensively so a misbehaving cursor cannot loop
+        # forever; each page yields at most _AUDIT_LOG_PAGE_SIZE entries.
+        max_pages = max_total // _AUDIT_LOG_PAGE_SIZE + 2
         data = await self._request("GET", "/auditlog", params=params)
-        items = data.get("items", [])
-        logger.info("Fetched %d audit log entries", len(items))
-        return items
+        for _ in range(max_pages):
+            items = data.get("items", [])
+            if not items:
+                break
+            all_items.extend(items)
+            if len(all_items) >= max_total:
+                break
+            href = ((data.get("_links") or {}).get("next") or {}).get("href")
+            if not href:
+                break
+            # base_url already includes /api/v2; strip that prefix so a relative
+            # next-href resolves against base_url without duplicating it.
+            if href.startswith("http"):
+                next_path = href
+            elif href.startswith(_API_V2_PREFIX):
+                next_path = href[len(_API_V2_PREFIX) :]
+            else:
+                next_path = href
+            data = await self._request("GET", next_path)
+
+        result = all_items[:max_total]
+        logger.info("Fetched %d audit log entries", len(result))
+        return result
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""

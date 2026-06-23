@@ -712,7 +712,6 @@ class FeatureFlagItem:
     flag_key: str
     provider: str
     project_key: str
-    environment: str
     flag_type: str
     created_at: str
     archived_at: str | None = None

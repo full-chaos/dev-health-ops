@@ -100,7 +100,6 @@ async def resolve_feature_flags(
             provider,
             flag_key,
             project_key,
-            environment,
             flag_type,
             created_at,
             archived_at
@@ -110,8 +109,16 @@ async def resolve_feature_flags(
         LIMIT %(limit)s
     """
 
+    count_query = f"""
+        SELECT count() AS total
+        FROM feature_flag FINAL
+        WHERE {" AND ".join(where_clauses)}
+    """
+    count_params = {k: v for k, v in params.items() if k != "limit"}
+
     try:
         rows = await query_dicts(client, query, params)
+        count_rows = await query_dicts(client, count_query, count_params)
     except Exception as exc:
         if _is_missing_clickhouse_table_error(exc, "feature_flag"):
             return _empty_feature_flags_result(FEATURE_FLAG_NOT_MATERIALIZED)
@@ -128,14 +135,14 @@ async def resolve_feature_flags(
             flag_key=str(row.get("flag_key") or ""),
             provider=str(row.get("provider") or ""),
             project_key=str(row.get("project_key") or ""),
-            environment=str(row.get("environment") or ""),
             flag_type=str(row.get("flag_type") or ""),
             created_at=_isoformat(row.get("created_at")),
             archived_at=_nullable_isoformat(row.get("archived_at")),
         )
         for row in rows
     ]
-    return FeatureFlagRegistryResult(flags=flags, total_count=len(flags))
+    total_count = int(count_rows[0]["total"]) if count_rows else 0
+    return FeatureFlagRegistryResult(flags=flags, total_count=total_count)
 
 
 async def resolve_feature_flag_events(
@@ -177,8 +184,16 @@ async def resolve_feature_flag_events(
         LIMIT %(limit)s
     """
 
+    count_query = f"""
+        SELECT count() AS total
+        FROM feature_flag_event
+        WHERE {" AND ".join(where_clauses)}
+    """
+    count_params = {k: v for k, v in params.items() if k != "limit"}
+
     try:
         rows = await query_dicts(client, query, params)
+        count_rows = await query_dicts(client, count_query, count_params)
     except Exception as exc:
         if _is_missing_clickhouse_table_error(exc, "feature_flag_event"):
             return _empty_feature_flag_events_result(
@@ -198,4 +213,5 @@ async def resolve_feature_flag_events(
         )
         for row in rows
     ]
-    return FeatureFlagEventsResult(events=events, total_count=len(events))
+    total_count = int(count_rows[0]["total"]) if count_rows else 0
+    return FeatureFlagEventsResult(events=events, total_count=total_count)

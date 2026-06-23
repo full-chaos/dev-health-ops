@@ -192,6 +192,14 @@ def test_production_compose_disables_ambient_migrations() -> None:
         )
 
 
+def test_production_api_healthcheck_uses_ready_probe() -> None:
+    services = _load_yaml(_PROD_COMPOSE)["services"]
+    command = " ".join(str(part) for part in services["api"]["healthcheck"]["test"])
+
+    assert "/ready" in command
+    assert "/health" not in command
+
+
 def test_legacy_compose_has_one_shot_migrate_service() -> None:
     services = _load_yaml(_LEGACY_COMPOSE)["services"]
     migrate = services.get("migrate")

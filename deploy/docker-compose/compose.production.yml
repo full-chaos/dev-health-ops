@@ -130,7 +130,7 @@ services:
       migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/ready"]
       interval: 15s
       timeout: 10s
       retries: 3
@@ -274,7 +274,9 @@ services:
 
   pgbouncer:
     # CHAOS-2065: optional transaction-mode pooler in front of a managed
-    # Postgres. Disabled unless explicitly enabled:
+    # Postgres. Do not enable this for Neon hosted -pooler endpoints; point
+    # app services directly at Neon and set PGBOUNCER_TRANSACTION_MODE=true.
+    # Disabled unless explicitly enabled:
     #   docker compose --profile pooler up -d
     # Then point Postgres consumers at it and flip the app flag:
     #   POSTGRES_URI=postgresql+asyncpg://USER:PASS@pgbouncer:6432/DB

@@ -14,7 +14,7 @@ async def test_postgres_health_uses_normalized_async_uri(monkeypatch):
 
     monkeypatch.setenv(
         "POSTGRES_URI",
-        "postgresql+asyncpg://u:p@ep-cool-boat-af967qaf-pooler.c-2.us-west-2.aws.neon.tech/db?sslmode=require&channel_binding=require",
+        "postgresql+asyncpg://u:p@pooler.example.com/db?sslmode=require&channel_binding=require",
     )
     monkeypatch.delenv("DATABASE_URI", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)

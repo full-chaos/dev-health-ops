@@ -50,19 +50,8 @@ def _pgbouncer_transaction_mode() -> bool:
     return _is_truthy(os.getenv("PGBOUNCER_TRANSACTION_MODE"))
 
 
-def _pooler_autodetect_disabled() -> bool:
-    return _is_truthy(os.getenv("POSTGRES_DISABLE_POOLER_AUTODETECT"))
-
-
-def _neon_pooler_endpoint(uri: str) -> bool:
-    if _pooler_autodetect_disabled() or not uri.startswith("postgresql"):
-        return False
-    host = make_url(uri).host or ""
-    return "-pooler" in host
-
-
-def _transaction_pooler_mode(uri: str) -> bool:
-    return _pgbouncer_transaction_mode() or _neon_pooler_endpoint(uri)
+def _transaction_pooler_mode() -> bool:
+    return _pgbouncer_transaction_mode()
 
 
 def _postgres_connect_timeout_seconds() -> float:
@@ -103,7 +92,7 @@ def _async_postgres_engine_kwargs(uri: str) -> dict[str, Any]:
         return {"pool_pre_ping": True}
 
     connect_args: dict[str, Any] = {"timeout": _postgres_connect_timeout_seconds()}
-    if _transaction_pooler_mode(uri):
+    if _transaction_pooler_mode():
         connect_args.update(
             {
                 "statement_cache_size": 0,
@@ -135,7 +124,7 @@ def _log_postgres_connection_posture(uri: str, kwargs: dict[str, Any]) -> None:
             "driver": url.drivername,
             "host": url.host,
             "database": url.database,
-            "transaction_pooler_mode": _transaction_pooler_mode(uri),
+            "transaction_pooler_mode": _transaction_pooler_mode(),
             "null_pool": uses_null_pool,
             "pool_size": None if uses_null_pool else kwargs.get("pool_size"),
             "max_overflow": None if uses_null_pool else kwargs.get("max_overflow"),
@@ -388,7 +377,7 @@ def get_postgres_sync_engine(uri: str | None = None) -> Engine:
     global _postgres_sync_engine
     if uri is not None:
         sync_uri = _ensure_sync_postgres(uri)
-        if _transaction_pooler_mode(sync_uri):
+        if _transaction_pooler_mode():
             return create_engine(sync_uri, poolclass=NullPool)
         if not sync_uri.startswith("postgresql"):
             return create_engine(sync_uri)
@@ -405,7 +394,7 @@ def get_postgres_sync_engine(uri: str | None = None) -> Engine:
             raise RuntimeError(
                 "PostgreSQL URI not configured. Set POSTGRES_URI environment variable."
             )
-        if _transaction_pooler_mode(uri):
+        if _transaction_pooler_mode():
             # PgBouncer owns the pool; psycopg keeps no server-side prepared
             # statements by default, so only the pool class needs to change.
             _postgres_sync_engine = create_engine(uri, poolclass=NullPool)

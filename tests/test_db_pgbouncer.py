@@ -21,7 +21,6 @@ def _clear_pool_env(monkeypatch):
     for var in (
         "PGBOUNCER_TRANSACTION_MODE",
         "POSTGRES_CONNECT_TIMEOUT_SECONDS",
-        "POSTGRES_DISABLE_POOLER_AUTODETECT",
         "POSTGRES_POOL_SIZE",
         "POSTGRES_MAX_OVERFLOW",
     ):
@@ -42,16 +41,8 @@ class TestPgbouncerTransactionModeFlag:
         monkeypatch.setenv("PGBOUNCER_TRANSACTION_MODE", val)
         assert db._pgbouncer_transaction_mode() is False
 
-    def test_neon_pooler_host_enables_transaction_pooler_mode(self):
-        uri = "postgresql+asyncpg://u:p@ep-cool-boat-af967qaf-pooler.c-2.us-west-2.aws.neon.tech/d"
-
-        assert db._transaction_pooler_mode(uri) is True
-
-    def test_neon_pooler_autodetect_can_be_disabled(self, monkeypatch):
-        monkeypatch.setenv("POSTGRES_DISABLE_POOLER_AUTODETECT", "true")
-        uri = "postgresql+asyncpg://u:p@ep-cool-boat-af967qaf-pooler.c-2.us-west-2.aws.neon.tech/d"
-
-        assert db._transaction_pooler_mode(uri) is False
+    def test_pooler_hostname_does_not_enable_transaction_pooler_mode(self):
+        assert db._transaction_pooler_mode() is False
 
 
 class TestAsyncEngineKwargs:
@@ -110,15 +101,16 @@ class TestAsyncEngineKwargs:
 
         assert kw["connect_args"]["timeout"] == 10.0
 
-    def test_neon_pooler_autodetect_uses_nullpool(self):
-        uri = "postgresql+asyncpg://u:p@ep-cool-boat-af967qaf-pooler.c-2.us-west-2.aws.neon.tech/d"
+    def test_pooler_hostname_without_flag_uses_queue_pool(self):
+        uri = "postgresql+asyncpg://u:p@pooler.example.com/d"
 
         kw = db._async_postgres_engine_kwargs(uri)
 
-        assert kw["poolclass"] is NullPool
-        assert kw["connect_args"]["statement_cache_size"] == 0
+        assert "poolclass" not in kw
+        assert kw["pool_pre_ping"] is True
+        assert "statement_cache_size" not in kw["connect_args"]
 
-    def test_neon_pooler_autodetect_uses_nullpool_for_sync_engine(self, monkeypatch):
+    def test_pooler_flag_uses_nullpool_for_sync_engine(self, monkeypatch):
         captured: dict[str, object] = {}
 
         def create_engine(dsn: str, **kwargs):
@@ -127,15 +119,17 @@ class TestAsyncEngineKwargs:
             return object()
 
         monkeypatch.setattr(db, "create_engine", create_engine)
+        monkeypatch.setenv("PGBOUNCER_TRANSACTION_MODE", "true")
 
         db.get_postgres_sync_engine(
-            "postgresql+asyncpg://u:p@ep-cool-boat-af967qaf-pooler.c-2.us-west-2.aws.neon.tech/d?ssl=require"
+            "postgresql+asyncpg://u:p@pooler.example.com/d?ssl=require"
         )
 
         assert captured["poolclass"] is NullPool
 
-    def test_connection_posture_log_is_sanitized(self, caplog):
-        uri = "postgresql+asyncpg://u:secret@ep-cool-boat-af967qaf-pooler.c-2.us-west-2.aws.neon.tech/d"
+    def test_connection_posture_log_is_sanitized(self, monkeypatch, caplog):
+        monkeypatch.setenv("PGBOUNCER_TRANSACTION_MODE", "true")
+        uri = "postgresql+asyncpg://u:secret@pooler.example.com/d"
         kw = db._async_postgres_engine_kwargs(uri)
 
         with caplog.at_level(logging.INFO, logger="dev_health_ops.db"):
@@ -145,7 +139,7 @@ class TestAsyncEngineKwargs:
             r for r in caplog.records if r.message == "postgres_connection_posture"
         )
         assert record.driver == "postgresql+asyncpg"
-        assert record.host == "ep-cool-boat-af967qaf-pooler.c-2.us-west-2.aws.neon.tech"
+        assert record.host == "pooler.example.com"
         assert record.database == "d"
         assert record.transaction_pooler_mode is True
         assert record.null_pool is True
@@ -159,7 +153,7 @@ class TestAsyncPostgresUrlNormalization:
 
         assert db._ensure_async_postgres(uri) == "postgresql+asyncpg://u:p@h/d"
 
-    def test_translates_neon_sslmode_for_asyncpg(self):
+    def test_translates_sslmode_for_asyncpg(self):
         uri = "postgresql://u:p@h/d?sslmode=require&channel_binding=require"
 
         assert (

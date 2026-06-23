@@ -208,10 +208,14 @@ class LaunchDarklyConnector:
         """Fetch audit log entries.
 
         :param since: Only return entries after this timestamp.
-        :param limit: Maximum entries to return (LD default is 20).
+        :param limit: Maximum entries to return. LaunchDarkly caps this at
+            20 per request; values outside 0..20 are clamped to stay valid.
         :returns: List of raw audit-log entry dicts.
         """
-        params: dict[str, Any] = {"limit": limit}
+        # LaunchDarkly rejects any audit-log `limit` outside 0..20 with HTTP
+        # 400 ("`limit` must be a valid integer between 0 and 20"), so clamp
+        # the caller-supplied value to the API's supported range.
+        params: dict[str, Any] = {"limit": max(0, min(int(limit), 20))}
         if since is not None:
             # LD expects epoch milliseconds for date filters
             epoch_ms = int(since.timestamp() * 1000)

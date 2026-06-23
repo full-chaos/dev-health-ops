@@ -158,6 +158,26 @@ class TestLaunchDarklyConnector:
         assert params["limit"] == 20
 
     @pytest.mark.asyncio
+    async def test_get_audit_log_clamps_limit_to_api_max(self, connector):
+        # LaunchDarkly returns HTTP 400 if `limit` exceeds 20; the connector
+        # must clamp any larger caller value to the API's supported range.
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {}
+        mock_response.json.return_value = {"items": []}
+
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.is_closed = False
+        mock_client.request = AsyncMock(return_value=mock_response)
+        connector._client = mock_client
+
+        await connector.get_audit_log(limit=200)
+
+        call_kwargs = mock_client.request.call_args
+        params = call_kwargs.kwargs.get("params") or call_kwargs[1].get("params")
+        assert params["limit"] == 20
+
+    @pytest.mark.asyncio
     async def test_close_closes_client(self, connector):
         mock_client = AsyncMock(spec=httpx.AsyncClient)
         mock_client.is_closed = False

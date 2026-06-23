@@ -24,6 +24,11 @@ from ..models.outputs import (
     WorkGraphNodeType,
     WorkGraphProvenance,
 )
+from ._membership_run_scope import (
+    LATEST_COMPLETE_RUN_SUBQUERY as _LATEST_COMPLETE_RUN_SUBQUERY,
+)
+from ._membership_run_scope import LEGACY_NODE_MAX_JOIN as _LEGACY_NODE_MAX_JOIN
+from ._membership_run_scope import RUN_SCOPE_PREDICATE as _RUN_SCOPE_PREDICATE
 
 logger = logging.getLogger(__name__)
 
@@ -367,51 +372,12 @@ def _row_to_edge(
 # protocol guarantees one generation per run_id, so no per-node-max is needed).
 # As soon as a real org-wide run publishes a marker, its completed_at exceeds the
 # legacy marker's, argMax selects it, and the legacy path retires automatically.
-_LEGACY_RUN_ID = "__legacy__"
-
-_LATEST_COMPLETE_RUN_SUBQUERY = """
-        SELECT argMax(run_id, completed_at) AS latest_run_id
-        FROM work_unit_membership_runs
-        WHERE org_id = %(org_id)s
-"""
-
-# LEFT JOIN to an inline derived table computing, per (org, node), the MAX
-# computed_at among LEGACY rows (run_id = '').  Bound to ``m`` by (org, node) and
-# aliased ``lnm`` so the scope predicate can restrict the legacy branch to each
-# node's most recent pre-migration row — the exact old per-node-latest behavior.
-# Inlined (not a top-level CTE) so it works identically in the annotation query
-# AND inside the correlated EXISTS semi-join.  Only meaningful when the latest
-# run is the legacy marker; harmless (unmatched LEFT JOIN) otherwise.  The
-# scoping subquery is org-scoped via %(org_id)s.
-_LEGACY_NODE_MAX_JOIN = """
-            LEFT JOIN (
-                SELECT
-                    org_id,
-                    node_type,
-                    node_id,
-                    max(computed_at) AS legacy_max_computed_at
-                FROM work_unit_membership
-                WHERE org_id = %(org_id)s AND run_id = ''
-                GROUP BY org_id, node_type, node_id
-            ) AS lnm
-                ON lnm.org_id = m.org_id
-                AND lnm.node_type = m.node_type
-                AND lnm.node_id = m.node_id
-"""
-
-# Scope predicate (legacy-vs-real conditional).  ``m`` = work_unit_membership
-# alias, ``latest_run`` = _LATEST_COMPLETE_RUN_SUBQUERY alias, ``lnm`` =
-# _LEGACY_NODE_MAX_JOIN alias.  REAL run -> run_id equality (one generation per
-# run_id).  LEGACY run -> the node's latest pre-migration row only (run_id='' AND
-# computed_at == that node's legacy max), NOT a blanket run_id='' match.  The
-# empty-string guard (latest_run.latest_run_id != '') stays the caller's
-# responsibility so orgs with no complete run resolve to "no membership".
-_RUN_SCOPE_PREDICATE = (
-    f"(latest_run.latest_run_id != '{_LEGACY_RUN_ID}' "
-    "AND m.run_id = latest_run.latest_run_id) "
-    f"OR (latest_run.latest_run_id = '{_LEGACY_RUN_ID}' AND m.run_id = '' "
-    "AND m.computed_at = lnm.legacy_max_computed_at)"
-)
+#
+# The four scoping constants (_LEGACY_RUN_ID, _LATEST_COMPLETE_RUN_SUBQUERY,
+# _LEGACY_NODE_MAX_JOIN, _RUN_SCOPE_PREDICATE) are imported at the top of this
+# module from ``_membership_run_scope`` — shared with the work-unit
+# team-attribution resolver so the two membership readers cannot drift (a partial
+# reimplementation drops results for migrated tenants — CHAOS-2608 codex finding).
 
 
 async def _batch_resolve_membership(

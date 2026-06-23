@@ -569,6 +569,34 @@ class WorkItemTeamAttribution:
 
 
 @strawberry.type
+class WorkUnitTeamAttribution:
+    """The team a work UNIT rolls up to, with provenance (CHAOS-2600 CS7).
+
+    A work unit (investment cluster) is an aggregation of many work items, each
+    with its own per-item ``WorkItemTeamAttribution``. This type collapses those
+    member attributions to the ONE team the unit is owned by, chosen by the same
+    source precedence the per-item resolver uses (``native_team`` strongest down
+    to ``unassigned``; ties broken by how many member items back the team). The
+    web renders this as the unit's team badge in the Investment view — it cannot
+    derive it client-side because ``work_unit_id`` (a content hash) and
+    ``work_item_id`` (a provider key) are disjoint id spaces joined only by
+    ``work_unit_membership`` in ClickHouse.
+    """
+
+    work_unit_id: str
+    team_id: str | None
+    team_name: str | None
+    source: TeamAttributionSource
+    confidence: TeamAttributionConfidence
+    # Always true: this IS the unit's selected team. Kept for shape-symmetry with
+    # WorkItemTeamAttribution and so the web can reuse its primary-selection hook.
+    is_primary: bool
+    # Number of member work items whose primary attribution backs the chosen team.
+    member_count: int
+    evidence: str
+
+
+@strawberry.type
 class WorkGraphEdgeResult:
     """A single edge in the work graph.
 

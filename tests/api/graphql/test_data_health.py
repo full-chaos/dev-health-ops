@@ -9,7 +9,10 @@ import pytest
 
 from dev_health_ops.api.graphql.context import GraphQLContext
 from dev_health_ops.api.graphql.resolvers import data_health
-from dev_health_ops.models.settings import IdentityMapping, JobRun, SyncConfiguration
+from dev_health_ops.api.services.configuration.clickhouse_identity_admin import (
+    ClickHouseIdentity,
+)
+from dev_health_ops.models.settings import JobRun, SyncConfiguration
 
 pytestmark = pytest.mark.anyio
 
@@ -107,12 +110,16 @@ async def test_identity_mapping_surfaces_unmapped_and_alias_suggestions(
         ]
 
     mapped = [
-        IdentityMapping(
+        ClickHouseIdentity(
             canonical_id="sam@corp.test",
-            org_id="org-1",
+            identity_uuid=UUID("00000000-0000-0000-0000-0000000000aa"),
+            display_name=None,
             email="sam@corp.test",
             provider_identities={"git": ["sam@corp.test"]},
             team_ids=["team-a"],
+            is_active=True,
+            updated_at=datetime(2026, 5, 20, tzinfo=UTC),
+            org_id="org-1",
         )
     ]
 
@@ -178,6 +185,68 @@ async def test_metric_lineage_uses_registry_and_argmax(monkeypatch: pytest.Monke
     assert result.compute_window.kind == "daily"
     assert result.row_count == 9
     assert "argMax(computed_at, computed_at)" in captured_sql[0]
+
+
+async def test_mapped_identities_reads_clickhouse_identities(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Exercise the REAL _mapped_identities (no monkeypatch of it): it must read
+    # the ClickHouse `identities` table via the shared _query_dicts path and map
+    # each row into a ClickHouseIdentity with decoded provider_identities.
+    import json
+
+    captured_sql: list[str] = []
+
+    async def fake_query_dicts(_client: Any, sql: str, params: dict[str, Any]):
+        captured_sql.append(sql)
+        assert params["org_id"] == "org-1"
+        return [
+            {
+                "canonical_id": "sam@corp.test",
+                "email": "sam@corp.test",
+                "display_name": "Sam Corp",
+                "provider_identities": json.dumps({"git": ["sam@corp.test"]}),
+                "team_ids": ["team-a"],
+                "is_active": 1,
+                "org_id": "org-1",
+            },
+            {
+                "canonical_id": "pat@corp.test",
+                "email": "pat@corp.test",
+                "display_name": None,
+                "provider_identities": json.dumps({}),
+                "team_ids": ["team-b"],
+                "is_active": 1,
+                "org_id": "org-1",
+            },
+        ]
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.queries.client.query_dicts", fake_query_dicts
+    )
+
+    mapped = await data_health._mapped_identities(
+        _context(), org_id="org-1", team="team-a"
+    )
+
+    # The query reads the FINAL, active-only `identities` table.
+    assert "FROM identities FINAL" in captured_sql[0]
+    assert "is_active = 1" in captured_sql[0]
+
+    # The team filter keeps only identities on team-a (pat is team-b only).
+    assert [m.canonical_id for m in mapped] == ["sam@corp.test"]
+    only = mapped[0]
+    assert isinstance(only, ClickHouseIdentity)
+    assert only.email == "sam@corp.test"
+    assert only.display_name == "Sam Corp"
+    # provider_identities is JSON-decoded from the ClickHouse String column.
+    assert only.provider_identities == {"git": ["sam@corp.test"]}
+    assert only.team_ids == ["team-a"]
+
+    # Keys derive from canonical_id/email/display_name (normalized) + provider ids.
+    keys = data_health._identity_keys(mapped)
+    assert "sam@corp.test" in keys
+    assert "sam corp" in keys
 
 
 async def _async_value(value: Any) -> Any:

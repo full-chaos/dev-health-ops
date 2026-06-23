@@ -20,14 +20,13 @@ from dev_health_ops.models.email_verification_token import EmailVerificationToke
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.licensing import OrgLicense, TierLimit
 from dev_health_ops.models.settings import (
-    IdentityMapping,
     IntegrationCredential,
     JobRun,
     ScheduledJob,
     SyncConfiguration,
-    TeamMapping,
 )
 from dev_health_ops.models.users import LoginAttempt, Membership, Organization, User
+from tests._clickhouse_team_store import FakeClickHouseTeamStore
 from tests._helpers import tables_of
 
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
@@ -46,8 +45,6 @@ _TABLES = tables_of(
     SyncConfiguration,
     ScheduledJob,
     JobRun,
-    IdentityMapping,
-    TeamMapping,
     OrgLicense,
     TierLimit,
 )
@@ -96,6 +93,16 @@ async def journey_app(monkeypatch: pytest.MonkeyPatch, session_maker):
     )
     app.dependency_overrides[admin_router_module.get_session] = _admin_session_override
 
+    # CHAOS-2600 CS5: the admin team/identity surface is ClickHouse-backed.
+    ch_store = FakeClickHouseTeamStore()
+
+    async def _ch_store_override():
+        yield ch_store
+
+    app.dependency_overrides[admin_router_module.get_clickhouse_store] = (
+        _ch_store_override
+    )
+
     monkeypatch.setattr(
         auth_router_module, "get_postgres_session", _auth_session_override
     )
@@ -112,15 +119,11 @@ async def journey_app(monkeypatch: pytest.MonkeyPatch, session_maker):
         "dev_health_ops.api.services.email_verification.send_verification_email",
         AsyncMock(),
     )
-    monkeypatch.setattr(
-        "dev_health_ops.workers.product_tasks.sync_teams_to_analytics",
-        MagicMock(),
-    )
     monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", "journey-test-encryption-key")
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac, current_user, session_maker
+        yield ac, current_user, session_maker, ch_store
 
     app.dependency_overrides.clear()
 
@@ -132,7 +135,7 @@ async def journey_app(monkeypatch: pytest.MonkeyPatch, session_maker):
 
 @pytest.mark.asyncio
 async def test_register_creates_user_and_org(journey_app):
-    ac, _, session_maker = journey_app
+    ac, _, session_maker, _ = journey_app
 
     response = await ac.post(
         "/api/v1/auth/register",
@@ -169,7 +172,7 @@ async def test_register_creates_user_and_org(journey_app):
 
 @pytest.mark.asyncio
 async def test_register_then_login_returns_tokens(journey_app):
-    ac, _, session_maker = journey_app
+    ac, _, session_maker, _ = journey_app
 
     email = "journey2@example.com"
     reg = await ac.post(
@@ -199,7 +202,7 @@ async def test_register_then_login_returns_tokens(journey_app):
 async def test_full_journey_register_login_create_credential_create_sync_config(
     journey_app,
 ):
-    ac, current_user, session_maker = journey_app
+    ac, current_user, session_maker, ch_store = journey_app
 
     email = "journey3@example.com"
     reg = await ac.post(
@@ -261,7 +264,7 @@ async def test_full_journey_register_login_create_credential_create_sync_config(
 
 @pytest.mark.asyncio
 async def test_full_journey_register_create_identity_and_team(journey_app):
-    ac, current_user, session_maker = journey_app
+    ac, current_user, session_maker, ch_store = journey_app
 
     email = "journey4@example.com"
     reg = await ac.post(
@@ -285,18 +288,9 @@ async def test_full_journey_register_create_identity_and_team(journey_app):
         is_superuser=False,
     )
 
-    identity_resp = await ac.post(
-        "/api/v1/admin/identities",
-        json={
-            "canonical_id": "alice@example.com",
-            "display_name": "Alice Smith",
-            "email": "alice@example.com",
-            "provider_identities": {"github": ["alice-gh"]},
-            "team_ids": [],
-        },
-    )
-    assert identity_resp.status_code == 200
-
+    # CHAOS-2600 CS5: the admin team/identity surface writes ClickHouse, not
+    # Postgres. The identity is created first and linked to the team below so
+    # its facets land in the ClickHouse team ``members``.
     team_resp = await ac.post(
         "/api/v1/admin/teams",
         json={
@@ -307,33 +301,35 @@ async def test_full_journey_register_create_identity_and_team(journey_app):
         },
     )
     assert team_resp.status_code == 200
+    team_body = team_resp.json()
+    assert team_body["team_id"] == "backend-team"
+    assert team_body["name"] == "Backend Team"
 
-    async with session_maker() as session:
-        identity_result = await session.execute(
-            select(IdentityMapping).where(
-                IdentityMapping.canonical_id == "alice@example.com",
-                IdentityMapping.org_id == reg_data["org_id"],
-            )
-        )
-        identity = identity_result.scalar_one_or_none()
+    identity_resp = await ac.post(
+        "/api/v1/admin/identities",
+        json={
+            "canonical_id": "alice@example.com",
+            "display_name": "Alice Smith",
+            "email": "alice@example.com",
+            "provider_identities": {"github": ["alice-gh"]},
+            "team_ids": ["backend-team"],
+        },
+    )
+    assert identity_resp.status_code == 200
+    identity_body = identity_resp.json()
+    assert identity_body["display_name"] == "Alice Smith"
+    assert identity_body["team_ids"] == ["backend-team"]
 
-        team_result = await session.execute(
-            select(TeamMapping).where(
-                TeamMapping.team_id == "backend-team",
-                TeamMapping.org_id == reg_data["org_id"],
-            )
-        )
-        team = team_result.scalar_one_or_none()
-
-    assert identity is not None
-    assert identity.display_name == "Alice Smith"
-    assert team is not None
-    assert team.name == "Backend Team"
+    # The team exists in ClickHouse and the identity's facets were unioned into
+    # its member list.
+    team_row = ch_store.rows[(reg_data["org_id"], "backend-team")]
+    assert team_row["name"] == "Backend Team"
+    assert set(team_row["members"]) == {"alice@example.com", "alice-gh"}
 
 
 @pytest.mark.asyncio
 async def test_register_duplicate_email_rejected(journey_app):
-    ac, _, session_maker = journey_app
+    ac, _, session_maker, _ = journey_app
 
     email = "journey5@example.com"
     first = await ac.post(

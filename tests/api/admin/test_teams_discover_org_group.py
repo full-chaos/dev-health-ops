@@ -40,7 +40,6 @@ from dev_health_ops.models.git import Base
 from dev_health_ops.models.settings import (
     IntegrationCredential,
     SyncConfiguration,
-    TeamMapping,
 )
 from dev_health_ops.models.users import Membership, Organization, User
 from tests._helpers import tables_of
@@ -52,7 +51,6 @@ _TABLES = tables_of(
     User,
     Organization,
     Membership,
-    TeamMapping,
     IntegrationCredential,
     SyncConfiguration,
 )

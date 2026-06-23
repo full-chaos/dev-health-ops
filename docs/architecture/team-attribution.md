@@ -28,7 +28,161 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 
 ---
 
+## 0. Target state (CHAOS-2600) — ClickHouse-only team attribution
+
+> **Governing target contract.** This §0 is the source of truth for the intended model and the
+> debugging navigation aid; **new code must follow it.** It is implemented across CHAOS-2600
+> CS1–CS7 — the ClickHouse enum widening lands in **CS1** (see *Schema prerequisite* below), the
+> precedence tests are inverted in **CS2**, and the legacy Postgres bridge path is removed in
+> **CS5/CS6**. Until then, §1 below still describes the live (pre-CHAOS-2600) cascade and the
+> existing tests still encode the old precedence.
+
+> **CS6 reality (CHAOS-2607).** ClickHouse is the system of record for **both** the team
+> catalog **and** identity→team membership. As of CS6 the Postgres `team_mappings` / `identity_mappings`
+> tables and models are **deleted** (Alembic `0020`), along with the `TeamMappingService` /
+> `IdentityMappingService` / `TeamDriftSyncService` classes, the `sync-team-drift` /
+> `reconcile-team-members` tasks, and the Postgres-backed drift engine. (The four admin drift-review
+> endpoints remain as HTTP 501 stubs until CS7 removes them with the web caller — CHAOS-2608.) (CS5 had already deleted the
+> Postgres→ClickHouse team bridge `providers/team_bridge.py` and `providers/team_reconcile.py`.) Admin
+> team/identity CRUD goes through `ClickHouseTeamAdminService` + `ClickHouseIdentityStore`, writing the
+> ClickHouse `teams` and `identities` tables directly. Identity membership uses **surgical replacement**
+> semantics: updating an identity removes its facets from teams it left and replaces changed facets in
+> teams it stayed in, editing `teams.members` add/remove-by-facet (never a full recompute) so Auto
+> Import / catalog members are preserved. See *CS6 status (CHAOS-2607)* at the end of §4.
+
+**ClickHouse is the only source used for analytics attribution. Postgres does not store or resolve
+team attribution mappings.** Manual mappings are ClickHouse fallback records only — never overrides,
+never outranking WTI-native facts. PR/MR attribution comes from an **actual linked issue donor**; an
+external issue-key *prefix* alone is not linked-issue inheritance.
+
+Every final attribution carries provenance: `org_id, work_item_id, provider, team_id, team_name,
+source, confidence, evidence, is_primary, computed_at`.
+`source ∈ {native_team, issue_project, project_ownership, repo_ownership, assignee_membership,
+linked_issue, manual_fallback, unassigned}`; `confidence ∈ {high, medium, low, manual, none}`.
+
+> **Schema prerequisite (CS1).** The `issue_project` / `manual_fallback` sources and the `manual` /
+> `none` confidence values require the ClickHouse `Enum8` widening on `work_item_team_attributions`
+> (migration 053) to land **before** any resolver emits them — emitting an unknown enum value fails
+> the insert. This is CHAOS-2600 ordering rule §4.1: migrate enums (CS1) → then emit (CS2/CS3).
+
+### 0.1 Resolution decision tree
+
+Resolution is **staged by precedence**. The resolver evaluates the applicable sources and persists
+**all** matching ones as candidates; the *winner* (`is_primary`) is the highest-precedence source
+present. "Wins" means *primary selection* — it does not mean lower-precedence sources go
+unevaluated or unrecorded. **To debug:** read `team_attribution_source` (the winner) from
+provenance, jump to that node, and verify no higher-precedence stage matched.
+
+```mermaid
+flowchart TD
+    Start(["Work item"]) --> COLLECT["Evaluate EVERY applicable source → persist a candidate row per match (provenance).<br/>The linked_issue candidate requires a real work_item_dependencies donor row resolving to a team;<br/>a bare issue-key prefix produces NO linked_issue candidate (it may match a manual_fallback instead)."]
+    COLLECT --> SEL{{"Select winner: is_primary = the highest-precedence candidate present"}}
+    SEL --> NT{"0 · native_team candidate?"}
+    NT -->|"yes"| Win["is_primary = matched source"]
+    NT -->|"no"| IP{"1 · issue_project candidate?"}
+    IP -->|"yes"| Win
+    IP -->|"no"| PO{"2 · project_ownership candidate?"}
+    PO -->|"yes"| Win
+    PO -->|"no"| RO{"3 · repo_ownership candidate?"}
+    RO -->|"yes"| Win
+    RO -->|"no"| AM{"4 · assignee_membership candidate?"}
+    AM -->|"yes"| Win
+    AM -->|"no"| LK{"5 · linked_issue candidate?<br/>(real donor row resolving to a team)"}
+    LK -->|"yes"| Win
+    LK -->|"no"| MF{"6 · manual_fallback candidate?<br/>repo / project / member / issue_key_prefix"}
+    MF -->|"yes"| Win
+    MF -->|"no"| UN["is_primary = unassigned (7)"]
+    Win --> P["Persist work_item_team_attributions:<br/>ALL candidate rows; is_primary on the winner"]
+    UN --> P
+    P --> API["Expose source / confidence / evidence via GraphQL"]
+    API --> UI["Frontend renders only — no recompute"]
+```
+
+**Invariants:** the **winner is the highest-precedence matching source** (all matching sources are
+still persisted as candidates — precedence decides `is_primary`, not which sources are computed);
+`linked_issue` (5) requires a real `work_item_dependencies` donor row resolving to a `work_items`
+row whose **own team came from a first-class fact (sources 0–4)** — a donor resolved only by
+`manual_fallback` is NOT a valid donor, so a bare prefix can never be laundered into rank-5
+inheritance (it falls through to 6); `manual_fallback` (6) can only beat `unassigned`; a whole org
+at `unassigned` usually means the ClickHouse `teams` dimension is empty.
+
+### 0.2 Source reference matrix
+
+| # | `source` | Resolves from (ClickHouse) | Confidence | Beats | Never overrides | Evidence keys |
+|--:|---|---|---|---|---|---|
+| 0 | `native_team` | `WorkItem.native_team_key` → `teams` | high | all below | — (top) | `native_team_key` |
+| 1 | `issue_project` | native issue project → owning team | high | 2–7 | 0 | `project_id, owner_team` |
+| 2 | `project_ownership` | `team_project_ownership` | high | 3–7 | 0–1 | `project_id, provider` |
+| 3 | `repo_ownership` | `team_repo_ownership` | medium | 4–7 | 0–2 | `repo_full_name` |
+| 4 | `assignee_membership` | `team_memberships` (assignee identity) | medium | 5–7 | 0–3 | `member_id, identity` |
+| 5 | `linked_issue` | `work_item_dependencies` donor → donor's team | medium | 6–7 | 0–4 | `dependency_type, donor_work_item_id, donor_provider` |
+| 6 | `manual_fallback` | `manual_attribution_fallbacks` (repo/project/member/issue_key_prefix) | manual\|low | 7 only | 0–5 | `scope_type, scope_id, reason` |
+| 7 | `unassigned` | — (nothing matched) | none | — (floor) | — | `reason` |
+
+### 0.3 Off-the-rails matrix (symptom → diagnosis → fix)
+
+| Symptom | Likely stage | Diagnose | Fix |
+|---|---|---|---|
+| A whole org is `unassigned` | 7 (floor) | `get_all_teams()` empty? CH `teams` populated for `org_id`? | re-home teams population; verify daily-chain order |
+| PR attributed to a surprising team via `linked_issue` | 5 | which `work_item_dependencies` edge? donor's own team? extkey ambiguous? | confirm donor row + `_canonical_target`; check `_INHERITABLE_RELATIONSHIP_TYPES` |
+| `manual_fallback` beats a real team | precedence | `_SOURCE_ORDER` has `manual_fallback=6`? loader merging manual at the wrong rank? | restore rank — manual is the lowest non-unassigned tier |
+| A bare prefix (e.g. `CHAOS`) attributes as `linked_issue` | 5 vs 6 | did a full key resolve to a real `work_items` row, or did a prefix shortcut leak in? | no prefix→team in `linked_issue`; route to manual `issue_key_prefix` |
+| A PR inherits via `linked_issue` from a donor that only has a `manual_fallback` (e.g. `issue_key_prefix`) rule | 5 (donor) | is the donor's *primary* source in 0–4? a rank-6 fallback must never be relabeled rank-5 | donors gated to `_DONOR_SOURCES` (0–4) in `build_linked_issue_team_resolver`; a manual-only donor is never a linked_issue donor (done CS3) |
+| Same scope shows duplicate ownership candidates / bloats over time | RMT read | `valid_from` is in the ownership tables' `ORDER BY`, so `FINAL` cannot collapse re-imports (each daily run is a new sort key) | reads dedup per *logical* scope via `argMax((updated_at, valid_from))`, NOT `FINAL` (done CS3, `load_team_attribution_context`); manual-fallback read keeps `FINAL` (its sort key has no `valid_from`) |
+| Team flips / stale team lingers after a re-org | write side | ownership writers set `valid_from=now` but never `valid_to`, so a reassigned scope keeps the old-team row active; readers can't tell stale from co-ownership | needs writer-side `valid_to` expiry on re-derivation — tracked **CHAOS-2610** (read-side `argMax` already makes the newest the primary by recency tiebreak) |
+| `manual_fallback` resolves the wrong team | scope match | which `manual_attribution_fallbacks` row matched (repo/project/member/issue_key_prefix)? | check `_manual_fallback_candidates` scope match + rule `priority`; manual is rank 6 (done CS3) |
+| Provenance absent in the API | GraphQL | resolver SELECTs the provenance columns? SDL has the fields? | expose `source/confidence/evidence` |
+| Web shows a different team than the backend | client recompute | any client-side mapping derived from `evidence`? | render-only; delete client derivation |
+
+> Full data-flow and data-object-hierarchy diagrams: see the CHAOS-2600 plan §1.6–1.7 / `team-flow.md`.
+
+### 0.4 Provider coverage contract (attribution is provider-agnostic)
+
+Attribution is **provider-agnostic** — the resolver and precedence (§0.1) never branch on provider.
+That is a **testable contract**: every WTI provider × every normalized entity must be covered, not
+just Linear. **Attribution changes MUST keep this matrix green; never add Linear-only coverage.**
+
+| provider \ entity | teams | projects | members | issues |
+|---|---|---|---|---|
+| jira   | partial | partial | partial | yes |
+| gitlab | partial | yes     | **no**  | yes |
+| github | yes     | n/a¹    | yes     | yes |
+| linear | yes     | partial | yes     | yes |
+
+`yes` = normalized in src AND asserted in tests · `partial` = only sink/integration assertion (no
+unit test of the normalizer) · `no` = normalized but output never asserted · `n/a` = provider does
+not natively produce this entity. ¹ GitHub has no native Project entity (the repo is the scope).
+
+- **Resolver row (CS2):** the precedence resolver (`resolve_team_attribution`) is exercised for all
+  four providers — Linear (`test_issue_project_wins_over_linked_issue`,
+  `test_assignee_membership_wins_over_linked_issue`), GitHub (`gh:` items in
+  `test_project_ownership_wins_over_linked_issue` / `test_repo_ownership_wins_over_linked_issue`),
+  GitLab (`test_gitlab_mr_resolver_precedence_with_gitlab_donor` — MR as item + GitLab issue as
+  same-provider donor), Jira (`test_jira_issue_project_wins_over_linked_issue`,
+  `test_assignee_membership_wins_over_jira_linked_donor`). (Provider *link-capture* — distinct from
+  the resolver — is also tested per provider, e.g. `test_gitlab_captures_external_key_*`.)
+- **Why it matters:** the team/project/member **dimension** is populated by the per-provider
+  team/project/member sync. **"Auto Import" is a UX option** (checkboxes to import teams, projects,
+  and members from an integration → `run_team_autoimport`, writing ClickHouse directly); manual
+  fallback is the separate explicit-override option. Because jira/github/gitlab work items carry
+  `native_team_key = None` (only Linear sets it real), non-Linear attribution depends *entirely* on
+  this dimension — so its coverage cells are the highest-risk. (CHAOS-2600 does not change these
+  sync ops; CS5 removes only the Postgres bridge.)
+- **Open gaps → CHAOS-2609 (CS-COV):** the dimension has holes — **gitlab/members normalized but
+  never asserted (high)**, gitlab epics untested (high), jira team/project/member sink-only
+  (medium), linear native projects not ingested (medium). Until those land, do **not** assume
+  non-Linear dimension coverage. The matrix above is the source of truth for what is/ isn't proven.
+
+---
+
 ## 1. Attribution cascade (decision flow)
+
+> **Implemented model: see §0 (CHAOS-2600).** As of CS2 the resolver applies the 8-source staged
+> precedence in §0 (`native_team > issue_project > project_ownership > repo_ownership >
+> assignee_membership > linked_issue > manual_fallback > unassigned`) — `linked_issue` is now a true
+> fallback below ownership/assignee, and the issue's own project key resolves as `issue_project`.
+> The 4-tier cascade below predates that change and is kept for historical context; where they
+> differ, **§0 governs**.
 
 `resolve_base_team()` runs tiers 1–3; the linked-issue resolver is tier 4. The
 first match wins and nothing ever overrides a real team.
@@ -39,7 +193,7 @@ flowchart TD
     B -- match --> T["team_id"]
     B -- miss --> C{"Tier 2: retry with project_key<br/>(Linear TEAM key)"}
     C -- match --> T
-    C -- miss --> D{"Tier 3: TeamResolver<br/>assignee in IdentityMapping?"}
+    C -- miss --> D{"Tier 3: assignee membership<br/>assignee in ClickHouse teams.members?"}
     D -- match --> T
     D -- miss --> E{"Tier 4: LinkedIssueTeamResolver<br/>linked donor issue has a team?"}
     E -- match --> T
@@ -203,8 +357,7 @@ flowchart LR
 
     D1 --> D2 --> D3 --> D4 --> D5
 
-    CH[("ClickHouse:<br/>work_items,<br/>work_item_dependencies,<br/>work_item_cycle_times")]
-    PG[("Postgres:<br/>TeamMapping,<br/>IdentityMapping")]
+    CH[("ClickHouse:<br/>work_items, work_item_dependencies,<br/>work_item_cycle_times,<br/>teams, identities")]
 
     S2 -->|write| CH
     S3 -->|read| CH
@@ -213,9 +366,18 @@ flowchart LR
     D2 -->|read| CH
     D3 -->|read| CH
     D5 -->|write| CH
-    PG -. team resolvers .-> S4
-    PG -. team resolvers .-> D4
+    CH -. team resolvers .-> S4
+    CH -. team resolvers .-> D4
 ```
+
+> **No Postgres in the team/identity path (CHAOS-2600).** The team resolvers read ClickHouse
+> `teams` / `identities` (and the ownership dimensions). The Postgres `team_mappings` /
+> `identity_mappings` tables and their models/services were dropped in CS6 (CHAOS-2607); the
+> Postgres→ClickHouse bridge (`team_bridge.py`), `team_reconcile.py`, the `sync-team-drift` /
+> `reconcile-team-members` tasks are all deleted; the four admin drift-review endpoints remain as HTTP
+> 501 stubs until CS7 (CHAOS-2608). Admin
+> team/identity CRUD writes ClickHouse via `ClickHouseTeamAdminService` / `ClickHouseIdentityStore`;
+> identity membership is edited surgically (add/remove-by-facet) so Auto Import members are preserved.
 
 **Key boundary differences**
 
@@ -263,6 +425,32 @@ does not collapse to `unassigned`.
 > standalone `job_daily` recompute between syncs can keep honoring it until the
 > next sync re-extracts the source. A link-lifecycle/tombstone (which also
 > affects the work-graph) is a tracked follow-up.
+
+### CS6 status (CHAOS-2607)
+
+- **Drift-review implementation is removed; endpoints kept as 501 stubs.** The Postgres-backed drift
+  engine (`TeamDriftSyncService` + the `TeamMapping` flagged-changes substrate) is **deleted** in CS6.
+  The four admin drift-review endpoints (`GET /teams/pending-changes`,
+  `POST /teams/{id}/approve-changes`, `/dismiss-changes`, `POST /teams/trigger-drift-sync`) **remain as
+  HTTP 501 compatibility stubs** so the web admin keeps getting a clean 501; they are removed together
+  with the web caller (`PendingChangesPanel`) in CS7 — see **CHAOS-2608**. A ClickHouse-backed
+  drift-review rebuild is tracked separately by **CHAOS-2622**.
+- **Postgres mapping deletion is done.** The `TeamMappingService` / `IdentityMappingService` /
+  `TeamDriftSyncService` classes, the dead `JiraActivityInferenceService.match_and_confirm` /
+  `TeamMembershipService.confirm_links` paths, the `sync-team-drift` / `reconcile-team-members` tasks,
+  and the Postgres `TeamMapping` / `IdentityMapping` models + tables are all **deleted in CS6** (Alembic
+  `0020` drops the tables).
+- **Known limitations.** (1) `ClickHouseTeamAdminService.add_members` has a read-modify-write
+  lost-update window under concurrent admin edits (deferred — admin surface is low-concurrency).
+  (2) The surgical facet remove can rarely over-remove a **shared facet** when two distinct
+  identities share a facet value and one is updated — for a shared **`email`** (the common case,
+  e.g. two records carrying the same address) or, for email-less identities, a shared
+  **`display_name`**; provider-ids (which are unique per identity, enforced by the confirm-path
+  409 check) are unaffected. Deferred — same low-concurrency bucket as the lost-update.
+  (3) Confirm-path membership writes are **non-transactional across teams**: ClickHouse has no
+  multi-statement transactions, so the two-pass design makes only the **validation** all-or-nothing
+  (a 409/404 leaves zero mutations). A ClickHouse error *mid-apply* (PASS 2) returns 500 with a
+  possible partial `team.members` / identity-record update; re-running the confirm is idempotent.
 
 ---
 

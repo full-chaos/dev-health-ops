@@ -114,16 +114,31 @@ async def write_batch(records: List[Model], session: AsyncSession) -> int:
 > See [Team Attribution](team-attribution.md) for the full architecture with
 > sequence, flowchart, ER, and component diagrams.
 
-Every work item is stamped with a `team_id` at compute time
-(`metrics/compute_work_items.py`). Resolution is a fallback cascade
+> **CHAOS-2600 (current model):** the implemented precedence is the 8-source staged model in
+> [team-attribution.md §0](team-attribution.md) (`native_team > issue_project > project_ownership >
+> repo_ownership > assignee_membership > linked_issue > manual_fallback > unassigned`), resolved
+> **query-time from ClickHouse** — the team catalog (`teams`), the team→project / team→repo ownership
+> dimensions, and identity→team membership (the ClickHouse `identities` table). There is **no live
+> Postgres** team or identity-membership lookup.
+>
+> **The numbered list below is HISTORICAL** (the pre-CHAOS-2600 4-tier cascade) and is kept only for
+> orientation. In particular, the assignee-membership tier no longer reads `IdentityMapping.team_ids`
+> from Postgres — that path is dead (dropped in CS6); membership is matched against ClickHouse
+> `teams.members` / the `identities` table. `linked_issue` is a true fallback **below** ownership and
+> assignee membership, not above them.
+
+Historically, every work item was stamped with a `team_id` at compute time
+(`metrics/compute_work_items.py`) via a fallback cascade
 (`resolve_base_team` + one inheritance tier), first match wins:
 
 1. **Scope key** — `ProjectKeyTeamResolver.resolve(work_scope_id)`: the Jira
    project key, GitHub/GitLab repo path, or Linear project name.
 2. **Project key** — retry with `WorkItem.project_key` (Linear's TEAM key,
    which differs from the project name when an issue sits in a project).
-3. **Assignee membership** — `TeamResolver` maps the primary assignee's
-   canonical identity to a team via `IdentityMapping.team_ids`.
+3. **Assignee membership** — `TeamResolver` mapped the primary assignee's
+   canonical identity to a team. *(Historical: this read `IdentityMapping.team_ids`
+   from Postgres; CS5 resolves assignee membership from ClickHouse
+   `teams.members` / the `identities` table instead.)*
 4. **Linked-issue inheritance** — `LinkedIssueTeamResolver`: an item that
    still resolved to no team borrows the team of an issue it links to via
    `work_item_dependencies`. This is **provider-agnostic** — a GitHub/GitLab

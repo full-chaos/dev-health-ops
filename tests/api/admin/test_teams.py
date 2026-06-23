@@ -3,19 +3,17 @@ from __future__ import annotations
 import importlib
 import uuid
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.git import Base
-from dev_health_ops.models.settings import TeamMapping
 from dev_health_ops.models.users import Membership, Organization, User
+from tests._clickhouse_team_store import FakeClickHouseTeamStore
 from tests._helpers import tables_of
 
 admin_router_module = importlib.import_module("dev_health_ops.api.admin")
@@ -31,7 +29,7 @@ async def session_maker(tmp_path: Path):
         await conn.run_sync(
             lambda sync_conn: Base.metadata.create_all(
                 sync_conn,
-                tables=tables_of(User, Organization, Membership, TeamMapping),
+                tables=tables_of(User, Organization, Membership),
             )
         )
 
@@ -60,11 +58,10 @@ async def seeded_state(session_maker):
 
 
 @pytest_asyncio.fixture
-async def client(monkeypatch, session_maker, seeded_state):
-    mock_sync = MagicMock()
-    monkeypatch.setattr(
-        "dev_health_ops.workers.product_tasks.sync_teams_to_analytics", mock_sync
-    )
+async def client(session_maker, seeded_state):
+    # CHAOS-2600 CS5: the admin team catalog is ClickHouse-backed; the admin
+    # endpoints read/write a ClickHouse store via get_clickhouse_store.
+    ch_store = FakeClickHouseTeamStore()
 
     app = FastAPI()
     app.include_router(admin_router_module.router)
@@ -73,6 +70,9 @@ async def client(monkeypatch, session_maker, seeded_state):
         async with session_maker() as session:
             yield session
             await session.commit()
+
+    async def _ch_store_override():
+        yield ch_store
 
     admin_user = AuthenticatedUser(
         user_id=seeded_state["user_id"],
@@ -84,10 +84,13 @@ async def client(monkeypatch, session_maker, seeded_state):
 
     app.dependency_overrides[auth_router_module.get_current_user] = lambda: admin_user
     app.dependency_overrides[admin_router_module.get_session] = _session_override
+    app.dependency_overrides[admin_router_module.get_clickhouse_store] = (
+        _ch_store_override
+    )
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as async_client:
-        yield async_client, seeded_state, mock_sync
+        yield async_client, seeded_state, ch_store
 
     app.dependency_overrides.clear()
 
@@ -125,8 +128,8 @@ async def test_create_team_returns_response_shape(client):
 
 
 @pytest.mark.asyncio
-async def test_create_team_persists_to_db(client, session_maker):
-    async_client, seeded_state, _ = client
+async def test_create_team_persists_to_clickhouse(client):
+    async_client, seeded_state, ch_store = client
     payload = {
         "team_id": "frontend-team",
         "name": "Frontend Team",
@@ -137,33 +140,12 @@ async def test_create_team_persists_to_db(client, session_maker):
     response = await async_client.post("/api/v1/admin/teams", json=payload)
     assert response.status_code == 200
 
-    async with session_maker() as session:
-        result = await session.execute(
-            select(TeamMapping).where(
-                TeamMapping.team_id == "frontend-team",
-                TeamMapping.org_id == seeded_state["org_id"],
-            )
-        )
-        team = result.scalar_one_or_none()
-
-    assert team is not None
-    assert team.name == "Frontend Team"
-    assert team.description == "Handles UI work"
-    assert team.is_active is True
-
-
-@pytest.mark.asyncio
-async def test_create_team_triggers_celery_sync(client):
-    async_client, _, mock_sync = client
-    payload = {
-        "team_id": "ops-team",
-        "name": "Ops Team",
-        "repo_patterns": [],
-        "project_keys": [],
-    }
-    response = await async_client.post("/api/v1/admin/teams", json=payload)
-    assert response.status_code == 200
-    mock_sync.apply_async.assert_called_once()
+    row = ch_store.rows[(seeded_state["org_id"], "frontend-team")]
+    assert row["name"] == "Frontend Team"
+    assert row["description"] == "Handles UI work"
+    assert row["is_active"] == 1
+    assert row["repo_patterns"] == ["frontend/*"]
+    assert row["project_keys"] == ["FRONT"]
 
 
 @pytest.mark.asyncio
@@ -212,11 +194,13 @@ async def test_update_team_description(client):
     data = update_response.json()
     assert data["description"] == "New description"
     assert data["team_id"] == "infra-team"
+    # Name is preserved across a partial update.
+    assert data["name"] == "Infra Team"
 
 
 @pytest.mark.asyncio
 async def test_delete_team(client):
-    async_client, _, _ = client
+    async_client, seeded_state, ch_store = client
     create_payload = {
         "team_id": "temp-team",
         "name": "Temp Team",
@@ -231,6 +215,7 @@ async def test_delete_team(client):
     delete_response = await async_client.delete("/api/v1/admin/teams/temp-team")
     assert delete_response.status_code == 200
     assert delete_response.json() == {"deleted": True}
+    assert (seeded_state["org_id"], "temp-team") not in ch_store.rows
 
 
 @pytest.mark.asyncio
@@ -271,8 +256,8 @@ async def test_list_teams_returns_multiple_teams(client):
 
 
 @pytest.mark.asyncio
-async def test_import_teams_creates_team_mappings(client, session_maker):
-    async_client, seeded_state, mock_sync = client
+async def test_import_teams_creates_clickhouse_teams(client):
+    async_client, seeded_state, ch_store = client
     payload = {
         "teams": [
             {
@@ -297,14 +282,49 @@ async def test_import_teams_creates_team_mappings(client, session_maker):
     assert data["skipped"] == 0
     assert "details" in data
 
-    async with session_maker() as session:
-        result = await session.execute(
-            select(TeamMapping).where(TeamMapping.org_id == seeded_state["org_id"])
-        )
-        teams = result.scalars().all()
+    org_id = seeded_state["org_id"]
+    # GitHub-discovered teams are stored under the gh: provider-prefixed id.
+    names = {
+        ch_store.rows[(org_id, "gh:backend")]["name"],
+        ch_store.rows[(org_id, "gh:frontend")]["name"],
+    }
+    assert names == {"Backend Squad", "Frontend Squad"}
 
-    assert len(teams) == 2
-    team_names = {t.name for t in teams}
-    assert "Backend Squad" in team_names
-    assert "Frontend Squad" in team_names
-    mock_sync.apply_async.assert_called()
+
+@pytest.mark.asyncio
+async def test_admin_created_team_has_empty_provider(client):
+    async_client, seeded_state, ch_store = client
+    response = await async_client.post(
+        "/api/v1/admin/teams",
+        json={
+            "team_id": "manual-team",
+            "name": "Manual Team",
+            "repo_patterns": [],
+            "project_keys": [],
+        },
+    )
+    assert response.status_code == 200
+    # Admin teams are not provider-owned (provider="" / native_team_key=None) so
+    # a later auto-import does not silently reclaim them. The fake store keeps
+    # only the projected columns; assert the row exists and is active.
+    row = ch_store.rows[(seeded_state["org_id"], "manual-team")]
+    assert row["is_active"] == 1
+
+
+@pytest.mark.asyncio
+async def test_drift_review_endpoints_disabled_501(client):
+    # The team drift-review surface is disabled (HTTP 501), not faked as success
+    # and not falling through to GET /teams/{team_id} (which would 404). The
+    # ClickHouse-backed rebuild is tracked by CHAOS-2622. These stubs keep the
+    # dev-health-web admin contract a clean 501 until CS7 removes both sides.
+    async_client, _, _ = client
+    calls = [
+        ("get", "/api/v1/admin/teams/pending-changes"),
+        ("post", "/api/v1/admin/teams/some-team/approve-changes"),
+        ("post", "/api/v1/admin/teams/some-team/dismiss-changes"),
+        ("post", "/api/v1/admin/teams/trigger-drift-sync"),
+    ]
+    for method, url in calls:
+        response = await getattr(async_client, method)(url)
+        assert response.status_code == 501, (method, url)
+        assert "CHAOS-2622" in response.json()["detail"], (method, url)

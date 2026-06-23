@@ -8,11 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
 from dev_health_ops.db import (
-    get_postgres_session,
-    resolve_db_uri,
     resolve_sink_uri,
 )
 from dev_health_ops.models.teams import Team
@@ -656,24 +652,40 @@ def sync_teams(ns: argparse.Namespace) -> int:
                 provider,
                 reason,
             )
-        # Org-scoped path: provider -> Postgres TeamMapping -> bridge_teams_to_clickhouse.
-        # Never write ClickHouse directly; the bridge reads from Postgres so the
-        # semantic layer is always the source of truth for org-scoped teams.
+        # Org-scoped path: write teams DIRECTLY to ClickHouse, the system of
+        # record. ClickHouse is org-scoped via ``store.org_id`` so the rows
+        # carry the org tag. No Postgres TeamMapping projection is involved.
         validate_sink(ns)
         db_uri = resolve_sink_uri(ns)
-        postgres_db_uri = resolve_db_uri(ns)
-        postgres_bridge_count: int = 0
-        try:
-            projection_result = asyncio.run(_project_teams_to_postgres(teams_data, ns))
-            postgres_bridge_count = int(projection_result.get("projected", 0) or 0)
-        except Exception as e:  # noqa: BLE001 - projection failures must affect exit code
-            logging.error("Failed to project teams to PostgreSQL: %s", e)
-            postgres_bridge_count = 0
+        org_id_str = str(org_id)
 
-        if postgres_bridge_count <= 0:
+        async def _org_handler() -> int:
+            from dev_health_ops.storage.clickhouse import ClickHouseStore
+
+            async with ClickHouseStore(db_uri) as store:
+                store.org_id = org_id_str
+                for team in teams_data:
+                    setattr(team, "org_id", org_id_str)
+                await store.insert_teams(teams_data)
+                if ops_links:
+                    await store.insert_jira_project_ops_team_links(ops_links)
+                    logging.info(
+                        "Synced %d jira project ops team links to ClickHouse (org=%s).",
+                        len(ops_links),
+                        org_id,
+                    )
+                return await _count_persisted_teams(store, teams_data)
+
+        try:
+            persisted_count = asyncio.run(_org_handler())
+        except Exception as e:  # noqa: BLE001 - write failures must affect exit code
+            logging.error("Failed to write teams to ClickHouse (org=%s): %s", org_id, e)
+            return 1
+
+        if persisted_count <= 0:
             message = (
-                "No teams were persisted to PostgreSQL TeamMapping "
-                f"(org={org_id}, count={postgres_bridge_count})."
+                "No teams were persisted to ClickHouse "
+                f"(org={org_id}, count={persisted_count})."
             )
             if getattr(ns, "allow_empty", False):
                 logging.warning(message)
@@ -683,40 +695,9 @@ def sync_teams(ns: argparse.Namespace) -> int:
             )
             return 1
 
-        # Bridge Postgres TeamMapping -> ClickHouse.
-        try:
-            from dev_health_ops.providers.team_bridge import bridge_teams_to_clickhouse
-
-            bridge_teams_to_clickhouse(
-                org_id=org_id,
-                db_url=db_uri,
-                postgres_db_url=postgres_db_uri,
-            )
-            logging.info(
-                "Bridged %d teams from PostgreSQL to ClickHouse (org=%s).",
-                postgres_bridge_count,
-                org_id,
-            )
-            if ops_links:
-                import asyncio
-
-                from dev_health_ops.storage.clickhouse import ClickHouseStore
-
-                async def _insert_ops_links() -> None:
-                    async with ClickHouseStore(db_uri) as store:
-                        store.org_id = str(org_id)
-                        await store.insert_jira_project_ops_team_links(ops_links)
-
-                asyncio.run(_insert_ops_links())
-                logging.info(
-                    "Synced %d jira project ops team links to ClickHouse (org=%s).",
-                    len(ops_links),
-                    org_id,
-                )
-        except Exception as e:  # noqa: BLE001 - bridge failures must affect exit code
-            logging.error("bridge_teams_to_clickhouse failed (org=%s): %s", org_id, e)
-            return 1
-
+        logging.info(
+            "Synced %d teams directly to ClickHouse (org=%s).", persisted_count, org_id
+        )
         return 0
 
     # No-org path: write directly to ClickHouse (unchanged).
@@ -774,36 +755,6 @@ async def _count_persisted_teams(store: Any, teams_data: list) -> int:
         if not org_id or str(getattr(team, "org_id", "") or "") == str(org_id)
     } - {""}
     return len(expected_ids & persisted_ids)
-
-
-async def _project_teams_to_postgres(
-    teams_data: list, ns: argparse.Namespace
-) -> dict[str, Any]:
-    from dev_health_ops.api.services.configuration.team_drift_sync import (
-        TeamDriftSyncService,
-    )
-
-    org_id = getattr(ns, "org", None)
-    if org_id is None:
-        return {"projected": 0}
-    provider = str(getattr(ns, "provider", "config") or "config").lower()
-    if getattr(ns, "db", None):
-        engine = create_async_engine(resolve_db_uri(ns))
-        factory = async_sessionmaker(engine, expire_on_commit=False)
-        try:
-            async with factory() as session:
-                result = await TeamDriftSyncService(
-                    session, str(org_id)
-                ).project_provider_teams(provider, teams_data)
-                await session.commit()
-                return result
-        finally:
-            await engine.dispose()
-
-    async with get_postgres_session() as session:
-        return await TeamDriftSyncService(session, str(org_id)).project_provider_teams(
-            provider, teams_data
-        )
 
 
 def register_commands(sync_subparsers: argparse._SubParsersAction) -> None:

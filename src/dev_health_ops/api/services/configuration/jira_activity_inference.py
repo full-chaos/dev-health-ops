@@ -14,11 +14,9 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ._helpers import _get_jira_activity_schema_classes
-from .identity_mapping import IdentityMappingService
 
 if TYPE_CHECKING:
     from dev_health_ops.api.admin.schemas import (
-        ConfirmInferredMemberAction,
         InferredMember,
     )
 
@@ -147,93 +145,3 @@ class JiraActivityInferenceService:
             inferred_members,
             key=lambda member: (-member.activity_count, member.account_id),
         )
-
-    async def match_and_confirm(
-        self,
-        team_id: str,
-        members: list[ConfirmInferredMemberAction],
-    ) -> dict[str, int]:
-        identity_svc = IdentityMappingService(self.session, self.org_id)
-
-        linked = 0
-        created = 0
-        skipped = 0
-
-        for member in members:
-            action = getattr(member, "action", None)
-            account_id = str(getattr(member, "account_id", ""))
-            if action == "skip":
-                skipped += 1
-                continue
-            if action != "add" or not account_id:
-                skipped += 1
-                continue
-
-            existing_by_provider = await identity_svc.find_by_provider_identity(
-                "jira", account_id
-            )
-
-            canonical_id = getattr(member, "canonical_id", None)
-            if existing_by_provider is not None and not canonical_id:
-                raise ValueError(
-                    f"canonical_id is required for existing Jira identity '{account_id}'"
-                )
-
-            if canonical_id:
-                mapping: Any | None = await identity_svc.get(canonical_id)
-                if mapping is None:
-                    raise ValueError(f"Identity '{canonical_id}' not found")
-                if (
-                    existing_by_provider is not None
-                    and existing_by_provider.canonical_id != canonical_id
-                ):
-                    raise ValueError(
-                        f"Jira identity '{account_id}' is linked to a different canonical identity"
-                    )
-
-                provider_identities = dict(mapping.provider_identities or {})
-                jira_identities = list(provider_identities.get("jira", []))
-                if account_id not in jira_identities:
-                    jira_identities.append(account_id)
-                provider_identities["jira"] = jira_identities
-
-                team_ids = list(mapping.team_ids or [])
-                if team_id not in team_ids:
-                    team_ids.append(team_id)
-
-                mapped_display_name = (
-                    str(mapping.display_name)
-                    if getattr(mapping, "display_name", None) is not None
-                    else None
-                )
-                mapped_email = (
-                    str(mapping.email)
-                    if getattr(mapping, "email", None) is not None
-                    else None
-                )
-
-                await identity_svc.create_or_update(
-                    canonical_id=canonical_id,
-                    display_name=getattr(member, "display_name", None)
-                    or mapped_display_name,
-                    email=getattr(member, "email", None) or mapped_email,
-                    provider_identities=provider_identities,
-                    team_ids=team_ids,
-                )
-                linked += 1
-                continue
-
-            await identity_svc.create_or_update(
-                canonical_id=f"jira:{account_id}",
-                display_name=getattr(member, "display_name", None),
-                email=getattr(member, "email", None),
-                provider_identities={"jira": [account_id]},
-                team_ids=[team_id],
-            )
-            created += 1
-
-        return {
-            "linked": linked,
-            "created": created,
-            "skipped": skipped,
-        }

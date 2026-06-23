@@ -45,6 +45,37 @@ def test_migration_051_creates_attribution_dimensions() -> None:
     )
 
 
+def test_migration_054_creates_identities() -> None:
+    # CHAOS-2600 CS5: ClickHouse-native identity records (canonical_id ->
+    # provider identities + team membership). The CH table is named `identities`
+    # (not `identity_mappings`) so it does not collide with the Postgres
+    # `identity_mappings` table during org-deletion purge. ReplacingMergeTree
+    # keyed on the logical identity so FINAL reads are well-formed.
+    migration = Path(
+        "src/dev_health_ops/migrations/clickhouse/054_identities.sql"
+    ).read_text()
+
+    assert "CREATE TABLE IF NOT EXISTS identities" in migration
+    # Must NOT define a CH table literally named identity_mappings (PG owns it).
+    assert "CREATE TABLE IF NOT EXISTS identity_mappings" not in migration
+    assert "ENGINE = ReplacingMergeTree(updated_at)" in migration
+    assert "ORDER BY (org_id, canonical_id)" in migration
+    for column in (
+        "canonical_id",
+        "identity_uuid",
+        "provider_identities",
+        "team_ids",
+    ):
+        assert column in migration
+    # The migration splitter strips comments before splitting on ';', but the
+    # committed-migration guard also forbids ';' inside comment text — assert it
+    # holds for this file too.
+    for line in migration.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("--"):
+            assert ";" not in stripped
+
+
 def test_metrics_sink_writes_dimension_and_attribution_columns() -> None:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     repo_id = uuid.uuid4()

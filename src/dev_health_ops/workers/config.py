@@ -140,16 +140,10 @@ beat_schedule = {
         "schedule": crontab(hour=1, minute=30),
         "options": {"queue": "default"},
     },
-    "sync-team-drift": {
-        "task": "dev_health_ops.workers.tasks.sync_team_drift",
-        "schedule": crontab(hour=2, minute=30),
-        "options": {"queue": "sync"},
-    },
-    "reconcile-team-members": {
-        "task": "dev_health_ops.workers.tasks.reconcile_team_members",
-        "schedule": crontab(hour=3, minute=0),
-        "options": {"queue": "sync"},
-    },
+    # The Postgres team-drift / identity-reconcile beat entries were removed in
+    # CHAOS-2600 CS5; their tasks + services were deleted in CS6. ClickHouse is
+    # the sole team/identity system of record, so no periodic Postgres-mapping
+    # writer remains.
     "reconcile-sync-dispatch": {
         "task": "dev_health_ops.workers.tasks.reconcile_sync_dispatch",
         "schedule": 60.0,

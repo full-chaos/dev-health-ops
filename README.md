@@ -116,8 +116,8 @@ CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
 CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
   dev-hops sync work-items --provider all --backfill 30
 
-# Teams into the semantic database
-POSTGRES_URI="postgresql+asyncpg://postgres:postgres@localhost:5555/postgres" \
+# Teams into the ClickHouse team catalog (ClickHouse is the system of record)
+CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
   dev-hops sync teams --provider config --path src/dev_health_ops/config/team_mapping.yaml --allow-empty
 ```
 

@@ -51,7 +51,6 @@ from .retention import (
 )
 from .settings import (
     GithubAppInstallation,
-    IdentityMapping,
     IntegrationCredential,
     IntegrationProvider,
     JobRun,
@@ -62,7 +61,6 @@ from .settings import (
     SettingCategory,
     SyncConfiguration,
     SyncWatermark,
-    TeamMapping,
 )
 from .sso import (
     SSOProtocol,
@@ -110,7 +108,6 @@ __all__ = [
     "GitCommitStat",
     "GitFile",
     "GithubAppInstallation",
-    "IdentityMapping",
     "Integration",
     "IntegrationCredential",
     "IntegrationDataset",
@@ -158,7 +155,6 @@ __all__ = [
     "SyncRunUnit",
     "SyncRunUnitStatus",
     "SyncWatermark",
-    "TeamMapping",
     "TIER_LIMITS",
     "User",
     "JiraProjectOpsTeamLink",

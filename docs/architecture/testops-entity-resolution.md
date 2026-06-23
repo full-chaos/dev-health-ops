@@ -27,7 +27,7 @@ The service_id is resolved using one of two methods:
 2. Path-prefix conventions defined in the repository configuration.
 
 ### Team Resolution
-The team_id is looked up from the semantic database (Postgres). The system checks existing team-to-repo or team-to-service mappings to assign the correct owner.
+The team_id is resolved from ClickHouse (CHAOS-2600 CS5) — there is no Postgres team lookup. The resolver reads the ClickHouse team catalog (`teams`) and the team→repo / team→project ownership dimensions to assign the correct owner, following the documented attribution cascade (`native_team > issue_project > project_ownership > repo_ownership > assignee_membership > linked_issue > manual_fallback > unassigned`). See [team-attribution.md §0](team-attribution.md). The legacy Postgres `team_mappings` lookup is a dead remnant dropped in CS6.
 
 ### Org ID
 The org_id serves as a partition and tenant key. It's present on every entity to ensure data isolation and efficient partitioning in ClickHouse.

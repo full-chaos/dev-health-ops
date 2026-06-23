@@ -19,13 +19,21 @@ Dev Health Ops uses a dual-database architecture separating **semantic** (operat
 │   │ • Settings          │       │ • CI/CD Pipelines   │            │
 │   │ • Credentials       │       │ • Deployments       │            │
 │   │ • Sync Configs      │       │ • Incidents         │            │
-│   │ • Identity Mappings │       │ • Daily Metrics     │            │
-│   │ • Team Mappings     │       │ • DORA Metrics      │            │
-│   │ • Alembic Migrations│       │ • Complexity Data   │            │
+│   │ • Alembic Migrations│       │ • Teams + Identities│            │
+│   │                     │       │ • Team ownership    │            │
+│   │                     │       │   dimensions        │            │
+│   │                     │       │ • Daily/DORA Metrics│            │
+│   │                     │       │ • Complexity Data   │            │
 │   └─────────────────────┘       └─────────────────────┘            │
 │                                                                     │
 └────────────────────────────────────────────────────────────────────┘
 ```
+
+> **Teams & identities live in ClickHouse (CHAOS-2600 CS5).** The team catalog
+> (`teams`), team→repo/project ownership dimensions, and identity→team
+> membership (`identities`) are ClickHouse-resolved at query time. The Postgres
+> `team_mappings` / `identity_mappings` tables were **dropped in CS6** (CHAOS-2607);
+> ClickHouse is the sole system of record.
 
 ## Analytics Backend Requirement
 
@@ -52,7 +60,7 @@ SQLite via `aiosqlite` remains allowed only for test fixtures and local-only eph
 |---------|---------|-------|
 | User management | PostgreSQL | Semantic layer |
 | Organization settings | PostgreSQL | Semantic layer |
-| Team mapping config (`team_mappings`) | PostgreSQL | Semantic layer (the `teams` entity itself is ClickHouse) |
+| Team & identity mapping (`teams`, `identities`) | ClickHouse | System of record as of CS5 (CHAOS-2606). The Postgres `team_mappings`/`identity_mappings` tables were dropped in CS6 (CHAOS-2607). |
 | Authentication | PostgreSQL | Semantic layer |
 
 ## Environment Variables
@@ -90,8 +98,6 @@ Stores operational data that requires:
 | `settings` | Org-scoped configuration |
 | `integration_credentials` | Encrypted provider credentials |
 | `sync_configurations` | Data sync job configs |
-| `identity_mappings` | Cross-provider identity resolution |
-| `team_mappings` | Team definitions and repo patterns |
 
 ### ClickHouse (Analytics Layer)
 
@@ -132,81 +138,45 @@ Commands automatically use the appropriate database:
 | `sync git` | ClickHouse | Git data ingestion |
 | `sync prs` | ClickHouse | PR data ingestion |
 | `sync work-items` | ClickHouse | Work item ingestion |
-| `sync teams` | Both | **Org-scoped** (`--org`): provider → Postgres `team_mappings` (via `TeamDriftSyncService`) → `bridge_teams_to_clickhouse`; **No-org**: direct ClickHouse write |
+| `sync teams` | ClickHouse | Writes ClickHouse `teams` directly. **Org-scoped** (`--org`): rows tagged with `org_id`; **No-org**: untagged. No Postgres team projection (CHAOS-2600 CS5). |
 | `metrics daily` | ClickHouse | Metrics computation |
 | `metrics dora` | ClickHouse | DORA metrics |
 | `api` | Both | Serves both layers |
 
 ### `sync teams` routing detail
 
-The `sync teams` command has two distinct routing paths depending on whether `--org` is supplied:
+As of CHAOS-2600 CS5, **ClickHouse is the system of record for teams**. Both routing paths write the ClickHouse `teams` table directly; the only difference is whether rows are tagged with `org_id`:
 
-| Path | Trigger | Write order | ClickHouse writer |
-|------|---------|-------------|-------------------|
-| **Org-scoped** | `--org <id>` present | 1. `TeamDriftSyncService.project_provider_teams` (upserts `team_mappings` in Postgres) → 2. `bridge_teams_to_clickhouse` (reads Postgres, resolves identities, writes `teams` to ClickHouse) | `bridge_teams_to_clickhouse` only |
-| **No-org** | `--org` absent | Direct `run_with_store` → ClickHouse `teams` table | `run_with_store` |
+| Path | Trigger | Write | ClickHouse writer |
+|------|---------|-------|-------------------|
+| **Org-scoped** | `--org <id>` present | Direct `insert_teams` to ClickHouse `teams`, each row tagged with `org_id` (plus any Jira ops links). No Postgres projection. | `ClickHouseStore.insert_teams` (org-scoped) |
+| **No-org** | `--org` absent | Direct `run_with_store` → ClickHouse `teams` table (untagged) | `run_with_store` |
 
-**Invariants for the org-scoped path:**
+**Invariants:**
 
-- PostgreSQL `team_mappings` is always the Postgres-first control plane and source of truth for org-scoped teams.
-- ClickHouse `teams` is the analytics read source of truth.
-- `bridge_teams_to_clickhouse` is the **sole** ClickHouse writer for org-scoped syncs. It reads `TeamMapping` + `IdentityMapping` from Postgres (both filtered by `org_id`), resolves member identities (email, canonical_id, all provider logins), and writes the enriched payload to the ClickHouse `teams` table.
-- `run_with_store` (direct ClickHouse write from provider data) is **never** called on the org-scoped path.
-- A Postgres projection failure (e.g. `TeamDriftSyncService` raises) causes exit 1.
-- A ClickHouse bridge failure (`bridge_teams_to_clickhouse` raises) is fatal (exit 1) so callers cannot report a successful sync when analytics has not been updated.
+- ClickHouse `teams` is the system of record AND the analytics read source for teams. There is no Postgres team control plane.
+- The org-scoped path opens a `ClickHouseStore`, sets `store.org_id`, tags each team with the org id, and calls `insert_teams` — mirroring the no-org path with the org tag added. It does **not** project to PostgreSQL `team_mappings` and does **not** call any Postgres→ClickHouse bridge.
+- A ClickHouse write failure is fatal (exit 1) so callers cannot report a successful sync when analytics has not been updated.
 
-#### Team Sync Architecture Diagrams
+> **Removed in CS5 (CHAOS-2606):** `bridge_teams_to_clickhouse` + `providers/team_bridge.py`, `providers/team_reconcile.py` + the `dev-hops teams reconcile` command, and the `sync_teams_to_analytics` task are **deleted**. The org-scoped path no longer projects to Postgres. **Removed in CS6 (CHAOS-2607):** the Postgres `team_mappings` / `identity_mappings` models + tables (Alembic `0020`), the `TeamMappingService` / `IdentityMappingService` / `TeamDriftSyncService` classes, the `sync-team-drift` / `reconcile-team-members` tasks, and the Postgres-backed drift engine are **deleted** (the four admin drift-review endpoints remain as HTTP 501 stubs until CS7 removes them with the web caller — CHAOS-2608; a ClickHouse-backed drift-review rebuild is tracked by CHAOS-2622).
 
-##### Current State (Split-Brain)
-Before the unification, the CLI and Celery/admin paths diverged, using different member resolvers and Postgres projection writers:
+#### Team Sync Architecture Diagram (CS5)
+
+Both paths write ClickHouse directly; identity→team membership is ClickHouse-native:
 
 ```mermaid
 graph TD
-    subgraph CLI Path
-        CLI[CLI: sync teams --org] -->|Calls| CLI_Local[CLI-Local Postgres Writer]
-        CLI_Local -->|Writes| PG[(PostgreSQL: team_mappings)]
-        CLI_Local -->|Resolves members| CLI_Resolver[CLI-Local Member Resolver]
-        CLI_Resolver -->|Mutates| PG_Identities[(PostgreSQL: identity_mappings)]
-        CLI -->|Calls| Bridge[bridge_teams_to_clickhouse]
-    end
+    CLI[CLI: sync teams --org] -->|insert_teams org-tagged| CH[(ClickHouse: teams)]
+    CLINO[CLI: sync teams no-org] -->|run_with_store| CH
+    Admin[Admin API: team/identity CRUD] -->|ClickHouseTeamAdminService / ClickHouseIdentityStore| CH
+    Admin -->|surgical team.members updates| CHI[(ClickHouse: identities)]
+    AutoImport[Celery: team auto-import] -->|native CH writers| CH
 
-    subgraph Celery / Admin Path
-        Admin[Admin API / Celery Worker] -->|Calls| Service[TeamDriftSyncService]
-        Service -->|Writes| PG
-        Worker[Celery: reconcile_team_members] -->|Resolves members| Worker_Resolver[reconcile_team_members]
-        Admin -->|Calls| Bridge
-    end
-
-    Bridge -->|Resolves members| Bridge_Resolver[Bridge Member Resolver]
-    Bridge -->|Writes| CH[(ClickHouse: teams)]
-```
-
-##### Target State (Unified Model)
-After the unification, all paths converge on the shared `TeamDriftSyncService` and a single shared member resolver:
-
-```mermaid
-graph TD
-    subgraph CLI Path
-        CLI[CLI: sync teams --org] -->|Calls| Service[TeamDriftSyncService]
-    end
-
-    subgraph Celery / Admin Path
-        Admin[Admin API / Celery Worker] -->|Calls| Service
-    end
-
-    subgraph Reconcile Command
-        Reconcile[CLI: teams reconcile --org] -->|Ensures mapping| PG
-        Reconcile -->|Calls| Bridge[bridge_teams_to_clickhouse]
-    end
-
-    Service -->|Writes/Flags| PG[(PostgreSQL: team_mappings)]
-    PG -->|Triggers| Bridge
-    Bridge -->|Sole Writer| CH[(ClickHouse: teams)]
-
-    subgraph Shared Identity Resolution
-        Bridge -->|Calls| SharedResolver[Shared members_by_team]
-        Worker[Celery: reconcile_team_members] -->|Calls| SharedResolver
-        SharedResolver -->|Reads confirmed facets| PG_Identities[(PostgreSQL: identity_mappings)]
+    subgraph "Removed (CS5 + CS6)"
+        Bridge[bridge_teams_to_clickhouse - DELETED CS5]
+        Reconcile[CLI teams reconcile - DELETED CS5]
+        Drift[sync-team-drift / reconcile-team-members tasks - DELETED CS6]
+        PG[(PostgreSQL team_mappings / identity_mappings - DROPPED CS6)]
     end
 ```
 ## API Service Routing

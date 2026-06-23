@@ -1,5 +1,7 @@
 # Performance Quick Wins Implementation Plan
 
+> **Historical plan (2026-04-16).** Snapshot of a completed perf task; not current architecture guidance. The `sync_team_drift` parallelization step below describes the worker's internals at that time. In CHAOS-2600 CS5 the `sync_team_drift` Celery task became a fail-closed no-op; **CS6 (CHAOS-2607) deleted** the task, `workers/sync_team.py`, the `_discover_and_sync_all` helper, and the CHAOS-2066 concurrency test. This snapshot describes the worker as it existed before that removal.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Eliminate event-loop blocking and sequential-await bottlenecks in hot async code paths across GraphQL, workers, ingest, and services.

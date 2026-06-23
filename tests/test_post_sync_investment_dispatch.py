@@ -36,7 +36,6 @@ _INVESTMENT_TASK = (
 _WORK_GRAPH_TASK = "dev_health_ops.workers.tasks.run_work_graph_build"
 _PROJECTION_TASK = "dev_health_ops.workers.tasks.run_membership_backfill"
 _DAILY_METRICS_TASK = "dev_health_ops.workers.tasks.run_daily_metrics"
-_TEAM_SYNC_TASK = "dev_health_ops.workers.tasks.sync_teams_to_analytics"
 
 
 def _run_dispatch(provider: str, sync_targets: list[str], org_id: str):
@@ -81,15 +80,15 @@ def test_investment_chain_dispatched_with_git_and_work_items() -> None:
     )
 
     assert mock_chain.call_count == 1
-    team_sig, daily_sig, build_sig, materialize_sig = mock_chain.call_args.args
-    assert team_sig.task_name == _TEAM_SYNC_TASK
+    # CHAOS-2600 CS5: the team-sync bridge step was removed from the chain;
+    # ClickHouse is written directly by sync_teams / auto-import, not a daily
+    # Postgres->ClickHouse bridge. Chain is daily_metrics -> build -> materialize.
+    daily_sig, build_sig, materialize_sig = mock_chain.call_args.args
     assert daily_sig.task_name == _DAILY_METRICS_TASK
     assert build_sig.task_name == _WORK_GRAPH_TASK
     assert materialize_sig.task_name == _INVESTMENT_TASK
 
     # All signatures are org-scoped onto the metrics queue.
-    assert team_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
-    assert team_sig.sig_kwargs["queue"] == "metrics"
     assert daily_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
     assert daily_sig.sig_kwargs["queue"] == "metrics"
     assert daily_sig.sig_kwargs.get("immutable") is True
@@ -140,12 +139,10 @@ def test_investment_chain_dispatched_with_work_items_only_jira() -> None:
     )
 
     assert mock_chain.call_count == 1
-    team_sig, daily_sig, build_sig, materialize_sig = mock_chain.call_args.args
-    assert team_sig.task_name == _TEAM_SYNC_TASK
+    daily_sig, build_sig, materialize_sig = mock_chain.call_args.args
     assert daily_sig.task_name == _DAILY_METRICS_TASK
     assert build_sig.task_name == _WORK_GRAPH_TASK
     assert materialize_sig.task_name == _INVESTMENT_TASK
-    assert team_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
     assert daily_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
     assert daily_sig.sig_kwargs.get("immutable") is True
     assert materialize_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
@@ -160,10 +157,8 @@ def test_daily_metrics_dispatched_with_work_items_only_jira() -> None:
     )
 
     mock_send_task.assert_not_called()
-    team_sig, daily_sig, *_ = mock_chain.call_args.args
-    assert team_sig.task_name == _TEAM_SYNC_TASK
+    daily_sig, *_ = mock_chain.call_args.args
     assert daily_sig.task_name == _DAILY_METRICS_TASK
-    assert team_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
     assert daily_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
     assert daily_sig.sig_kwargs["queue"] == "metrics"
     assert daily_sig.sig_kwargs.get("immutable") is True
@@ -202,9 +197,7 @@ def test_post_sync_dispatch_forwards_backfill_window() -> None:
         )
 
     window_send_task.assert_not_called()
-    team_sig, daily_sig, build_sig, materialize_sig = window_chain.call_args.args
-    assert team_sig.task_name == _TEAM_SYNC_TASK
-    assert team_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
+    daily_sig, build_sig, materialize_sig = window_chain.call_args.args
     assert daily_sig.task_name == _DAILY_METRICS_TASK
     assert daily_sig.sig_kwargs["kwargs"] == {
         "org_id": "org-123",

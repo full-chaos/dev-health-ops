@@ -439,7 +439,6 @@ def _dispatch_post_sync_tasks(
         dispatched.append("run_daily_metrics")
 
     if has_work_items:
-        dispatched.append("sync_teams_to_analytics")
         dispatched.append("run_daily_metrics")
 
     if has_git:
@@ -492,11 +491,6 @@ def _dispatch_post_sync_tasks(
             immutable=True,
         )
         if has_work_items:
-            sync_teams_sig = celery_app.signature(
-                "dev_health_ops.workers.tasks.sync_teams_to_analytics",
-                kwargs={"org_id": org_id},
-                queue="metrics",
-            )
             daily_metrics_sig = celery_app.signature(
                 "dev_health_ops.workers.tasks.run_daily_metrics",
                 kwargs=daily_metrics_kwargs,
@@ -504,7 +498,6 @@ def _dispatch_post_sync_tasks(
                 immutable=True,
             )
             chain(
-                sync_teams_sig,
                 daily_metrics_sig,
                 build_sig,
                 materialize_sig,

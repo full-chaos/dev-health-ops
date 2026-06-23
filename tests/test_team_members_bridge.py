@@ -16,7 +16,9 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from dev_health_ops.providers.team_bridge import _members_by_team
+from dev_health_ops.api.services.configuration.team_member_resolver import (
+    members_by_team as _members_by_team,
+)
 
 # ---------------------------------------------------------------------------
 # _members_by_team

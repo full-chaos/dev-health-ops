@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, cast
 
 from dev_health_ops.metrics.compute_work_items import (
+    ManualFallbackRule,
     TeamAttributionCandidate,
     TeamAttributionContext,
     TeamAttributionSource,
@@ -381,20 +382,33 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
             self.client,
             f"""
             SELECT
-                o.provider,
-                o.team_id,
-                ifNull(nullIf(t.name, ''), o.team_id) AS team_name,
-                o.project_id,
-                o.project_key,
-                o.is_primary,
-                o.specificity,
-                o.priority,
-                o.updated_at
-            FROM team_project_ownership AS o
-            LEFT JOIN teams AS t ON t.org_id = o.org_id AND t.id = o.team_id
-            WHERE o.valid_from <= {{as_of:DateTime}}
-              AND (o.valid_to IS NULL OR o.valid_to > {{as_of:DateTime}})
-              {org_filter}
+                g.provider,
+                g.team_id,
+                ifNull(nullIf(t.name, ''), g.team_id) AS team_name,
+                g.project_id,
+                g.project_key,
+                g.is_primary,
+                g.specificity,
+                g.priority,
+                g.updated_at
+            FROM (
+                SELECT
+                    o.org_id AS org_id,
+                    o.provider AS provider,
+                    o.project_id AS project_id,
+                    o.team_id AS team_id,
+                    argMax(o.project_key, (o.updated_at, o.valid_from)) AS project_key,
+                    argMax(o.is_primary, (o.updated_at, o.valid_from)) AS is_primary,
+                    argMax(o.specificity, (o.updated_at, o.valid_from)) AS specificity,
+                    argMax(o.priority, (o.updated_at, o.valid_from)) AS priority,
+                    max(o.updated_at) AS updated_at
+                FROM team_project_ownership AS o
+                WHERE o.valid_from <= {{as_of:DateTime}}
+                  AND (o.valid_to IS NULL OR o.valid_to > {{as_of:DateTime}})
+                  {org_filter}
+                GROUP BY o.org_id, o.provider, o.project_id, o.team_id
+            ) AS g
+            LEFT JOIN teams AS t ON t.org_id = g.org_id AND t.id = g.team_id
             """,
             params,
         )
@@ -402,20 +416,33 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
             self.client,
             f"""
             SELECT
-                o.provider,
-                o.team_id,
-                ifNull(nullIf(t.name, ''), o.team_id) AS team_name,
-                o.repo_id,
-                o.repo_full_name,
-                o.is_primary,
-                o.specificity,
-                o.priority,
-                o.updated_at
-            FROM team_repo_ownership AS o
-            LEFT JOIN teams AS t ON t.org_id = o.org_id AND t.id = o.team_id
-            WHERE o.valid_from <= {{as_of:DateTime}}
-              AND (o.valid_to IS NULL OR o.valid_to > {{as_of:DateTime}})
-              {org_filter}
+                g.provider,
+                g.team_id,
+                ifNull(nullIf(t.name, ''), g.team_id) AS team_name,
+                g.repo_id,
+                g.repo_full_name,
+                g.is_primary,
+                g.specificity,
+                g.priority,
+                g.updated_at
+            FROM (
+                SELECT
+                    o.org_id AS org_id,
+                    o.provider AS provider,
+                    o.repo_full_name AS repo_full_name,
+                    o.team_id AS team_id,
+                    argMax(o.repo_id, (o.updated_at, o.valid_from)) AS repo_id,
+                    argMax(o.is_primary, (o.updated_at, o.valid_from)) AS is_primary,
+                    argMax(o.specificity, (o.updated_at, o.valid_from)) AS specificity,
+                    argMax(o.priority, (o.updated_at, o.valid_from)) AS priority,
+                    max(o.updated_at) AS updated_at
+                FROM team_repo_ownership AS o
+                WHERE o.valid_from <= {{as_of:DateTime}}
+                  AND (o.valid_to IS NULL OR o.valid_to > {{as_of:DateTime}})
+                  {org_filter}
+                GROUP BY o.org_id, o.provider, o.repo_full_name, o.team_id
+            ) AS g
+            LEFT JOIN teams AS t ON t.org_id = g.org_id AND t.id = g.team_id
             """,
             params,
         )
@@ -423,18 +450,52 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
             self.client,
             f"""
             SELECT
+                g.provider,
+                g.team_id,
+                ifNull(nullIf(t.name, ''), g.team_id) AS team_name,
+                g.member_id,
+                g.raw_provider_user_id,
+                g.raw_email,
+                g.is_primary,
+                g.specificity,
+                g.priority,
+                g.updated_at
+            FROM (
+                SELECT
+                    o.org_id AS org_id,
+                    o.provider AS provider,
+                    o.team_id AS team_id,
+                    o.member_id AS member_id,
+                    argMax(o.raw_provider_user_id, (o.updated_at, o.valid_from))
+                        AS raw_provider_user_id,
+                    argMax(o.raw_email, (o.updated_at, o.valid_from)) AS raw_email,
+                    argMax(o.is_primary, (o.updated_at, o.valid_from)) AS is_primary,
+                    argMax(o.specificity, (o.updated_at, o.valid_from)) AS specificity,
+                    argMax(o.priority, (o.updated_at, o.valid_from)) AS priority,
+                    max(o.updated_at) AS updated_at
+                FROM team_memberships AS o
+                WHERE o.valid_from <= {{as_of:DateTime}}
+                  AND (o.valid_to IS NULL OR o.valid_to > {{as_of:DateTime}})
+                  {org_filter}
+                GROUP BY o.org_id, o.provider, o.team_id, o.member_id
+            ) AS g
+            LEFT JOIN teams AS t ON t.org_id = g.org_id AND t.id = g.team_id
+            """,
+            params,
+        )
+
+        manual_rows = await _clickhouse_query_dicts(
+            self.client,
+            f"""
+            SELECT
                 o.provider,
+                o.scope_type,
+                o.scope_id,
                 o.team_id,
-                ifNull(nullIf(t.name, ''), o.team_id) AS team_name,
-                o.member_id,
-                o.raw_provider_user_id,
-                o.raw_email,
-                o.is_primary,
-                o.specificity,
-                o.priority,
-                o.updated_at
-            FROM team_memberships AS o
-            LEFT JOIN teams AS t ON t.org_id = o.org_id AND t.id = o.team_id
+                ifNull(nullIf(o.team_name, ''), o.team_id) AS team_name,
+                o.reason,
+                o.priority
+            FROM manual_attribution_fallbacks AS o FINAL
             WHERE o.valid_from <= {{as_of:DateTime}}
               AND (o.valid_to IS NULL OR o.valid_to > {{as_of:DateTime}})
               {org_filter}
@@ -489,6 +550,19 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
                     context.member_by_identity.setdefault(
                         (str(row.get("provider") or ""), key), []
                     ).append(candidate)
+
+        for row in manual_rows:
+            context.manual_fallbacks.append(
+                ManualFallbackRule(
+                    provider=str(row.get("provider") or ""),
+                    scope_type=str(row.get("scope_type") or ""),
+                    scope_id=str(row.get("scope_id") or ""),
+                    team_id=str(row.get("team_id") or ""),
+                    team_name=str(row.get("team_name") or row.get("team_id") or ""),
+                    reason=str(row.get("reason") or ""),
+                    priority=int(row.get("priority") or 100),
+                )
+            )
         return context
 
     async def load_cicd_data(

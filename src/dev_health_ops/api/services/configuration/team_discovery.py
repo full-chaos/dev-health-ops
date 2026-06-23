@@ -1,7 +1,9 @@
 """Team discovery service.
 
 Pulls team-like units (GitHub teams, GitLab subgroups, Linear teams, Jira
-projects) from external providers and imports them into ``TeamMapping``.
+projects) from external providers. Discovered teams are imported into the
+ClickHouse-native ``teams`` catalog by ``ClickHouseTeamAdminService`` (the
+admin import endpoint); ClickHouse is the team system of record (CHAOS-2600).
 """
 
 from __future__ import annotations
@@ -10,14 +12,12 @@ import asyncio
 import itertools
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 import requests
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ._helpers import _get_discovered_team_cls
-from .team_mapping import TeamMappingService
 
 if TYPE_CHECKING:
     from dev_health_ops.api.admin.schemas import DiscoveredTeam
@@ -76,10 +76,11 @@ class TeamDiscoveryService:
     """Service for discovering teams from external providers."""
 
     def __init__(self, session: AsyncSession | None, org_id: str):
-        # ``session`` is optional: the discover_* methods perform external
-        # network I/O only and never touch the DB, so callers that only need
-        # discovery (e.g. the worker fan-out) can pass ``None`` and avoid
-        # holding a connection idle-in-transaction. import_teams requires one.
+        # ``session`` is optional and unused by the discover_* methods: they
+        # perform external network I/O only and never touch the DB, so callers
+        # can pass ``None`` and avoid holding a connection idle-in-transaction.
+        # Persisting discovered teams is the ClickHouse admin import endpoint's
+        # job (ClickHouse is the team system of record, CHAOS-2600).
         self.session = session
         self.org_id = org_id
 
@@ -290,88 +291,3 @@ class TeamDiscoveryService:
                 await connector.close()
 
         return await _discover()
-
-    async def import_teams(
-        self,
-        teams: list[DiscoveredTeam],
-        on_conflict: str = "skip",
-    ) -> dict[str, Any]:
-        """Import discovered teams into TeamMapping."""
-        if self.session is None:
-            raise RuntimeError("import_teams requires a database session")
-        team_mapping_svc = TeamMappingService(self.session, self.org_id)
-        imported = 0
-        skipped = 0
-        merged = 0
-        details: list[dict[str, Any]] = []
-
-        for team in teams:
-            if team.provider_type == "github":
-                team_id = f"gh:{team.provider_team_id}"
-            elif team.provider_type == "gitlab":
-                team_id = f"gl:{team.provider_team_id}"
-            elif team.provider_type == "ms-teams":
-                team_id = f"ms-teams:{team.provider_team_id}"
-            else:
-                team_id = team.provider_team_id
-
-            existing = await team_mapping_svc.get(team_id)
-            if existing is not None and on_conflict == "skip":
-                skipped += 1
-                details.append(
-                    {
-                        "team_id": team_id,
-                        "provider_team_id": team.provider_team_id,
-                        "action": "skipped",
-                    }
-                )
-                continue
-
-            associations = team.associations or {}
-            provider_linkage = {
-                "provider_type": team.provider_type,
-                "provider_team_id": team.provider_team_id,
-                "provider_org": associations.get("provider_org"),
-                "last_discovered_at": datetime.now(timezone.utc).isoformat(),
-                "sync_source": "imported",
-            }
-
-            extra_data = dict(existing.extra_data or {}) if existing else {}
-            extra_data.update(
-                {k: v for k, v in provider_linkage.items() if v is not None}
-            )
-
-            await team_mapping_svc.create_or_update(
-                team_id=team_id,
-                name=team.name,
-                description=team.description,
-                repo_patterns=associations.get("repo_patterns", []),
-                project_keys=associations.get("project_keys", []),
-                extra_data=extra_data,
-            )
-
-            if existing is None:
-                imported += 1
-                details.append(
-                    {
-                        "team_id": team_id,
-                        "provider_team_id": team.provider_team_id,
-                        "action": "imported",
-                    }
-                )
-            else:
-                merged += 1
-                details.append(
-                    {
-                        "team_id": team_id,
-                        "provider_team_id": team.provider_team_id,
-                        "action": "merged",
-                    }
-                )
-
-        return {
-            "imported": imported,
-            "skipped": skipped,
-            "merged": merged,
-            "details": details,
-        }

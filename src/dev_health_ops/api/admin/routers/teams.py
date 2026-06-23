@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Protocol, cast
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,11 +19,14 @@ from dev_health_ops.api.services.configuration import (
     IntegrationCredentialsService,
     SyncConfigurationService,
     TeamDiscoveryService,
-    TeamMappingService,
+)
+from dev_health_ops.api.services.configuration.clickhouse_team_admin import (
+    ClickHouseTeamAdminService,
 )
 from dev_health_ops.credentials.resolver import github_credentials_from_mapping
+from dev_health_ops.storage.clickhouse import ClickHouseStore
 
-from .common import get_session
+from .common import get_clickhouse_store, get_session
 
 router = APIRouter()
 
@@ -80,16 +83,6 @@ def _dedupe_teams(teams: list[Any]) -> list[Any]:
     return unique
 
 
-class _MutableTeamMapping(Protocol):
-    name: str
-    description: str | None
-    repo_patterns: list[str]
-    project_keys: list[str]
-    extra_data: dict[str, Any]
-    managed_fields: list[str]
-    sync_policy: int
-
-
 def _team_mapping_response(team: object) -> TeamMappingResponse:
     return TeamMappingResponse.model_validate(
         {
@@ -114,10 +107,10 @@ def _team_mapping_response(team: object) -> TeamMappingResponse:
 @router.get("/teams", response_model=list[TeamMappingResponse])
 async def list_teams(
     active_only: bool = True,
-    session: AsyncSession = Depends(get_session),
+    store: ClickHouseStore = Depends(get_clickhouse_store),
     org_id: str = Depends(get_admin_org_id),
 ) -> list[TeamMappingResponse]:
-    svc = TeamMappingService(session, org_id)
+    svc = ClickHouseTeamAdminService(store, org_id)
     teams = await svc.list_all(active_only=active_only)
     return [_team_mapping_response(team) for team in teams]
 
@@ -125,23 +118,16 @@ async def list_teams(
 @router.post("/teams", response_model=TeamMappingResponse)
 async def create_or_update_team(
     payload: TeamMappingCreate,
-    session: AsyncSession = Depends(get_session),
+    store: ClickHouseStore = Depends(get_clickhouse_store),
     org_id: str = Depends(get_admin_org_id),
 ) -> TeamMappingResponse:
-    from dev_health_ops.workers.product_tasks import sync_teams_to_analytics
-
-    svc = TeamMappingService(session, org_id)
+    svc = ClickHouseTeamAdminService(store, org_id)
     team = await svc.create_or_update(
         team_id=payload.team_id,
         name=payload.name,
         description=payload.description,
         repo_patterns=payload.repo_patterns,
         project_keys=payload.project_keys,
-        extra_data=payload.extra_data,
-    )
-    await session.commit()
-    getattr(sync_teams_to_analytics, "apply_async")(
-        kwargs={"org_id": org_id}, queue="metrics"
     )
     return _team_mapping_response(team)
 
@@ -149,10 +135,10 @@ async def create_or_update_team(
 @router.delete("/teams/{team_id}")
 async def delete_team(
     team_id: str,
-    session: AsyncSession = Depends(get_session),
+    store: ClickHouseStore = Depends(get_clickhouse_store),
     org_id: str = Depends(get_admin_org_id),
 ) -> dict:
-    svc = TeamMappingService(session, org_id)
+    svc = ClickHouseTeamAdminService(store, org_id)
     deleted = await svc.delete(team_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Team not found")
@@ -335,30 +321,41 @@ async def discover_teams(
 @router.post("/teams/import", response_model=TeamImportResponse)
 async def import_teams(
     payload: TeamImportRequest,
-    session: AsyncSession = Depends(get_session),
+    store: ClickHouseStore = Depends(get_clickhouse_store),
     org_id: str = Depends(get_admin_org_id),
 ) -> TeamImportResponse:
-    from dev_health_ops.workers.product_tasks import sync_teams_to_analytics
-
-    svc = TeamDiscoveryService(session, org_id)
+    svc = ClickHouseTeamAdminService(store, org_id)
     result = await svc.import_teams(payload.teams, payload.on_conflict)
-    await session.commit()
-    getattr(sync_teams_to_analytics, "apply_async")(
-        kwargs={"org_id": org_id}, queue="metrics"
-    )
     return TeamImportResponse(**result)
+
+
+# --- Team drift review -----------------------------------------------------
+# The drift-review surface was built on the Postgres ``TeamMapping``
+# flagged-changes machinery, which was removed when ClickHouse became the team
+# system of record (CHAOS-2600). The backing service + Postgres tables are gone
+# (CS6), so these endpoints are disabled (HTTP 501) rather than returning fake
+# success; a ClickHouse-backed rebuild is tracked by CHAOS-2622. They remain as
+# pure 501 stubs (no deleted PG code) so the dev-health-web admin keeps getting a
+# clean 501 instead of a bogus 404 from the ``/teams/{team_id}`` fallthrough;
+# the endpoints + their web caller are removed together in CS7.
+#
+# ROUTING: the static paths (``/teams/pending-changes``,
+# ``/teams/trigger-drift-sync``) are declared BEFORE the ``/teams/{team_id}``
+# path-param route so FastAPI matches them rather than treating the literal as a
+# team id.
+
+_DRIFT_DISABLED_DETAIL = (
+    "Team drift review is disabled; the Postgres flagged-changes machinery was "
+    "removed in CHAOS-2600 CS6. A ClickHouse-backed rebuild is tracked by "
+    "CHAOS-2622."
+)
 
 
 @router.get("/teams/pending-changes")
 async def get_pending_changes(
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
-):
-    from dev_health_ops.api.services.configuration import TeamDriftSyncService
-
-    svc = TeamDriftSyncService(session, org_id)
-    changes = await svc.get_all_pending_changes()
-    return {"changes": changes, "total": len(changes)}
+) -> dict[str, Any]:
+    raise HTTPException(status_code=501, detail=_DRIFT_DISABLED_DETAIL)
 
 
 @router.post("/teams/{team_id}/approve-changes")
@@ -366,22 +363,9 @@ async def approve_team_changes(
     team_id: str,
     change_indices: list[int] | None = None,
     approve_all: bool = False,
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
-):
-    from dev_health_ops.api.services.configuration import TeamDriftSyncService
-    from dev_health_ops.workers.product_tasks import sync_teams_to_analytics
-
-    svc = TeamDriftSyncService(session, org_id)
-    indices = None if approve_all else change_indices
-    result = await svc.approve_changes(team_id, indices)
-    await session.commit()
-    getattr(sync_teams_to_analytics, "apply_async")(
-        kwargs={"org_id": org_id}, queue="metrics"
-    )
-    if "error" in result:
-        raise HTTPException(status_code=404, detail=result["error"])
-    return result
+) -> dict[str, Any]:
+    raise HTTPException(status_code=501, detail=_DRIFT_DISABLED_DETAIL)
 
 
 @router.post("/teams/{team_id}/dismiss-changes")
@@ -389,38 +373,25 @@ async def dismiss_team_changes(
     team_id: str,
     change_indices: list[int] | None = None,
     dismiss_all: bool = False,
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
-):
-    from dev_health_ops.api.services.configuration import TeamDriftSyncService
-
-    svc = TeamDriftSyncService(session, org_id)
-    indices = None if dismiss_all else change_indices
-    result = await svc.dismiss_changes(team_id, indices)
-    await session.commit()
-    if "error" in result:
-        raise HTTPException(status_code=404, detail=result["error"])
-    return result
+) -> dict[str, Any]:
+    raise HTTPException(status_code=501, detail=_DRIFT_DISABLED_DETAIL)
 
 
 @router.post("/teams/trigger-drift-sync")
 async def trigger_drift_sync(
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
-):
-    from dev_health_ops.workers.sync_tasks import sync_team_drift
-
-    getattr(sync_team_drift, "apply_async")(kwargs={"org_id": org_id}, queue="sync")
-    return {"status": "dispatched"}
+) -> dict[str, Any]:
+    raise HTTPException(status_code=501, detail=_DRIFT_DISABLED_DETAIL)
 
 
 @router.get("/teams/{team_id}", response_model=TeamMappingResponse)
 async def get_team(
     team_id: str,
-    session: AsyncSession = Depends(get_session),
+    store: ClickHouseStore = Depends(get_clickhouse_store),
     org_id: str = Depends(get_admin_org_id),
 ) -> TeamMappingResponse:
-    svc = TeamMappingService(session, org_id)
+    svc = ClickHouseTeamAdminService(store, org_id)
     team = await svc.get(team_id)
     if team is None:
         raise HTTPException(status_code=404, detail="Team not found")
@@ -431,29 +402,36 @@ async def get_team(
 async def update_team(
     team_id: str,
     payload: TeamMappingUpdate,
-    session: AsyncSession = Depends(get_session),
+    store: ClickHouseStore = Depends(get_clickhouse_store),
     org_id: str = Depends(get_admin_org_id),
 ) -> TeamMappingResponse:
-    svc = TeamMappingService(session, org_id)
+    # ClickHouse is the team system of record. Only the fields the CH ``teams``
+    # table carries (name/description/repo_patterns/project_keys) are mutable
+    # here; the Postgres-only drift fields (extra_data/managed_fields/
+    # sync_policy) have no ClickHouse counterpart and are surfaced as stable
+    # defaults in the response.
+    svc = ClickHouseTeamAdminService(store, org_id)
     existing = await svc.get(team_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="Team not found")
 
-    mutable_existing = cast(_MutableTeamMapping, existing)
-    if payload.name is not None:
-        mutable_existing.name = payload.name
-    if payload.description is not None:
-        mutable_existing.description = payload.description
-    if payload.repo_patterns is not None:
-        mutable_existing.repo_patterns = payload.repo_patterns
-    if payload.project_keys is not None:
-        mutable_existing.project_keys = payload.project_keys
-    if payload.extra_data is not None:
-        mutable_existing.extra_data = payload.extra_data
-    if payload.managed_fields is not None:
-        mutable_existing.managed_fields = payload.managed_fields
-    if payload.sync_policy is not None:
-        mutable_existing.sync_policy = payload.sync_policy
-
-    await session.flush()
-    return _team_mapping_response(existing)
+    updated = await svc.create_or_update(
+        team_id=team_id,
+        name=payload.name if payload.name is not None else existing.name,
+        description=(
+            payload.description
+            if payload.description is not None
+            else existing.description
+        ),
+        repo_patterns=(
+            payload.repo_patterns
+            if payload.repo_patterns is not None
+            else existing.repo_patterns
+        ),
+        project_keys=(
+            payload.project_keys
+            if payload.project_keys is not None
+            else existing.project_keys
+        ),
+    )
+    return _team_mapping_response(updated)

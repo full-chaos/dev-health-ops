@@ -262,7 +262,9 @@ async def _membership_rows(
             # the teams.members roster so BOTH attribution paths match aliased and
             # non-aliased members (CHAOS-2609).
             facets = resolver.membership_facets(
-                provider=PROVIDER, username=raw_identity
+                provider=PROVIDER,
+                username=raw_identity,
+                email=getattr(member, "email", None),
             ) or [raw_identity]
             roster_for_team = roster.setdefault(team_id, [])
             for facet in facets:

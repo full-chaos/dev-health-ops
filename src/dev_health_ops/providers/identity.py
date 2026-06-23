@@ -118,21 +118,29 @@ class IdentityResolver:
         provider: WorkItemProvider | str,
         username: str | None = None,
         account_id: str | None = None,
+        email: str | None = None,
     ) -> list[str]:
-        """Identities to store on a team membership so a no-email assignee for
-        this member matches on resolution — under THIS org's alias map.
+        """Every identity an assignee for this member could resolve to — under
+        THIS org's alias map — so both attribution paths match.
 
-        Returns the **alias-resolved** identity FIRST (the canonical string a
-        no-email assignee resolves to via :meth:`resolve` with the same alias
-        map, e.g. ``lead@example.com`` when ``github:lead`` is aliased), then the
-        provider-qualified id (``github:lead``) as a robustness fallback,
-        de-duplicated. The first element is the one that MUST match; auto-import
-        stores it in ``team_memberships.raw_provider_user_id`` and the
-        ``teams.members`` roster so BOTH attribution paths resolve aliased and
-        non-aliased members alike (CHAOS-2609). ``display_name`` is intentionally
-        omitted — it is never a stable membership facet.
+        Order (de-duplicated, ``unknown``/empty dropped):
+
+        1. The **no-email** identity FIRST — what an assignee WITHOUT an email
+           resolves to: the alias-resolved canonical (``lead@example.com`` when
+           ``github:lead`` is aliased) else the provider-qualified id. This is the
+           element auto-import stores in the single ``raw_provider_user_id`` edge
+           facet (``raw_email`` already covers the email case on the ladder).
+        2. The provider-qualified id (``github:lead``) as a robustness fallback.
+        3. If the member has an email: what an assignee WITH that email resolves
+           to (``resolve(email=…)`` — alias-mapped if the email is aliased) AND
+           the normalized raw email — so the ``teams.members`` roster (read by
+           ``TeamResolver``) matches an email-bearing assignee too. Without this,
+           an email+provider-id member matched on the ladder via ``raw_email`` but
+           MISSED on the roster (CHAOS-2609).
+
+        ``display_name`` is intentionally omitted — never a stable facet.
         """
-        primary = self.resolve(
+        no_email_identity = self.resolve(
             provider=cast(WorkItemProvider, provider),
             username=username,
             account_id=account_id,
@@ -140,8 +148,14 @@ class IdentityResolver:
         qualified = provider_qualified_identity(
             provider, username=username, account_id=account_id
         )
+        candidates = [no_email_identity, qualified]
+        if email:
+            candidates.append(
+                self.resolve(provider=cast(WorkItemProvider, provider), email=email)
+            )
+            candidates.append(_norm_email(email))
         facets: list[str] = []
-        for candidate in (primary, qualified):
+        for candidate in candidates:
             if candidate and candidate != "unknown" and candidate not in facets:
                 facets.append(candidate)
         return facets

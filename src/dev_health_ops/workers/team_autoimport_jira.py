@@ -272,7 +272,9 @@ def populate(
         for member in discovered_members:
             member_id = _member_id("jira", member.provider_identity)
             facets = resolver.membership_facets(
-                provider="jira", account_id=member.provider_identity
+                provider="jira",
+                account_id=member.provider_identity,
+                email=member.email,
             ) or [member.provider_identity]
             for facet in facets:
                 if facet not in roster_facets:

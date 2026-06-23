@@ -633,6 +633,8 @@ _NO_EMAIL_ASSIGNEE: dict[str, dict[str, Any]] = {
         "no_alias_identity": "github:platform-lead",
         "alias_key": "github:platform-lead",
         "canonical": "gh-lead@example.com",
+        # The member's email from _patch_provider_stubs.discover_members_github.
+        "member_email": "platform@example.com",
         "team_id": "gh:platform",
     },
     "gitlab": {
@@ -640,6 +642,7 @@ _NO_EMAIL_ASSIGNEE: dict[str, dict[str, Any]] = {
         "no_alias_identity": "gitlab:dev-health-maintainer",
         "alias_key": "gitlab:dev-health-maintainer",
         "canonical": "gl-lead@example.com",
+        "member_email": "gitlab@example.com",
         "team_id": "gl:full-chaos/dev-health",
     },
     "jira": {
@@ -647,6 +650,7 @@ _NO_EMAIL_ASSIGNEE: dict[str, dict[str, Any]] = {
         "no_alias_identity": "jira:accountid:jira-ops-account",
         "alias_key": "jira:accountid:jira-ops-account",
         "canonical": "jira-lead@example.com",
+        "member_email": "jira-ops@example.com",
         "team_id": "OPS",
     },
 }
@@ -690,11 +694,20 @@ def _membership_probe_work_item(provider: str, assignee: str) -> WorkItem:
     )
 
 
-@pytest.mark.parametrize("aliased", [False, True], ids=["no_alias", "aliased"])
+# scenario → (alias file aliased?, builds an email-bearing assignee?)
+#   no_alias : no alias map, no-email assignee → resolves to provider-qualified id
+#   aliased  : alias map present, no-email assignee → resolves to canonical email
+#   email    : no alias map, assignee carries the member's EMAIL → resolves to that
+#              email (regression for the email+provider-id member: the ladder
+#              matched via raw_email but the roster used to MISS — CHAOS-2609 r4)
+_E2E_SCENARIOS = ["no_alias", "aliased", "email"]
+
+
+@pytest.mark.parametrize("scenario", _E2E_SCENARIOS, ids=_E2E_SCENARIOS)
 @pytest.mark.parametrize("provider", ["github", "gitlab", "jira"])
 def test_chaos_2609_no_email_assignee_resolves_to_autoimported_team_via_both_paths(
     provider: str,
-    aliased: bool,
+    scenario: str,
     monkeypatch: pytest.MonkeyPatch,
     sync_session_factory: Callable[[], Any],
     tmp_path: Any,
@@ -703,7 +716,7 @@ def test_chaos_2609_no_email_assignee_resolves_to_autoimported_team_via_both_pat
     # it, and the assignee path resolves the assignee through it. Point both at
     # the SAME file via IDENTITY_MAPPING_PATH so the aliased case is faithful.
     mapping_path = tmp_path / "identity_mapping.yaml"
-    _write_identity_mapping(mapping_path, aliased=aliased)
+    _write_identity_mapping(mapping_path, aliased=(scenario == "aliased"))
     monkeypatch.setenv("IDENTITY_MAPPING_PATH", str(mapping_path))
 
     sink = RecordingClickHouseSink()
@@ -717,12 +730,21 @@ def test_chaos_2609_no_email_assignee_resolves_to_autoimported_team_via_both_pat
     assert sink.memberships, "auto-import must populate team_memberships"
 
     spec = _NO_EMAIL_ASSIGNEE[provider]
-    expected_identity = spec["canonical"] if aliased else spec["no_alias_identity"]
+    if scenario == "email":
+        # An assignee that carries the member's email — resolves BY email.
+        resolve_kwargs = {**spec["resolve_kwargs"], "email": spec["member_email"]}
+        expected_identity = spec["member_email"]
+    elif scenario == "aliased":
+        resolve_kwargs = spec["resolve_kwargs"]
+        expected_identity = spec["canonical"]
+    else:
+        resolve_kwargs = spec["resolve_kwargs"]
+        expected_identity = spec["no_alias_identity"]
 
-    # 1. The REAL resolver (same alias map auto-import used) turns a no-email
-    #    assignee into the alias-resolved identity — a canonical email when
-    #    aliased, the provider-qualified id otherwise.
-    assignee = load_identity_resolver().resolve(**spec["resolve_kwargs"])
+    # 1. The REAL resolver (same alias map auto-import used) turns the assignee
+    #    into the identity it resolves to: provider-qualified id (no_alias),
+    #    canonical email (aliased), or the member's email (email scenario).
+    assignee = load_identity_resolver().resolve(**resolve_kwargs)
     assert assignee == expected_identity
 
     item = _membership_probe_work_item(provider, assignee)
@@ -738,14 +760,15 @@ def test_chaos_2609_no_email_assignee_resolves_to_autoimported_team_via_both_pat
         attribution_context=context,
     )
     assert ladder_team_id == spec["team_id"], (
-        f"{provider} (aliased={aliased}): no-email assignee {assignee!r} must "
-        f"resolve to the auto-imported team via the canonical ladder"
+        f"{provider} ({scenario}): assignee {assignee!r} must resolve to the "
+        f"auto-imported team via the canonical ladder"
     )
     assert ladder_team_name
     assert any(c.source == "assignee_membership" for c in candidates)
 
     # 3. Secondary TeamResolver: the teams.members roster resolves the SAME
-    #    assignee to the SAME team (the path the cosmetic roster fix missed).
+    #    assignee to the SAME team (the path the cosmetic roster fix missed, and
+    #    the path the email-bearing member used to miss before r4).
     team_resolver = TeamResolver(
         member_to_team=_build_member_to_team(list(sink.teams.values()))
     )
@@ -756,6 +779,6 @@ def test_chaos_2609_no_email_assignee_resolves_to_autoimported_team_via_both_pat
         attribution_context=None,
     )
     assert roster_team_id == spec["team_id"], (
-        f"{provider} (aliased={aliased}): teams.members roster must resolve "
-        f"no-email assignee {assignee!r} to the auto-imported team via TeamResolver"
+        f"{provider} ({scenario}): teams.members roster must resolve assignee "
+        f"{assignee!r} to the auto-imported team via TeamResolver"
     )

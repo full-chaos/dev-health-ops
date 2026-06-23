@@ -175,8 +175,11 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 > `gitlab:<username>` / `jira:accountid:<account_id>`. Deriving the identity directly (bypassing the
 > alias map) is the bug that broke aliased orgs. The alias-resolved identity lands in **both**
 > `team_memberships.raw_provider_user_id` (the one facet the ladder's `member_by_identity` indexes that
-> is free) **and** the `teams.members` roster (read by `TeamResolver`; the roster also carries the
-> provider-qualified id for robustness). The `member_id` **primary** keeps its `gh:`/`gl:`/`jira:<id>`
+> is free) **and** the `teams.members` roster (read by `TeamResolver`). `membership_facets` returns
+> *every* identity an assignee for this member could resolve to — the no-email identity, the
+> provider-qualified id, AND (when the member has an email) the resolver-mapped + normalized **email** —
+> so the roster matches an email-bearing assignee too (the ladder already matched it via `raw_email`,
+> but the roster used to miss). The `member_id` **primary** keeps its `gh:`/`gl:`/`jira:<id>`
 > form (untouched — it is the ReplacingMergeTree dedup key). A `members` cell is `yes` only when this
 > end-to-end resolution is **proven** (a no-email assignee — aliased AND non-aliased — resolves to the
 > auto-imported team via *both* paths —

@@ -13,6 +13,7 @@ import os
 from urllib.parse import urlparse
 
 from dev_health_ops.api.middleware.rate_limit import LIMITER_BACKEND
+from dev_health_ops.db import get_postgres_uri
 
 from .queries.client import clickhouse_client, query_dicts
 
@@ -101,7 +102,9 @@ def _dsn_uses_async_driver(dsn: str) -> bool:
 
 async def _check_postgres_health() -> tuple[str, str]:
     """Check Postgres connectivity. Returns ``("postgres", status)``."""
-    uri = _postgres_url()
+    if not _postgres_url():
+        return "postgres", "not_configured"
+    uri = get_postgres_uri()
     if not uri:
         return "postgres", "not_configured"
     if _dsn_uses_async_driver(uri):

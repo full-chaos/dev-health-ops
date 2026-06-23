@@ -93,6 +93,15 @@ class TestPostgresRuntimeUrlNormalization:
         assert url.query["ssl"] == "require"
         assert "channel_binding" not in url.query
 
+    def test_async_normalizer_preserves_unrelated_query_params(self):
+        result = db.normalize_async_postgres_uri(
+            "postgresql://u:p@h/db?sslmode=require&application_name=api"
+        )
+
+        url = make_url(result)
+        assert url.query["ssl"] == "require"
+        assert url.query["application_name"] == "api"
+
     def test_sync_normalizer_converts_asyncpg_ssl_to_libpq_sslmode(self):
         result = db.normalize_sync_postgres_uri(
             "postgresql+asyncpg://u:p@h/db?ssl=require"
@@ -112,6 +121,15 @@ class TestPostgresRuntimeUrlNormalization:
         assert url.drivername == "postgresql"
         assert url.query["sslmode"] == "require"
         assert "ssl" not in url.query
+
+    def test_sync_normalizer_removes_channel_binding(self):
+        result = db.normalize_sync_postgres_uri(
+            "postgresql+asyncpg://u:p@h/db?sslmode=require&channel_binding=require"
+        )
+
+        url = make_url(result)
+        assert url.query["sslmode"] == "require"
+        assert "channel_binding" not in url.query
 
     def test_sync_normalizer_preserves_unrelated_query_params(self):
         result = db.normalize_sync_postgres_uri(

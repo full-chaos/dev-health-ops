@@ -1,3 +1,6 @@
+from sqlalchemy.engine import make_url
+
+from dev_health_ops import db
 from dev_health_ops.metrics.db_utils import (
     normalize_db_url,
     normalize_postgres_url,
@@ -67,3 +70,90 @@ class TestNormalizeDbUrl:
         result = normalize_db_url(url)
         assert result == "sqlite:///path/sqlite+aiosqlite/data.db"
         assert result.count("sqlite+aiosqlite") == 1
+
+
+class TestPostgresRuntimeUrlNormalization:
+    def test_async_normalizer_converts_plain_postgres_sslmode_to_asyncpg_ssl(self):
+        result = db.normalize_async_postgres_uri(
+            "postgresql://u:p@h/db?sslmode=require"
+        )
+
+        url = make_url(result)
+        assert url.drivername == "postgresql+asyncpg"
+        assert url.query["ssl"] == "require"
+        assert "sslmode" not in url.query
+
+    def test_async_normalizer_removes_channel_binding(self):
+        result = db.normalize_async_postgres_uri(
+            "postgresql+asyncpg://u:p@h/db?sslmode=require&channel_binding=require"
+        )
+
+        url = make_url(result)
+        assert url.drivername == "postgresql+asyncpg"
+        assert url.query["ssl"] == "require"
+        assert "channel_binding" not in url.query
+
+    def test_sync_normalizer_converts_asyncpg_ssl_to_libpq_sslmode(self):
+        result = db.normalize_sync_postgres_uri(
+            "postgresql+asyncpg://u:p@h/db?ssl=require"
+        )
+
+        url = make_url(result)
+        assert url.drivername == "postgresql"
+        assert url.query["sslmode"] == "require"
+        assert "ssl" not in url.query
+
+    def test_sync_normalizer_keeps_existing_sslmode_compatible(self):
+        result = db.normalize_sync_postgres_uri(
+            "postgresql+asyncpg://u:p@h/db?sslmode=require"
+        )
+
+        url = make_url(result)
+        assert url.drivername == "postgresql"
+        assert url.query["sslmode"] == "require"
+        assert "ssl" not in url.query
+
+    def test_sync_normalizer_preserves_unrelated_query_params(self):
+        result = db.normalize_sync_postgres_uri(
+            "postgresql+asyncpg://u:p@h/db?ssl=require&application_name=worker"
+        )
+
+        url = make_url(result)
+        assert url.query["sslmode"] == "require"
+        assert url.query["application_name"] == "worker"
+
+    def test_get_sync_postgres_uri_normalizes_env_uri(self, monkeypatch):
+        monkeypatch.setenv(
+            "POSTGRES_URI",
+            "postgresql+asyncpg://u:p@h/db?ssl=require&channel_binding=require",
+        )
+        monkeypatch.delenv("DATABASE_URI", raising=False)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+
+        result = db._get_sync_postgres_uri()
+
+        assert result is not None
+        url = make_url(result)
+        assert url.drivername == "postgresql"
+        assert url.query["sslmode"] == "require"
+        assert "ssl" not in url.query
+        assert "channel_binding" not in url.query
+
+    def test_sync_engine_explicit_uri_uses_normalized_dsn(self, monkeypatch):
+        captured: dict[str, str] = {}
+
+        def create_engine(dsn: str, **kwargs):
+            captured["dsn"] = dsn
+            return object()
+
+        monkeypatch.setattr(db, "create_engine", create_engine)
+
+        db.get_postgres_sync_engine(
+            "postgresql+asyncpg://u:p@h/db?ssl=require&application_name=worker"
+        )
+
+        url = make_url(captured["dsn"])
+        assert url.drivername == "postgresql"
+        assert url.query["sslmode"] == "require"
+        assert url.query["application_name"] == "worker"
+        assert "ssl" not in url.query

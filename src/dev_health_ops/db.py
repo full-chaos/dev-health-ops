@@ -91,11 +91,11 @@ def get_postgres_uri() -> str | None:
     """Get PostgreSQL connection URI with fallback chain."""
     uri = os.getenv("POSTGRES_URI")
     if uri:
-        return _ensure_async_postgres(uri)
+        return normalize_async_postgres_uri(uri)
 
     fallback = os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
     if fallback:
-        return _ensure_async_postgres(fallback)
+        return normalize_async_postgres_uri(fallback)
 
     return None
 
@@ -105,10 +105,12 @@ def get_clickhouse_uri() -> str | None:
     return os.getenv("CLICKHOUSE_URI")
 
 
-def _ensure_async_postgres(uri: str) -> str:
-    """Ensure semantic DB URIs use an async driver."""
+def normalize_async_postgres_uri(uri: str) -> str:
     if uri.startswith("postgresql://"):
-        uri = uri.replace("postgresql://", "postgresql+asyncpg://", 1)
+        url = make_url(uri)
+        uri = url.set(drivername="postgresql+asyncpg").render_as_string(
+            hide_password=False
+        )
     elif uri.startswith("sqlite://") and not uri.startswith("sqlite+aiosqlite://"):
         return uri.replace("sqlite://", "sqlite+aiosqlite://", 1)
     return _normalize_asyncpg_postgres_query(uri)
@@ -131,6 +133,29 @@ def _normalize_asyncpg_postgres_query(uri: str) -> str:
         return uri
 
     return url.set(query=query).render_as_string(hide_password=False)
+
+
+def _ensure_async_postgres(uri: str) -> str:
+    return normalize_async_postgres_uri(uri)
+
+
+def normalize_sync_postgres_uri(uri: str) -> str:
+    if uri.startswith("postgresql"):
+        url = make_url(uri)
+        query = dict(url.query)
+        ssl = query.pop("ssl", None)
+        query.pop("channel_binding", None)
+        if ssl is not None and "sslmode" not in query:
+            query["sslmode"] = ssl
+        drivername = (
+            "postgresql" if url.drivername == "postgresql+asyncpg" else url.drivername
+        )
+        return url.set(drivername=drivername, query=query).render_as_string(
+            hide_password=False
+        )
+    if uri.startswith("sqlite+aiosqlite://"):
+        return uri.replace("sqlite+aiosqlite://", "sqlite://", 1)
+    return uri
 
 
 def get_postgres_engine() -> AsyncEngine:
@@ -253,7 +278,7 @@ def require_clickhouse_uri() -> str:
 def resolve_db_uri(ns) -> str:
     uri = getattr(ns, "db", None)
     if uri:
-        return _ensure_async_postgres(uri)
+        return normalize_async_postgres_uri(uri)
     return require_postgres_uri()
 
 
@@ -289,25 +314,17 @@ _postgres_sync_engine: Engine | None = None
 def _get_sync_postgres_uri() -> str | None:
     uri = os.getenv("POSTGRES_URI")
     if uri:
-        if uri.startswith("postgresql+asyncpg://"):
-            return uri.replace("postgresql+asyncpg://", "postgresql://", 1)
-        return uri
+        return normalize_sync_postgres_uri(uri)
 
     fallback = os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
     if fallback:
-        if "asyncpg" in fallback:
-            return fallback.replace("+asyncpg", "", 1)
-        return fallback
+        return normalize_sync_postgres_uri(fallback)
 
     return None
 
 
 def _ensure_sync_postgres(uri: str) -> str:
-    if uri.startswith("postgresql+asyncpg://"):
-        return uri.replace("postgresql+asyncpg://", "postgresql://", 1)
-    if uri.startswith("sqlite+aiosqlite://"):
-        return uri.replace("sqlite+aiosqlite://", "sqlite://", 1)
-    return uri
+    return normalize_sync_postgres_uri(uri)
 
 
 def get_postgres_sync_engine(uri: str | None = None) -> Engine:

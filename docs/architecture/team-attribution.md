@@ -166,15 +166,20 @@ not natively produce this entity. ¹ GitHub has no native Project entity (the re
 
 One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → `discover_*` → ClickHouse. (`LinearClient.iter_projects` is vestigial dead code, never a path.) **Two member representations — do not conflate:** `team_memberships` (edges) = canonical attribution source, read by the ladder, all 4 providers; `teams.members` (roster) = secondary resolver + admin/display, this CS populates it for github/gitlab too. **Chain:** members → assignee identity → issues → PRs/MRs → (maybe) commits; commit authors are a separate git-side source, member↔author reconciliation deferred (not CHAOS-2600).
 
-> **Identity must match what the assignee path produces (CHAOS-2609).** Both consumers key on the
-> *resolver-consumed* identity, so auto-import writes that exact string — `github:<login>` /
-> `gitlab:<username>` / `jira:accountid:<account_id>`, the same value `IdentityResolver.resolve`
-> returns for a no-email assignee (single source: `providers/identity.py::provider_qualified_identity`).
-> It lands in **both** `team_memberships.raw_provider_user_id` (a facet the ladder's
-> `member_by_identity` indexes) **and** the `teams.members` roster (read by `TeamResolver`). The
-> `member_id` **primary** keeps its `gh:`/`gl:`/`jira:<id>` form (untouched — it is the
-> ReplacingMergeTree dedup key). A `members` cell is `yes` only when this end-to-end resolution is
-> **proven** (a no-email assignee resolves to the auto-imported team via *both* paths —
+> **Identity must match what the assignee path produces — UNDER THE ORG ALIAS MAP (CHAOS-2609).**
+> Both consumers key on the *resolver-consumed* identity. Auto-import resolves each member through the
+> **same** `IdentityResolver` the assignee path uses — `load_identity_resolver()` (the global
+> `identity_mapping.yaml` / `IDENTITY_MAPPING_PATH`) — via `IdentityResolver.membership_facets`, so an
+> **aliased** member resolves to the **same canonical identity** an aliased assignee does (e.g.
+> `github:lead` → `lead@example.com`), and a non-aliased member stays `github:<login>` /
+> `gitlab:<username>` / `jira:accountid:<account_id>`. Deriving the identity directly (bypassing the
+> alias map) is the bug that broke aliased orgs. The alias-resolved identity lands in **both**
+> `team_memberships.raw_provider_user_id` (the one facet the ladder's `member_by_identity` indexes that
+> is free) **and** the `teams.members` roster (read by `TeamResolver`; the roster also carries the
+> provider-qualified id for robustness). The `member_id` **primary** keeps its `gh:`/`gl:`/`jira:<id>`
+> form (untouched — it is the ReplacingMergeTree dedup key). A `members` cell is `yes` only when this
+> end-to-end resolution is **proven** (a no-email assignee — aliased AND non-aliased — resolves to the
+> auto-imported team via *both* paths —
 > `tests/workers/test_team_autoimport_e2e_sync_surface.py`), not when a row is merely written.
 
 - **Resolver row (CS2):** the precedence resolver (`resolve_team_attribution`) is exercised for all

@@ -25,7 +25,7 @@ from dev_health_ops.metrics.schemas import (
     TeamProjectOwnershipRecord,
 )
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
-from dev_health_ops.providers.identity import provider_qualified_identity
+from dev_health_ops.providers.identity import load_identity_resolver
 
 _T = TypeVar("_T")
 
@@ -190,6 +190,11 @@ def populate(
             "work_item_team_attributions_imported": 0,
         }
 
+    # Same alias map the assignee/compute path uses (load_identity_resolver in
+    # job_work_items / providers.base), so an aliased member resolves to the SAME
+    # canonical identity an aliased assignee does (CHAOS-2609).
+    resolver = load_identity_resolver()
+
     team_rows: list[dict[str, Any]] = []
     project_rows: list[ProjectRecord] = []
     member_rows: list[MemberRecord] = []
@@ -257,20 +262,21 @@ def populate(
                 project_keys=project_keys,
             )
         )
-        # Roster carries the RESOLVER-CONSUMED identity (jira:accountid:<id>) so
-        # the secondary TeamResolver matches a no-email assignee, which
-        # IdentityResolver resolves to that same facet (CHAOS-2609).
-        team_rows[-1]["members"] = [
-            provider_qualified_identity("jira", account_id=member.provider_identity)
-            or member.provider_identity
-            for member in discovered_members
-        ]
+        # Resolve each member through the SAME org alias map an assignee uses:
+        # facets[0] is the alias-resolved identity (canonical email when the
+        # accountId is aliased, else jira:accountid:<id>) — the facet a no-email
+        # assignee resolves to. raw_provider_user_id stores it (member_id PK keeps
+        # the jira:<id> form); the roster carries all facets so BOTH attribution
+        # paths match aliased and non-aliased members (CHAOS-2609).
+        roster_facets: list[str] = []
         for member in discovered_members:
             member_id = _member_id("jira", member.provider_identity)
-            qualified_identity = (
-                provider_qualified_identity("jira", account_id=member.provider_identity)
-                or member.provider_identity
-            )
+            facets = resolver.membership_facets(
+                provider="jira", account_id=member.provider_identity
+            ) or [member.provider_identity]
+            for facet in facets:
+                if facet not in roster_facets:
+                    roster_facets.append(facet)
             member_rows.append(
                 MemberRecord(
                     org_id=org_id,
@@ -290,7 +296,7 @@ def populate(
                     provider="jira",
                     team_id=team_id,
                     member_id=member_id,
-                    raw_provider_user_id=qualified_identity,
+                    raw_provider_user_id=facets[0],
                     raw_email=member.email,
                     source="native",
                     is_primary=1 if member.role == "lead" else 0,
@@ -300,6 +306,7 @@ def populate(
                     updated_at=now,
                 )
             )
+        team_rows[-1]["members"] = roster_facets
 
     sink, should_close = _sink_from_kwargs(scope, kwargs)
     try:

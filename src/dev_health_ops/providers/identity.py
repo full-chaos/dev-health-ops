@@ -4,6 +4,7 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import yaml
 
@@ -110,6 +111,40 @@ class IdentityResolver:
         if display_name:
             return display_name.strip() or "unknown"
         return "unknown"
+
+    def membership_facets(
+        self,
+        *,
+        provider: WorkItemProvider | str,
+        username: str | None = None,
+        account_id: str | None = None,
+    ) -> list[str]:
+        """Identities to store on a team membership so a no-email assignee for
+        this member matches on resolution — under THIS org's alias map.
+
+        Returns the **alias-resolved** identity FIRST (the canonical string a
+        no-email assignee resolves to via :meth:`resolve` with the same alias
+        map, e.g. ``lead@example.com`` when ``github:lead`` is aliased), then the
+        provider-qualified id (``github:lead``) as a robustness fallback,
+        de-duplicated. The first element is the one that MUST match; auto-import
+        stores it in ``team_memberships.raw_provider_user_id`` and the
+        ``teams.members`` roster so BOTH attribution paths resolve aliased and
+        non-aliased members alike (CHAOS-2609). ``display_name`` is intentionally
+        omitted — it is never a stable membership facet.
+        """
+        primary = self.resolve(
+            provider=cast(WorkItemProvider, provider),
+            username=username,
+            account_id=account_id,
+        )
+        qualified = provider_qualified_identity(
+            provider, username=username, account_id=account_id
+        )
+        facets: list[str] = []
+        for candidate in (primary, qualified):
+            if candidate and candidate != "unknown" and candidate not in facets:
+                facets.append(candidate)
+        return facets
 
 
 def load_identity_resolver(path: Path | None = None) -> IdentityResolver:

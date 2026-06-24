@@ -72,6 +72,52 @@ def _as_aware(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
+def _ch_string(value: str) -> str:
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def _load_pr_ids_by_repo_path(
+    sink: Any,
+    *,
+    org_id: str,
+    repo_paths: set[tuple[str, str]],
+) -> dict[tuple[str, str], set[str]]:
+    if not repo_paths:
+        return {}
+
+    from dev_health_ops.work_graph.ids import generate_pr_id
+
+    repo_ids = sorted({repo_id for repo_id, _path in repo_paths})
+    paths = sorted({path for _repo_id, path in repo_paths})
+    query = f"""
+        SELECT DISTINCT
+            p.repo_id AS repo_id,
+            p.pr_number AS pr_number,
+            s.file_path AS file_path
+        FROM work_graph_pr_commit AS p
+        INNER JOIN git_commit_stats AS s ON (
+            toString(p.repo_id) = toString(s.repo_id)
+            AND p.commit_hash = s.commit_hash
+            AND toString(p.org_id) = toString(s.org_id)
+        )
+        WHERE p.org_id = {_ch_string(org_id)}
+          AND toString(p.repo_id) IN ({", ".join(_ch_string(v) for v in repo_ids)})
+          AND s.file_path IN ({", ".join(_ch_string(v) for v in paths)})
+    """
+    rows = sink.query_dicts(query, {})
+    matches: dict[tuple[str, str], set[str]] = {}
+    for row in rows:
+        repo_id = str(row.get("repo_id") or "")
+        file_path = str(row.get("file_path") or "")
+        pr_number = row.get("pr_number")
+        if not repo_id or not file_path or pr_number is None:
+            continue
+        matches.setdefault((repo_id, file_path), set()).add(
+            generate_pr_id(uuid.UUID(repo_id), int(pr_number))
+        )
+    return matches
+
+
 def _sync_launchdarkly_feature_flags(
     *,
     db_url: str,
@@ -80,11 +126,19 @@ def _sync_launchdarkly_feature_flags(
     sync_options: dict[str, Any],
     since_dt: datetime | None,
 ) -> dict[str, Any]:
+    from dev_health_ops.connectors.exceptions import ConnectorException
     from dev_health_ops.connectors.launchdarkly import LaunchDarklyConnector
     from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
     from dev_health_ops.processors.launchdarkly import (
         normalize_audit_events,
         normalize_flags,
+    )
+    from dev_health_ops.providers.launchdarkly.code_refs import (
+        LD_CODE_REFERENCE_CONFIDENCE,
+        LaunchDarklyCodeReferencesClient,
+        build_code_reference_links,
+        index_repo_rows,
+        resolve_repo_id,
     )
     from dev_health_ops.work_graph.builder import BuildConfig, WorkGraphBuilder
     from dev_health_ops.work_graph.ids import generate_feature_flag_id
@@ -115,6 +169,20 @@ def _sync_launchdarkly_feature_flags(
             # connector paginates via _links.next to assemble full history
             # since the last watermark.
             raw_events = await connector.get_audit_log(since=since_dt, limit=1000)
+        try:
+            async with LaunchDarklyCodeReferencesClient(api_key=api_key) as code_refs:
+                raw_code_refs = await code_refs.list_default_branch_references(
+                    project_key=project_key
+                )
+            code_references_error = None
+        except ConnectorException as exc:
+            logger.warning(
+                "Skipping LaunchDarkly code references for project %s: %s",
+                project_key,
+                exc,
+            )
+            raw_code_refs = []
+            code_references_error = str(exc)
 
         flags = normalize_flags(raw_flags, org_id)
         if environment:
@@ -159,6 +227,44 @@ def _sync_launchdarkly_feature_flags(
         try:
             sink.write_feature_flags(flags)
             sink.write_feature_flag_events(events)
+
+            repo_rows = sink.query_dicts(
+                "SELECT id, repo FROM repos WHERE org_id = " + _ch_string(org_id),
+                {},
+            )
+            repo_index = index_repo_rows(repo_rows)
+            repo_paths = {
+                (str(repo_id), ref.file_path)
+                for ref in raw_code_refs
+                if (repo_id := resolve_repo_id(ref, repo_index)) is not None
+            }
+            pr_ids_by_repo_path = _load_pr_ids_by_repo_path(
+                sink,
+                org_id=org_id,
+                repo_paths=repo_paths,
+            )
+            code_ref_links, code_ref_edges = build_code_reference_links(
+                raw_code_refs,
+                org_id=org_id,
+                repo_index=repo_index,
+                pr_ids_by_repo_path=pr_ids_by_repo_path,
+            )
+            sink.write_feature_flag_links(code_ref_links)
+            for edge in code_ref_edges:
+                target_type = (
+                    NodeType.FILE if edge["target_type"] == "file" else NodeType.PR
+                )
+                builder.add_feature_flag_edge(
+                    flag_id=str(edge["flag_id"]),
+                    target_type=target_type,
+                    target_id=str(edge["target_id"]),
+                    edge_type=EdgeType.GUARDS,
+                    confidence=LD_CODE_REFERENCE_CONFIDENCE,
+                    evidence=str(edge["evidence"]),
+                    provenance=Provenance.NATIVE,
+                    repo_id=edge["repo_id"],
+                    provider="launchdarkly",
+                )
 
             latest_events: dict[str, Any] = {}
             for event in events:
@@ -205,6 +311,10 @@ def _sync_launchdarkly_feature_flags(
         return {
             "flags_synced": len(flags),
             "events_synced": len(events),
+            "code_references_synced": len(raw_code_refs),
+            "code_reference_links_synced": len(code_ref_links),
+            "code_reference_edges_synced": len(code_ref_edges),
+            "code_references_error": code_references_error,
             "project_key": project_key,
             "environment": environment or None,
         }

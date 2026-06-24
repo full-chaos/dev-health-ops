@@ -61,6 +61,66 @@ class _CroniterStub:
         return self._next
 
 
+def test_planner_source_rows_accepts_github_full_name():
+    integration_id = uuid.uuid4()
+    config_id = uuid.uuid4()
+    payload = sync_router_module.SyncConfigBatchCreate(
+        name="Full Chaos",
+        provider="github",
+        sync_options={"owner": "fallback-owner"},
+        repos=["acme/web"],
+    )
+
+    rows = sync_router_module._planner_source_rows(
+        payload,
+        {},
+        {},
+        "org-test",
+        integration_id,
+        config_id,
+    )
+
+    assert len(rows) == 1
+    source = rows[0]
+    assert source.external_id == "acme/web"
+    assert source.full_name == "acme/web"
+    assert source.name == "web"
+    assert source.metadata_ == {
+        "owner": "acme",
+        "planner_managed_sync_config_id": str(config_id),
+    }
+
+
+def test_planner_source_rows_keeps_gitlab_slash_path_unchanged():
+    integration_id = uuid.uuid4()
+    config_id = uuid.uuid4()
+    payload = sync_router_module.SyncConfigBatchCreate(
+        name="GitLab",
+        provider="gitlab",
+        sync_options={"group": "fallback-group"},
+        repos=["group/subgroup/project"],
+    )
+
+    rows = sync_router_module._planner_source_rows(
+        payload,
+        {},
+        {"group/subgroup/project": (42, "group/subgroup/project")},
+        "org-test",
+        integration_id,
+        config_id,
+    )
+
+    assert len(rows) == 1
+    source = rows[0]
+    assert source.external_id == "42"
+    assert source.full_name == "group/subgroup/project"
+    assert source.name == "project"
+    assert source.metadata_ == {
+        "path_with_namespace": "group/subgroup/project",
+        "planner_managed_sync_config_id": str(config_id),
+    }
+
+
 @pytest_asyncio.fixture
 async def session_maker(tmp_path: Path):
     db_path = tmp_path / "sync-configs.db"

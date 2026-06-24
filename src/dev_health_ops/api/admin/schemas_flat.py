@@ -143,7 +143,10 @@ class SyncConfigBatchCreate(BaseModel):
     credential_id: str | None = None
     sync_targets: list[str] = Field(default_factory=list)
     sync_options: dict[str, Any] = Field(default_factory=dict)
-    repos: list[str] = Field(default_factory=list, description="Repo names to sync")
+    repos: list[str] = Field(
+        default_factory=list,
+        description="Repo names or full names to sync",
+    )
     schedule_cron: str | None = None
     timezone: str | None = None
     initial_sync_depth: int | None = None

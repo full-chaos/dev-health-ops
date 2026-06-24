@@ -34,6 +34,7 @@ from dev_health_ops.sync.trigger_routing import MIGRATED_TRIGGER_ROUTING_SETTING
 from dev_health_ops.sync.watermarks import get_watermark, set_watermark
 
 ORG_ID = "backfill-fanout-org"
+PLANNER_TAG_KEY = "planner_managed_sync_config_id"
 
 
 @pytest.fixture
@@ -538,7 +539,7 @@ def test_run_backfill_task_fanout_resolves_migrated_integration_id(
     from dev_health_ops.workers import sync_backfill
 
     integration = _create_integration(db_session)
-    _create_source(db_session, integration, "full-chaos/dev-health")
+    source = _create_source(db_session, integration, "full-chaos/dev-health")
     _create_dataset(db_session, integration, "commits")
     config = SyncConfiguration(
         name="migrated parent backfill",
@@ -551,6 +552,8 @@ def test_run_backfill_task_fanout_resolves_migrated_integration_id(
         planner_managed=True,
     )
     db_session.add(config)
+    db_session.flush()
+    source.metadata_ = {PLANNER_TAG_KEY: str(config.id)}
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
     monkeypatch.setenv("SYNC_FANOUT_BACKFILL", "1")
@@ -602,7 +605,7 @@ def test_run_backfill_task_fanout_resolves_migrated_integration_id(
     assert result["status"] == "success"
     assert captured["integration_id"] == str(integration.id)
     assert captured["integration_id"] != str(config.id)
-    assert captured["source_ids"] is None  # parent => whole integration
+    assert captured["source_ids"] == (str(source.id),)
     assert captured["since"] == date(2026, 6, 1)
     assert captured["before"] == date(2026, 6, 7)
     assert captured["triggered_by"] == "backfill"

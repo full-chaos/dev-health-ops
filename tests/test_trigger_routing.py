@@ -25,6 +25,7 @@ from dev_health_ops.sync.trigger_routing import (
 )
 
 ORG_ID = "routing-org"
+PLANNER_TAG_KEY = "planner_managed_sync_config_id"
 
 
 @pytest.fixture
@@ -74,29 +75,51 @@ def _set_flag(session: Session, value: str) -> None:
     session.flush()
 
 
-def _source(session: Session, integration_id: uuid.UUID) -> IntegrationSource:
-    session.add(
-        Integration(
-            id=integration_id,
-            org_id=ORG_ID,
-            provider="github",
-            name="github-integration",
-            config={},
-        )
+def _integration(
+    session: Session, integration_id: uuid.UUID, *, provider: str = "github"
+) -> Integration:
+    integration = Integration(
+        id=integration_id,
+        org_id=ORG_ID,
+        provider=provider,
+        name=f"{provider}-integration-{integration_id}",
+        config={},
     )
+    session.add(integration)
+    session.flush()
+    return integration
+
+
+def _integration_source(
+    session: Session,
+    integration_id: uuid.UUID,
+    *,
+    provider: str = "github",
+    full_name: str,
+    metadata: dict[str, str] | None = None,
+    is_enabled: bool = True,
+) -> IntegrationSource:
     source = IntegrationSource(
         org_id=ORG_ID,
         integration_id=integration_id,
-        provider="github",
+        provider=provider,
         source_type="repository",
-        external_id="full-chaos/dev-health",
-        name="dev-health",
-        full_name="full-chaos/dev-health",
-        is_enabled=True,
+        external_id=full_name,
+        name=full_name.rsplit("/", 1)[-1],
+        full_name=full_name,
+        metadata_=metadata or {},
+        is_enabled=is_enabled,
     )
     session.add(source)
     session.flush()
     return source
+
+
+def _source(session: Session, integration_id: uuid.UUID) -> IntegrationSource:
+    _integration(session, integration_id)
+    return _integration_source(
+        session, integration_id, full_name="full-chaos/dev-health"
+    )
 
 
 # --- flag reader -----------------------------------------------------------
@@ -210,6 +233,133 @@ def test_planner_managed_parent_routes_without_flag(db_session):
 
     assert req is not None
     assert req.integration_id == str(integration_id)
+
+
+@pytest.mark.parametrize("provider", ["github", "gitlab"])
+def test_planner_managed_parent_scopes_to_tagged_enabled_sources(db_session, provider):
+    integration_id = uuid.uuid4()
+    _integration(db_session, integration_id, provider=provider)
+    config = _config(
+        db_session,
+        provider=provider,
+        migrated_integration_id=integration_id,
+        planner_managed=True,
+    )
+    tag = {PLANNER_TAG_KEY: str(config.id)}
+    selected = [
+        _integration_source(
+            db_session,
+            integration_id,
+            provider=provider,
+            full_name=f"acme/{provider}-selected-a",
+            metadata=tag,
+        ),
+        _integration_source(
+            db_session,
+            integration_id,
+            provider=provider,
+            full_name=f"acme/{provider}-selected-b",
+            metadata=tag,
+        ),
+        _integration_source(
+            db_session,
+            integration_id,
+            provider=provider,
+            full_name=f"acme/{provider}-selected-c",
+            metadata=tag,
+        ),
+    ]
+    _integration_source(
+        db_session,
+        integration_id,
+        provider=provider,
+        full_name=f"acme/{provider}-untagged",
+    )
+    _integration_source(
+        db_session,
+        integration_id,
+        provider=provider,
+        full_name=f"acme/{provider}-disabled",
+        metadata=tag,
+        is_enabled=False,
+    )
+
+    req = planner_request_for_config_if_routed(
+        db_session, config, triggered_by="manual"
+    )
+
+    assert req is not None
+    assert req.source_ids is not None
+    assert set(req.source_ids) == {str(source.id) for source in selected}
+    assert len(req.source_ids) == 3
+
+
+def test_planner_managed_child_keeps_single_source_scope(db_session):
+    integration_id = uuid.uuid4()
+    _integration(db_session, integration_id)
+    source = _integration_source(
+        db_session, integration_id, full_name="full-chaos/dev-health"
+    )
+    child = _config(
+        db_session,
+        migrated_integration_id=integration_id,
+        migrated_source_id=source.id,
+        planner_managed=True,
+    )
+
+    req = planner_request_for_config_if_routed(db_session, child, triggered_by="manual")
+
+    assert req is not None
+    assert req.source_ids == (str(source.id),)
+
+
+def test_planner_managed_parent_with_zero_tagged_enabled_sources_syncs_nothing(
+    db_session,
+):
+    integration_id = uuid.uuid4()
+    _integration(db_session, integration_id)
+    config = _config(
+        db_session,
+        migrated_integration_id=integration_id,
+        planner_managed=True,
+    )
+    _integration_source(db_session, integration_id, full_name="full-chaos/untagged")
+    _integration_source(
+        db_session,
+        integration_id,
+        full_name="full-chaos/disabled",
+        metadata={PLANNER_TAG_KEY: str(config.id)},
+        is_enabled=False,
+    )
+
+    req = planner_request_for_config_if_routed(
+        db_session, config, triggered_by="manual"
+    )
+
+    assert req is not None
+    assert req.source_ids == ()
+
+
+def test_flag_routed_parent_without_planner_marker_keeps_all_enabled_semantics(
+    db_session,
+):
+    integration_id = uuid.uuid4()
+    _integration(db_session, integration_id)
+    config = _config(db_session, migrated_integration_id=integration_id)
+    _integration_source(
+        db_session,
+        integration_id,
+        full_name="full-chaos/tagged-but-legacy",
+        metadata={PLANNER_TAG_KEY: str(config.id)},
+    )
+    _set_flag(db_session, "true")
+
+    req = planner_request_for_config_if_routed(
+        db_session, config, triggered_by="manual"
+    )
+
+    assert req is not None
+    assert req.source_ids is None
 
 
 def test_migrated_single_with_source_needs_flag_without_planner_marker(db_session):

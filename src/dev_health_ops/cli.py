@@ -360,6 +360,13 @@ def _suppress_parser_construction_noise():
 def _should_resolve_org(ns: argparse.Namespace) -> bool:
     if getattr(ns, "org", None) is not None:
         return False
+    # The planner-config audit defaults to ALL orgs; never auto-resolve it to a
+    # single (first) org, or the cross-org audit silently scans only one org.
+    if (
+        getattr(ns, "command", None) == "audit"
+        and getattr(ns, "audit_command", None) == "planner-configs"
+    ):
+        return False
     return not (
         getattr(ns, "command", None) == "migrate"
         and getattr(ns, "migrate_command", None) == "clickhouse"
@@ -421,6 +428,7 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     # --- audit (read ClickHouse analytics store) ---
     ("audit", "perf"): frozenset({_REQ_CLICKHOUSE}),
     ("audit", "schema"): frozenset({_REQ_CLICKHOUSE}),
+    ("audit", "planner-configs"): frozenset({_REQ_POSTGRES}),
     # --- other ClickHouse-backed commands ---
     ("recommendations", "compute"): frozenset({_REQ_CLICKHOUSE}),
     ("investment", "materialize"): frozenset({_REQ_CLICKHOUSE}),
@@ -589,7 +597,13 @@ def build_parser() -> argparse.ArgumentParser:
     from dev_health_ops import migrate as migrate_mod
     from dev_health_ops.api import runner as api_runner
     from dev_health_ops.api.admin import cli as admin_cli
-    from dev_health_ops.audit import completeness, coverage, perf, schema
+    from dev_health_ops.audit import (
+        completeness,
+        coverage,
+        perf,
+        planner_configs,
+        schema,
+    )
     from dev_health_ops.audit.ai_governance import cli as ai_governance_cli
     from dev_health_ops.fixtures import runner as fixtures_runner
     from dev_health_ops.metrics import (
@@ -670,6 +684,7 @@ def build_parser() -> argparse.ArgumentParser:
     schema.register_commands(audit_subparsers)
     perf.register_commands(audit_subparsers)
     coverage.register_commands(audit_subparsers)
+    planner_configs.register_commands(audit_subparsers)
 
     # ---- fixtures ----
     fixtures_runner.register_commands(sub)

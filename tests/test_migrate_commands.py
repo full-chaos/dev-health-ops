@@ -126,6 +126,12 @@ class TestMigrateRouting:
         assert getattr(ns, "org", None) is None
         assert _should_resolve_org(ns)
 
+    def test_audit_planner_configs_without_org_does_not_auto_resolve(self):
+        ns = self.parser.parse_args(["audit", "planner-configs"])
+
+        assert getattr(ns, "org", None) is None
+        assert not _should_resolve_org(ns)
+
     def test_upgrade_flat_defaults_to_head(self):
         ns = self.parser.parse_args(["migrate", "upgrade"])
         assert ns.revision == "head"

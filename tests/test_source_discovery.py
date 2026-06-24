@@ -227,6 +227,95 @@ def test_rediscovery_updates_last_seen_at_no_duplicates(
         )
 
 
+def test_github_rediscovery_preserves_planner_tag_and_updates_fields(
+    session: Session, github_integration: Integration
+):
+    from dev_health_ops.sync.discovery import discover_sources_for_integration
+
+    config_id = uuid.uuid4()
+    t_before = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    source = IntegrationSource(
+        org_id="org-test",
+        integration_id=github_integration.id,
+        provider="github",
+        source_type="repository",
+        external_id="acme/api",
+        name="old-name",
+        full_name="old/full-name",
+        metadata_={
+            "owner": "old-owner",
+            "planner_managed_sync_config_id": str(config_id),
+        },
+        is_enabled=True,
+        discovered_at=t_before,
+        last_seen_at=t_before,
+    )
+    session.add(source)
+    session.commit()
+
+    with patch(DISCOVERY_PATH, return_value=[("acme", "api")]):
+        updated = discover_sources_for_integration(session, github_integration.id)
+
+    assert len(updated) == 1
+    assert updated[0].name == "api"
+    assert updated[0].full_name == "acme/api"
+    assert updated[0].last_seen_at > t_before
+    assert updated[0].metadata_ == {
+        "owner": "acme",
+        "planner_managed_sync_config_id": str(config_id),
+    }
+
+
+def test_gitlab_rediscovery_preserves_planner_tag_and_updates_fields(
+    session: Session, gitlab_integration: Integration
+):
+    from dev_health_ops.sync.discovery import discover_sources_for_integration
+
+    config_id = uuid.uuid4()
+    t_before = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    source = IntegrationSource(
+        org_id="org-test",
+        integration_id=gitlab_integration.id,
+        provider="gitlab",
+        source_type="project",
+        external_id="42",
+        name="old-name",
+        full_name="old/full-name",
+        metadata_={
+            "path_with_namespace": "old/full-name",
+            "planner_managed_sync_config_id": str(config_id),
+        },
+        is_enabled=True,
+        discovered_at=t_before,
+        last_seen_at=t_before,
+    )
+    session.add(source)
+    session.commit()
+
+    with patch(DISCOVERY_PATH, return_value=[("42", "acme/api")]):
+        updated = discover_sources_for_integration(session, gitlab_integration.id)
+
+    assert len(updated) == 1
+    assert updated[0].name == "api"
+    assert updated[0].full_name == "acme/api"
+    assert updated[0].last_seen_at > t_before
+    assert updated[0].metadata_ == {
+        "path_with_namespace": "acme/api",
+        "planner_managed_sync_config_id": str(config_id),
+    }
+
+
+def test_new_github_discovery_row_has_only_fresh_metadata(
+    session: Session, github_integration: Integration
+):
+    from dev_health_ops.sync.discovery import discover_sources_for_integration
+
+    with patch(DISCOVERY_PATH, return_value=[("acme", "api")]):
+        sources = discover_sources_for_integration(session, github_integration.id)
+
+    assert sources[0].metadata_ == {"owner": "acme"}
+
+
 # ---------------------------------------------------------------------------
 # Test 5: Disabled source stays disabled after re-discovery
 # ---------------------------------------------------------------------------

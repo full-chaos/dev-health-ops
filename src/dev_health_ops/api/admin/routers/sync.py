@@ -666,6 +666,26 @@ def _planner_source_rows(
     return rows
 
 
+async def _assert_single_planner_parent_for_integration(
+    session: AsyncSession,
+    org_id: str,
+    integration_id: uuid.UUID,
+) -> None:
+    count_stmt = select(func.count(SyncConfiguration.id)).where(
+        SyncConfiguration.org_id == org_id,
+        SyncConfiguration.planner_managed.is_(True),
+        SyncConfiguration.migrated_integration_id == integration_id,
+        SyncConfiguration.parent_id.is_(None),
+    )
+    planner_parent_count = (await session.execute(count_stmt)).scalar_one()
+    if planner_parent_count > 1:
+        raise RuntimeError(
+            "Planner-managed integration invariant violated: "
+            f"integration {integration_id} is linked to {planner_parent_count} "
+            "planner-managed parent sync configurations"
+        )
+
+
 @router.get("/sync-targets")
 async def get_provider_sync_targets() -> dict[str, list[str]]:
     return PROVIDER_SYNC_TARGETS
@@ -1024,6 +1044,7 @@ async def batch_create_sync_configs(
     )
     session.add(parent)
     await session.flush()
+    await _assert_single_planner_parent_for_integration(session, org_id, integration.id)
 
     source_rows = _planner_source_rows(
         payload,

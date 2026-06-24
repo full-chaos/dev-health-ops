@@ -182,7 +182,10 @@ def discover_sources_for_integration(
     constraint ``(org_id, integration_id, provider, external_id)``.
 
     On re-discovery:
-    - ``last_seen_at``, ``name``, ``full_name``, and ``metadata_`` are updated.
+    - ``last_seen_at``, ``name``, and ``full_name`` are updated.
+    - ``metadata_`` is merged: fresh discovery values win, while keys the
+      discovery payload lacks (including ``planner_managed_sync_config_id``)
+      are preserved.
     - ``is_enabled`` is **not** changed for existing rows (preserves operator
       intent).  Only brand-new sources get ``is_enabled = auto_enable``.
     - ``discovered_at`` is **not** changed for existing rows.
@@ -240,7 +243,7 @@ def discover_sources_for_integration(
             existing.last_seen_at = now
             existing.name = fields["name"]
             existing.full_name = fields["full_name"]
-            existing.metadata_ = fields["metadata_"]
+            existing.metadata_ = {**(existing.metadata_ or {}), **fields["metadata_"]}
             upserted.append(existing)
         else:
             source = IntegrationSource(

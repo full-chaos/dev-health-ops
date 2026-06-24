@@ -42,6 +42,13 @@ _DIAGNOSTIC_HEADER_NAMES = (
 _TItem = TypeVar("_TItem")
 
 
+_TIMELINE_TYPENAME_TO_EVENT = {
+    "MergedEvent": "merged",
+    "ClosedEvent": "closed",
+    "ReopenedEvent": "reopened",
+}
+
+
 def _parse_github_datetime(value: object) -> datetime | None:
     if isinstance(value, datetime):
         if value.tzinfo is None:
@@ -127,12 +134,21 @@ class GitHubGraphQLReview:
     url: object
 
 
+@dataclass
+class GitHubGraphQLEvent:
+    created_at: object
+    event: object
+    actor: object = None
+    label: object = None
+
+
 @dataclass(frozen=True)
 class BatchedPRPayload:
     number: int
     issue_comments: tuple[GitHubGraphQLComment, ...]
     review_comments: tuple[GitHubGraphQLComment, ...]
     reviews: tuple[GitHubGraphQLReview, ...]
+    events: tuple[GitHubGraphQLEvent, ...] = ()
 
 
 class _GitHubEventLike(Protocol):
@@ -554,6 +570,7 @@ class GitHubWorkClient:
         comments_limit: int | None = None,
         review_comments_limit: int | None = None,
         reviews_limit: int | None = None,
+        events_limit: int | None = 0,
         batch_size: int = 50,
     ) -> Iterable[BatchedPRPayload]:
         """Fetch PR issue comments, reviews, and review comments in GraphQL batches.
@@ -585,6 +602,7 @@ class GitHubWorkClient:
                 comments_first=self._connection_first(comments_limit),
                 review_comments_first=self._connection_first(review_comments_limit),
                 reviews_first=self._connection_first(reviews_limit),
+                events_first=self._connection_first(events_limit),
             )
             yield from self._complete_pr_social_payloads(
                 owner=owner,
@@ -593,6 +611,7 @@ class GitHubWorkClient:
                 comments_limit=comments_limit,
                 review_comments_limit=review_comments_limit,
                 reviews_limit=reviews_limit,
+                events_limit=events_limit,
             )
 
     def iter_pr_comments_batch(
@@ -710,6 +729,18 @@ class GitHubWorkClient:
             url=node.get("url"),
         )
 
+    @classmethod
+    def _event_from_graphql(cls, node: dict[str, Any]) -> GitHubGraphQLEvent:
+        actor_node = node.get("actor") if isinstance(node.get("actor"), dict) else {}
+        actor = GitHubGraphQLUser(login=(actor_node or {}).get("login"))
+        typename = str(node.get("__typename") or "")
+        return GitHubGraphQLEvent(
+            created_at=_parse_github_datetime(node.get("createdAt")),
+            event=_TIMELINE_TYPENAME_TO_EVENT.get(typename, ""),
+            actor=actor,
+            label=None,
+        )
+
     def _fetch_pr_social_data_page(
         self,
         *,
@@ -721,6 +752,8 @@ class GitHubWorkClient:
         reviews_first: int,
         comments_after: str | None = None,
         reviews_after: str | None = None,
+        events_first: int = 0,
+        events_after: str | None = None,
     ) -> dict[int, dict[str, Any]]:
         aliases: list[str] = []
         for idx, number in enumerate(numbers):
@@ -746,6 +779,18 @@ class GitHubWorkClient:
                 fields.append(
                     f"reviews(first: {reviews_first}, after: {reviews_after_arg}) "
                     f"{{ nodes {{ {' '.join(review_fields)} }} pageInfo {{ hasNextPage endCursor }} }}"
+                )
+            if events_first > 0:
+                events_after_arg = self._graphql_arg(events_after)
+                fields.append(
+                    "timelineItems(itemTypes: [MERGED_EVENT, CLOSED_EVENT, "
+                    "REOPENED_EVENT], "
+                    f"first: {events_first}, after: {events_after_arg}) "
+                    "{ nodes { __typename "
+                    "... on MergedEvent { createdAt actor { login } } "
+                    "... on ClosedEvent { createdAt actor { login } } "
+                    "... on ReopenedEvent { createdAt actor { login } } } "
+                    "pageInfo { hasNextPage endCursor } }"
                 )
             aliases.append(
                 f"pr{idx}: pullRequest(number: {int(number)}) {{ {' '.join(fields)} }}"
@@ -809,6 +854,7 @@ class GitHubWorkClient:
         comments_limit: int | None,
         review_comments_limit: int | None,
         reviews_limit: int | None,
+        events_limit: int | None = 0,
     ) -> Iterable[BatchedPRPayload]:
         for number, pr_node in initial.items():
             comments_connection = pr_node.get("comments")
@@ -904,11 +950,41 @@ class GitHubWorkClient:
             if review_comments_limit is not None:
                 review_comments = review_comments[: int(review_comments_limit)]
 
+            events_connection = pr_node.get("timelineItems")
+            events_nodes = self._connection_nodes(events_connection)
+            events_cursor = self._connection_cursor(events_connection)
+            while (
+                events_cursor
+                and self._remaining_limit(events_limit, len(events_nodes)) != 0
+            ):
+                remaining_events = self._remaining_limit(
+                    events_limit, len(events_nodes)
+                )
+                more = self._fetch_pr_social_data_page(
+                    owner=owner,
+                    repo=repo,
+                    numbers=[number],
+                    comments_first=0,
+                    review_comments_first=0,
+                    reviews_first=0,
+                    events_first=self._connection_first(remaining_events),
+                    events_after=events_cursor,
+                ).get(number, {})
+                more_events = (
+                    more.get("timelineItems") if isinstance(more, dict) else None
+                )
+                events_nodes.extend(self._connection_nodes(more_events))
+                events_cursor = self._connection_cursor(more_events)
+            events = [self._event_from_graphql(node) for node in events_nodes]
+            if events_limit is not None:
+                events = events[: int(events_limit)]
+
             yield BatchedPRPayload(
                 number=number,
                 issue_comments=tuple(comments),
                 review_comments=tuple(review_comments),
                 reviews=tuple(reviews),
+                events=tuple(events),
             )
 
     def iter_repo_milestones(

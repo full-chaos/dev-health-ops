@@ -885,3 +885,133 @@ class TestWorkGraphBuilderIntegration:
     def test_incremental_build(self):
         """Incremental build with from_date parameter."""
         pass
+
+
+class TestFlagGuardsEdges:
+    """CHAOS-2630 Phase C1: flag -> issue GUARDS edges from real text references."""
+
+    def _run(self, flag_rows, wi_rows, *, org_id="org-1"):
+        fake_sink = MagicMock()
+        fake_sink.backend_type = "clickhouse"
+
+        def mock_query(query, params):
+            if "feature_flag" in query:
+                return flag_rows
+            if "work_items" in query:
+                return wi_rows
+            return []
+
+        fake_sink.query_dicts = MagicMock(side_effect=mock_query)
+        fake_sink.write_work_graph_edges = MagicMock()
+        fake_sink.write_feature_flag_links = MagicMock()
+
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default", org_id=org_id)
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            count = builder._build_flag_guards_edges()
+            builder.close()
+        return count, fake_sink
+
+    @pytest.mark.parametrize(
+        "flag_provider,work_item_id",
+        [
+            ("launchdarkly", "jira:ABC-1"),
+            ("launchdarkly", "gh:org/repo#5"),
+            ("gitlab", "gl:grp/proj#9"),
+            ("gitlab", "linear:TEAM-3"),
+        ],
+    )
+    def test_known_flag_in_issue_text_emits_guards_edge(
+        self, flag_provider, work_item_id
+    ):
+        flag_rows = [
+            {
+                "flag_key": "checkout-v2",
+                "provider": flag_provider,
+                "project_key": "web",
+            },
+        ]
+        wi_rows = [
+            {
+                "work_item_id": work_item_id,
+                "title": "Roll out checkout-v2",
+                "description": "Gate the new flow behind the flag",
+            },
+        ]
+        count, sink = self._run(flag_rows, wi_rows)
+
+        assert count == 1
+        edges = sink.write_work_graph_edges.call_args[0][0]
+        assert len(edges) == 1
+        edge = edges[0]
+        assert edge.edge_type == "guards"
+        assert edge.source_type == "feature_flag"
+        assert edge.target_type == "issue"
+        assert edge.target_id == work_item_id
+        assert edge.provenance == "explicit_text"
+        assert edge.confidence == 0.6
+        assert edge.provider == flag_provider
+        assert edge.evidence == "flagref:checkout-v2"
+
+        links = sink.write_feature_flag_links.call_args[0][0]
+        assert len(links) == 1
+        link = links[0]
+        assert link.flag_key == "checkout-v2"
+        assert link.target_type == "issue"
+        assert link.target_id == work_item_id
+        assert link.link_source == "explicit_text"
+        assert link.link_type == "tracks"
+        assert link.evidence_type == "issue_text"
+        assert link.confidence == 0.6
+        assert link.provider == flag_provider
+        assert link.org_id == "org-1"
+
+    def test_unknown_flag_key_emits_nothing(self):
+        flag_rows = [
+            {
+                "flag_key": "checkout-v2",
+                "provider": "launchdarkly",
+                "project_key": "web",
+            },
+        ]
+        wi_rows = [
+            {
+                "work_item_id": "jira:ABC-1",
+                "title": "Toggle mystery-flag",
+                "description": "not a registered flag",
+            },
+        ]
+        count, sink = self._run(flag_rows, wi_rows)
+        assert count == 0
+        sink.write_work_graph_edges.assert_not_called()
+        sink.write_feature_flag_links.assert_not_called()
+
+    def test_empty_registry_skips_emission(self):
+        count, sink = self._run(
+            [],
+            [{"work_item_id": "jira:ABC-1", "title": "x", "description": "y"}],
+        )
+        assert count == 0
+        sink.write_work_graph_edges.assert_not_called()
+        sink.write_feature_flag_links.assert_not_called()
+
+    def test_substring_reference_does_not_emit(self):
+        flag_rows = [
+            {
+                "flag_key": "search",
+                "provider": "launchdarkly",
+                "project_key": "web",
+            },
+        ]
+        wi_rows = [
+            {
+                "work_item_id": "jira:ABC-1",
+                "title": "we are searching the logs",
+                "description": "",
+            },
+        ]
+        count, sink = self._run(flag_rows, wi_rows)
+        assert count == 0
+        sink.write_work_graph_edges.assert_not_called()

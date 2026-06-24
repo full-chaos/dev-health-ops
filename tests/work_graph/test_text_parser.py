@@ -5,8 +5,10 @@ from typing import cast
 import pytest
 
 from dev_health_ops.work_graph.extractors.text_parser import (
+    ParsedFlagRef,
     ParsedIssueRef,
     RefType,
+    extract_flag_key_refs,
     extract_github_issue_refs,
     extract_gitlab_issue_refs,
     extract_jira_keys,
@@ -345,3 +347,67 @@ class TestParsedIssueRef:
         )
         with pytest.raises(Exception):  # FrozenInstanceError
             setattr(ref, "issue_key", "DEF-456")
+
+
+class TestExtractFlagKeyRefs:
+    """Tests for registry-validated feature-flag key extraction (CHAOS-2630)."""
+
+    def test_matches_known_key_on_word_boundary(self):
+        refs = extract_flag_key_refs(
+            "Rolling out checkout-v2 to 50% of traffic",
+            ["checkout-v2", "search-rollout"],
+        )
+        assert refs == [ParsedFlagRef(flag_key="checkout-v2", raw_match="checkout-v2")]
+
+    def test_unknown_key_never_matches(self):
+        # A flag-like token that is NOT in the registry must not be surfaced.
+        refs = extract_flag_key_refs(
+            "Toggling mystery-flag in prod",
+            ["checkout-v2"],
+        )
+        assert refs == []
+
+    def test_substring_inside_larger_token_is_not_matched(self):
+        # 'search' must not match inside 'searching' or 'search-rollout'.
+        assert extract_flag_key_refs("we are searching logs", ["search"]) == []
+        assert extract_flag_key_refs("enable search-rollout now", ["search"]) == []
+
+    def test_longer_key_matched_not_its_prefix(self):
+        # When both 'checkout' and 'checkout-v2' are known, text containing
+        # 'checkout-v2' yields the full key, never the bare 'checkout' prefix.
+        refs = extract_flag_key_refs(
+            "ship checkout-v2 today",
+            ["checkout", "checkout-v2"],
+        )
+        assert [r.flag_key for r in refs] == ["checkout-v2"]
+
+    def test_min_length_guard_skips_short_keys(self):
+        assert extract_flag_key_refs("set ab here", ["ab"]) == []
+        assert extract_flag_key_refs("set abcd here", ["abcd"]) == [
+            ParsedFlagRef(flag_key="abcd", raw_match="abcd")
+        ]
+
+    def test_numeric_key_is_skipped(self):
+        assert extract_flag_key_refs("value 1234 seen", ["1234"]) == []
+
+    def test_regex_special_chars_in_key_are_literal(self):
+        refs = extract_flag_key_refs(
+            "toggling a.b.c rollout",
+            ["a.b.c"],
+        )
+        assert [r.flag_key for r in refs] == ["a.b.c"]
+        # The '.' must be literal: 'aXbYc' must NOT match 'a.b.c'.
+        assert extract_flag_key_refs("aXbYc rollout", ["a.b.c"]) == []
+
+    def test_deduplicates_repeated_keys(self):
+        refs = extract_flag_key_refs(
+            "flag-one and flag-one again, plus flag-two",
+            ["flag-one", "flag-two"],
+        )
+        assert [r.flag_key for r in refs] == ["flag-one", "flag-two"]
+
+    def test_empty_text_returns_empty(self):
+        assert extract_flag_key_refs("", ["checkout-v2"]) == []
+
+    def test_empty_registry_returns_empty(self):
+        assert extract_flag_key_refs("checkout-v2 here", []) == []

@@ -978,3 +978,106 @@ def test_github_provider_invalid_repo_format():
     # Will fail before token check due to format validation
     with pytest.raises(ValueError, match="expected owner/repo"):
         provider.ingest(ctx)
+
+
+# ============================================================================
+# Work-item ingestion options (Sync Target toggles) — CHAOS-646
+# ============================================================================
+
+
+def _options_client() -> MagicMock:
+    """A GitHub work client whose iterators all yield nothing."""
+    client = MagicMock()
+    client.iter_repo_milestones.return_value = []
+    client.iter_issues.return_value = []
+    client.iter_issue_events.return_value = []
+    client.iter_pull_requests.return_value = []
+    client.iter_pr_comments_batch.return_value = []
+    return client
+
+
+@patch.dict(os.environ, {}, clear=True)
+def test_work_item_options_include_pull_requests_false_skips_prs(
+    mock_status_mapping, mock_identity
+):
+    """include_pull_requests=False must skip the PR fetch entirely."""
+    from dev_health_ops.providers.base import WorkItemIngestionOptions
+
+    client = _options_client()
+    provider = GitHubProvider(
+        status_mapping=mock_status_mapping, identity=mock_identity, client=client
+    )
+    ctx = IngestionContext(
+        repo="owner/repo",
+        window=IngestionWindow(),
+        work_item_options=WorkItemIngestionOptions(include_pull_requests=False),
+    )
+    provider.ingest(ctx)
+    client.iter_pull_requests.assert_not_called()
+    client.iter_issues.assert_called_once()
+
+
+@patch.dict(os.environ, {}, clear=True)
+def test_work_item_options_include_issues_false_skips_issues(
+    mock_status_mapping, mock_identity
+):
+    """include_issues=False must skip the issues fetch entirely."""
+    from dev_health_ops.providers.base import WorkItemIngestionOptions
+
+    client = _options_client()
+    provider = GitHubProvider(
+        status_mapping=mock_status_mapping, identity=mock_identity, client=client
+    )
+    ctx = IngestionContext(
+        repo="owner/repo",
+        window=IngestionWindow(),
+        work_item_options=WorkItemIngestionOptions(include_issues=False),
+    )
+    provider.ingest(ctx)
+    client.iter_issues.assert_not_called()
+    client.iter_pull_requests.assert_called_once()
+
+
+@patch.dict(os.environ, {}, clear=True)
+def test_work_item_options_default_none_uses_env_defaults(
+    mock_status_mapping, mock_identity
+):
+    """With no options and no env overrides, both issues and PRs are fetched."""
+    client = _options_client()
+    provider = GitHubProvider(
+        status_mapping=mock_status_mapping, identity=mock_identity, client=client
+    )
+    ctx = IngestionContext(repo="owner/repo", window=IngestionWindow())
+    provider.ingest(ctx)
+    client.iter_issues.assert_called_once()
+    client.iter_pull_requests.assert_called_once()
+
+
+@patch.dict(os.environ, {"GITHUB_INCLUDE_PRS": "false"}, clear=True)
+def test_work_item_options_none_falls_back_to_env(mock_status_mapping, mock_identity):
+    """A None option falls back to the env flag (GITHUB_INCLUDE_PRS=false)."""
+    client = _options_client()
+    provider = GitHubProvider(
+        status_mapping=mock_status_mapping, identity=mock_identity, client=client
+    )
+    ctx = IngestionContext(repo="owner/repo", window=IngestionWindow())
+    provider.ingest(ctx)
+    client.iter_pull_requests.assert_not_called()
+
+
+@patch.dict(os.environ, {"GITHUB_INCLUDE_PRS": "false"}, clear=True)
+def test_work_item_options_ctx_overrides_env(mock_status_mapping, mock_identity):
+    """An explicit ctx option beats the env flag (True overrides env false)."""
+    from dev_health_ops.providers.base import WorkItemIngestionOptions
+
+    client = _options_client()
+    provider = GitHubProvider(
+        status_mapping=mock_status_mapping, identity=mock_identity, client=client
+    )
+    ctx = IngestionContext(
+        repo="owner/repo",
+        window=IngestionWindow(),
+        work_item_options=WorkItemIngestionOptions(include_pull_requests=True),
+    )
+    provider.ingest(ctx)
+    client.iter_pull_requests.assert_called_once()

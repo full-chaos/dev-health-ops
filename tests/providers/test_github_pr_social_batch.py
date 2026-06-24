@@ -444,3 +444,87 @@ def test_batched_pr_reviews_preserve_rest_consumed_fields() -> None:
     assert reviews[0].submitted_at == datetime(2026, 1, 3, 3, 4, 5, tzinfo=timezone.utc)
     assert reviews[0].body == "LGTM"
     assert reviews[0].url == "https://github.test/review/10"
+
+
+def _timeline_node(typename: str, created_at: str, login: str) -> dict[str, object]:
+    return {
+        "__typename": typename,
+        "createdAt": created_at,
+        "actor": {"login": login},
+    }
+
+
+def test_batched_pr_events_fetched_and_mapped() -> None:
+    """PR timeline events (merged/closed/reopened) are batched into the same
+    GraphQL call as comments and mapped to the event shape the normalizers
+    consume (event string, created_at, actor.login). This replaces the per-PR
+    REST iter_issue_events call that exhausted the installation rate limit."""
+    client, graphql, _gate = _client()
+    prs = [_pr(number) for number in range(1, 4)]
+    graphql.query.return_value = {
+        "repository": {
+            f"pr{idx}": {
+                "number": number,
+                "timelineItems": {
+                    "nodes": [
+                        _timeline_node("MergedEvent", "2026-02-01T00:00:00Z", "merger"),
+                        _timeline_node("ClosedEvent", "2026-02-02T00:00:00Z", "closer"),
+                        _timeline_node(
+                            "ReopenedEvent", "2026-02-03T00:00:00Z", "reopener"
+                        ),
+                    ],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                },
+            }
+            for idx, number in enumerate(range(1, 4))
+        }
+    }
+
+    payloads = {
+        payload.number: payload
+        for payload in client.iter_pr_social_data_batch(
+            owner="owner", repo="repo", prs=prs, events_limit=1000
+        )
+    }
+
+    # One GraphQL call covers all three PRs' events (no per-PR REST fan-out).
+    assert graphql.query.call_count == 1
+    query_str = graphql.query.call_args.args[0]
+    assert "timelineItems" in query_str
+    for pr in prs:
+        pr.get_issue_events.assert_not_called()
+
+    events = payloads[1].events
+    assert [e.event for e in events] == ["merged", "closed", "reopened"]
+    assert events[0].created_at == datetime(2026, 2, 1, tzinfo=timezone.utc)
+    assert getattr(events[0].actor, "login") == "merger"
+    assert getattr(events[2].actor, "login") == "reopener"
+
+
+def test_batched_pr_events_omitted_when_events_limit_zero() -> None:
+    """Existing comment/review batches default events_limit=0, so the
+    timelineItems connection must not be added to their query (no extra cost)."""
+    client, graphql, _gate = _client()
+    graphql.query.return_value = {
+        "repository": {
+            "pr0": {
+                "number": 1,
+                "comments": {
+                    "nodes": [_comment_node(1)],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                },
+            }
+        }
+    }
+
+    payload = next(
+        iter(
+            client.iter_pr_comments_batch(
+                owner="owner", repo="repo", prs=[_pr(1)], limit=100
+            )
+        )
+    )
+
+    assert payload  # consumed
+    query_str = graphql.query.call_args.args[0]
+    assert "timelineItems" not in query_str

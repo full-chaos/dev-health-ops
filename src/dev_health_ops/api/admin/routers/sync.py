@@ -822,44 +822,6 @@ async def _replace_planner_repository_selection(
     return _repo_selection_from_sources(config, refreshed_sources)
 
 
-@router.get(
-    "/sync-configs/{config_id}/repositories",
-    response_model=SyncConfigRepositorySelection,
-)
-async def get_sync_config_repositories(
-    config_id: str,
-    session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_admin_org_id),
-) -> SyncConfigRepositorySelection:
-    svc = SyncConfigurationService(session, org_id)
-    config = await svc.get_by_id(config_id)
-    if config is None:
-        raise HTTPException(status_code=404, detail="Sync configuration not found")
-    return await _repository_selection_for_config(session, org_id, config)
-
-
-@router.put(
-    "/sync-configs/{config_id}/repositories",
-    response_model=SyncConfigRepositorySelection,
-)
-async def replace_sync_config_repositories(
-    config_id: str,
-    payload: SyncConfigRepositorySelectionUpdate,
-    session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_admin_org_id),
-) -> SyncConfigRepositorySelection:
-    svc = SyncConfigurationService(session, org_id)
-    config = await svc.get_by_id(config_id)
-    if config is None:
-        raise HTTPException(status_code=404, detail="Sync configuration not found")
-    if str(getattr(config, "provider", "")).lower() not in {"github", "gitlab"}:
-        raise HTTPException(
-            status_code=400,
-            detail="Repository selection is only supported for GitHub and GitLab configs",
-        )
-    return await _replace_planner_repository_selection(session, org_id, config, payload)
-
-
 async def _assert_single_planner_parent_for_integration(
     session: AsyncSession,
     org_id: str,
@@ -1389,6 +1351,44 @@ async def get_sync_config(
     if config is None:
         raise HTTPException(status_code=404, detail="Sync configuration not found")
     return _sync_config_to_response(config)
+
+
+@router.get(
+    "/sync-configs/{config_id}/repositories",
+    response_model=SyncConfigRepositorySelection,
+)
+async def get_sync_config_repositories(
+    config_id: str,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+) -> SyncConfigRepositorySelection:
+    svc = SyncConfigurationService(session, org_id)
+    config = await svc.get_by_id(config_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Sync configuration not found")
+    return await _repository_selection_for_config(session, org_id, config)
+
+
+@router.put(
+    "/sync-configs/{config_id}/repositories",
+    response_model=SyncConfigRepositorySelection,
+)
+async def replace_sync_config_repositories(
+    config_id: str,
+    payload: SyncConfigRepositorySelectionUpdate,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+) -> SyncConfigRepositorySelection:
+    svc = SyncConfigurationService(session, org_id)
+    config = await svc.get_by_id(config_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Sync configuration not found")
+    if str(getattr(config, "provider", "")).lower() not in {"github", "gitlab"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Repository selection is only supported for GitHub and GitLab configs",
+        )
+    return await _replace_planner_repository_selection(session, org_id, config, payload)
 
 
 @router.patch("/sync-configs/{config_id}", response_model=SyncConfigResponse)

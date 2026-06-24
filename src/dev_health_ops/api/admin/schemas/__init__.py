@@ -81,6 +81,8 @@ from dev_health_ops.api.admin.schemas_flat import (  # noqa: F401
     SyncConfigBatchCreate,
     SyncConfigBatchResponse,
     SyncConfigCreate,
+    SyncConfigRepositorySelection,
+    SyncConfigRepositorySelectionUpdate,
     SyncConfigResponse,
     SyncConfigUpdate,
     TeamDiscoverResponse,

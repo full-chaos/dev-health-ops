@@ -28,6 +28,7 @@ from dev_health_ops.providers.base import (
 )
 from dev_health_ops.providers.github.client import (
     GitHubGraphQLComment,
+    GitHubGraphQLEvent,
     GitHubWorkClient,
 )
 from dev_health_ops.providers.normalize_common import to_utc as _to_utc
@@ -35,6 +36,12 @@ from dev_health_ops.providers.utils import env_flag as _env_flag
 from dev_health_ops.providers.utils import env_int
 
 logger = logging.getLogger(__name__)
+
+
+# Max PR timeline events fetched per PR via GraphQL. Only MERGED/CLOSED/
+# REOPENED items are requested, so this is effectively unbounded in practice;
+# mirrors the prior REST iter_issue_events(limit=1000) intent.
+_PR_EVENTS_LIMIT = 1000
 
 
 class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
@@ -274,24 +281,35 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                         limit=remaining_limit,
                     )
                 )
+                # Batch PR timeline events and comments via GraphQL (one query
+                # per <=50 PRs) instead of a per-PR REST issue-events call.
+                # The per-PR REST events fetch exhausted the GitHub App
+                # installation's REST primary rate limit (403). Events drive
+                # status transitions + reopen detection; comments drive
+                # interaction events + the Linear linkback dependency capture.
                 pr_comments_by_number: dict[int, tuple[GitHubGraphQLComment, ...]] = {}
-                if fetch_comments:
-                    pr_comments_by_number = {
-                        number: comments
-                        for number, comments in client.iter_pr_comments_batch(
-                            owner=owner,
-                            repo=repo,
-                            prs=prs,
-                            limit=comments_limit,
-                        )
-                    }
+                pr_events_by_number: dict[int, tuple[GitHubGraphQLEvent, ...]] = {}
+                for payload in client.iter_pr_social_data_batch(
+                    owner=owner,
+                    repo=repo,
+                    prs=prs,
+                    comments_limit=comments_limit if fetch_comments else 0,
+                    review_comments_limit=0,
+                    reviews_limit=0,
+                    events_limit=_PR_EVENTS_LIMIT,
+                ):
+                    pr_events_by_number[payload.number] = payload.events
+                    if fetch_comments:
+                        pr_comments_by_number[payload.number] = payload.issue_comments
 
                 for pr in prs:
                     if ctx.limit is not None and fetched_count >= ctx.limit:
                         break
 
-                    # Get events for transitions and reopen detection
-                    events = list(client.iter_issue_events(pr, limit=1000))
+                    # Events for transitions/reopen detection, from the batch.
+                    events = list(
+                        pr_events_by_number.get(int(getattr(pr, "number", 0) or 0), ())
+                    )
 
                     wi, wi_transitions = github_pr_to_work_item(
                         pr=pr,

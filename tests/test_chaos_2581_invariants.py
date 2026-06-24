@@ -173,7 +173,7 @@ def _patch_reconciler_enqueues(
     finalize_side_effect: Callable[..., Any] | None = None,
     post_sync_side_effect: Callable[..., Any] | None = None,
 ) -> tuple[list[tuple[Any, Any]], list[tuple[Any, Any]], list[dict[str, Any]]]:
-    from dev_health_ops.workers import sync_runtime, sync_units
+    from dev_health_ops.workers import post_sync_dispatch, sync_units
 
     dispatches: list[tuple[Any, Any]] = []
     finalizers: list[tuple[Any, Any]] = []
@@ -200,7 +200,7 @@ def _patch_reconciler_enqueues(
     monkeypatch.setattr(sync_units.dispatch_sync_run, "apply_async", dispatch_apply)
     monkeypatch.setattr(sync_units.finalize_sync_run, "apply_async", finalize_apply)
     monkeypatch.setattr(
-        sync_runtime,
+        post_sync_dispatch,
         "_dispatch_post_sync_tasks",
         dispatch_post_sync,
     )

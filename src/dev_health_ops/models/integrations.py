@@ -237,6 +237,15 @@ class SyncRunUnit(Base):
     )
     status: Mapped[str] = mapped_column(String, nullable=False)
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    available_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    rate_limit_deferrals: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    rate_limit_first_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
@@ -265,6 +274,12 @@ class SyncRunUnit(Base):
 
     __table_args__ = (
         Index("ix_sync_run_units_run_status", "sync_run_id", "status"),
+        Index(
+            "ix_sync_run_units_status_available",
+            "sync_run_id",
+            "status",
+            "available_at",
+        ),
         Index("ix_sync_run_units_source_id", "source_id"),
         Index("ix_sync_run_units_dataset_key", "dataset_key"),
         Index(

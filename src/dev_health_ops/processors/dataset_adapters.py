@@ -305,7 +305,7 @@ def _run_work_item_dataset(context: SyncTaskContext) -> dict[str, Any]:
 
 
 def _run_feature_flags_dataset(context: SyncTaskContext) -> dict[str, Any]:
-    from dev_health_ops.workers.sync_runtime import (
+    from dev_health_ops.workers.feature_flag_sync import (
         _sync_gitlab_feature_flags,
         _sync_launchdarkly_feature_flags,
     )

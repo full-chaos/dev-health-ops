@@ -11,11 +11,9 @@ from dev_health_ops.models.integrations import (
     IntegrationDataset,
     IntegrationSource,
 )
-from dev_health_ops.models.settings import Setting, SettingCategory, SyncConfiguration
+from dev_health_ops.models.settings import SyncConfiguration
 from dev_health_ops.sync.datasets import supported_datasets
 from dev_health_ops.workers.task_utils import _extract_owner_repo
-
-MIGRATED_TRIGGER_ROUTING_SETTING_KEY = "sync.migrated_trigger_routing_enabled"
 
 
 @dataclass(frozen=True)
@@ -35,7 +33,6 @@ class MigrationReport:
     configs_linked: int = 0
     sources_linked: int = 0
     issues: list[MigrationIssue] = field(default_factory=list)
-    feature_flag_key: str = MIGRATED_TRIGGER_ROUTING_SETTING_KEY
 
 
 def _now_utc() -> datetime:
@@ -54,31 +51,6 @@ def _as_targets(value: object | None) -> list[str]:
 
 def _is_numeric(value: object | None) -> bool:
     return value is not None and str(value).isdigit()
-
-
-def _ensure_feature_flag_setting(
-    session: Session, *, org_id: str, dry_run: bool
-) -> None:
-    existing = (
-        session.query(Setting)
-        .filter(
-            Setting.org_id == org_id,
-            Setting.category == SettingCategory.SYNC.value,
-            Setting.key == MIGRATED_TRIGGER_ROUTING_SETTING_KEY,
-        )
-        .one_or_none()
-    )
-    if existing is not None or dry_run:
-        return
-    session.add(
-        Setting(
-            org_id=org_id,
-            category=SettingCategory.SYNC.value,
-            key=MIGRATED_TRIGGER_ROUTING_SETTING_KEY,
-            value="false",
-            description="Route sync triggers through migrated Integration records.",
-        )
-    )
 
 
 def _integration_for_parent(
@@ -368,7 +340,6 @@ def migrate_configs_to_integrations(
 ) -> MigrationReport:
     report = MigrationReport(dry_run=dry_run)
     for parent in _parent_configs(session):
-        _ensure_feature_flag_setting(session, org_id=parent.org_id, dry_run=dry_run)
         integration = _integration_for_parent(session, parent, report, dry_run=dry_run)
         children = _children_for_parent(session, parent)
         _ensure_datasets(
@@ -393,7 +364,6 @@ def migrate_configs_to_integrations(
 
 
 __all__ = [
-    "MIGRATED_TRIGGER_ROUTING_SETTING_KEY",
     "MigrationIssue",
     "MigrationReport",
     "migrate_configs_to_integrations",

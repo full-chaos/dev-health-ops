@@ -16,23 +16,8 @@ from dev_health_ops.workers.queue_monitor import monitor_queue_depths
 from dev_health_ops.workers.recommendations_tasks import run_recommendations_job
 from dev_health_ops.workers.report_scheduler import dispatch_scheduled_reports
 from dev_health_ops.workers.report_task import execute_saved_report
-from dev_health_ops.workers.sync_batch import (
-    _batch_sync_callback,
-    _get_batch_size,
-    _is_batch_eligible,
-    _run_sync_for_repo,
-)
 from dev_health_ops.workers.sync_reconciler import reconcile_sync_dispatch
-from dev_health_ops.workers.sync_runtime import (
-    _dispatch_post_sync_tasks,
-    run_sync_config,
-)
 from dev_health_ops.workers.sync_scheduler import dispatch_scheduled_syncs
-from dev_health_ops.workers.sync_tasks import (
-    dispatch_batch_sync,
-    run_backfill,
-    run_work_items_sync,
-)
 from dev_health_ops.workers.sync_units import (
     dispatch_sync_run,
     finalize_sync_run,
@@ -63,16 +48,10 @@ from dev_health_ops.workers.work_graph_tasks import (
 )
 
 __all__ = [
-    "_batch_sync_callback",
-    "_dispatch_post_sync_tasks",
     "_extract_provider_token",
-    "_get_batch_size",
     "_inject_provider_token",
     "_invalidate_metrics_cache",
-    "_is_batch_eligible",
     "_resolve_env_credentials",
-    "_run_sync_for_repo",
-    "dispatch_batch_sync",
     "dispatch_daily_metrics_partitioned",
     "dispatch_investment_materialize_partitioned",
     "dispatch_release_impact",
@@ -87,7 +66,6 @@ __all__ = [
     "process_webhook_event",
     "reconcile_sync_dispatch",
     "dispatch_membership_backfill",
-    "run_backfill",
     "run_capacity_forecast_job",
     "run_complexity_job",
     "run_daily_metrics",
@@ -103,9 +81,7 @@ __all__ = [
     "run_product_telemetry_consumer",
     "run_recommendations_job",
     "run_release_impact_job",
-    "run_sync_config",
     "run_sync_unit",
     "run_work_graph_build",
-    "run_work_items_sync",
     "send_billing_notification",
 ]

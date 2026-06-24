@@ -9,19 +9,13 @@ from sqlalchemy.orm import Session
 
 from dev_health_ops.models import (
     Base,
-    Setting,
-    SettingCategory,
     SyncConfiguration,
 )
 from dev_health_ops.models.integrations import Integration, IntegrationSource
-from dev_health_ops.sync.config_migration import migrate_configs_to_integrations
 from dev_health_ops.sync.trigger_routing import (
-    MIGRATED_TRIGGER_ROUTING_SETTING_KEY,
-    is_migrated_trigger_routing_enabled,
     mark_sync_run_failed,
     plan_request_for_config,
     planner_request_for_config_if_routed,
-    should_route_config_to_planner,
 )
 
 ORG_ID = "routing-org"
@@ -61,18 +55,6 @@ def _config(
     session.add(config)
     session.flush()
     return config
-
-
-def _set_flag(session: Session, value: str) -> None:
-    session.add(
-        Setting(
-            org_id=ORG_ID,
-            category=SettingCategory.SYNC.value,
-            key=MIGRATED_TRIGGER_ROUTING_SETTING_KEY,
-            value=value,
-        )
-    )
-    session.flush()
 
 
 def _integration(
@@ -120,30 +102,6 @@ def _source(session: Session, integration_id: uuid.UUID) -> IntegrationSource:
     return _integration_source(
         session, integration_id, full_name="full-chaos/dev-health"
     )
-
-
-# --- flag reader -----------------------------------------------------------
-
-
-def test_flag_missing_is_disabled(db_session):
-    assert is_migrated_trigger_routing_enabled(db_session, ORG_ID) is False
-
-
-@pytest.mark.parametrize("value", ["true", "1", "yes", "on", "TRUE", "On"])
-def test_flag_truthy_values_enable(db_session, value):
-    _set_flag(db_session, value)
-    assert is_migrated_trigger_routing_enabled(db_session, ORG_ID) is True
-
-
-@pytest.mark.parametrize("value", ["false", "0", "no", "off", ""])
-def test_flag_falsey_values_disable(db_session, value):
-    _set_flag(db_session, value)
-    assert is_migrated_trigger_routing_enabled(db_session, ORG_ID) is False
-
-
-def test_flag_is_scoped_per_org(db_session):
-    _set_flag(db_session, "true")
-    assert is_migrated_trigger_routing_enabled(db_session, "other-org") is False
 
 
 # --- plan request builder --------------------------------------------------
@@ -220,7 +178,7 @@ def test_mode_override(db_session):
     assert req.mode == "backfill"
 
 
-def test_planner_managed_parent_routes_without_flag(db_session):
+def test_planner_managed_parent_routes(db_session):
     integration_id = uuid.uuid4()
     config = _config(
         db_session, migrated_integration_id=integration_id, planner_managed=True
@@ -340,9 +298,13 @@ def test_planner_managed_parent_with_zero_tagged_enabled_sources_syncs_nothing(
     assert req.source_ids == ()
 
 
-def test_flag_routed_parent_without_planner_marker_keeps_all_enabled_semantics(
+def test_non_planner_managed_parent_keeps_all_enabled_semantics(
     db_session,
 ):
+    # Routing is now unconditional, but planner-source scoping only applies to
+    # planner-managed parents. A migrated, non-planner-managed parent keeps the
+    # historic all-enabled fan-out (source_ids None) even when a source happens
+    # to carry the planner tag.
     integration_id = uuid.uuid4()
     _integration(db_session, integration_id)
     config = _config(db_session, migrated_integration_id=integration_id)
@@ -352,7 +314,6 @@ def test_flag_routed_parent_without_planner_marker_keeps_all_enabled_semantics(
         full_name="full-chaos/tagged-but-legacy",
         metadata={PLANNER_TAG_KEY: str(config.id)},
     )
-    _set_flag(db_session, "true")
 
     req = planner_request_for_config_if_routed(
         db_session, config, triggered_by="manual"
@@ -360,115 +321,6 @@ def test_flag_routed_parent_without_planner_marker_keeps_all_enabled_semantics(
 
     assert req is not None
     assert req.source_ids is None
-
-
-def test_migrated_single_with_source_needs_flag_without_planner_marker(db_session):
-    integration_id = uuid.uuid4()
-    config = _config(db_session, migrated_integration_id=integration_id)
-    _source(db_session, integration_id)
-
-    assert (
-        planner_request_for_config_if_routed(db_session, config, triggered_by="manual")
-        is None
-    )
-    _set_flag(db_session, "true")
-    assert planner_request_for_config_if_routed(
-        db_session, config, triggered_by="manual"
-    )
-
-
-def test_migrated_parent_with_children_needs_flag(db_session):
-    integration_id = uuid.uuid4()
-    parent = _config(db_session, migrated_integration_id=integration_id)
-    _config(
-        db_session,
-        migrated_integration_id=integration_id,
-        migrated_source_id=uuid.uuid4(),
-        parent_id=parent.id,
-    )
-
-    assert (
-        planner_request_for_config_if_routed(db_session, parent, triggered_by="manual")
-        is None
-    )
-    _set_flag(db_session, "true")
-    assert planner_request_for_config_if_routed(
-        db_session, parent, triggered_by="manual"
-    )
-
-
-def test_migrated_parent_with_sources_stays_legacy_for_all_triggers(db_session):
-    _set_flag(db_session, "false")
-
-    parent = SyncConfiguration(
-        org_id=ORG_ID,
-        name="legacy parent",
-        provider="github",
-        sync_targets=["git"],
-        sync_options={"owner": "full-chaos"},
-        is_active=True,
-    )
-    db_session.add(parent)
-    db_session.flush()
-    child = SyncConfiguration(
-        org_id=ORG_ID,
-        name="full-chaos/dev-health",
-        provider="github",
-        sync_targets=["git"],
-        sync_options={"owner": "full-chaos", "repo": "dev-health"},
-        parent_id=parent.id,
-        is_active=True,
-    )
-    db_session.add(child)
-    db_session.flush()
-
-    migrate_configs_to_integrations(db_session)
-    db_session.flush()
-
-    assert parent.planner_managed is False
-    assert child.planner_managed is False
-    assert parent.migrated_integration_id is not None
-    assert child.migrated_source_id is not None
-    assert should_route_config_to_planner(db_session, parent) is False
-    assert (
-        planner_request_for_config_if_routed(db_session, parent, triggered_by="manual")
-        is None
-    )
-    assert (
-        planner_request_for_config_if_routed(
-            db_session, parent, triggered_by="schedule"
-        )
-        is None
-    )
-    assert (
-        planner_request_for_config_if_routed(
-            db_session, parent, triggered_by="backfill", mode="backfill"
-        )
-        is None
-    )
-
-
-def test_operational_error_rolls_back_and_disables(monkeypatch, db_session):
-    """A failed flag read (e.g. missing settings table on PG) must roll back
-    the aborted transaction and return False so the caller's legacy path runs
-    on a clean session."""
-    from sqlalchemy.exc import OperationalError
-
-    def _boom(*_args, **_kwargs):
-        raise OperationalError("SELECT settings", {}, Exception("no such table"))
-
-    rolled_back = {"count": 0}
-    real_rollback = db_session.rollback
-
-    def _spy_rollback(*args, **kwargs):
-        rolled_back["count"] += 1
-        return real_rollback(*args, **kwargs)
-
-    monkeypatch.setattr(db_session, "query", _boom)
-    monkeypatch.setattr(db_session, "rollback", _spy_rollback)
-
-    assert is_migrated_trigger_routing_enabled(db_session, ORG_ID) is False
-    assert rolled_back["count"] == 1
 
 
 # --- mark_sync_run_failed (conditional compare-and-set) --------------------

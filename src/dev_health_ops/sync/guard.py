@@ -29,7 +29,6 @@ slot right now, across ALL runs (including the current run).  These reduce
 
 * status == DISPATCHING  AND  updated_at > stale_dispatch_cutoff  (fresh)
 * status == RUNNING  AND  (lease_expires_at IS NULL OR lease_expires_at > now)
-* status == RETRYING  AND  updated_at > stale_running_cutoff  (fresh)
 
 RUNNING is split by lease state. A NULL lease is unknown/pre-migration and
 therefore LIVE. Only an explicit expired lease proves the worker is dead; those
@@ -41,10 +40,11 @@ pass.  Mirrors ``_claim_units`` claim + reclaim logic exactly:
 
 * status == PLANNED  (any age — claimed via UPDATE…RETURNING)
 * status == DISPATCHING  AND  updated_at <= stale_dispatch_cutoff  (stale reclaim)
+* status == RETRYING  AND  available_at <= now  (due deferral)
 
 Fresh DISPATCHING is NOT a candidate (it is a consumer).
 RUNNING is NOT a candidate (expired leases are terminalized, not requeued).
-Stale RETRYING is NOT a candidate (``_claim_units`` does not reclaim RETRYING).
+RETRYING never consumes capacity. Future RETRYING is deferred until available_at.
 
 The two sets are disjoint by construction — no subtraction is needed or
 performed.
@@ -140,20 +140,20 @@ class DispatchGuard:
 
         concurrency_cap = _env_int("SYNC_UNIT_CONCURRENCY_PER_BUCKET", 8)
 
-        # Staleness cutoffs — same env vars as _stale_dispatch_seconds() /
-        # _stale_running_seconds() in sync_units.py.  Defined locally to avoid
-        # a circular import (sync_units imports DispatchGuard from this module).
+        # Staleness cutoff — same env var as _stale_dispatch_seconds() in
+        # sync_units.py. Defined locally to avoid a circular import
+        # (sync_units imports DispatchGuard from this module).
         now = datetime.now(timezone.utc)
         stale_dispatch_cutoff = now - timedelta(seconds=_stale_dispatch_seconds_guard())
-        stale_running_cutoff = now - timedelta(seconds=_stale_running_seconds_guard())
 
         # Build the CANDIDATE set per bucket — units from THIS run that
         # _claim_units can enqueue this pass.  Mirrors _claim_units exactly:
         #   • PLANNED (any age) — claimed via UPDATE…RETURNING
         #   • stale DISPATCHING (updated_at <= stale_dispatch_cutoff) — reclaimed
+        #   • due RETRYING (available_at <= now) — claimed via UPDATE…RETURNING
         # RUNNING is NOT a candidate (F2: never reclaim RUNNING — no heartbeat).
         # Fresh DISPATCHING is a capacity CONSUMER, not a candidate.
-        # Stale RETRYING is neither (_claim_units does not reclaim RETRYING).
+        # Future RETRYING is deferred and does not consume capacity.
         candidates_by_bucket: dict[tuple[str, str, str], list[SyncRunUnit]] = (
             defaultdict(list)
         )
@@ -165,9 +165,15 @@ class DispatchGuard:
                 if _as_aware_guard(unit.updated_at) <= stale_dispatch_cutoff:
                     # Stale DISPATCHING — _claim_units will reclaim it.
                     candidates_by_bucket[bucket].append(unit)
+            elif (
+                unit.status == SyncRunUnitStatus.RETRYING.value
+                and unit.available_at is not None
+                and _as_aware_guard(unit.available_at) <= now
+            ):
+                candidates_by_bucket[bucket].append(unit)
             # RUNNING (any age) → capacity consumer only; never a candidate (F2).
             # Fresh DISPATCHING → consumer only (counted in active_count below).
-            # RETRYING (any age) → neither candidate nor consumer for this run.
+            # Future RETRYING → deferred, no capacity consumption.
             # SUCCESS / FAILED → terminal, ignored.
 
         # F1 TOCTOU fix: acquire a PostgreSQL transaction-scoped advisory lock
@@ -192,7 +198,7 @@ class DispatchGuard:
             #   • fresh DISPATCHING: updated_at > stale_dispatch_cutoff
             #   • live RUNNING: lease_expires_at is NULL (unknown/pre-migration)
             #     or lease_expires_at > now
-            #   • fresh RETRYING: updated_at > stale_running_cutoff
+            # RETRYING never consumes capacity.
             # No subtraction is performed; the consumer and candidate sets are
             # disjoint by construction.
             active_count = (
@@ -212,10 +218,6 @@ class DispatchGuard:
                                 SyncRunUnit.lease_expires_at.is_(None)
                                 | (SyncRunUnit.lease_expires_at > now)
                             )
-                        )
-                        | (
-                            (SyncRunUnit.status == SyncRunUnitStatus.RETRYING.value)
-                            & (SyncRunUnit.updated_at > stale_running_cutoff)
                         )
                     ),
                 )
@@ -301,9 +303,9 @@ def _env_int(name: str, default: int) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Staleness helpers — mirrors sync_units._stale_dispatch_seconds() /
-# _stale_running_seconds() using the same env vars.  Defined here to avoid
-# a circular import (sync_units imports DispatchGuard from this module).
+# Staleness helper — mirrors sync_units._stale_dispatch_seconds() using the same
+# env var. Defined here to avoid a circular import (sync_units imports
+# DispatchGuard from this module).
 # ---------------------------------------------------------------------------
 
 
@@ -315,16 +317,6 @@ def _stale_dispatch_seconds_guard() -> int:
         )
     except ValueError:
         return 900
-
-
-def _stale_running_seconds_guard() -> int:
-    try:
-        return max(
-            1,
-            int(os.getenv("SYNC_UNIT_RUNNING_STALE_SECONDS", "3600")),
-        )
-    except ValueError:
-        return 3600
 
 
 def _as_aware_guard(value: datetime) -> datetime:

@@ -23,7 +23,7 @@ from dev_health_ops.workers.queue_monitor import (
 
 def _kombu_payload(enqueued_at: str | None = None) -> str:
     """A kombu redis message envelope as it sits on the broker list."""
-    headers = {"task": "dev_health_ops.workers.tasks.run_sync_config", "id": "t-1"}
+    headers = {"task": "dev_health_ops.workers.tasks.dispatch_sync_run", "id": "t-1"}
     if enqueued_at is not None:
         headers["enqueued_at"] = enqueued_at
     return json.dumps(

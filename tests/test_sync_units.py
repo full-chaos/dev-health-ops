@@ -32,7 +32,7 @@ from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_STATUS_DISPATCHED,
     OUTBOX_STATUS_PENDING,
 )
-from dev_health_ops.workers.sync_runtime import build_post_sync_dispatch_payload
+from dev_health_ops.workers.post_sync_dispatch import build_post_sync_dispatch_payload
 
 
 def _aware(value: datetime) -> datetime:
@@ -959,7 +959,7 @@ def test_run_sync_unit_skips_duplicate_delivery_with_live_running_lease(
 
 
 def test_finalize_once_only_dispatches_metrics_once(db_session, monkeypatch):
-    from dev_health_ops.workers import sync_reconciler, sync_runtime, sync_units
+    from dev_health_ops.workers import post_sync_dispatch, sync_reconciler, sync_units
 
     run, unit = _seed_run(db_session)
     config = SyncConfiguration(
@@ -975,7 +975,7 @@ def test_finalize_once_only_dispatches_metrics_once(db_session, monkeypatch):
     _patch_db_session(monkeypatch, db_session)
     dispatches = []
     monkeypatch.setattr(
-        sync_runtime,
+        post_sync_dispatch,
         "_dispatch_post_sync_tasks",
         lambda **kwargs: dispatches.append(kwargs),
     )
@@ -1888,7 +1888,7 @@ def test_post_sync_dispatch_includes_window(db_session, monkeypatch):
     """
     from datetime import date
 
-    from dev_health_ops.workers import sync_reconciler, sync_runtime, sync_units
+    from dev_health_ops.workers import post_sync_dispatch, sync_reconciler, sync_units
 
     run, unit = _seed_run(db_session)
     config = SyncConfiguration(
@@ -1909,7 +1909,7 @@ def test_post_sync_dispatch_includes_window(db_session, monkeypatch):
     _patch_db_session(monkeypatch, db_session)
     dispatches = []
     monkeypatch.setattr(
-        sync_runtime,
+        post_sync_dispatch,
         "_dispatch_post_sync_tasks",
         lambda **kwargs: dispatches.append(kwargs),
     )
@@ -1932,7 +1932,7 @@ def test_post_sync_dispatch_none_window_unit_unbounds_lower(db_session, monkeypa
     The aggregate lower bound must be unbounded (from_date=None and
     work_graph_from_date=None), not the bounded unit's date (CHAOS-2577 fix).
     """
-    from dev_health_ops.workers import sync_reconciler, sync_runtime, sync_units
+    from dev_health_ops.workers import post_sync_dispatch, sync_reconciler, sync_units
 
     # Seed the run with the first unit (bounded).
     run, unit_bounded = _seed_run(db_session)
@@ -1973,7 +1973,7 @@ def test_post_sync_dispatch_none_window_unit_unbounds_lower(db_session, monkeypa
 
     dispatches: list[dict] = []
     monkeypatch.setattr(
-        sync_runtime,
+        post_sync_dispatch,
         "_dispatch_post_sync_tasks",
         lambda **kwargs: dispatches.append(kwargs),
     )
@@ -2274,3 +2274,194 @@ def test_claim_units_does_not_reclaim_concurrently_claimed_running(tmp_path):
             assert _aware(reclaimed_unit.updated_at) > seeded_at
     finally:
         engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit deferral state machine regression tests (CHAOS-2647)
+# ---------------------------------------------------------------------------
+
+
+def _seed_dispatching_unit(
+    session, *, rate_limit_deferrals: int = 0, rate_limit_first_seen_at=None
+):
+    """Seed a run+unit in DISPATCHING status with rate-limit metadata pre-set.
+
+    run_sync_unit's first CAS requires status==DISPATCHING to claim the unit to
+    RUNNING.  After the claim the code re-reads the unit from DB to obtain
+    rate_limit_deferrals, so the metadata set here is visible to the deferral
+    logic.  Returns (run, unit).
+    """
+    run, unit = _seed_run(session)
+    unit.status = SyncRunUnitStatus.DISPATCHING.value
+    unit.rate_limit_deferrals = rate_limit_deferrals
+    unit.rate_limit_first_seen_at = rate_limit_first_seen_at
+    session.flush()
+    return run, unit
+
+
+def test_run_sync_unit_rate_limit_defers_without_failure(db_session, monkeypatch):
+    """A RateLimitException defers the unit to RETRYING, never FAILED.
+
+    Regression: the deferral block must fire BEFORE the generic FAILED block.
+    """
+    from dev_health_ops.exceptions import RateLimitException
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.sync.dispatch_outbox import OUTBOX_KIND_DISPATCH
+    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_dispatching_unit(db_session)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    set_watermark_calls: list[object] = []
+    monkeypatch.setattr(
+        sync_units,
+        "set_watermark",
+        lambda *a, **kw: set_watermark_calls.append((a, kw)),
+    )
+    finalize_calls = _patch_finalize_apply(monkeypatch)
+
+    def raise_rate_limit(ctx, runtime):
+        raise RateLimitException("429 Too Many Requests", retry_after_seconds=120)
+
+    monkeypatch.setattr(dataset_adapters, "run_dataset_unit", raise_rate_limit)
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    assert result["status"] == "rate_limited_deferred"
+
+    db_session.refresh(unit)
+    assert unit.status == SyncRunUnitStatus.RETRYING.value, (
+        f"Expected RETRYING, got {unit.status!r} — deferral block did not fire"
+    )
+    assert unit.available_at is not None
+    assert _aware(unit.available_at) > datetime.now(timezone.utc)
+    assert unit.rate_limit_deferrals == 1
+    assert unit.lease_owner is None
+    assert unit.lease_expires_at is None
+    assert set_watermark_calls == [], "watermark must not be written on deferral"
+    assert finalize_calls == [], "finalize must not be fast-enqueued on deferral"
+
+    dispatch_outbox = (
+        db_session.query(SyncDispatchOutbox)
+        .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_DISPATCH)
+        .one_or_none()
+    )
+    assert dispatch_outbox is not None, (
+        "A DISPATCH outbox wakeup must be written so the reconciler re-arms dispatch"
+    )
+
+
+def test_retrying_unit_not_claimed_before_available_at_and_claimed_after(
+    tmp_path, monkeypatch
+):
+    """RETRYING units with a future available_at are skipped; past ones are claimed."""
+    from dev_health_ops.workers.sync_units import _claim_units
+
+    engine = _file_backed_engine(tmp_path)
+    try:
+        with Session(engine) as seed_session:
+            run, unit = _seed_run(seed_session)
+            now = datetime.now(timezone.utc)
+            unit.status = SyncRunUnitStatus.RETRYING.value
+            unit.available_at = now + timedelta(hours=1)  # future — must NOT be claimed
+            unit.rate_limit_deferrals = 1
+            run_id = run.id
+            unit_id = unit.id
+            seed_session.commit()
+
+        # --- available_at in the FUTURE: unit must stay RETRYING ---
+        with Session(engine) as check_session:
+            claimed = _claim_units(check_session, run_id)
+            claimed_ids_future = {u.id for u in claimed}
+            check_session.commit()
+
+        assert unit_id not in claimed_ids_future, (
+            "RETRYING unit with future available_at must not be claimed"
+        )
+
+        with Session(engine) as assert_session:
+            refreshed = (
+                assert_session.query(SyncRunUnit)
+                .filter(SyncRunUnit.id == unit_id)
+                .one()
+            )
+            assert refreshed.status == SyncRunUnitStatus.RETRYING.value
+
+        # --- Move available_at into the PAST: unit must now be claimed ---
+        with Session(engine) as update_session:
+            u = (
+                update_session.query(SyncRunUnit)
+                .filter(SyncRunUnit.id == unit_id)
+                .one()
+            )
+            u.available_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            update_session.commit()
+
+        with Session(engine) as claim_session:
+            claimed_after = _claim_units(claim_session, run_id)
+            claimed_ids = {u.id for u in claimed_after}
+            claim_session.commit()
+
+        assert unit_id in claimed_ids, (
+            "RETRYING unit with past available_at must be claimed to DISPATCHING"
+        )
+
+        with Session(engine) as assert_session2:
+            refreshed2 = (
+                assert_session2.query(SyncRunUnit)
+                .filter(SyncRunUnit.id == unit_id)
+                .one()
+            )
+            assert refreshed2.status == SyncRunUnitStatus.DISPATCHING.value
+    finally:
+        engine.dispose()
+
+
+def test_rate_limit_budget_exhaustion_falls_through_to_failed(db_session, monkeypatch):
+    """When the deferral count budget is exhausted the unit is stamped FAILED.
+
+    Regression guard: budget exhaustion must fall through to the generic FAILED
+    path, not silently defer again.
+    """
+    from dev_health_ops.exceptions import RateLimitException
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.rate_limit_defer import RATE_LIMIT_MAX_DEFERRALS
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    # Seed with deferrals already at the max so the next raise exhausts the budget.
+    run, unit = _seed_dispatching_unit(
+        db_session, rate_limit_deferrals=RATE_LIMIT_MAX_DEFERRALS
+    )
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    finalize_calls = _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    def raise_rate_limit(ctx, runtime):
+        raise RateLimitException("429 Too Many Requests", retry_after_seconds=60)
+
+    monkeypatch.setattr(dataset_adapters, "run_dataset_unit", raise_rate_limit)
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    assert result["status"] == "failed", (
+        f"Budget-exhausted rate limit must fall through to FAILED, got {result['status']!r}"
+    )
+    assert result.get("error_category") == "rate_limit"
+
+    db_session.refresh(unit)
+    assert unit.status == SyncRunUnitStatus.FAILED.value, (
+        f"Expected FAILED after budget exhaustion, got {unit.status!r}"
+    )
+    assert unit.result is not None
+    assert unit.result.get("error_category") == "rate_limit"
+    assert unit.lease_owner is None
+    assert unit.lease_expires_at is None
+    assert finalize_calls == [((str(run.id),), "sync")]

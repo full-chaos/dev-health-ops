@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.settings import ScheduledJob, SyncConfiguration
-from dev_health_ops.workers import sync_scheduler
+from dev_health_ops.workers import sync_scheduler, sync_units
 from tests.test_sync_scheduler_idempotency import (
     HOUR,
     _call,
@@ -35,7 +35,13 @@ def db_session():
     engine.dispose()
 
 
-def _patch_scheduler(monkeypatch, session):
+def _patch_scheduler(monkeypatch, session) -> tuple[object, MagicMock]:
+    """Wire the scheduler onto the fan-out planner dispatch path (CHAOS-2647).
+
+    The legacy ``run_sync_config`` / ``dispatch_batch_sync`` worker tasks were
+    removed; due, integration-linked configs now dispatch via
+    ``dispatch_sync_run.apply_async``.
+    """
     from dev_health_ops.workers.sync_scheduler import dispatch_scheduled_syncs
 
     monkeypatch.setitem(sys.modules, "croniter", _hourly_croniter_module())
@@ -43,23 +49,22 @@ def _patch_scheduler(monkeypatch, session):
         "dev_health_ops.db.get_postgres_session_sync",
         lambda: _fake_session_ctx(session),
     )
-    run_sync_mock = MagicMock()
-    batch_sync_mock = MagicMock()
-    monkeypatch.setattr(sync_scheduler, "run_sync_config", run_sync_mock)
-    monkeypatch.setattr(sync_scheduler, "dispatch_batch_sync", batch_sync_mock)
-    return dispatch_scheduled_syncs, run_sync_mock, batch_sync_mock
+    monkeypatch.setattr(sync_scheduler, "organization_exists_sync", lambda *_: True)
+    dispatch_mock = MagicMock()
+    monkeypatch.setattr(sync_units, "dispatch_sync_run", dispatch_mock)
+    return dispatch_scheduled_syncs, dispatch_mock
 
 
 def test_second_dispatcher_after_first_stamp_does_not_double_dispatch(
     monkeypatch, db_session
 ):
     now = datetime.now(timezone.utc)
-    config = _make_config(last_sync_at=now - 2 * HOUR)
+    config = _make_config(db_session, last_sync_at=now - 2 * HOUR)
     job = _make_job(config)
-    db_session.add_all([config, job])
+    db_session.add(job)
     db_session.flush()
 
-    task, run_sync_mock, batch_sync_mock = _patch_scheduler(monkeypatch, db_session)
+    task, dispatch_mock = _patch_scheduler(monkeypatch, db_session)
 
     first = _call(task)
     second = _call(task)
@@ -68,8 +73,7 @@ def test_second_dispatcher_after_first_stamp_does_not_double_dispatch(
     assert second["dispatched"] == []
     assert first["errors"] == 0
     assert second["errors"] == 0
-    run_sync_mock.apply_async.assert_called_once()
-    batch_sync_mock.apply_async.assert_not_called()
+    dispatch_mock.apply_async.assert_called_once()
 
 
 @contextmanager
@@ -140,16 +144,13 @@ def test_postgres_existing_job_marker_prevents_second_dispatcher(
 
     monkeypatch.setitem(sys.modules, "croniter", _hourly_croniter_module())
     monkeypatch.setattr(sync_scheduler, "organization_exists_sync", lambda *_: True)
-    run_sync_mock = MagicMock()
-    batch_sync_mock = MagicMock()
-    monkeypatch.setattr(sync_scheduler, "run_sync_config", run_sync_mock)
-    monkeypatch.setattr(sync_scheduler, "dispatch_batch_sync", batch_sync_mock)
+    dispatch_mock = MagicMock()
+    monkeypatch.setattr(sync_units, "dispatch_sync_run", dispatch_mock)
 
     with _session_scope(session_factory) as setup:
-        config = _make_config(last_sync_at=now - 2 * HOUR)
-        config.org_id = org_id
+        config = _make_config(setup, last_sync_at=now - 2 * HOUR, org_id=org_id)
         job = _make_job(config)
-        setup.add_all([config, job])
+        setup.add(job)
         setup.commit()
         config_id = config.id
         job_id = job.id
@@ -167,7 +168,7 @@ def test_postgres_existing_job_marker_prevents_second_dispatcher(
             assert not sync_scheduler._maybe_dispatch_config(
                 session_two, config_two, now
             )
-            run_sync_mock.apply_async.assert_called_once()
+            dispatch_mock.apply_async.assert_called_once()
         finally:
             session_one.close()
             session_two.close()
@@ -201,15 +202,11 @@ def test_postgres_missing_job_row_race_dispatches_once(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "croniter", _hourly_croniter_module())
     monkeypatch.setattr(sync_scheduler, "organization_exists_sync", lambda *_: True)
-    run_sync_mock = MagicMock()
-    batch_sync_mock = MagicMock()
-    monkeypatch.setattr(sync_scheduler, "run_sync_config", run_sync_mock)
-    monkeypatch.setattr(sync_scheduler, "dispatch_batch_sync", batch_sync_mock)
+    dispatch_mock = MagicMock()
+    monkeypatch.setattr(sync_units, "dispatch_sync_run", dispatch_mock)
 
     with _session_scope(session_factory) as setup:
-        config = _make_config(last_sync_at=now - 2 * HOUR)
-        config.org_id = org_id
-        setup.add(config)
+        config = _make_config(setup, last_sync_at=now - 2 * HOUR, org_id=org_id)
         setup.commit()
         config_id = config.id
 
@@ -228,8 +225,7 @@ def test_postgres_missing_job_row_race_dispatches_once(monkeypatch):
             results = [future.result(timeout=30) for future in futures]
 
         assert sorted(results) == [False, True]
-        run_sync_mock.apply_async.assert_called_once()
-        batch_sync_mock.apply_async.assert_not_called()
+        dispatch_mock.apply_async.assert_called_once()
 
         with _session_scope(session_factory) as verify:
             jobs = (

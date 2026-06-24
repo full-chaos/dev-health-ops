@@ -673,7 +673,7 @@ def test_finalize_passes_full_datetime_work_graph_window(db_session, monkeypatch
     """
     from datetime import datetime, timedelta, timezone  # noqa: F401
 
-    from dev_health_ops.workers import sync_reconciler, sync_runtime, sync_units
+    from dev_health_ops.workers import post_sync_dispatch, sync_reconciler, sync_units
 
     run, units, integration, source = _seed_run(db_session, unit_count=1)
 
@@ -710,7 +710,7 @@ def test_finalize_passes_full_datetime_work_graph_window(db_session, monkeypatch
         captured_kwargs.update(kwargs)
 
     monkeypatch.setattr(
-        sync_runtime, "_dispatch_post_sync_tasks", fake_dispatch_post_sync
+        post_sync_dispatch, "_dispatch_post_sync_tasks", fake_dispatch_post_sync
     )
     sync_units.finalize_sync_run(str(run.id))
     relay_result = sync_reconciler.reconcile_sync_dispatch(limit=10)

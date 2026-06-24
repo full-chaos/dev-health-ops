@@ -46,7 +46,7 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
         mark_outbox_publish_failed,
         upsert_outbox_wakeup,
     )
-    from dev_health_ops.workers.sync_runtime import (
+    from dev_health_ops.workers.post_sync_dispatch import (
         _dispatch_post_sync_tasks,
         build_post_sync_dispatch_payload,
     )
@@ -265,6 +265,7 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
 def _dispatchable_run_ids(
     session, stale_dispatch_cutoff: datetime, limit: int
 ) -> set[str]:
+    now = datetime.now(timezone.utc)
     rows = (
         session.query(SyncRunUnit.sync_run_id)
         .join(SyncRun, SyncRun.id == SyncRunUnit.sync_run_id)
@@ -275,6 +276,11 @@ def _dispatchable_run_ids(
                 | (
                     (SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value)
                     & (SyncRunUnit.updated_at <= stale_dispatch_cutoff)
+                )
+                | (
+                    (SyncRunUnit.status == SyncRunUnitStatus.RETRYING.value)
+                    & (SyncRunUnit.available_at.is_not(None))
+                    & (SyncRunUnit.available_at <= now)
                 )
             ),
         )
@@ -499,6 +505,7 @@ def _run_has_dispatchable_units(
     session, sync_run_id: str | uuid.UUID, stale_dispatch_cutoff: datetime
 ) -> bool:
     run_uuid = uuid.UUID(str(sync_run_id))
+    now = datetime.now(timezone.utc)
     return (
         session.query(SyncRunUnit.id)
         .join(SyncRun, SyncRun.id == SyncRunUnit.sync_run_id)
@@ -510,6 +517,11 @@ def _run_has_dispatchable_units(
                 | (
                     (SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value)
                     & (SyncRunUnit.updated_at <= stale_dispatch_cutoff)
+                )
+                | (
+                    (SyncRunUnit.status == SyncRunUnitStatus.RETRYING.value)
+                    & (SyncRunUnit.available_at.is_not(None))
+                    & (SyncRunUnit.available_at <= now)
                 )
             ),
         )

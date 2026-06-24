@@ -254,7 +254,7 @@ def test_gitlab_feature_flags_route_to_existing_feature_flag_sync() -> None:
     )
 
     with patch(
-        "dev_health_ops.workers.sync_runtime._sync_gitlab_feature_flags",
+        "dev_health_ops.workers.feature_flag_sync._sync_gitlab_feature_flags",
         return_value={"flags_synced": 2},
     ) as feature_flags:
         result = run_dataset_unit(ctx, _runtime())
@@ -277,7 +277,7 @@ def test_launchdarkly_feature_flags_route_to_existing_feature_flag_sync() -> Non
     )
 
     with patch(
-        "dev_health_ops.workers.sync_runtime._sync_launchdarkly_feature_flags",
+        "dev_health_ops.workers.feature_flag_sync._sync_launchdarkly_feature_flags",
         return_value={"flags_synced": 3},
     ) as feature_flags:
         result = run_dataset_unit(ctx, _runtime())

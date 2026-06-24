@@ -5,6 +5,7 @@ Text parsing utilities for extracting issue references from PR titles and bodies
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
 
@@ -394,4 +395,78 @@ def extract_gitlab_issue_refs(text: str) -> list[ParsedIssueRef]:
                     )
                 )
 
+    return results
+
+
+# Feature-flag keys are free-form identifiers (e.g. "checkout-v2",
+# "search_rollout") with no canonical shape, unlike PROJECT-123 issue keys.
+# A reference can therefore only be recognised by matching against the org's
+# real registry of flag keys. We also require a minimum length and reject
+# purely-numeric keys to keep false positives down (CHAOS-2630 Phase C1).
+FLAG_KEY_MIN_LENGTH = 4
+
+# Characters that count as part of a flag-key token. A match must not be
+# flanked by any of these, so "search" does not match inside "searching" or
+# "search-rollout", and "checkout-v2" is matched as a single unit.
+_FLAG_KEY_BOUNDARY = r"[\w./:-]"
+
+
+@dataclass(frozen=True)
+class ParsedFlagRef:
+    """A feature-flag key reference found in free-form text.
+
+    Attributes:
+        flag_key: The registry flag key that matched.
+        raw_match: The exact text span that matched.
+    """
+
+    flag_key: str
+    raw_match: str
+
+
+def extract_flag_key_refs(
+    text: str,
+    known_flag_keys: Iterable[str],
+    *,
+    min_length: int = FLAG_KEY_MIN_LENGTH,
+) -> list[ParsedFlagRef]:
+    """Extract references to known feature-flag keys from free-form text.
+
+    Feature-flag keys have no canonical shape (unlike ``PROJECT-123`` issue
+    keys), so a reference can only be recognised by matching against the
+    caller-supplied registry of real flag keys for the org. Matching is:
+
+    - **registry-validated**: only keys in ``known_flag_keys`` can match; an
+      unknown token is never surfaced as a flag reference;
+    - **whole-token**: the key must appear on identifier boundaries, so
+      ``search`` does not match inside ``searching`` and ``checkout-v2`` is
+      matched as a unit (never as the shorter ``checkout``);
+    - **guarded**: keys shorter than ``min_length`` and purely-numeric keys are
+      skipped, since they are too noisy to attribute confidently.
+
+    Args:
+        text: The PR/issue/commit text to scan.
+        known_flag_keys: The org's real flag keys (from the feature_flag registry).
+        min_length: Minimum key length to consider (default 4).
+
+    Returns:
+        De-duplicated ``ParsedFlagRef`` list, in first-seen order of the keys.
+    """
+    if not text:
+        return []
+
+    seen: set[str] = set()
+    results: list[ParsedFlagRef] = []
+    for raw_key in known_flag_keys:
+        key = (raw_key or "").strip()
+        if len(key) < min_length or key.isdigit() or key in seen:
+            continue
+        pattern = re.compile(
+            rf"(?<!{_FLAG_KEY_BOUNDARY}){re.escape(key)}(?!{_FLAG_KEY_BOUNDARY})"
+        )
+        match = pattern.search(text)
+        if match is None:
+            continue
+        seen.add(key)
+        results.append(ParsedFlagRef(flag_key=key, raw_match=match.group(0)))
     return results

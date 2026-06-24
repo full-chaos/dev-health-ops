@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from dev_health_ops.metrics.schemas import (
+    FeatureFlagLinkRecord,
     WorkGraphEdgeRecord,
     WorkGraphIssuePRRecord,
     WorkGraphPRCommitRecord,
@@ -24,6 +25,7 @@ from dev_health_ops.metrics.schemas import (
 from dev_health_ops.metrics.sinks.factory import create_sink
 from dev_health_ops.work_graph.extractors.text_parser import (
     RefType,
+    extract_flag_key_refs,
     extract_github_issue_refs,
     extract_gitlab_issue_refs,
     extract_jira_keys,
@@ -68,6 +70,12 @@ DEPENDENCY_TYPE_MAP: dict[str, EdgeType] = {
     "is_parent_of": EdgeType.PARENT_OF,
     "is_child_of": EdgeType.CHILD_OF,
 }
+
+# CHAOS-2630 Phase C1: confidence ceiling for flag associations inferred from a
+# flag key literally appearing in PR/issue/commit text. Kept well below the 0.9
+# used for structured PROJECT-123 issue refs (flag keys are noisier free-form
+# strings) and strictly below NATIVE, per the design sign-off.
+FLAG_TEXT_REF_CONFIDENCE = 0.6
 
 
 @dataclass
@@ -367,6 +375,7 @@ class WorkGraphBuilder:
             "pr_commit_edges": 0,
             "commit_file_edges": 0,
             "heuristic_edges": 0,
+            "flag_guards_edges": 0,
         }
 
         logger.info("Starting work graph build...")
@@ -403,12 +412,134 @@ class WorkGraphBuilder:
         # 6. Commit->file edges are handled by view over git_commit_stats
         stats["commit_file_edges"] = self._count_commit_file_edges()
 
+        # 7. Build feature-flag GUARDS edges (flag -> issue) from real flag-key
+        #    references in issue text. CHAOS-2630 Phase C1: the only non-fixture
+        #    source of flag associations; registry-validated + confidence-gated.
+        stats["flag_guards_edges"] = self._build_flag_guards_edges()
+
         logger.info(
             "Work graph build complete: %s",
             ", ".join(f"{k}={v}" for k, v in stats.items()),
         )
 
         return stats
+
+    def _build_flag_guards_edges(self) -> int:
+        """Build GUARDS edges (feature_flag -> issue) from real flag-key text refs.
+
+        CHAOS-2630 Phase C1 -- the only non-fixture source of feature-flag
+        associations. A flag key that literally appears in an issue's title or
+        description is an evidence-backed signal that the issue is guarded by
+        that flag. Matching is **registry-validated** (only keys present in the
+        ``feature_flag`` table for the org can match) and emitted as
+        ``EXPLICIT_TEXT`` with a confidence ceiling strictly below ``NATIVE``;
+        an unknown flag key never produces an edge or a link.
+        """
+        logger.info("Building feature-flag GUARDS edges from issue text references...")
+
+        # 1. Load the org's real flag registry (env-agnostic identity).
+        flag_query = "SELECT flag_key, provider, project_key FROM feature_flag FINAL"
+        if self.config.org_id:
+            flag_query += f" WHERE org_id = '{self.config.org_id}'"
+        flag_rows = self.sink.query_dicts(flag_query, {})
+        if not flag_rows:
+            logger.info("No feature flags in registry; skipping GUARDS edges")
+            return 0
+
+        # flag_key -> list of (provider, project_key, flag_id). A key can in
+        # principle exist under more than one provider/project; emit for each.
+        flag_identities: dict[str, list[tuple[str, str, str]]] = {}
+        for row in flag_rows:
+            flag_key = str(row.get("flag_key") or "")
+            if not flag_key:
+                continue
+            provider = str(row.get("provider") or "")
+            project_key = str(row.get("project_key") or "")
+            flag_id = generate_feature_flag_id(
+                self.config.org_id, provider, project_key, flag_key
+            )
+            flag_identities.setdefault(flag_key, []).append(
+                (provider, project_key, flag_id)
+            )
+
+        known_keys = list(flag_identities.keys())
+
+        # 2. Load issue text (work_items title + description).
+        wi_query = "SELECT work_item_id, title, description FROM work_items"
+        if self.config.org_id:
+            wi_query += f" WHERE org_id = '{self.config.org_id}'"
+        wi_rows = self.sink.query_dicts(wi_query, {})
+        if not wi_rows:
+            return 0
+
+        edges: list[WorkGraphEdge] = []
+        links: list[FeatureFlagLinkRecord] = []
+        seen_edges: set[str] = set()
+        now = self._now
+
+        for wi_row in wi_rows:
+            work_item_id = str(wi_row.get("work_item_id") or "")
+            if not work_item_id:
+                continue
+            text = " ".join(
+                str(wi_row.get(col) or "") for col in ("title", "description")
+            ).strip()
+            if not text:
+                continue
+            for ref in extract_flag_key_refs(text, known_keys):
+                for provider, _project_key, flag_id in flag_identities[ref.flag_key]:
+                    edge_id = generate_edge_id(
+                        NodeType.FEATURE_FLAG,
+                        flag_id,
+                        EdgeType.GUARDS,
+                        NodeType.ISSUE,
+                        work_item_id,
+                    )
+                    if edge_id in seen_edges:
+                        continue
+                    seen_edges.add(edge_id)
+                    edges.append(
+                        WorkGraphEdge(
+                            edge_id=edge_id,
+                            source_type=NodeType.FEATURE_FLAG,
+                            source_id=flag_id,
+                            target_type=NodeType.ISSUE,
+                            target_id=work_item_id,
+                            edge_type=EdgeType.GUARDS,
+                            provenance=Provenance.EXPLICIT_TEXT,
+                            confidence=FLAG_TEXT_REF_CONFIDENCE,
+                            evidence=f"flagref:{ref.raw_match}",
+                            provider=provider or None,
+                            event_ts=now,
+                        )
+                    )
+                    links.append(
+                        FeatureFlagLinkRecord(
+                            flag_key=ref.flag_key,
+                            target_type="issue",
+                            target_id=work_item_id,
+                            provider=provider,
+                            link_source="explicit_text",
+                            link_type="tracks",
+                            evidence_type="issue_text",
+                            confidence=FLAG_TEXT_REF_CONFIDENCE,
+                            valid_from=now,
+                            valid_to=None,
+                            last_synced=now,
+                            org_id=self.config.org_id,
+                        )
+                    )
+
+        if edges:
+            self._write_edges(edges)
+        if links:
+            self.sink.write_feature_flag_links(links)
+        logger.info(
+            "Created %d feature-flag GUARDS edges (%d links) from text references",
+            len(edges),
+            len(links),
+        )
+        return len(edges)
 
     def _build_issue_issue_edges(self) -> int:
         """

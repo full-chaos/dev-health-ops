@@ -15,6 +15,7 @@ from dev_health_ops.connectors.utils.rate_limit_queue import (
     RateLimitGate,
     create_rate_limit_gate,
 )
+from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.providers._ratelimit import gate_call
 from dev_health_ops.providers.utils import EnvSpec, read_env_spec
 
@@ -41,7 +42,7 @@ class LinearComplexityLimitError(LinearGraphQLError):
     """
 
 
-class LinearRateLimitError(RuntimeError):
+class LinearRateLimitError(RateLimitException):
     """Linear kept returning HTTP 429 after exhausting all retry attempts."""
 
 
@@ -428,6 +429,7 @@ class LinearClient:
             payload["variables"] = variables
 
         last_delay = 0.0
+        last_server_retry_after: float | None = None
         for attempt in range(1, self.max_attempts + 1):
             try:
                 with gate_call(self.gate):
@@ -437,6 +439,8 @@ class LinearClient:
                     if response.status_code == 429:
                         raise _LinearHTTPRateLimit(self._retry_after_seconds(response))
             except _LinearHTTPRateLimit as exc:
+                if exc.retry_after_seconds is not None:
+                    last_server_retry_after = exc.retry_after_seconds
                 last_delay = self._last_applied_delay(exc.retry_after_seconds)
                 logger.warning(
                     "Linear rate limit hit (attempt %d/%d), backing off %.1fs",
@@ -460,7 +464,10 @@ class LinearClient:
 
         raise LinearRateLimitError(
             f"Linear API rate limited: giving up after {self.max_attempts} "
-            f"attempts (last backoff {last_delay:.1f}s)"
+            f"attempts (last backoff {last_delay:.1f}s)",
+            retry_after_seconds=last_server_retry_after
+            if last_server_retry_after is not None
+            else last_delay,
         )
 
     def _last_applied_delay(self, retry_after_seconds: float | None) -> float:

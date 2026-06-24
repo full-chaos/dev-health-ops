@@ -1062,6 +1062,25 @@ class TestLinearClientRetry:
 
         assert client._client.post.call_count == 5
 
+    def test_429_exhaustion_preserves_retry_after(self, sleeps: list[float]) -> None:
+        # On exhaustion the terminal error must carry the server Retry-After as a
+        # canonical RateLimitException so the worker layer can defer on it.
+        from dev_health_ops.exceptions import RateLimitException
+        from dev_health_ops.providers.linear.client import LinearRateLimitError
+
+        client = self._make_client()
+        client._client.post = MagicMock(
+            side_effect=lambda *a, **kw: self._response(
+                429, headers={"Retry-After": "7"}
+            )
+        )
+
+        with pytest.raises(LinearRateLimitError) as exc_info:
+            client._execute("query { viewer { id } }")
+
+        assert isinstance(exc_info.value, RateLimitException)
+        assert exc_info.value.retry_after_seconds == 7.0
+
     def test_429_backoff_grows_exponentially(self, sleeps: list[float]) -> None:
         from dev_health_ops.providers.linear.client import LinearRateLimitError
 

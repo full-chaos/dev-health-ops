@@ -11,7 +11,11 @@ from dev_health_ops.connectors.utils.rate_limit_queue import (
     RateLimitGate,
     create_rate_limit_gate,
 )
-from dev_health_ops.providers._ratelimit import penalize_from_response
+from dev_health_ops.exceptions import RateLimitException
+from dev_health_ops.providers._ratelimit import (
+    parse_retry_after_header,
+    penalize_from_response,
+)
 from dev_health_ops.providers.utils import EnvSpec, read_env_spec
 
 logger = logging.getLogger(__name__)
@@ -140,6 +144,7 @@ class JiraClient:
                     url, params=params, timeout=self.timeout_seconds
                 )
                 if resp.status_code == 429:
+                    retry_after = parse_retry_after_header(resp.headers)
                     applied = penalize_from_response(self.gate, resp)
                     logger.info(
                         "Jira rate limited; backoff %.1fs (HTTP 429, attempt %d/%d)",
@@ -149,6 +154,10 @@ class JiraClient:
                     )
                     if attempt + 1 < attempts:
                         continue
+                    raise RateLimitException(
+                        f"Jira rate limited: giving up after {attempts} attempts (HTTP 429)",
+                        retry_after_seconds=retry_after,
+                    )
                 resp.raise_for_status()
                 self.gate.reset()
                 data = resp.json()

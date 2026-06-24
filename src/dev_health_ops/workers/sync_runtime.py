@@ -22,6 +22,12 @@ from dev_health_ops.utils.datetime import utc_today
 from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.org_guard import organization_exists_sync
+from dev_health_ops.workers.rate_limit_defer import (
+    maybe_plan_rate_limit_deferral,
+    plan_not_before_wait,
+    reenqueue_after_rate_limit,
+    reenqueue_rate_limit_chunk,
+)
 from dev_health_ops.workers.task_utils import (
     _GIT_TARGETS,
     _WORK_ITEM_TARGETS,
@@ -684,7 +690,16 @@ def run_sync_config(
     org_id: str,
     triggered_by: str = "manual",
     pending_run_id: str | None = None,
+    *,
+    _rate_limit_attempts: int = 0,
+    _rate_limit_first_seen_at: str | None = None,
+    _rate_limit_not_before: str | None = None,
 ) -> dict:
+    wait = plan_not_before_wait(_rate_limit_not_before)
+    if wait is not None:
+        reenqueue_rate_limit_chunk(self, wait)
+        return {"status": "rate_limited_deferred", "reason": "not_before"}
+
     from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
     from dev_health_ops.models.settings import (
@@ -1163,6 +1178,24 @@ def run_sync_config(
         }
 
     except Exception as exc:
+        deferral = maybe_plan_rate_limit_deferral(
+            exc,
+            attempts=_rate_limit_attempts,
+            first_seen_at=_rate_limit_first_seen_at,
+        )
+        if deferral is not None:
+            logger.warning(
+                "Sync config rate-limited (config_id=%s); deferring %.1fs "
+                "(deferral %d)",
+                config_id,
+                deferral.countdown,
+                deferral.attempts,
+            )
+            reenqueue_after_rate_limit(self, deferral)
+            return {
+                "status": "rate_limited_deferred",
+                "retry_after_seconds": deferral.countdown,
+            }
         logger.exception(
             "Sync config task failed: config_id=%s org_id=%s error=%s",
             config_id,

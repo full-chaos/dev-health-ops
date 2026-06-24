@@ -8,6 +8,7 @@ import pytest
 import requests
 
 from dev_health_ops.connectors.utils.rate_limit_queue import RateLimitGate
+from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.providers.jira.client import JiraAuth, JiraClient
 
 
@@ -78,16 +79,19 @@ def test_jira_search_page_persistent_429_exhausts_retries_and_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # When 429s never clear, the request is penalized once per attempt and then
-    # surfaces as an HTTPError after the bounded retries are exhausted.
+    # surfaces as a RateLimitException carrying the server Retry-After so the
+    # worker layer can defer (instead of a bare HTTPError that drops the delay).
     gate = MagicMock(spec=RateLimitGate)
     gate.penalize.return_value = 2.0
     client = _make_client(gate, max_retries_429=2)
     mock_get = MagicMock(return_value=_FakeJira429Response())
     monkeypatch.setattr(client.session, "get", mock_get)
 
-    with pytest.raises(requests.HTTPError):
+    with pytest.raises(RateLimitException) as exc_info:
         client.search_issues_page(jql="project = ENG", start_at=0, max_results=50)
 
+    # The Retry-After header ("2") is preserved on the exception.
+    assert exc_info.value.retry_after_seconds == 2.0
     assert mock_get.call_count == 3
     assert gate.wait_sync.call_count == 3
     assert gate.penalize.call_count == 3

@@ -12,10 +12,56 @@ from dev_health_ops.connectors.utils.rate_limit_queue import (
     RateLimitGate,
     create_rate_limit_gate,
 )
-from dev_health_ops.providers._ratelimit import gate_call
+from dev_health_ops.exceptions import RateLimitException
+from dev_health_ops.providers._ratelimit import gate_call, parse_retry_after_header
 from dev_health_ops.providers.utils import EnvSpec, read_env_spec
 
 logger = logging.getLogger(__name__)
+
+
+def _maybe_raise_gitlab_rate_limit(exc: BaseException) -> None:
+    """Raise RateLimitException if exc is a GitLab rate-limit error (HTTP 429,
+    or 403 carrying rate-limit headers); otherwise return None so callers
+    continue their existing handling."""
+    import gitlab  # python-gitlab; keep lazy to match existing import semantics
+
+    if isinstance(exc, RateLimitException):
+        raise exc
+    if not isinstance(exc, gitlab.exceptions.GitlabError):
+        return None
+    status = getattr(exc, "response_code", None)
+    headers = getattr(exc, "response_headers", None) or {}
+    retry_after = parse_retry_after_header(headers)
+
+    def _hdr(name: str) -> str | None:
+        try:
+            return headers.get(name)
+        except AttributeError:
+            return None
+
+    is_rate_limited = status == 429 or (
+        status == 403
+        and (
+            retry_after is not None
+            or str(_hdr("RateLimit-Remaining")) == "0"
+            or _hdr("Retry-After") is not None
+        )
+    )
+    if not is_rate_limited:
+        return None
+    # Prefer Retry-After; else derive from RateLimit-Reset (epoch seconds) if present.
+    if retry_after is None:
+        reset_raw = _hdr("RateLimit-Reset")
+        if reset_raw is not None:
+            try:
+                import time as _t
+
+                retry_after = max(0.0, float(reset_raw) - _t.time())
+            except (TypeError, ValueError):
+                retry_after = None
+    raise RateLimitException(
+        f"GitLab rate limited (HTTP {status})", retry_after_seconds=retry_after
+    ) from exc
 
 
 class _ListManager(Protocol):
@@ -95,8 +141,12 @@ class GitLabWorkClient:
         )
 
     def get_project(self, project_id_or_path: str) -> Any:
-        with gate_call(self.gate):
-            return self.gl.projects.get(project_id_or_path)
+        try:
+            with gate_call(self.gate):
+                return self.gl.projects.get(project_id_or_path)
+        except Exception as exc:
+            _maybe_raise_gitlab_rate_limit(exc)
+            raise
 
     def _gated_iter(self, iterable: Any) -> Iterator[Any]:
         """Consume a python-gitlab lazy iterator with each page fetch routed
@@ -107,11 +157,17 @@ class GitLabWorkClient:
         """
         iterator = iter(iterable)
         while True:
-            with gate_call(self.gate):
-                try:
-                    item = next(iterator)
-                except StopIteration:
-                    return
+            try:
+                with gate_call(self.gate):
+                    try:
+                        item = next(iterator)
+                    except StopIteration:
+                        return
+            except StopIteration:
+                return
+            except Exception as exc:
+                _maybe_raise_gitlab_rate_limit(exc)
+                raise
             yield item
 
     def iter_project_issues(
@@ -169,6 +225,7 @@ class GitLabWorkClient:
                 notes = list(issue.notes.list(per_page=100, iterator=True))[:limit]
             return notes
         except Exception as exc:
+            _maybe_raise_gitlab_rate_limit(exc)
             logger.debug("Failed to fetch issue notes: %s", exc)
             return []
 
@@ -184,6 +241,7 @@ class GitLabWorkClient:
                 notes = list(mr.notes.list(per_page=100, iterator=True))[:limit]
             return notes
         except Exception as exc:
+            _maybe_raise_gitlab_rate_limit(exc)
             logger.debug("Failed to fetch MR notes: %s", exc)
             return []
 
@@ -201,6 +259,7 @@ class GitLabWorkClient:
                 )[:limit]
             return events
         except Exception as exc:
+            _maybe_raise_gitlab_rate_limit(exc)
             logger.debug("Failed to fetch issue label events: %s", exc)
             return []
 
@@ -218,6 +277,7 @@ class GitLabWorkClient:
                 )[:limit]
             return events
         except Exception as exc:
+            _maybe_raise_gitlab_rate_limit(exc)
             logger.debug("Failed to fetch issue state events: %s", exc)
             return []
 
@@ -235,6 +295,7 @@ class GitLabWorkClient:
                 )[:limit]
             return events
         except Exception as exc:
+            _maybe_raise_gitlab_rate_limit(exc)
             logger.debug("Failed to fetch MR state events: %s", exc)
             return []
 
@@ -248,6 +309,7 @@ class GitLabWorkClient:
                 links = list(issue.links.list(per_page=100, iterator=True))
             return links
         except Exception as exc:
+            _maybe_raise_gitlab_rate_limit(exc)
             logger.debug("Failed to fetch issue links: %s", exc)
             return []
 
@@ -277,6 +339,7 @@ class GitLabWorkClient:
                 milestones = group.milestones.list(state=state, iterator=True)
             yield from self._gated_iter(milestones)
         except Exception as exc:
+            _maybe_raise_gitlab_rate_limit(exc)
             logger.debug("Failed to fetch group milestones: %s", exc)
             return
 
@@ -286,8 +349,12 @@ class GitLabWorkClient:
 
     def get_group(self, group_id_or_path: str) -> Any:
         """Get a GitLab group by ID or path."""
-        with gate_call(self.gate):
-            return self.gl.groups.get(group_id_or_path)
+        try:
+            with gate_call(self.gate):
+                return self.gl.groups.get(group_id_or_path)
+        except Exception as exc:
+            _maybe_raise_gitlab_rate_limit(exc)
+            raise
 
     def iter_group_epics(
         self,
@@ -328,6 +395,7 @@ class GitLabWorkClient:
                 if limit is not None and count >= int(limit):
                     return
         except Exception as exc:
+            _maybe_raise_gitlab_rate_limit(exc)
             # Epics require GitLab Premium/Ultimate - gracefully handle
             if "403" in str(exc) or "404" in str(exc):
                 logger.debug(
@@ -351,6 +419,7 @@ class GitLabWorkClient:
                 notes = list(epic.notes.list(per_page=100, iterator=True))[:limit]
             return notes
         except Exception as exc:
+            _maybe_raise_gitlab_rate_limit(exc)
             logger.debug("Failed to fetch epic notes: %s", exc)
             return []
 
@@ -368,6 +437,7 @@ class GitLabWorkClient:
                 issues = list(epic.issues.list(per_page=100, iterator=True))
             return issues
         except Exception as exc:
+            _maybe_raise_gitlab_rate_limit(exc)
             logger.debug("Failed to fetch epic issues: %s", exc)
             return []
 
@@ -385,5 +455,6 @@ class GitLabWorkClient:
                 )[:limit]
             return events
         except Exception as exc:
+            _maybe_raise_gitlab_rate_limit(exc)
             logger.debug("Failed to fetch epic state events: %s", exc)
             return []

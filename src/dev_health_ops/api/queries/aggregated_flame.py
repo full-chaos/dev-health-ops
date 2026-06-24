@@ -186,7 +186,7 @@ async def fetch_throughput(
             coalesce(nullIf(team_name, ''), 'Unassigned') AS team_name,
             sum(items_completed) AS items_completed,
             sum(items_started) AS items_started
-        FROM work_item_metrics_daily
+        FROM work_item_metrics_daily FINAL
         WHERE {where_clause}
         GROUP BY team_name
         HAVING items_completed > 0

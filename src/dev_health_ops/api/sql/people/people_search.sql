@@ -12,7 +12,7 @@ WITH identities AS (
     SELECT
         user_identity AS identity,
         max(day) AS last_seen
-    FROM work_item_user_metrics_daily
+    FROM work_item_user_metrics_daily FINAL
     WHERE user_identity != ''
       AND org_id = %(org_id)s
     GROUP BY user_identity

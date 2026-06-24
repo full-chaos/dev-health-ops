@@ -12,11 +12,12 @@ def _date_params(start_day: date, end_day: date) -> dict[str, Any]:
     return {"start_day": start_day, "end_day": end_day}
 
 
-# CHAOS-2377: tables that the daily job appends to per-run (plain MergeTree, one
-# fresh row per (natural key, computed_at)). Reading them with a top-level
-# sum() double-counts re-runs/backfills, so the table read must be wrapped in a
-# per-key argMax(..., computed_at) dedup subquery before aggregating — matching
-# the operating_review / sankey / aggregated_flame readers on this branch.
+# CHAOS-2377 / CHAOS-2645: daily-rollup tables the sync job re-writes per run.
+# work_item_metrics_daily and work_item_user_metrics_daily are
+# ReplacingMergeTree(computed_at) (migration 055); work_item_state_durations_daily
+# stays MergeTree. In all cases a top-level sum() double-counts re-runs/backfills,
+# so the table read is wrapped in a per-key argMax(..., computed_at) dedup subquery
+# before aggregating (the FINAL-equivalent for the metric-config read path).
 _DEDUP_BY_COMPUTED_AT: dict[str, tuple[str, ...]] = {
     "work_item_state_durations_daily": (
         "day",
@@ -24,6 +25,18 @@ _DEDUP_BY_COMPUTED_AT: dict[str, tuple[str, ...]] = {
         "work_scope_id",
         "team_id",
         "status",
+    ),
+    "work_item_metrics_daily": (
+        "day",
+        "provider",
+        "work_scope_id",
+        "team_id",
+    ),
+    "work_item_user_metrics_daily": (
+        "day",
+        "provider",
+        "work_scope_id",
+        "user_identity",
     ),
 }
 

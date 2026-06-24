@@ -9,7 +9,7 @@ FROM (
     UNION ALL
 
     SELECT 'work' AS source
-    FROM work_item_user_metrics_daily
+    FROM work_item_user_metrics_daily FINAL
     WHERE user_identity IN %(identities)s
       AND org_id = %(org_id)s
     LIMIT 1

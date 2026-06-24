@@ -76,7 +76,7 @@ async def load_throughput_from_sink(
 
     query = f"""
         SELECT day, SUM(items_completed) as items_completed
-        FROM work_item_metrics_daily
+        FROM work_item_metrics_daily FINAL
         WHERE {where_clause}
         GROUP BY day
         ORDER BY day
@@ -128,7 +128,7 @@ async def get_backlog_from_sink(
 
     query = f"""
         SELECT wip_count_end_of_day
-        FROM work_item_metrics_daily
+        FROM work_item_metrics_daily FINAL
         WHERE {where_clause}
         ORDER BY day DESC
         LIMIT 1
@@ -151,7 +151,7 @@ async def discover_team_scopes(sink: Any) -> list[tuple[str | None, str | None]]
 
     query = """
         SELECT DISTINCT team_id, work_scope_id
-        FROM work_item_metrics_daily
+        FROM work_item_metrics_daily FINAL
         WHERE day >= today() - 30
     """
 

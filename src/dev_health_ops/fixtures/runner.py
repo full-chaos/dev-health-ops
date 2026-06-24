@@ -1852,25 +1852,25 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
             return 1
 
         metrics_count = int(
-            client.query("SELECT count() FROM work_item_metrics_daily").result_rows[0][
-                0
-            ]
+            client.query(
+                "SELECT count() FROM work_item_metrics_daily FINAL"
+            ).result_rows[0][0]
         )
         metrics_with_predictability = int(
             client.query(
-                "SELECT count() FROM work_item_metrics_daily "
+                "SELECT count() FROM work_item_metrics_daily FINAL "
                 "WHERE predictability_score > 0"
             ).result_rows[0][0]
         )
         metrics_with_congestion = int(
             client.query(
-                "SELECT count() FROM work_item_metrics_daily "
+                "SELECT count() FROM work_item_metrics_daily FINAL "
                 "WHERE wip_congestion_ratio > 0"
             ).result_rows[0][0]
         )
         metrics_with_new_items = int(
             client.query(
-                "SELECT count() FROM work_item_metrics_daily WHERE new_items_count > 0"
+                "SELECT count() FROM work_item_metrics_daily FINAL WHERE new_items_count > 0"
             ).result_rows[0][0]
         )
         logging.info(

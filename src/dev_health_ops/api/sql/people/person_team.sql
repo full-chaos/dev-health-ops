@@ -11,7 +11,7 @@ FROM (
     UNION ALL
 
     SELECT team_id, day
-    FROM work_item_user_metrics_daily
+    FROM work_item_user_metrics_daily FINAL
     WHERE user_identity IN %(identities)s
       AND org_id = %(org_id)s
       AND team_id IS NOT NULL

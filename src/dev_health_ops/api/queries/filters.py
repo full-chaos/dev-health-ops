@@ -42,7 +42,7 @@ async def fetch_filter_options(
             UNION ALL
 
             SELECT team_id AS value
-            FROM work_item_user_metrics_daily
+            FROM work_item_user_metrics_daily FINAL
             WHERE team_id != ''
               AND org_id = %(org_id)s
         )

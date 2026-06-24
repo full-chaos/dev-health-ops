@@ -412,7 +412,7 @@ class ClickHouseStore:
           day, provider, work_scope_id, user_identity, team_id, team_name,
           items_started, items_completed, wip_count_end_of_day,
           cycle_time_p50_hours, cycle_time_p90_hours, computed_at
-        FROM work_item_user_metrics_daily
+        FROM work_item_user_metrics_daily FINAL
         {where}
         """
 

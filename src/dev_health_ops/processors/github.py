@@ -50,6 +50,7 @@ from dev_health_ops.processors.testops_ingest import (
     MAX_RUNS_PER_SYNC,
     ingest_report_members,
 )
+from dev_health_ops.providers.github.client import GitHubAuth, GitHubWorkClient
 from dev_health_ops.providers.pr_state import normalize_pr_state
 from dev_health_ops.utils import (
     AGGREGATE_STATS_MARKER,
@@ -623,6 +624,7 @@ def _enrich_prs_with_reviews_batch(
     raw_gh_prs: list[Any],
     ingestion_sink: IngestionSink,
     loop: asyncio.AbstractEventLoop,
+    gate: "RateLimitGate",
 ) -> list[GitPullRequestReview]:
     """Batch-fetch reviews for all PRs and enrich pr_objects in place.
 
@@ -630,13 +632,30 @@ def _enrich_prs_with_reviews_batch(
     replacing the N+1 pattern (one review API call per PR).
     """
     all_review_objects: list[GitPullRequestReview] = []
+    pr_objects_by_number = {int(pr.number): pr for pr in pr_objects}
+    reviews_by_pr = {}
 
-    for pr_obj, gh_pr in zip(pr_objects, raw_gh_prs):
-        try:
-            reviews = connector.get_pull_request_reviews(owner, repo_name, gh_pr.number)
-        except Exception as e:
-            logging.debug("Failed to fetch reviews for PR #%d: %s", gh_pr.number, e)
+    try:
+        review_client = _github_work_client_from_connector(connector, gate=gate)
+        for pr_number, reviews in review_client.iter_pr_reviews_batch(
+            owner=owner,
+            repo=repo_name,
+            prs=raw_gh_prs,
+            limit=None,
+        ):
+            reviews_by_pr[int(pr_number)] = reviews
+    except Exception as e:
+        logging.debug(
+            "Failed to batch-fetch reviews for %s/%s: %s", owner, repo_name, e
+        )
+
+    for gh_pr in raw_gh_prs:
+        pr_number = int(getattr(gh_pr, "number", 0) or 0)
+        pr_obj = pr_objects_by_number.get(pr_number)
+        if pr_obj is None:
             continue
+
+        reviews = reviews_by_pr.get(pr_number, ())
 
         if not reviews:
             continue
@@ -659,10 +678,10 @@ def _enrich_prs_with_reviews_batch(
             all_review_objects.append(
                 GitPullRequestReview(
                     repo_id=repo_id,
-                    number=gh_pr.number,
-                    review_id=r.id,
-                    reviewer=r.reviewer,
-                    state=r.state,
+                    number=pr_number,
+                    review_id=str(r.id),
+                    reviewer=str(r.reviewer or "Unknown"),
+                    state=str(r.state or ""),
                     submitted_at=review_at,
                 )
             )
@@ -678,6 +697,26 @@ def _enrich_prs_with_reviews_batch(
         pr_obj.changes_requested_count = changes_requested_count
 
     return all_review_objects
+
+
+def _github_work_client_from_connector(
+    connector,
+    *,
+    gate: "RateLimitGate",
+) -> GitHubWorkClient:
+    rest_base_url = getattr(connector, "_rest_base_url", None)
+    raw_base_url = rest_base_url() if callable(rest_base_url) else None
+    base_url = raw_base_url if isinstance(raw_base_url, str) else None
+    token = getattr(connector, "token", None)
+    client = GitHubWorkClient(
+        auth=GitHubAuth(token=token, base_url=base_url),
+        per_page=int(getattr(connector, "per_page", 100) or 100),
+        gate=gate,
+    )
+    connector_graphql = getattr(connector, "graphql", None)
+    if connector_graphql is not None:
+        client.graphql = connector_graphql
+    return client
 
 
 def _sync_github_prs_to_store(
@@ -734,6 +773,7 @@ def _sync_github_prs_to_store(
         raw_gh_prs=raw_gh_prs,
         ingestion_sink=ingestion_sink,
         loop=loop,
+        gate=gate,
     )
 
     # Phase 3: persist reviews in one bulk insert

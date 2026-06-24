@@ -158,6 +158,17 @@ class SyncConfigBatchResponse(BaseModel):
     total_created: int
 
 
+class SyncConfigRepositorySelection(BaseModel):
+    owner: str
+    repos: list[str] = Field(default_factory=list)
+    sync_all_repos: bool = False
+
+
+class SyncConfigRepositorySelectionUpdate(BaseModel):
+    owner: str = Field(..., min_length=1)
+    repos: list[str] = Field(default_factory=list)
+
+
 class SyncConfigUpdate(BaseModel):
     sync_targets: list[str] | None = None
     sync_options: dict[str, Any] | None = None

@@ -235,6 +235,10 @@ def run_work_items_sync_job(
     jira_project_keys: list[str] | None = None,
     jira_jql: str | None = None,
     jira_fetch_all: bool | None = None,
+    include_issues: bool | None = None,
+    include_pull_requests: bool | None = None,
+    fetch_comments: bool | None = None,
+    fetch_milestones: bool | None = None,
 ) -> None:
     """
     Sync work tracking facts from provider APIs and write derived work item tables.
@@ -373,7 +377,11 @@ def run_work_items_sync_job(
         if "github" in provider_set:
             from uuid import UUID
 
-            from dev_health_ops.providers.base import IngestionContext, IngestionWindow
+            from dev_health_ops.providers.base import (
+                IngestionContext,
+                IngestionWindow,
+                WorkItemIngestionOptions,
+            )
             from dev_health_ops.providers.github.provider import GitHubProvider
 
             github_provider = GitHubProvider(
@@ -395,6 +403,12 @@ def run_work_items_sync_job(
                     repo=discovered_repo.full_name,
                     repo_id=discovered_repo.repo_id,
                     org_id=github_org_id,
+                    work_item_options=WorkItemIngestionOptions(
+                        include_issues=include_issues,
+                        include_pull_requests=include_pull_requests,
+                        fetch_comments=fetch_comments,
+                        fetch_milestones=fetch_milestones,
+                    ),
                 )
                 for batch in github_provider.iter_ingest(ctx):
                     work_items.extend(batch.work_items)

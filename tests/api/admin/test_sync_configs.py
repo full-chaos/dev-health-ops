@@ -1479,6 +1479,142 @@ async def test_batch_create_github_creates_planner_config_without_children(
 
 
 @pytest.mark.asyncio
+async def test_get_sync_config_repositories_returns_planner_sources(client):
+    ac, _ = client
+
+    create_resp = await ac.post(
+        "/api/v1/admin/sync-configs/batch",
+        json={
+            "name": "gh-repo-read",
+            "provider": "github",
+            "sync_targets": ["git"],
+            "sync_options": {"owner": "acme"},
+            "repos": ["alpha", "beta"],
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = create_resp.json()["parent"]["id"]
+
+    resp = await ac.get(f"/api/v1/admin/sync-configs/{config_id}/repositories")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "owner": "acme",
+        "repos": ["acme/alpha", "acme/beta"],
+        "sync_all_repos": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_replace_sync_config_repositories_updates_planner_sources(
+    client, session_maker
+):
+    ac, _ = client
+
+    create_resp = await ac.post(
+        "/api/v1/admin/sync-configs/batch",
+        json={
+            "name": "gh-repo-replace",
+            "provider": "github",
+            "sync_targets": ["git"],
+            "sync_options": {"owner": "acme"},
+            "repos": ["alpha", "beta"],
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = create_resp.json()["parent"]["id"]
+
+    resp = await ac.put(
+        f"/api/v1/admin/sync-configs/{config_id}/repositories",
+        json={"owner": "acme", "repos": ["acme/beta", "acme/gamma"]},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "owner": "acme",
+        "repos": ["acme/beta", "acme/gamma"],
+        "sync_all_repos": False,
+    }
+    async with session_maker() as session:
+        sources = (await session.execute(select(IntegrationSource))).scalars().all()
+        config = (
+            await session.execute(
+                select(SyncConfiguration).where(
+                    SyncConfiguration.id == uuid.UUID(config_id)
+                )
+            )
+        ).scalar_one()
+
+    by_external_id = {source.external_id: source for source in sources}
+    assert by_external_id["acme/alpha"].is_enabled is False
+    assert by_external_id["acme/beta"].is_enabled is True
+    assert by_external_id["acme/gamma"].is_enabled is True
+    assert config.sync_options["owner"] == "acme"
+    assert "all_repos" not in config.sync_options
+
+
+@pytest.mark.asyncio
+async def test_sync_config_repositories_ignore_untagged_sources(client, session_maker):
+    ac, _ = client
+
+    create_resp = await ac.post(
+        "/api/v1/admin/sync-configs/batch",
+        json={
+            "name": "gh-repo-scoped",
+            "provider": "github",
+            "sync_targets": ["git"],
+            "sync_options": {"owner": "acme"},
+            "repos": ["alpha", "beta"],
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = create_resp.json()["parent"]["id"]
+
+    async with session_maker() as session:
+        config = (
+            await session.execute(
+                select(SyncConfiguration).where(
+                    SyncConfiguration.id == uuid.UUID(config_id)
+                )
+            )
+        ).scalar_one()
+        session.add(
+            IntegrationSource(
+                org_id=config.org_id,
+                integration_id=config.migrated_integration_id,
+                provider="github",
+                source_type="repository",
+                external_id="acme/discovered",
+                name="discovered",
+                full_name="acme/discovered",
+                metadata_={"owner": "acme"},
+                is_enabled=True,
+            )
+        )
+        await session.commit()
+
+    get_resp = await ac.get(f"/api/v1/admin/sync-configs/{config_id}/repositories")
+
+    assert get_resp.status_code == 200, get_resp.text
+    assert get_resp.json()["repos"] == ["acme/alpha", "acme/beta"]
+
+    put_resp = await ac.put(
+        f"/api/v1/admin/sync-configs/{config_id}/repositories",
+        json={"owner": "acme", "repos": ["acme/beta"]},
+    )
+
+    assert put_resp.status_code == 200, put_resp.text
+    assert put_resp.json()["repos"] == ["acme/beta"]
+    async with session_maker() as session:
+        sources = (await session.execute(select(IntegrationSource))).scalars().all()
+
+    by_external_id = {source.external_id: source for source in sources}
+    assert by_external_id["acme/alpha"].is_enabled is False
+    assert by_external_id["acme/beta"].is_enabled is True
+    assert by_external_id["acme/discovered"].is_enabled is True
+
+
+@pytest.mark.asyncio
 async def test_batch_create_gitlab_children_get_project_id_and_group(
     client, session_maker
 ):

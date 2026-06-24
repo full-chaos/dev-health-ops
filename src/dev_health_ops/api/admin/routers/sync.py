@@ -20,6 +20,8 @@ from dev_health_ops.api.admin.schemas import (
     SyncConfigBatchCreate,
     SyncConfigBatchResponse,
     SyncConfigCreate,
+    SyncConfigRepositorySelection,
+    SyncConfigRepositorySelectionUpdate,
     SyncConfigResponse,
     SyncConfigUpdate,
 )
@@ -673,6 +675,187 @@ def _planner_source_rows(
     return rows
 
 
+def _repo_selection_owner(config: SyncConfiguration) -> str:
+    sync_options = dict(getattr(config, "sync_options") or {})
+    return str(sync_options.get("owner") or sync_options.get("group") or "")
+
+
+def _repo_selection_from_sources(
+    config: SyncConfiguration, sources: Sequence[IntegrationSource]
+) -> SyncConfigRepositorySelection:
+    enabled_sources = [source for source in sources if bool(source.is_enabled)]
+    return SyncConfigRepositorySelection(
+        owner=_repo_selection_owner(config),
+        repos=[str(source.full_name) for source in enabled_sources],
+        sync_all_repos=bool((getattr(config, "sync_options") or {}).get("all_repos")),
+    )
+
+
+def _is_planner_source_for_config(
+    source: IntegrationSource, config: SyncConfiguration
+) -> bool:
+    metadata = dict(getattr(source, "metadata_", None) or {})
+    return metadata.get("planner_managed_sync_config_id") == str(getattr(config, "id"))
+
+
+async def _planner_sources_for_config(
+    session: AsyncSession, org_id: str, config: SyncConfiguration
+) -> list[IntegrationSource]:
+    integration_id = getattr(config, "migrated_integration_id", None)
+    if integration_id is None:
+        return []
+    result = await session.execute(
+        select(IntegrationSource).where(
+            IntegrationSource.org_id == org_id,
+            IntegrationSource.integration_id == integration_id,
+            IntegrationSource.provider == getattr(config, "provider"),
+        )
+    )
+    return [
+        source
+        for source in result.scalars().all()
+        if _is_planner_source_for_config(source, config)
+    ]
+
+
+async def _legacy_child_repositories_for_config(
+    session: AsyncSession, org_id: str, config: SyncConfiguration
+) -> list[str]:
+    result = await session.execute(
+        select(SyncConfiguration).where(
+            SyncConfiguration.org_id == org_id,
+            SyncConfiguration.parent_id == getattr(config, "id"),
+        )
+    )
+    repos: list[str] = []
+    for child in result.scalars().all():
+        sync_options = dict(getattr(child, "sync_options") or {})
+        repo = sync_options.get("repo") or sync_options.get("project_id")
+        if repo is None:
+            continue
+        owner = sync_options.get("owner") or sync_options.get("group")
+        if owner and "/" not in str(repo):
+            repos.append(f"{owner}/{repo}")
+        else:
+            repos.append(str(repo))
+    return repos
+
+
+async def _repository_selection_for_config(
+    session: AsyncSession, org_id: str, config: SyncConfiguration
+) -> SyncConfigRepositorySelection:
+    sources = await _planner_sources_for_config(session, org_id, config)
+    if sources:
+        return _repo_selection_from_sources(config, sources)
+    repos = await _legacy_child_repositories_for_config(session, org_id, config)
+    sync_options = dict(getattr(config, "sync_options") or {})
+    if not repos and sync_options.get("repo") is not None:
+        repo = str(sync_options["repo"])
+        owner = _repo_selection_owner(config)
+        repos = [f"{owner}/{repo}" if owner and "/" not in repo else repo]
+    return SyncConfigRepositorySelection(
+        owner=_repo_selection_owner(config),
+        repos=repos,
+        sync_all_repos=bool(sync_options.get("all_repos")),
+    )
+
+
+async def _replace_planner_repository_selection(
+    session: AsyncSession,
+    org_id: str,
+    config: SyncConfiguration,
+    payload: SyncConfigRepositorySelectionUpdate,
+) -> SyncConfigRepositorySelection:
+    integration_id = getattr(config, "migrated_integration_id", None)
+    if integration_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Repository selection edits require a planner-managed sync config",
+        )
+
+    existing_sources = await _planner_sources_for_config(session, org_id, config)
+    enabled_existing = [
+        source for source in existing_sources if bool(source.is_enabled)
+    ]
+    await _acquire_repo_limit_create_lock(session, org_id)
+    current_count = await _active_repo_usage_count_for_limit(session, org_id)
+    requested_count = current_count - len(enabled_existing) + len(payload.repos)
+
+    def _check_limit(sync_session) -> tuple[bool, str | None]:
+        tier_svc = TierLimitService(sync_session)
+        return tier_svc.check_repo_limit(uuid.UUID(org_id), requested_count)
+
+    allowed, reason = await session.run_sync(_check_limit)
+    if not allowed:
+        raise HTTPException(
+            status_code=403,
+            detail=reason
+            or f"Repo limit exceeded (selecting {len(payload.repos)} repos)",
+        )
+
+    sync_options = dict(getattr(config, "sync_options") or {})
+    provider = str(getattr(config, "provider")).lower()
+    if provider == "gitlab":
+        sync_options["group"] = payload.owner
+    else:
+        sync_options["owner"] = payload.owner
+    sync_options.pop("all_repos", None)
+    mutable_config = cast(_MutableSyncConfiguration, config)
+    mutable_config.sync_options = sync_options
+
+    batch_payload = SyncConfigBatchCreate(
+        name=str(getattr(config, "name")),
+        provider=str(getattr(config, "provider")),
+        credential_id=str(getattr(config, "credential_id"))
+        if getattr(config, "credential_id", None)
+        else None,
+        sync_targets=list(getattr(config, "sync_targets") or []),
+        sync_options=sync_options,
+        repos=payload.repos,
+    )
+    gitlab_projects: dict[str, tuple[int, str]] = {}
+    if provider == "gitlab" and payload.repos:
+        gitlab_projects, effective_gitlab_url = await _resolve_gitlab_batch_projects(
+            session, org_id, batch_payload
+        )
+        if effective_gitlab_url != DEFAULT_GITLAB_URL:
+            sync_options["gitlab_url"] = effective_gitlab_url
+            mutable_config.sync_options = sync_options
+
+    desired_rows = _planner_source_rows(
+        batch_payload,
+        sync_options,
+        gitlab_projects,
+        org_id,
+        integration_id,
+        getattr(config, "id"),
+    )
+    existing_by_external_id = {
+        str(source.external_id): source for source in existing_sources
+    }
+    desired_external_ids = {str(row.external_id) for row in desired_rows}
+
+    for source in existing_sources:
+        if str(source.external_id) not in desired_external_ids:
+            source.is_enabled = False
+
+    for desired in desired_rows:
+        existing = existing_by_external_id.get(str(desired.external_id))
+        if existing is None:
+            session.add(desired)
+            continue
+        existing.source_type = desired.source_type
+        existing.name = desired.name
+        existing.full_name = desired.full_name
+        existing.metadata_ = desired.metadata_
+        existing.is_enabled = True
+        existing.last_seen_at = datetime.now(timezone.utc)
+
+    await session.flush()
+    refreshed_sources = await _planner_sources_for_config(session, org_id, config)
+    return _repo_selection_from_sources(config, refreshed_sources)
+
+
 async def _assert_single_planner_parent_for_integration(
     session: AsyncSession,
     org_id: str,
@@ -1202,6 +1385,44 @@ async def get_sync_config(
     if config is None:
         raise HTTPException(status_code=404, detail="Sync configuration not found")
     return _sync_config_to_response(config)
+
+
+@router.get(
+    "/sync-configs/{config_id}/repositories",
+    response_model=SyncConfigRepositorySelection,
+)
+async def get_sync_config_repositories(
+    config_id: str,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+) -> SyncConfigRepositorySelection:
+    svc = SyncConfigurationService(session, org_id)
+    config = await svc.get_by_id(config_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Sync configuration not found")
+    return await _repository_selection_for_config(session, org_id, config)
+
+
+@router.put(
+    "/sync-configs/{config_id}/repositories",
+    response_model=SyncConfigRepositorySelection,
+)
+async def replace_sync_config_repositories(
+    config_id: str,
+    payload: SyncConfigRepositorySelectionUpdate,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+) -> SyncConfigRepositorySelection:
+    svc = SyncConfigurationService(session, org_id)
+    config = await svc.get_by_id(config_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Sync configuration not found")
+    if str(getattr(config, "provider", "")).lower() not in {"github", "gitlab"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Repository selection is only supported for GitHub and GitLab configs",
+        )
+    return await _replace_planner_repository_selection(session, org_id, config, payload)
 
 
 @router.patch("/sync-configs/{config_id}", response_model=SyncConfigResponse)

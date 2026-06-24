@@ -44,6 +44,7 @@ from tests._helpers import tables_of
 
 admin_router_module = importlib.import_module("dev_health_ops.api.admin")
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
+sync_router_module = importlib.import_module("dev_health_ops.api.admin.routers.sync")
 
 _TABLES = tables_of(
     User,
@@ -389,6 +390,48 @@ async def test_batch_creates_planner_parent_when_planner_flag_inactive(
         "files",
         "repo-metadata",
     }
+
+
+@pytest.mark.asyncio
+async def test_planner_parent_integration_invariant_rejects_second_parent(
+    session_maker, seeded_state
+):
+    org_id = seeded_state["org_id"]
+    async with session_maker() as session:
+        integration = Integration(
+            org_id=org_id,
+            provider="github",
+            name="shared-integration",
+            config={"owner": "myorg"},
+            is_active=True,
+        )
+        session.add(integration)
+        await session.flush()
+        session.add_all(
+            [
+                SyncConfiguration(
+                    name="planner-parent-a",
+                    provider="github",
+                    org_id=org_id,
+                    sync_targets=["git"],
+                    migrated_integration_id=integration.id,
+                    planner_managed=True,
+                ),
+                SyncConfiguration(
+                    name="planner-parent-b",
+                    provider="github",
+                    org_id=org_id,
+                    sync_targets=["git"],
+                    migrated_integration_id=integration.id,
+                    planner_managed=True,
+                ),
+            ]
+        )
+        await session.flush()
+        with pytest.raises(RuntimeError, match="invariant violated"):
+            await sync_router_module._assert_single_planner_parent_for_integration(
+                session, org_id, integration.id
+            )
 
 
 # ---------------------------------------------------------------------------

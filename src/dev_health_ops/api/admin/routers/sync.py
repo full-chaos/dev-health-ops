@@ -642,14 +642,21 @@ def _planner_source_rows(
             }
         else:
             source_type = "repository" if provider == "github" else "source"
-            full_name = f"{owner}/{repo_name}" if provider == "github" else repo_name
+            if provider == "github" and "/" in repo_name:
+                source_owner, source_name = repo_name.split("/", 1)
+                full_name = repo_name
+            else:
+                source_owner = owner
+                source_name = repo_name
+                full_name = (
+                    f"{owner}/{repo_name}" if provider == "github" else repo_name
+                )
             external_id = full_name
-            source_name = repo_name
             metadata = {
                 "planner_managed_sync_config_id": str(config_id),
             }
             if provider == "github":
-                metadata["owner"] = owner
+                metadata["owner"] = source_owner
         rows.append(
             IntegrationSource(
                 org_id=org_id,

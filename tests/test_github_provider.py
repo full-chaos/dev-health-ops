@@ -14,6 +14,7 @@ Tests cover:
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, cast
@@ -21,6 +22,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from dev_health_ops.connectors.exceptions import NotFoundException
 from dev_health_ops.models.work_items import WorkItem
 from dev_health_ops.providers.base import (
     IngestionContext,
@@ -940,6 +942,62 @@ def test_github_provider_ingest(mock_from_env, mock_status_mapping, mock_identit
     assert isinstance(batch, ProviderBatch)
     assert len(batch.work_items) == 2  # 1 issue + 1 PR
     assert len(batch.sprints) == 1
+
+
+@patch.dict(os.environ, {}, clear=True)
+def test_github_provider_pr_social_404_does_not_drop_fetched_prs(
+    caplog, mock_status_mapping, mock_identity
+):
+    client = _options_client()
+    client.iter_pull_requests.return_value = [_mock_pr(number=100, title="Test PR")]
+    client.iter_pr_social_data_batch.side_effect = NotFoundException(
+        "GitHub resource not found on GraphQL PR social data: Not Found"
+    )
+    provider = GitHubProvider(
+        status_mapping=mock_status_mapping, identity=mock_identity, client=client
+    )
+    ctx = IngestionContext(repo="owner/repo", window=IngestionWindow())
+
+    with caplog.at_level(
+        logging.WARNING, logger="dev_health_ops.providers.github.provider"
+    ):
+        batch = provider.ingest(ctx)
+
+    assert [item.work_item_id for item in batch.work_items] == ["ghpr:owner/repo#100"]
+    assert "GitHub: failed to fetch PRs from owner/repo" not in caplog.text
+    assert "GitHub: failed to fetch PR social data from owner/repo" in caplog.text
+
+
+@patch.dict(os.environ, {}, clear=True)
+def test_github_provider_pr_processing_404_is_not_logged_as_fetch_failure(
+    caplog, mock_status_mapping, mock_identity
+):
+    class BrokenPR:
+        number = 101
+
+        @property
+        def body(self):
+            raise NotFoundException("GitHub resource not found while loading PR")
+
+    client = _options_client()
+    client.iter_pull_requests.return_value = [
+        _mock_pr(number=100, title="Test PR"),
+        BrokenPR(),
+    ]
+    client.iter_pr_social_data_batch.return_value = []
+    provider = GitHubProvider(
+        status_mapping=mock_status_mapping, identity=mock_identity, client=client
+    )
+    ctx = IngestionContext(repo="owner/repo", window=IngestionWindow())
+
+    with caplog.at_level(
+        logging.WARNING, logger="dev_health_ops.providers.github.provider"
+    ):
+        batch = provider.ingest(ctx)
+
+    assert [item.work_item_id for item in batch.work_items] == ["ghpr:owner/repo#100"]
+    assert "GitHub: failed to fetch PRs from owner/repo" not in caplog.text
+    assert "GitHub: failed to process PRs from owner/repo" in caplog.text
 
 
 @patch.dict(os.environ, {}, clear=True)

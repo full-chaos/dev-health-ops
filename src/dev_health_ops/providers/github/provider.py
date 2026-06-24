@@ -266,13 +266,13 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
 
         # Fetch pull requests
         if include_prs:
-            try:
-                remaining_limit = None
-                if ctx.limit is not None:
-                    remaining_limit = ctx.limit - fetched_count
-                    if remaining_limit <= 0:
-                        remaining_limit = None
+            remaining_limit = None
+            if ctx.limit is not None:
+                remaining_limit = ctx.limit - fetched_count
+                if remaining_limit <= 0:
+                    remaining_limit = None
 
+            try:
                 prs = list(
                     client.iter_pull_requests(
                         owner=owner,
@@ -281,6 +281,11 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                         limit=remaining_limit,
                     )
                 )
+            except Exception as exc:
+                logger.warning(
+                    "GitHub: failed to fetch PRs from %s: %s", repo_full_name, exc
+                )
+            else:
                 # Batch PR timeline events and comments via GraphQL (one query
                 # per <=50 PRs) instead of a per-PR REST issue-events call.
                 # The per-PR REST events fetch exhausted the GitHub App
@@ -289,147 +294,159 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                 # interaction events + the Linear linkback dependency capture.
                 pr_comments_by_number: dict[int, tuple[GitHubGraphQLComment, ...]] = {}
                 pr_events_by_number: dict[int, tuple[GitHubGraphQLEvent, ...]] = {}
-                for payload in client.iter_pr_social_data_batch(
-                    owner=owner,
-                    repo=repo,
-                    prs=prs,
-                    comments_limit=comments_limit if fetch_comments else 0,
-                    review_comments_limit=0,
-                    reviews_limit=0,
-                    events_limit=_PR_EVENTS_LIMIT,
-                ):
-                    pr_events_by_number[payload.number] = payload.events
-                    if fetch_comments:
-                        pr_comments_by_number[payload.number] = payload.issue_comments
-
-                for pr in prs:
-                    if ctx.limit is not None and fetched_count >= ctx.limit:
-                        break
-
-                    # Events for transitions/reopen detection, from the batch.
-                    events = list(
-                        pr_events_by_number.get(int(getattr(pr, "number", 0) or 0), ())
+                try:
+                    for payload in client.iter_pr_social_data_batch(
+                        owner=owner,
+                        repo=repo,
+                        prs=prs,
+                        comments_limit=comments_limit if fetch_comments else 0,
+                        review_comments_limit=0,
+                        reviews_limit=0,
+                        events_limit=_PR_EVENTS_LIMIT,
+                    ):
+                        pr_events_by_number[payload.number] = payload.events
+                        if fetch_comments:
+                            pr_comments_by_number[payload.number] = (
+                                payload.issue_comments
+                            )
+                except Exception as exc:
+                    logger.warning(
+                        "GitHub: failed to fetch PR social data from %s: %s",
+                        repo_full_name,
+                        exc,
                     )
 
-                    wi, wi_transitions = github_pr_to_work_item(
-                        pr=pr,
-                        repo_full_name=repo_full_name,
-                        repo_id=ctx.repo_id,
-                        status_mapping=self.status_mapping,
-                        identity=self.identity,
-                        events=events,
-                    )
+                try:
+                    for pr in prs:
+                        if ctx.limit is not None and fetched_count >= ctx.limit:
+                            break
 
-                    # Enrich with priority from labels
-                    wi = enrich_work_item_with_priority(wi, wi.labels)
-
-                    work_items.append(wi)
-                    transitions.extend(wi_transitions)
-
-                    # Detect reopen events
-                    reopen_events.extend(
-                        detect_github_reopen_events(
-                            work_item_id=wi.work_item_id,
-                            events=events,
-                            identity=self.identity,
+                        # Events for transitions/reopen detection, from the batch.
+                        events = list(
+                            pr_events_by_number.get(
+                                int(getattr(pr, "number", 0) or 0), ()
+                            )
                         )
-                    )
 
-                    # Extract dependencies from body
-                    dependencies.extend(
-                        extract_github_dependencies(
-                            work_item_id=wi.work_item_id,
-                            issue_or_pr=pr,
+                        wi, wi_transitions = github_pr_to_work_item(
+                            pr=pr,
                             repo_full_name=repo_full_name,
-                        )
-                    )
-
-                    # Detect AI attribution signals for this PR.
-                    # Each signal is converted to a full AIAttributionRecord
-                    # using subject context from this ingestion pass.
-                    pr_signals = detect_pr_attributions(pr=pr)
-                    if pr_signals:
-                        if ctx.org_id is None:
-                            raise ValueError(
-                                "GitHub AI attribution requires ctx.org_id"
-                            )
-                        _observed = _to_utc(getattr(pr, "created_at", None))
-                        _observed = _observed or datetime.now(timezone.utc)
-                        # CHAOS-2396: subject_id must be the BARE PR number, not
-                        # the prefixed work_item_id ('ghpr:{repo}#{n}'). The AI
-                        # governance loader and the ai_impact/ai_detector readers
-                        # join ai_attribution.subject_id = toString(pr.number)
-                        # (scoped by repo_id), and GitLab already writes the bare
-                        # iid. Writing the prefixed id made every GitHub PR
-                        # attribution miss the join, so GitHub orgs got zero AI
-                        # governance/coverage. repo_id (below) disambiguates the
-                        # same PR number across repos.
-                        _pr_number = str(int(getattr(pr, "number", 0) or 0))
-                        for _sig in pr_signals:
-                            ai_attributions.append(
-                                AIAttributionRecord.from_signal(
-                                    _sig,
-                                    org_id=ctx.org_id,
-                                    provider="github",
-                                    subject_type="pull_request",
-                                    subject_id=_pr_number,
-                                    repo_id=ctx.repo_id,
-                                    observed_at=_observed,
-                                )
-                            )
-                        logger.debug(
-                            "GitHub: detected %d AI attribution signal(s) for %s",
-                            len(pr_signals),
-                            wi.work_item_id,
+                            repo_id=ctx.repo_id,
+                            status_mapping=self.status_mapping,
+                            identity=self.identity,
+                            events=events,
                         )
 
-                    # Fetch comments for interactions
-                    if fetch_comments:
-                        try:
-                            pr_number = int(getattr(pr, "number", 0) or 0)
-                            comments = pr_comments_by_number.get(pr_number, ())
-                            for comment in comments:
-                                event = github_comment_to_interaction_event(
-                                    comment=comment,
-                                    work_item_id=wi.work_item_id,
-                                    identity=self.identity,
-                                )
-                                if event:
-                                    interactions.append(event)
-                            # Secondary link capture: the Linear integration
-                            # bot's linkback comment when the PR body/branch
-                            # carries no reference. Only that bot actor is
-                            # trusted (see extract_github_comment_dependencies).
-                            dependencies.extend(
-                                extract_github_comment_dependencies(
-                                    work_item_id=wi.work_item_id,
-                                    comments=[
-                                        (
-                                            getattr(c, "body", None),
-                                            getattr(
-                                                getattr(c, "user", None),
-                                                "login",
-                                                None,
-                                            ),
-                                        )
-                                        for c in comments
-                                    ],
-                                )
+                        # Enrich with priority from labels
+                        wi = enrich_work_item_with_priority(wi, wi.labels)
+
+                        work_items.append(wi)
+                        transitions.extend(wi_transitions)
+
+                        # Detect reopen events
+                        reopen_events.extend(
+                            detect_github_reopen_events(
+                                work_item_id=wi.work_item_id,
+                                events=events,
+                                identity=self.identity,
                             )
-                        except Exception as exc:
+                        )
+
+                        # Extract dependencies from body
+                        dependencies.extend(
+                            extract_github_dependencies(
+                                work_item_id=wi.work_item_id,
+                                issue_or_pr=pr,
+                                repo_full_name=repo_full_name,
+                            )
+                        )
+
+                        # Detect AI attribution signals for this PR.
+                        # Each signal is converted to a full AIAttributionRecord
+                        # using subject context from this ingestion pass.
+                        pr_signals = detect_pr_attributions(pr=pr)
+                        if pr_signals:
+                            if ctx.org_id is None:
+                                raise ValueError(
+                                    "GitHub AI attribution requires ctx.org_id"
+                                )
+                            _observed = _to_utc(getattr(pr, "created_at", None))
+                            _observed = _observed or datetime.now(timezone.utc)
+                            # CHAOS-2396: subject_id must be the BARE PR number, not
+                            # the prefixed work_item_id ('ghpr:{repo}#{n}'). The AI
+                            # governance loader and the ai_impact/ai_detector readers
+                            # join ai_attribution.subject_id = toString(pr.number)
+                            # (scoped by repo_id), and GitLab already writes the bare
+                            # iid. Writing the prefixed id made every GitHub PR
+                            # attribution miss the join, so GitHub orgs got zero AI
+                            # governance/coverage. repo_id (below) disambiguates the
+                            # same PR number across repos.
+                            _pr_number = str(int(getattr(pr, "number", 0) or 0))
+                            for _sig in pr_signals:
+                                ai_attributions.append(
+                                    AIAttributionRecord.from_signal(
+                                        _sig,
+                                        org_id=ctx.org_id,
+                                        provider="github",
+                                        subject_type="pull_request",
+                                        subject_id=_pr_number,
+                                        repo_id=ctx.repo_id,
+                                        observed_at=_observed,
+                                    )
+                                )
                             logger.debug(
-                                "GitHub: failed to fetch comments for PR %s: %s",
+                                "GitHub: detected %d AI attribution signal(s) for %s",
+                                len(pr_signals),
                                 wi.work_item_id,
-                                exc,
                             )
 
-                    fetched_count += 1
+                        # Fetch comments for interactions
+                        if fetch_comments:
+                            try:
+                                pr_number = int(getattr(pr, "number", 0) or 0)
+                                comments = pr_comments_by_number.get(pr_number, ())
+                                for comment in comments:
+                                    event = github_comment_to_interaction_event(
+                                        comment=comment,
+                                        work_item_id=wi.work_item_id,
+                                        identity=self.identity,
+                                    )
+                                    if event:
+                                        interactions.append(event)
+                                # Secondary link capture: the Linear integration
+                                # bot's linkback comment when the PR body/branch
+                                # carries no reference. Only that bot actor is
+                                # trusted (see extract_github_comment_dependencies).
+                                dependencies.extend(
+                                    extract_github_comment_dependencies(
+                                        work_item_id=wi.work_item_id,
+                                        comments=[
+                                            (
+                                                getattr(c, "body", None),
+                                                getattr(
+                                                    getattr(c, "user", None),
+                                                    "login",
+                                                    None,
+                                                ),
+                                            )
+                                            for c in comments
+                                        ],
+                                    )
+                                )
+                            except Exception as exc:
+                                logger.debug(
+                                    "GitHub: failed to fetch comments for PR %s: %s",
+                                    wi.work_item_id,
+                                    exc,
+                                )
 
-            except Exception as exc:
-                logger.warning(
-                    "GitHub: failed to fetch PRs from %s: %s", repo_full_name, exc
-                )
-
+                        fetched_count += 1
+                except Exception as exc:
+                    logger.warning(
+                        "GitHub: failed to process PRs from %s: %s",
+                        repo_full_name,
+                        exc,
+                    )
         logger.info(
             "GitHub: fetched %d work items (%d issues, %d PRs) from %s",
             len(work_items),

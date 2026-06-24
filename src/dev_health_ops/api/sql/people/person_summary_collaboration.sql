@@ -46,7 +46,7 @@ SELECT
     'handoff_points' AS section,
     'Items started' AS label,
     sum(items_started) AS value
-FROM work_item_user_metrics_daily
+FROM work_item_user_metrics_daily FINAL
 WHERE day >= %(start_day)s AND day < %(end_day)s
   AND user_identity IN %(identities)s
   AND org_id = %(org_id)s
@@ -57,7 +57,7 @@ SELECT
     'handoff_points' AS section,
     'Items completed' AS label,
     sum(items_completed) AS value
-FROM work_item_user_metrics_daily
+FROM work_item_user_metrics_daily FINAL
 WHERE day >= %(start_day)s AND day < %(end_day)s
   AND user_identity IN %(identities)s
   AND org_id = %(org_id)s

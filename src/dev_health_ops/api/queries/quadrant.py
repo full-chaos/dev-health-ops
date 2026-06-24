@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from dev_health_ops.clickhouse_dedup import dedup_from
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 from .client import query_dicts
@@ -40,7 +41,7 @@ async def fetch_quadrant_metric(
             {entity_expr} AS entity_id,
             {label_expr} AS entity_label,
             {value_expr} AS value
-        FROM {table}
+        FROM {dedup_from(table)}
         {join_sql}
         WHERE day >= %(start_day)s AND day < %(end_day)s
         {where_sql}

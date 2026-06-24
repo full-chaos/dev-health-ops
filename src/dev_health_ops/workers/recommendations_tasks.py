@@ -125,7 +125,7 @@ def _discover_team_ids(client: Any, org_id: str) -> list[str]:
     """
     query = """
         SELECT DISTINCT team_id
-        FROM work_item_metrics_daily
+        FROM work_item_metrics_daily FINAL
         WHERE day >= today() - 30
           AND team_id != ''
     """

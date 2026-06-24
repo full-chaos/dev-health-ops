@@ -210,6 +210,7 @@ async def test_fetch_metric_value_leaves_other_tables_flat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # The generic reader must NOT add argMax dedup for unaffected tables.
+    # (repo_metrics_daily is plain MergeTree, not in _DEDUP_BY_COMPUTED_AT.)
     captured: dict[str, str] = {}
 
     async def fake_query_dicts(_client: Any, query: str, _params: Any) -> list[Any]:
@@ -220,7 +221,7 @@ async def test_fetch_metric_value_leaves_other_tables_flat(
 
     await metrics.fetch_metric_value(
         cast(BaseMetricsSink, object()),
-        table="work_item_metrics_daily",
+        table="repo_metrics_daily",
         column="items_completed",
         start_day=date(2026, 5, 1),
         end_day=date(2026, 5, 2),
@@ -233,7 +234,7 @@ async def test_fetch_metric_value_leaves_other_tables_flat(
     normalized = " ".join(captured["query"].split())
     assert "argMax" not in normalized
     assert _NATURAL_KEY_GROUP_BY not in normalized
-    assert "FROM work_item_metrics_daily WHERE" in normalized
+    assert "FROM repo_metrics_daily WHERE" in normalized
 
 
 # --- /explain root-cause readers (CHAOS-2377 re-review) ----------------------

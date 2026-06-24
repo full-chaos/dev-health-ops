@@ -1438,7 +1438,9 @@ async def run_daily_metrics_finalize(
             except Exception:
                 logger.debug("Skipping malformed user_metrics row: %s", row)
 
-        wi_query = "SELECT * FROM work_item_user_metrics_daily WHERE day = {day:Date}"
+        wi_query = (
+            "SELECT * FROM work_item_user_metrics_daily FINAL WHERE day = {day:Date}"
+        )
         wi_params: dict[str, Any] = {"day": day}
         if org_id:
             wi_query += " AND org_id = {org_id:String}"

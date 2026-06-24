@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from datetime import date, datetime
 from typing import Any
 
+from dev_health_ops.clickhouse_dedup import dedup_from
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 from .client import query_dicts
@@ -88,7 +89,7 @@ async def fetch_person_metric_value(
 ) -> float:
     template = load_sql("people/person_summary_deltas.sql")
     sql = template.format(
-        table=table,
+        table=dedup_from(table),
         column=column,
         aggregator=aggregator,
         identity_column=identity_column,
@@ -121,7 +122,7 @@ async def fetch_person_metric_series(
 ) -> list[dict[str, Any]]:
     template = load_sql("people/person_metric_timeseries.sql")
     sql = template.format(
-        table=table,
+        table=dedup_from(table),
         column=column,
         aggregator=aggregator,
         identity_column=identity_column,
@@ -154,7 +155,7 @@ async def fetch_person_breakdown(
 ) -> list[dict[str, Any]]:
     template = load_sql("people/person_metric_breakdowns.sql")
     sql = template.format(
-        table=table,
+        table=dedup_from(table),
         column=column,
         aggregator=aggregator,
         identity_column=identity_column,

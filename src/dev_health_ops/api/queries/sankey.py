@@ -55,7 +55,7 @@ async def fetch_expense_counts(
             sum(new_items_count) AS new_items,
             sum(new_bugs_count) AS new_bugs,
             sum(items_completed * bug_completed_ratio) AS bug_completed_estimate
-        FROM work_item_metrics_daily
+        FROM work_item_metrics_daily FINAL
         WHERE day >= %(start_day)s AND day < %(end_day)s
           AND org_id = %(org_id)s
             {scope_filter}

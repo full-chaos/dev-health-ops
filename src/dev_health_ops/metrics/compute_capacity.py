@@ -407,7 +407,7 @@ async def load_throughput_history_clickhouse(
         SELECT
             day,
             sum(items_completed) as items_completed
-        FROM work_item_metrics_daily
+        FROM work_item_metrics_daily FINAL
         WHERE {where_clause}
         GROUP BY day
         ORDER BY day
@@ -465,7 +465,7 @@ async def load_throughput_history_sqlalchemy(
     query = text(
         f"""
         SELECT day, SUM(items_completed) as items_completed
-        FROM work_item_metrics_daily
+        FROM work_item_metrics_daily FINAL
         WHERE {where_clause}
         GROUP BY day
         ORDER BY day

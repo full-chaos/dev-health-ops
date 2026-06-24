@@ -74,7 +74,7 @@ Existing assets this plan builds on:
   - `org_id`, `event_type`, `flag_key`, `environment`, `repo_id`, `actor_type`, `prev_state`, `next_state`, `event_ts`, `ingested_at`, `source_event_id`, `dedupe_key`
 
 - `feature_flag_link` (raw linkage — flag-to-entity relationships)
-  - `org_id`, `flag_key`, `target_type` (`issue`/`pr`/`release`), `target_id`, `provider`, `link_source`, `link_type` (`code_reference`/`configuration`/`issue_tag`/`rollout_issue`), `evidence_type`, `confidence`, `valid_from`, `valid_to`, `last_synced`
+  - `org_id`, `flag_key`, `target_type` (`file`/`issue`/`pr`/`release`), `target_id`, `provider`, `link_source`, `link_type` (`code_reference`/`configuration`/`issue_tag`/`rollout_issue`), `evidence_type`, `confidence`, `valid_from`, `valid_to`, `last_synced`
 
 - `telemetry_signal_bucket` (raw event — aggregated user impact counters)
   - `org_id`, `signal_type`, `signal_count`, `session_count`, `unique_pseudonymous_count` (nullable, k-anonymity gated), `endpoint_group`, `environment`, `repo_id`, `release_ref`, `bucket_start`, `bucket_end`, `ingested_at`, `is_sampled`, `schema_version`, `dedupe_key`
@@ -171,8 +171,10 @@ Telemetry and flag events may arrive late (mobile clients, batch exports, retrie
 ### Edge types (proposed)
 - `introduced_by` (release <- PR): evidence = provider release/deployment API linking PR to release
 - `config_changed_by` (feature_flag <- flag_event): evidence = provider audit log event ID; only created when explicit provider evidence links a flag change to a release or PR (e.g., GitLab `introduced_by_url`). **Not created from time-window heuristics alone.**
-- `guards` (feature_flag -> issue/epic/scope): evidence = provider `rollout_issue_url` or explicit tag/label
+- `guards` (feature_flag -> file/PR/issue/epic/scope): evidence = provider code-reference payload, provider `rollout_issue_url`, or explicit tag/label. LaunchDarkly code references are provider-native and may emit `native` high-confidence file links plus PR links when existing PR→commit→file facts touched the referenced path.
 - `impacts` (release/feature_flag -> telemetry_signal_bucket): evidence = `release_ref` + environment match; note: `telemetry_signal_bucket` is joined at query-time, not stored as a first-class work graph node
+
+Phase C2 implemented LaunchDarkly code-reference ingestion from `GET /api/v2/code-refs/repositories` with default-branch references filtered by project key. This signal only exists when customers run LaunchDarkly code-reference scanning in CI. `IMPACTS`, `DEPLOYS`, and `LINKED_INCIDENT` remain intentionally un-emitted in production until release/deploy/incident signal sources are designed and connected.
 
 > **Design decision:** The originally proposed `rolls_out` edge (release -> feature_flag) is removed. Flag rollouts are config changes that happen independently of code releases. The `config_changed_by` edge captures the narrower, evidence-backed relationship. Reuse existing `REFERENCES` edge type for "PR/commit mentions flag key" relationships detected via code search.
 

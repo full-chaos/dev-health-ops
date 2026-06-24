@@ -1,5 +1,6 @@
 """Tests for LaunchDarkly connector and processor normalization."""
 
+import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -22,6 +23,19 @@ from dev_health_ops.processors.launchdarkly import (
     _parse_iso,
     normalize_audit_events,
     normalize_flags,
+)
+from dev_health_ops.providers.launchdarkly.code_refs import (
+    LD_CODE_REFERENCE_CONFIDENCE,
+    LaunchDarklyCodeReference,
+    LaunchDarklyCodeReferencesClient,
+    build_code_reference_links,
+    index_repo_rows,
+    parse_code_reference_repositories,
+)
+from dev_health_ops.work_graph.ids import (
+    generate_feature_flag_id,
+    generate_file_id,
+    generate_pr_id,
 )
 
 # ---------------------------------------------------------------------------
@@ -233,6 +247,171 @@ class TestLaunchDarklyConnector:
     async def test_context_manager(self):
         async with LaunchDarklyConnector(api_key="key", project_key="p") as conn:
             assert conn.api_key == "key"
+
+
+class TestLaunchDarklyCodeReferences:
+    @pytest.mark.asyncio
+    async def test_list_default_branch_references_uses_project_filter(self):
+        response = MagicMock()
+        response.status_code = 200
+        response.headers = {}
+        response.json.return_value = {"items": []}
+
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.is_closed = False
+        mock_client.request = AsyncMock(return_value=response)
+
+        client = LaunchDarklyCodeReferencesClient(api_key="key")
+        client._client = mock_client
+
+        refs = await client.list_default_branch_references(project_key="web")
+
+        assert refs == []
+        mock_client.request.assert_called_once_with(
+            "GET",
+            "/code-refs/repositories",
+            params={"withReferencesForDefaultBranch": "1", "projKey": "web"},
+        )
+
+    def test_parse_code_reference_repositories_flattens_hunks(self):
+        refs = parse_code_reference_repositories(
+            {
+                "items": [
+                    {
+                        "name": "dev-health",
+                        "sourceLink": "https://github.com/full-chaos/dev-health",
+                        "defaultBranch": "main",
+                        "branches": [
+                            {
+                                "name": "main",
+                                "head": "abc123",
+                                "references": [
+                                    {
+                                        "path": "/main/web/src/checkout.ts",
+                                        "hunks": [
+                                            {
+                                                "startingLineNumber": 42,
+                                                "lines": "variation('checkout-v2')",
+                                                "projKey": "web",
+                                                "flagKey": "checkout-v2",
+                                                "aliases": ["checkoutV2"],
+                                            }
+                                        ],
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+
+        assert refs == [
+            LaunchDarklyCodeReference(
+                flag_key="checkout-v2",
+                project_key="web",
+                repo_name="dev-health",
+                repo_source_link="https://github.com/full-chaos/dev-health",
+                branch_name="main",
+                branch_head="abc123",
+                file_path="web/src/checkout.ts",
+                starting_line_number=42,
+                lines="variation('checkout-v2')",
+                aliases=("checkoutV2",),
+            )
+        ]
+
+    def test_build_code_reference_links_emits_native_file_and_pr_artifacts(self):
+        repo_id = "11111111-1111-1111-1111-111111111111"
+        ref = LaunchDarklyCodeReference(
+            flag_key="checkout-v2",
+            project_key="web",
+            repo_name="dev-health",
+            repo_source_link="https://github.com/full-chaos/dev-health",
+            branch_name="main",
+            branch_head="abc123",
+            file_path="web/src/checkout.ts",
+            starting_line_number=42,
+            lines="variation('checkout-v2')",
+        )
+        repo_index = index_repo_rows([{"id": repo_id, "repo": "full-chaos/dev-health"}])
+        pr_id = generate_pr_id(uuid.UUID(repo_id), 17)
+
+        links, edges = build_code_reference_links(
+            [ref],
+            org_id="org-1",
+            repo_index=repo_index,
+            pr_ids_by_repo_path={(repo_id, "web/src/checkout.ts"): {pr_id}},
+            now=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+
+        assert {(link.target_type, link.target_id) for link in links} == {
+            ("file", generate_file_id(uuid.UUID(repo_id), "web/src/checkout.ts")),
+            ("pr", pr_id),
+        }
+        assert all(link.org_id == "org-1" for link in links)
+        assert all(link.link_source == "native" for link in links)
+        assert all(link.link_type == "code_reference" for link in links)
+        assert all(link.confidence == LD_CODE_REFERENCE_CONFIDENCE for link in links)
+
+        flag_id = generate_feature_flag_id(
+            "org-1", "launchdarkly", "web", "checkout-v2"
+        )
+        assert edges == [
+            {
+                "flag_id": flag_id,
+                "target_type": "file",
+                "target_id": generate_file_id(
+                    uuid.UUID(repo_id), "web/src/checkout.ts"
+                ),
+                "repo_id": uuid.UUID(repo_id),
+                "evidence": "ld_code_ref:dev-health:main:web/src/checkout.ts:L42",
+            },
+            {
+                "flag_id": flag_id,
+                "target_type": "pr",
+                "target_id": pr_id,
+                "repo_id": uuid.UUID(repo_id),
+                "evidence": "ld_code_ref:dev-health:main:web/src/checkout.ts:L42",
+            },
+        ]
+
+    def test_source_link_wins_over_bare_repo_name_collision(self):
+        wrong_repo_id = "11111111-1111-1111-1111-111111111111"
+        correct_repo_id = "22222222-2222-2222-2222-222222222222"
+        ref = LaunchDarklyCodeReference(
+            flag_key="checkout-v2",
+            project_key="web",
+            repo_name="dev-health",
+            repo_source_link="https://github.com/full-chaos/dev-health",
+            branch_name="main",
+            branch_head="abc123",
+            file_path="web/src/checkout.ts",
+            starting_line_number=42,
+            lines="variation('checkout-v2')",
+        )
+        repo_index = index_repo_rows(
+            [
+                {"id": wrong_repo_id, "repo": "other/dev-health"},
+                {"id": correct_repo_id, "repo": "full-chaos/dev-health"},
+            ]
+        )
+
+        links, edges = build_code_reference_links(
+            [ref],
+            org_id="org-1",
+            repo_index=repo_index,
+            pr_ids_by_repo_path={},
+            now=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+
+        assert [(link.target_type, link.target_id) for link in links] == [
+            (
+                "file",
+                generate_file_id(uuid.UUID(correct_repo_id), "web/src/checkout.ts"),
+            )
+        ]
+        assert edges[0]["repo_id"] == uuid.UUID(correct_repo_id)
 
 
 # ---------------------------------------------------------------------------

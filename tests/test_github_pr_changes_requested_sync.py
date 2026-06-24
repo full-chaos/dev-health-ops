@@ -12,6 +12,7 @@ import asyncio
 import uuid
 from datetime import datetime, timezone
 from typing import Any, cast
+from unittest.mock import patch
 
 import pytest
 
@@ -112,6 +113,8 @@ class _FakeReview:
         self.state = state
         self.reviewer = reviewer
         self.submitted_at = datetime(2020, 1, 2, tzinfo=timezone.utc)
+        self.body = f"review {review_id}"
+        self.url = f"https://github.test/reviews/{review_id}"
 
 
 @pytest.mark.asyncio
@@ -137,25 +140,47 @@ async def test_github_pr_sync_writes_changes_requested_count_from_reviews():
     class _Connector:
         def __init__(self):
             self.github = _FakeGithub(fake_repo)
+            self.token = "token"
+            self.per_page = 100
+            self.graphql = object()
+
+        def _rest_base_url(self):
+            return "https://api.github.com"
 
         def get_pull_request_reviews(self, owner, repo, number):
-            return reviews_by_pr.get(number, [])
+            raise AssertionError("per-PR review fetch should not be used")
 
-    total = await loop.run_in_executor(
-        None,
-        cast(Any, _sync_github_prs_to_store),
-        _Connector(),
-        "o",
-        "r",
-        repo_id,
-        store,
-        loop,
-        50,  # batch_size
-        "all",
-        _NoSleepGate(),
-    )
+    class _BatchReviewClient:
+        calls: list[tuple[str, str, list[int], int | None]] = []
+
+        def __init__(self, **_kwargs):
+            self.graphql = None
+
+        def iter_pr_reviews_batch(self, *, owner, repo, prs, limit):
+            self.calls.append((owner, repo, [pr.number for pr in prs], limit))
+            for pr in prs:
+                yield pr.number, tuple(reviews_by_pr.get(pr.number, []))
+
+    with patch(
+        "dev_health_ops.processors.github.GitHubWorkClient",
+        _BatchReviewClient,
+    ):
+        total = await loop.run_in_executor(
+            None,
+            cast(Any, _sync_github_prs_to_store),
+            _Connector(),
+            "o",
+            "r",
+            repo_id,
+            store,
+            loop,
+            50,  # batch_size
+            "all",
+            _NoSleepGate(),
+        )
 
     assert total == 2
+    assert _BatchReviewClient.calls == [("o", "r", [1, 2], None)]
 
     prs = {pr.number: pr for batch in store.pr_batches for pr in batch}
     assert prs[1].changes_requested_count == 2
@@ -167,3 +192,8 @@ async def test_github_pr_sync_writes_changes_requested_count_from_reviews():
     # Reviews themselves are still persisted for git_pull_request_reviews.
     persisted_reviews = [r for batch in store.review_batches for r in batch]
     assert len(persisted_reviews) == 5
+    first_review = persisted_reviews[0]
+    assert first_review.review_id == "101"
+    assert first_review.reviewer == "carol"
+    assert first_review.state == "CHANGES_REQUESTED"
+    assert first_review.submitted_at == datetime(2020, 1, 2, tzinfo=timezone.utc)

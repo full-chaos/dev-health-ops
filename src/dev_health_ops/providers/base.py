@@ -58,6 +58,23 @@ class IngestionWindow:
 
 
 @dataclass(frozen=True)
+class WorkItemIngestionOptions:
+    """Per-target/sub-data toggles for work-item ingestion.
+
+    Tri-state: ``None`` means "not specified — the provider falls back to its
+    environment-default behavior", which preserves current behavior for callers
+    that pass nothing (CLI, backfill, webhooks, batch, tests). Config-aware sync
+    paths set these explicitly to honor the admin Sync Target / dataset
+    selections (e.g. "Pull Requests" unchecked -> include_pull_requests=False).
+    """
+
+    include_issues: bool | None = None
+    include_pull_requests: bool | None = None
+    fetch_comments: bool | None = None
+    fetch_milestones: bool | None = None
+
+
+@dataclass(frozen=True)
 class IngestionContext:
     """
     Context passed to provider.ingest() describing what to fetch.
@@ -78,6 +95,9 @@ class IngestionContext:
     org_id: UUID | None = None
     group: str | None = None  # gitlab
     limit: int | None = None
+    work_item_options: WorkItemIngestionOptions = field(
+        default_factory=WorkItemIngestionOptions
+    )
 
 
 @dataclass

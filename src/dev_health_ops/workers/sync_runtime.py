@@ -1101,6 +1101,9 @@ def run_sync_config(
                 search_pattern=sync_options.get("search"),
                 org_id=org_id,
                 credentials=work_items_credentials,
+                include_pull_requests=(
+                    ("prs" in sync_targets) if provider == "github" else None
+                ),
             )
             result_payload["work_items_synced"] = True
 

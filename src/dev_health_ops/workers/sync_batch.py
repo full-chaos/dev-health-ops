@@ -800,6 +800,9 @@ def _run_sync_for_repo(
                 search_pattern=sync_options_override.get("search"),
                 org_id=org_id,
                 credentials=work_items_credentials,
+                include_pull_requests=(
+                    ("prs" in sync_targets) if provider == "github" else None
+                ),
             )
             duration_ms = int(
                 (datetime.now(timezone.utc) - started_backfill).total_seconds() * 1000

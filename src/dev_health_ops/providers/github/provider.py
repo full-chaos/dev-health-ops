@@ -122,9 +122,25 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
         interactions: list[WorkItemInteractionEvent] = []
         sprints: list[Sprint] = []
         ai_attributions: list[AIAttributionRecord] = []
-        include_prs = _env_flag("GITHUB_INCLUDE_PRS", True)
-        fetch_comments = _env_flag("GITHUB_FETCH_COMMENTS", True)
-        fetch_milestones = _env_flag("GITHUB_FETCH_MILESTONES", True)
+        _wi_opts = ctx.work_item_options
+        include_issues = (
+            True if _wi_opts.include_issues is None else _wi_opts.include_issues
+        )
+        include_prs = (
+            _env_flag("GITHUB_INCLUDE_PRS", True)
+            if _wi_opts.include_pull_requests is None
+            else _wi_opts.include_pull_requests
+        )
+        fetch_comments = (
+            _env_flag("GITHUB_FETCH_COMMENTS", True)
+            if _wi_opts.fetch_comments is None
+            else _wi_opts.fetch_comments
+        )
+        fetch_milestones = (
+            _env_flag("GITHUB_FETCH_MILESTONES", True)
+            if _wi_opts.fetch_milestones is None
+            else _wi_opts.fetch_milestones
+        )
 
         comments_limit = env_int("GITHUB_COMMENTS_LIMIT", 500)
 
@@ -162,13 +178,18 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
 
         # Fetch issues
         try:
-            for issue in client.iter_issues(
-                owner=owner,
-                repo=repo,
-                state="all",
-                since=since,
-                limit=ctx.limit,
-            ):
+            issues_iter = (
+                client.iter_issues(
+                    owner=owner,
+                    repo=repo,
+                    state="all",
+                    since=since,
+                    limit=ctx.limit,
+                )
+                if include_issues
+                else ()
+            )
+            for issue in issues_iter:
                 if ctx.limit is not None and fetched_count >= ctx.limit:
                     break
 

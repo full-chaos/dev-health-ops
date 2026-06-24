@@ -23,6 +23,7 @@ The outbox and reconciler relay now recover committed PLANNED runs. This module'
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
@@ -41,6 +42,8 @@ MIGRATED_TRIGGER_ROUTING_SETTING_KEY = "sync.migrated_trigger_routing_enabled"
 _TRUTHY = {"1", "true", "yes", "on"}
 
 logger = logging.getLogger(__name__)
+
+_PLANNER_TAG_KEY = "planner_managed_sync_config_id"
 
 
 # ---------------------------------------------------------------------------
@@ -144,9 +147,11 @@ def plan_request_for_config(
 
     Routing semantics:
 
-    * **Parent config** (no ``migrated_source_id``): plan the *whole*
-      integration — all enabled sources and datasets — matching the admin
-      integration ``/sync`` endpoint's default fan-out.
+    * **Parent config** (no ``migrated_source_id``): leave source and dataset
+      scope unset. Callers that route planner-managed parents through
+      :func:`planner_request_for_config_if_routed` narrow sources to the
+      config-tagged ``IntegrationSource`` rows in that session-aware wrapper;
+      direct callers keep the historic all-enabled integration fan-out.
     * **Child config** (``migrated_source_id`` set): scope the run to that one
       source, and to the dataset keys derived from the child's legacy targets so
       the migrated trigger covers exactly what the child used to.
@@ -201,6 +206,34 @@ def should_route_config_to_planner(session: Session, config: SyncConfiguration) 
     return is_migrated_trigger_routing_enabled(session, str(config.org_id))
 
 
+def _planner_scoped_source_ids(
+    session: Session, config: SyncConfiguration
+) -> tuple[str, ...]:
+    """Return enabled source ids explicitly tagged for a planner-managed parent."""
+    from dev_health_ops.models.integrations import IntegrationSource
+
+    integration_id = getattr(config, "migrated_integration_id", None)
+    if integration_id is None:
+        return ()
+
+    config_id = str(config.id)
+    enabled_sources = (
+        session.query(IntegrationSource)
+        .filter(
+            IntegrationSource.org_id == config.org_id,
+            IntegrationSource.integration_id == integration_id,
+            IntegrationSource.is_enabled.is_(True),
+        )
+        .order_by(IntegrationSource.full_name, IntegrationSource.id)
+        .all()
+    )
+    return tuple(
+        str(source.id)
+        for source in enabled_sources
+        if str((source.metadata_ or {}).get(_PLANNER_TAG_KEY)) == config_id
+    )
+
+
 def planner_request_for_config_if_routed(
     session: Session,
     config: SyncConfiguration,
@@ -208,9 +241,26 @@ def planner_request_for_config_if_routed(
     triggered_by: str,
     mode: str = "incremental",
 ) -> SyncPlanRequest | None:
+    """Build a planner request if the config routes to the integration planner.
+
+    Planner-managed parent configs are session-scoped to enabled
+    ``IntegrationSource`` rows tagged with that config id. This preserves the
+    distinction between ``None`` (legacy all-enabled fan-out) and ``()`` (no
+    user-selected enabled sources) while leaving child configs and flag-routed
+    non-planner-managed parents on their existing semantics.
+    """
     if not should_route_config_to_planner(session, config):
         return None
-    return plan_request_for_config(config, triggered_by=triggered_by, mode=mode)
+    request = plan_request_for_config(config, triggered_by=triggered_by, mode=mode)
+    if (
+        request is not None
+        and bool(getattr(config, "planner_managed", False))
+        and getattr(config, "migrated_source_id", None) is None
+    ):
+        request = dataclasses.replace(
+            request, source_ids=_planner_scoped_source_ids(session, config)
+        )
+    return request
 
 
 def stamp_sync_run_canonical_config(

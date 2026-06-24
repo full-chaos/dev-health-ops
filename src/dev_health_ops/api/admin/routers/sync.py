@@ -112,6 +112,9 @@ def _mark_backfill_job_failed(
     bf_job.status = "failed"
     bf_job.error_message = error
     bf_job.completed_at = completed_at
+    # The dispatch never enqueued (or its task id is meaningless), so drop any
+    # pre-dispatch sync_run marker: the run is separately terminalized as failed.
+    bf_job.celery_task_id = None
     sync_session.flush()
 
 
@@ -1085,13 +1088,12 @@ async def _resolve_gitlab_batch_projects(
     response_model=SyncConfigBatchResponse,
     status_code=201,
     description=(
-        "Create a parent sync config + one child per repo. "
-        "**Deprecated (CHAOS-2520):** Child sync configs are deprecated in favour of "
-        "the integration/source/dataset model introduced in CHAOS-2507. "
-        "When the integration planner is active (``sync.migrated_trigger_routing_enabled`` "
-        "setting is enabled for the org), this endpoint creates the parent config only "
-        "and returns zero children. Legacy behaviour is preserved when the planner is "
-        "inactive (rollback path)."
+        "Create a parent sync config backed by the integration/source/dataset "
+        "model. **Deprecated (CHAOS-2520):** the legacy child-per-repo sync "
+        "configs are removed in favour of that model (CHAOS-2507). The "
+        "integration planner is now the only routing path, so this endpoint "
+        "always creates the parent config plus its integration/source/dataset "
+        "rows and returns zero children."
     ),
 )
 async def batch_create_sync_configs(
@@ -1099,16 +1101,16 @@ async def batch_create_sync_configs(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SyncConfigBatchResponse:
-    """Create a parent sync config + one child per repo.
+    """Create a parent sync config backed by the integration/source/dataset model.
 
-    Child ``sync_options`` are provider-shaped:
+    Per-source options are provider-shaped:
 
-    - **github**: each child carries ``repo`` (plus ``owner`` inherited from
-      the parent options); child name is ``{owner}/{repo}``.
-    - **gitlab**: each child carries an integer ``project_id`` plus ``group``
-      (and ``gitlab_url`` when present in the parent options), matching what
-      the sync runtime expects (``workers/sync_runtime.py`` requires
-      ``project_id``). ``payload.repos`` entries may be either numeric GitLab
+    - **github**: each planner source row carries ``repo`` (plus ``owner``
+      inherited from the parent options); the source name is ``{owner}/{repo}``.
+    - **gitlab**: each planner source row carries an integer ``project_id`` plus
+      ``group`` (and ``gitlab_url`` when present in the parent options), which the
+      unitized GitLab dataset adapter requires to address a project.
+      ``payload.repos`` entries may be either numeric GitLab
       project ids or project names, which are resolved to ids by listing the
       group's projects via the stored credential. Name entries therefore
       require ``credential_id`` and a ``group``/``owner`` in ``sync_options``;
@@ -1121,16 +1123,15 @@ async def batch_create_sync_configs(
       are used as project ids as-is, with no listing call. The effective
       ``gitlab_url`` (``sync_options.gitlab_url`` → credential ``url`` →
       ``https://gitlab.com``) is persisted into parent and child options when
-      it is not the public default, so self-hosted children sync against the
-      same instance used for resolution. Child name is the project's
+      it is not the public default, so self-hosted sources sync against the
+      same instance used for resolution. The source name is the project's
       ``path_with_namespace`` when known.
 
     .. deprecated:: CHAOS-2520
-        Child sync configs are deprecated. When the integration planner is
-        active (``sync.migrated_trigger_routing_enabled`` setting), new
-        integrations must use the integration/source/dataset model instead.
-        This endpoint will create the parent config only (zero children) when
-        the planner flag is enabled.
+        Child sync configs are removed. The integration planner is the only
+        routing path; new integrations use the integration/source/dataset model.
+        This endpoint always creates the parent config only (zero children) plus
+        the integration/source/dataset rows it routes through.
     """
     await _acquire_repo_limit_create_lock(session, org_id)
     current_count = await _active_repo_usage_count_for_limit(session, org_id)
@@ -1742,6 +1743,12 @@ async def trigger_sync_config_backfill(
             )
         )
 
+        # Persist the sync_run marker BEFORE dispatch so a crash between enqueue
+        # and the post-dispatch commit still lets finalize_sync_run link this
+        # BackfillJob (matched via celery_task_id.contains("sync_run:<id>")). On
+        # enqueue failure the marker is cleared in _mark_backfill_job_failed.
+        backfill_job.celery_task_id = f"sync_run:{plan.sync_run_id}"
+
         await session.commit()
 
         try:
@@ -1769,7 +1776,7 @@ async def trigger_sync_config_backfill(
             )
             await session.commit()
             raise HTTPException(status_code=503, detail=f"Task queue unavailable: {e}")
-        backfill_job.celery_task_id = result.id
+        backfill_job.celery_task_id = f"{result.id}|sync_run:{plan.sync_run_id}"
         await session.commit()
         return {
             "status": "accepted",

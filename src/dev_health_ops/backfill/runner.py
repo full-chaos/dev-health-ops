@@ -138,6 +138,7 @@ def run_backfill_for_config(
 
         provider = str(config.provider or "").strip().lower()
         sync_options = dict(config.sync_options or {})
+        sync_targets = [str(t) for t in (config.sync_targets or [])]
 
     windows = chunk_date_range(since=since, before=before, chunk_days=chunk_days)
 
@@ -160,6 +161,13 @@ def run_backfill_for_config(
             jira_project_keys=jira_project_keys if provider == "jira" else None,
             jira_jql=jira_jql if provider == "jira" else None,
             jira_fetch_all=jira_fetch_all if provider == "jira" else None,
+            # CHAOS-646: only ingest PRs as work items when the PRS target is
+            # enabled (None would let the github provider fall back to the
+            # GITHUB_INCLUDE_PRS env default, PRs ON). Mirrors the unitized path
+            # (processors/dataset_adapters._work_item_kwargs).
+            include_pull_requests=(
+                ("prs" in sync_targets) if provider == "github" else None
+            ),
         )
 
     team_autoimport = _run_team_autoimport_for_backfill(

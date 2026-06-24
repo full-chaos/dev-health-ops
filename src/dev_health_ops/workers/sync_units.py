@@ -597,6 +597,15 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     "reason": "lease_lost",
                 }
             if sync_run_id is not None:
+                # Earlier-wins upsert (CHAOS-2647): we deliberately do NOT
+                # force-set available_at=not_before here. A revived past dispatch
+                # wakeup may be consumed as a no-op while all remaining units are
+                # future RETRYING; the reconciler's periodic _dispatchable_run_ids
+                # scan re-materializes dispatch once available_at <= now (bounded
+                # delay, never stuck). Forcing not_before is unsafe: it would
+                # overwrite the earlier countdown _schedule_redispatch arms for
+                # capped PLANNED siblings, delaying their dispatch. The precision
+                # loss is negligible versus provider rate-limit backoff windows.
                 upsert_outbox_wakeup(
                     session,
                     sync_run_id=sync_run_id,

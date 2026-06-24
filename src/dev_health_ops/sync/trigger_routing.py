@@ -87,7 +87,9 @@ def plan_request_for_config(
     """Build a :class:`SyncPlanRequest` for a migrated config, else ``None``.
 
     Returns ``None`` when the config was never migrated (no
-    ``migrated_integration_id``), signalling the caller to use the legacy path.
+    ``migrated_integration_id``). The integration planner is the only routing
+    path (the legacy worker was removed in CHAOS-2647), so the caller must fail
+    or skip when no planner route exists.
 
     Routing semantics:
 
@@ -121,9 +123,10 @@ def plan_request_for_config(
         dataset_keys = child_dataset_keys or None
 
     # Promote incremental -> full_resync when the config's sync_options carry
-    # the legacy full_resync flag (mirrors sync_runtime.py:656 / sync_batch.py:657).
-    # Only promote when the caller passed the default "incremental" mode; an
-    # explicit backfill or full_resync from the caller is never overridden.
+    # the legacy full_resync flag (preserves the removed legacy worker's
+    # full_resync promotion semantics). Only promote when the caller passed the
+    # default "incremental" mode; an explicit backfill or full_resync from the
+    # caller is never overridden.
     if mode == SyncRunMode.INCREMENTAL.value:
         sync_options = getattr(config, "sync_options", None) or {}
         if bool(sync_options.get("full_resync")):

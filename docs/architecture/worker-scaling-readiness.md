@@ -44,7 +44,7 @@ sequenceDiagram
     Broker->>W1: Pick up dispatch task
     W1->>DB: SELECT ... FOR UPDATE SKIP LOCKED (due jobs)
     Note over W1,DB: Lock acquired on due ScheduledJob rows
-    W1->>Broker: Enqueue run_sync_config / dispatch_batch_sync
+    W1->>Broker: Enqueue dispatch_sync_run (planner fan-out)
     W1->>DB: Update next_run_at & release lock
     
     Note over W2: Concurrent or subsequent tick

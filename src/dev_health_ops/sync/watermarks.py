@@ -188,7 +188,7 @@ def get_watermark(
     1. Canonical: ``(org_id, source_id, dataset_key)`` via the
        ``uq_sync_watermark_org_source_dataset`` constraint.
     2. Legacy target column: ``(org_id, repo_id=source_id, target=dataset_key)``
-       — covers rows written by the old ``sync_runtime`` path where
+       — covers rows written by the legacy worker path (pre-CHAOS-2647) where
        ``target == dataset_key`` (e.g. ``target="git"``, ``dataset_key="git"``).
     3. Reverse-legacy fallback: for a canonical ``dataset_key`` that has no
        exact row, reverse-map it to its legacy target(s) and look up the raw

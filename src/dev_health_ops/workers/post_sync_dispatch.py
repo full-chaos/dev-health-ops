@@ -30,6 +30,7 @@ class PostSyncDispatchPayload:
     to_date: str | None
     work_graph_from_date: str | None
     work_graph_to_date: str | None
+    auto_import_teams: bool
 
 
 def _as_aware(value: datetime) -> datetime:
@@ -111,6 +112,17 @@ def build_post_sync_dispatch_payload(
         else None
     )
 
+    from dev_health_ops.sync.trigger_routing import (
+        canonical_sync_config_for_sync_run,
+    )
+
+    canonical_config = canonical_sync_config_for_sync_run(session, run)
+    auto_import_teams = (
+        bool((canonical_config.sync_options or {}).get("auto_import_teams"))
+        if canonical_config is not None
+        else False
+    )
+
     return PostSyncDispatchPayload(
         provider=next(iter(successful_by_provider), "unknown"),
         sync_targets=sorted(legacy_targets),
@@ -119,6 +131,7 @@ def build_post_sync_dispatch_payload(
         to_date=to_date_str,
         work_graph_from_date=work_graph_from_date_str,
         work_graph_to_date=work_graph_to_date_str,
+        auto_import_teams=auto_import_teams,
     )
 
 
@@ -133,6 +146,8 @@ def _dispatch_post_sync_tasks(
     to_date: str | None = None,
     work_graph_from_date: str | None = None,
     work_graph_to_date: str | None = None,
+    auto_import_teams: bool = False,
+    sync_run_id: str | None = None,
 ) -> None:
     target_set = set(sync_targets)
     has_git = bool(target_set & _GIT_TARGETS)
@@ -221,3 +236,23 @@ def _dispatch_post_sync_tasks(
             sync_targets,
             dispatched,
         )
+
+    # Post-sync team auto-import (CHAOS-2647): restore the legacy per-config-run
+    # refresh of team/project/member attribution on the unitized path. Dispatched
+    # as a separate credential-resolving "sync" task (this relay has no credentials)
+    # and gated on the canonical config's ``auto_import_teams``. Best-effort: a
+    # dispatch failure must never break post-sync metric fan-out.
+    if auto_import_teams and sync_run_id:
+        try:
+            celery_app.send_task(
+                "dev_health_ops.workers.tasks.run_post_sync_team_autoimport",
+                kwargs={"sync_run_id": sync_run_id},
+                queue="sync",
+            )
+        except Exception:
+            logger.exception(
+                "Post-sync team auto-import dispatch failed for "
+                "org_id=%s sync_run_id=%s",
+                org_id,
+                sync_run_id,
+            )

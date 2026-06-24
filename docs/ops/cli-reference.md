@@ -103,7 +103,7 @@ Requires: ClickHouse (--analytics-db / CLICKHOUSE_URI), organization (--org / OR
 
 > ⚠️ **Warning (CHAOS-2475):** Sync commands run inline and require provider credentials (such as `GITHUB_TOKEN`, `GITLAB_TOKEN`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, or `LINEAR_API_KEY`) that the CLI doesn't enforce at startup. Running them inline without these inputs can cause silent failures.
 >
-> **Interim Workaround:** We recommend triggering the sync via the API endpoint `POST /api/v1/admin/sync-configs/{config_id}/trigger` (which dispatches the `run_sync_config` task to the `sync` queue). See [workers.md](workers.md) for details on Celery worker configuration.
+> **Interim Workaround:** We recommend triggering the sync via the API endpoint `POST /api/v1/admin/sync-configs/{config_id}/trigger` (which plans a `SyncRun` and dispatches `dispatch_sync_run` to the `sync` queue). See [workers.md](workers.md) for details on Celery worker configuration.
 
 ### `sync git`
 
@@ -856,7 +856,7 @@ python -m dev_health_ops.cli admin bundles assign-org --org-id <uuid> --feature-
 
 > ⚠️ **Warning (CHAOS-2475):** The `backfill run` command runs inline and requires provider credentials that the CLI doesn't enforce at startup. Running it inline can cause silent failures. Additionally, there is a known preflight-token bug (CHAOS-2479) where the CLI fails to validate credentials correctly.
 >
-> **Interim Workaround:** We recommend triggering the backfill via the API endpoint `POST /api/v1/admin/sync-configs/{config_id}/backfill` (which dispatches the `run_backfill` task to the `backfill` queue). See [workers.md](workers.md) for details on Celery worker configuration.
+> **Interim Workaround:** We recommend triggering the backfill via the API endpoint `POST /api/v1/admin/sync-configs/{config_id}/backfill` (which plans a backfill-mode `SyncRun` and dispatches `dispatch_sync_run` to the `sync` queue). See [workers.md](workers.md) for details on Celery worker configuration.
 
 Run historical data backfill for a sync configuration. Data is synced in chunked 7-day windows. Uses `CLICKHOUSE_URI`.
 

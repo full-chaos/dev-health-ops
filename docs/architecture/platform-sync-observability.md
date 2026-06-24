@@ -65,7 +65,7 @@ Generalize the run record so global/ad-hoc jobs report status the same way syncs
 
 - Relax `JobRun.job_id` to nullable and add a discriminator `job_kind` (e.g. `sync`, `backfill`, `investment_materialize`, `work_graph_build`, `report`) + optional `job_key`.
 - Add columns: `org_id` (indexed), `actor_user_id` (nullable, the triggering superadmin), `target_user_id` (nullable), `trace_id`/`correlation_id` (nullable, for SignOz/BugSink deep-link).
-- Have `run_investment_materialize` and `run_work_graph_build` open/close a `JobRun` (running → success/failed with `error`/`error_traceback`), mirroring `sync_runtime.run_sync_config`.
+- Have `run_investment_materialize` and `run_work_graph_build` open/close a `JobRun` (running → success/failed with `error`/`error_traceback`), mirroring the unitized sync run lifecycle (`dispatch_sync_run` → `run_sync_unit` → `finalize_sync_run`).
 - Alembic migration (Postgres). No analytics/ClickHouse change.
 
 _Alternative considered:_ register the globals as `ScheduledJob` rows so they emit `JobRun`s unchanged (smaller migration, but conflates "scheduled" with "global/ad-hoc"). Decision pending (see Open Decisions #1).

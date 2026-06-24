@@ -367,11 +367,25 @@ async def test_backfill_fanout_commits_backfill_job_before_dispatch(
 
     assert resp.status_code == 202, resp.text
     assert resp.json()["mode"] == "fanout"
-    assert visible_at_dispatch == [("pending", 0, None)]
+    # Durability (CHAOS-2647): the sync_run:<id> marker is committed BEFORE
+    # dispatch, so a crash between enqueue and the post-dispatch commit still lets
+    # finalize_sync_run link this BackfillJob. At dispatch time the committed row
+    # is pending/0-chunks and already carries the marker.
+    assert len(visible_at_dispatch) == 1
+    status_at_dispatch, chunks_at_dispatch, marker_at_dispatch = visible_at_dispatch[0]
+    assert (status_at_dispatch, chunks_at_dispatch) == ("pending", 0)
+    assert marker_at_dispatch is not None
+    assert marker_at_dispatch.startswith("sync_run:")
 
     async with session_maker() as session:
         backfill_job = (await session.execute(select(BackfillJob))).scalar_one()
-    assert backfill_job.celery_task_id == "bf-fanout-visible-task-id"
+    # The celery_task_id must carry the ``sync_run:<id>`` marker so finalize_sync_run
+    # (which looks up BackfillJob by celery_task_id.contains("sync_run:<id>")) can link
+    # the job to its run and update status/chunk counts (CHAOS-2647 regression).
+    assert (
+        backfill_job.celery_task_id
+        == f"bf-fanout-visible-task-id|sync_run:{resp.json()['sync_run_id']}"
+    )
 
 
 @pytest.mark.asyncio

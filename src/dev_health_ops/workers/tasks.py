@@ -37,6 +37,7 @@ from dev_health_ops.workers.task_utils import (
     _invalidate_metrics_cache,
     _resolve_env_credentials,
 )
+from dev_health_ops.workers.team_autoimport import run_post_sync_team_autoimport
 from dev_health_ops.workers.work_graph_tasks import (
     dispatch_investment_materialize_partitioned,
     dispatch_membership_backfill,
@@ -82,6 +83,7 @@ __all__ = [
     "run_recommendations_job",
     "run_release_impact_job",
     "run_sync_unit",
+    "run_post_sync_team_autoimport",
     "run_work_graph_build",
     "send_billing_notification",
 ]

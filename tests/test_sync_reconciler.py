@@ -558,6 +558,8 @@ def test_reconciler_relays_pending_post_sync_row_with_rebuilt_payload(
         "to_date": "2026-06-03",
         "work_graph_from_date": "2026-06-01T00:00:00+00:00",
         "work_graph_to_date": "2026-06-04T00:00:00+00:00",
+        "auto_import_teams": False,
+        "sync_run_id": str(run.id),
     }
     assert post_sync_row.status == OUTBOX_STATUS_DISPATCHED
     assert post_sync_row.claim_token is None

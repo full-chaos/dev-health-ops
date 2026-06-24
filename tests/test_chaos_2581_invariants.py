@@ -916,6 +916,8 @@ def test_a6_post_sync_metrics_receive_exact_covered_window(
             "to_date": "2026-05-20",
             "work_graph_from_date": "2026-05-10T00:00:00+00:00",
             "work_graph_to_date": "2026-05-21T00:00:00+00:00",
+            "auto_import_teams": False,
+            "sync_run_id": str(run.id),
         }
     ]
     assert (

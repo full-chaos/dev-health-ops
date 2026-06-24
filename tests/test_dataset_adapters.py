@@ -393,3 +393,63 @@ def test_github_dataset_through_runtime_cache_enters_store_before_insert(
     assert store.client is not None
     assert store.inserted == [{"id": "repo-1"}]
     assert result["dataset"] == "repo-metadata"
+
+
+def test_github_work_items_include_prs_when_prs_dataset_enabled() -> None:
+    """CHAOS-646: github work-items ingest PRs as work items when PRS is enabled.
+
+    The planner stamps ``sync_prs=True`` on the work-items unit when a PRS-family
+    dataset is enabled for the config; the adapter must thread that into
+    ``run_work_items_sync_job(include_pull_requests=True)``.
+    """
+    ctx = _context(
+        provider="github",
+        dataset_key="work-items",
+        processor_flags=_flags(sync_prs=True),
+    )
+
+    with patch(
+        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job"
+    ) as work_items:
+        run_dataset_unit(ctx, _runtime())
+
+    work_items.assert_called_once()
+    assert work_items.call_args.kwargs["include_pull_requests"] is True
+
+
+def test_github_work_items_exclude_prs_when_prs_dataset_disabled() -> None:
+    """CHAOS-646 regression: PRs must NOT be ingested as work items when the PRS
+    dataset is off. A missing/None value would let the github provider fall back
+    to the GITHUB_INCLUDE_PRS env default (PRs ON), re-introducing the bug."""
+    ctx = _context(
+        provider="github",
+        dataset_key="work-items",
+        processor_flags=_flags(sync_prs=False),
+    )
+
+    with patch(
+        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job"
+    ) as work_items:
+        run_dataset_unit(ctx, _runtime())
+
+    work_items.assert_called_once()
+    assert work_items.call_args.kwargs["include_pull_requests"] is False
+
+
+def test_non_github_work_items_leave_include_pull_requests_unset() -> None:
+    """Only github threads include_pull_requests (matching the legacy worker);
+    other providers leave it unset so the provider default applies."""
+    ctx = _context(
+        provider="jira",
+        dataset_key="work-items",
+        source_external_id="ENG",
+        processor_flags=_flags(),
+    )
+
+    with patch(
+        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job"
+    ) as work_items:
+        run_dataset_unit(ctx, _runtime())
+
+    work_items.assert_called_once()
+    assert "include_pull_requests" not in work_items.call_args.kwargs

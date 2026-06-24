@@ -497,6 +497,8 @@ def _publish_claimed_post_sync_row(
         to_date=payload.to_date,
         work_graph_from_date=payload.work_graph_from_date,
         work_graph_to_date=payload.work_graph_to_date,
+        auto_import_teams=payload.auto_import_teams,
+        sync_run_id=str(row.sync_run_id),
     )
     return True
 

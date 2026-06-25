@@ -422,6 +422,32 @@ def test_github_work_items_include_prs_when_prs_dataset_enabled() -> None:
     assert work_items.call_args.kwargs["include_pull_requests"] is True
 
 
+def test_github_work_items_threads_usage_observations_to_result() -> None:
+    ctx = _context(
+        provider="github",
+        dataset_key="work-items",
+        processor_flags=_flags(sync_prs=True),
+    )
+    observations = {
+        "github_usage": [
+            {
+                "transport": "rest",
+                "operation": "GET /repos/full-chaos/dev-health/issues",
+                "request_count": 1,
+                "rate_limit": {"remaining": "4999", "reset": "1234567890"},
+            }
+        ]
+    }
+
+    with patch(
+        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job",
+        return_value={"observations": observations},
+    ):
+        result = run_dataset_unit(ctx, _runtime())
+
+    assert result["observations"] == observations
+
+
 def test_github_work_items_exclude_prs_when_prs_dataset_disabled() -> None:
     """CHAOS-646 regression: PRs must NOT be ingested as work items when the PRS
     dataset is off. A missing/None value would let the github provider fall back

@@ -262,7 +262,24 @@ def test_run_sync_unit_success_persists_status_and_incremental_watermark(
     monkeypatch.delenv("DATABASE_URI", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setattr(
-        dataset_adapters, "run_dataset_unit", lambda ctx, runtime: {"ok": True}
+        dataset_adapters,
+        "run_dataset_unit",
+        lambda ctx, runtime: {
+            "ok": True,
+            "observations": {
+                "github_usage": [
+                    {
+                        "transport": "rest",
+                        "operation": "GET /repos/full-chaos/dev-health/issues",
+                        "request_count": 1,
+                        "rate_limit": {
+                            "remaining": "4999",
+                            "reset": "1234567890",
+                        },
+                    }
+                ]
+            },
+        },
     )
 
     result = getattr(run_sync_unit, "run")(str(unit.id))
@@ -273,7 +290,16 @@ def test_run_sync_unit_success_persists_status_and_incremental_watermark(
     assert unit.attempts == 1
     assert unit.result is not None
     assert unit.result["ok"] is True
-    budget_estimate = unit.result["observations"]["budget_estimate"]
+    observations = unit.result["observations"]
+    assert observations["github_usage"] == [
+        {
+            "transport": "rest",
+            "operation": "GET /repos/full-chaos/dev-health/issues",
+            "request_count": 1,
+            "rate_limit": {"remaining": "4999", "reset": "1234567890"},
+        }
+    ]
+    budget_estimate = observations["budget_estimate"]
     assert budget_estimate[0]["bucket"]["provider"] == "github"
     assert budget_estimate[0]["bucket"]["dimension"] == "rest_core"
     assert unit.lease_owner is None

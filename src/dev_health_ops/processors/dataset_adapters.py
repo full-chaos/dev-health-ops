@@ -296,9 +296,9 @@ def _run_work_item_dataset(context: SyncTaskContext) -> dict[str, Any]:
     from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
 
     kwargs = _work_item_kwargs(context)
-    run_work_items_sync_job(**kwargs)
+    sync_result = run_work_items_sync_job(**kwargs)
     window_start = _window_start_from_work_item_args(context)
-    return {
+    result: dict[str, Any] = {
         "provider": context.provider,
         "dataset": context.dataset_key,
         "source": context.source_external_id,
@@ -310,6 +310,11 @@ def _run_work_item_dataset(context: SyncTaskContext) -> dict[str, Any]:
         if context.window_end is not None
         else None,
     }
+    if isinstance(sync_result, dict) and isinstance(
+        sync_result.get("observations"), dict
+    ):
+        result["observations"] = sync_result["observations"]
+    return result
 
 
 def _run_feature_flags_dataset(context: SyncTaskContext) -> dict[str, Any]:

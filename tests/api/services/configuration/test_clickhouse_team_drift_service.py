@@ -29,6 +29,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, cast
 
+import pytest
+
 from dev_health_ops.api.services.configuration.clickhouse_team_admin import (
     _TEAM_COLUMNS,
 )
@@ -119,7 +121,9 @@ class FakeDriftStore:
             self.teams[team_id] = {
                 "id": team_id,
                 "team_uuid": team_uuid,
-                "name": str(row.get("name") or team_id),
+                "name": str(row.get("name"))
+                if row.get("name") is not None
+                else team_id,
                 "description": row.get("description"),
                 "members": list(row.get("members") or []),
                 "project_keys": list(row.get("project_keys") or []),
@@ -287,6 +291,38 @@ def test_change_ids_decides_only_the_requested_subset() -> None:
     assert store.teams["team-1"]["description"] == "Old desc"
     assert result == {"approved": 1, "change_ids": ["chg-name"]}
     assert [row["change_id"] for row in store.drift_inserts] == ["chg-name"]
+
+
+def test_approve_uses_empty_observed_name_instead_of_falling_back() -> None:
+    store = FakeDriftStore()
+    _seed_catalog_team(store, name="Old", description="Observed description")
+    _seed_observation(store, name="")
+    store.pending = [_pending("chg-name", field="name", old="Old", new="")]
+
+    result = asyncio.run(
+        _service(store).approve(
+            team_id="team-1", change_ids=["chg-name"], decided_by="admin"
+        )
+    )
+
+    assert store.teams["team-1"]["name"] == ""
+    assert result == {"approved": 1, "change_ids": ["chg-name"]}
+
+
+def test_approve_fails_without_provider_observation() -> None:
+    store = FakeDriftStore()
+    _seed_catalog_team(store, name="Old", description="Observed description")
+    store.pending = [_pending("chg-name", field="name", old="Old", new="Platform")]
+
+    with pytest.raises(ValueError, match="provider observation"):
+        asyncio.run(
+            _service(store).approve(
+                team_id="team-1", change_ids=["chg-name"], decided_by="admin"
+            )
+        )
+
+    assert store.teams["team-1"]["name"] == "Old"
+    assert store.drift_inserts == []
 
 
 def test_approve_without_change_ids_and_not_all_is_a_noop() -> None:

@@ -173,11 +173,18 @@ class ClickHouseTeamDriftService:
         if not field:
             return
         observation = await self._observation_for(row)
+        if not observation:
+            raise ValueError(
+                "Cannot approve drift change without a provider observation"
+            )
+        observed_column = _JSON_FIELD_COLUMNS.get(str(field), str(field))
+        if observed_column not in observation:
+            raise ValueError(
+                f"Cannot approve drift change without observed field {field!s}"
+            )
         observed_value = self._observed_field_value(
             field=str(field), observation=observation
         )
-        if observed_value is None:
-            observed_value = _loads_json(row.get("new_value_json"))
 
         team_id = str(row["team_id"])
         existing = await self.team_admin.get(team_id)
@@ -192,7 +199,7 @@ class ClickHouseTeamDriftService:
         repo_patterns = existing.repo_patterns if existing is not None else []
 
         if field == "name":
-            name = str(observed_value or name)
+            name = str(observed_value) if observed_value is not None else name
         elif field == "description":
             description = None if observed_value is None else str(observed_value)
         elif field == "members":

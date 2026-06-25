@@ -191,7 +191,7 @@ class FakeClickHouseTeamStore:
             self.rows[(org_id, team_id)] = {
                 "id": team_id,
                 "team_uuid": team_uuid,
-                "name": str(get("name") or team_id),
+                "name": str(get("name")) if get("name") is not None else team_id,
                 "description": get("description"),
                 "members": _as_list(get("members")),
                 "project_keys": _as_list(get("project_keys")),
@@ -295,6 +295,7 @@ class FakeClickHouseTeamStore:
         if "team_drift_changes" in query:
             team_id = params.get("team_id")
             provider = params.get("provider")
+            pending_only = "status = 'pending'" in query
             changes: list[dict[str, Any]] = []
             for (row_org, _change_id), row in self.drift_changes.items():
                 if row_org != org_id:
@@ -306,6 +307,8 @@ class FakeClickHouseTeamStore:
                 if provider is not None and str(row.get("provider") or "") != str(
                     provider
                 ):
+                    continue
+                if pending_only and row.get("status") != "pending":
                     continue
                 changes.append(dict(row))
             return changes

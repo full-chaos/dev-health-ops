@@ -121,6 +121,7 @@ class ProviderBatch:
     # Records are passed to the ClickHouse sink by the sync orchestrator.
     # NOTE: storage-worker (CHAOS-1579) may add this field too — trivial merge.
     ai_attributions: list[AIAttributionRecord] = field(default_factory=list)
+    observations: dict[str, Any] = field(default_factory=dict)
 
 
 class Provider(ABC):

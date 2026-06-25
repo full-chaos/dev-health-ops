@@ -195,9 +195,17 @@ async def client(session_maker, seeded_state):
 
 
 async def _create_sync_config(ac, name: str = "my-sync", provider: str = "github"):
+    # github/gitlab plain creates are token-wide (all_repos); non-git providers
+    # ignore the flag and materialize a single source. Either way the config is
+    # integration-native and triggerable.
     return await ac.post(
         "/api/v1/admin/sync-configs",
-        json={"name": name, "provider": provider, "sync_targets": []},
+        json={
+            "name": name,
+            "provider": provider,
+            "sync_targets": [],
+            "sync_options": {"all_repos": True},
+        },
     )
 
 
@@ -211,10 +219,9 @@ async def _create_migrated_config(
 ) -> str:
     """Insert an integration-linked SyncConfiguration + Integration/source/dataset.
 
-    Post-CHAOS-2647 only configs linked to a migrated integration can be
-    triggered/backfilled; bare configs return HTTP 400. Seeding the integration,
-    one enabled source and one enabled dataset lets the trigger endpoint route
-    through the fan-out planner (plan_sync_run + dispatch_sync_run).
+    Seeds the integration, one enabled source and one enabled dataset so the
+    trigger endpoint routes through the fan-out planner (plan_sync_run +
+    dispatch_sync_run).
     """
     async with session_maker() as session:
         integration = Integration(
@@ -251,7 +258,7 @@ async def _create_migrated_config(
             sync_targets=["git"],
             sync_options={},
             is_active=is_active,
-            migrated_integration_id=integration.id,
+            integration_id=integration.id,
         )
         session.add_all([source, dataset, config])
         await session.flush()
@@ -543,7 +550,7 @@ async def test_create_sync_config_acquires_repo_limit_lock_before_count(
             "name": "lock-before-count-single",
             "provider": "github",
             "sync_targets": ["git"],
-            "sync_options": {"owner": "full-chaos", "repo": "dev-health"},
+            "sync_options": {"owner": "full-chaos", "all_repos": True},
         },
     )
 
@@ -946,25 +953,168 @@ async def test_delete_nonexistent_sync_config_returns_404(client):
 
 
 @pytest.mark.asyncio
-async def test_trigger_unmigrated_config_returns_400(client):
-    """CHAOS-2647: a bare config not linked to a migrated integration cannot be
-    triggered. Planner-only routing returns HTTP 400 instead of enqueuing a
-    legacy worker task."""
+@pytest.mark.parametrize(
+    "provider, sync_targets, sync_options",
+    [
+        ("jira", ["work-items"], {"project_key": "ENG"}),
+        ("linear", ["work-items"], {"team_id": "team-uuid"}),
+        ("launchdarkly", ["feature-flags"], {"project_key": "default"}),
+    ],
+)
+async def test_create_non_git_sync_config_is_integration_native_and_triggerable(
+    client, session_maker, provider, sync_targets, sync_options
+):
+    """Provider matrix (non-git): POST /sync-configs materializes an
+    integration-linked, planner-managed config with exactly one planner-tagged
+    source for jira/linear/launchdarkly, so they trigger real units instead of
+    the old "no linked integration" 400. These providers have no repo list and
+    previously fell through to a bare, unroutable config.
+    """
     ac, _ = client
 
-    create_resp = await _create_sync_config(ac, name="trigger-unmigrated")
-    assert create_resp.status_code == 201
+    create_resp = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": f"{provider}-matrix",
+            "provider": provider,
+            "sync_targets": sync_targets,
+            "sync_options": sync_options,
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
     config_id = create_resp.json()["id"]
 
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, uuid.UUID(config_id))
+        assert config is not None
+        assert config.integration_id is not None
+        assert config.planner_managed is True
+        integration = await session.get(Integration, config.integration_id)
+        assert integration is not None and integration.provider == provider
+        enabled_sources = (
+            (
+                await session.execute(
+                    select(IntegrationSource).where(
+                        IntegrationSource.integration_id == config.integration_id,
+                        IntegrationSource.is_enabled.is_(True),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(enabled_sources) == 1
+        assert (enabled_sources[0].metadata_ or {}).get(
+            "planner_managed_sync_config_id"
+        ) == config_id
+
     mock_dispatch = MagicMock()
+    mock_dispatch.apply_async.return_value = MagicMock(id="fake-task-id")
     with patch(
         "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
     ):
         resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
 
-    assert resp.status_code == 400
-    assert "not linked to a migrated integration" in resp.json()["detail"]
-    mock_dispatch.apply_async.assert_not_called()
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["total_units"] >= 1
+    mock_dispatch.apply_async.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider, repo", [("github", "acme/repo"), ("gitlab", "123")])
+async def test_batch_create_git_sync_config_is_triggerable_with_units(
+    client, session_maker, provider, repo
+):
+    """Provider matrix (git): POST /sync-configs/batch with a concrete repo
+    materializes one planner source and plans a non-empty run, so a single-repo
+    git create is triggerable with units (not a silent zero-unit 202)."""
+    ac, _ = client
+
+    create_resp = await ac.post(
+        "/api/v1/admin/sync-configs/batch",
+        json={
+            "name": f"{provider}-batch",
+            "provider": provider,
+            "sync_targets": ["git"],
+            "repos": [repo],
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = create_resp.json()["parent"]["id"]
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, uuid.UUID(config_id))
+        assert config is not None and config.integration_id is not None
+        assert config.planner_managed is True
+        enabled_sources = (
+            (
+                await session.execute(
+                    select(IntegrationSource).where(
+                        IntegrationSource.integration_id == config.integration_id,
+                        IntegrationSource.is_enabled.is_(True),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(enabled_sources) == 1
+
+    mock_dispatch = MagicMock()
+    mock_dispatch.apply_async.return_value = MagicMock(id="fake-task-id")
+    with patch(
+        "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
+    ):
+        resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
+
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["total_units"] >= 1
+    mock_dispatch.apply_async.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["github", "gitlab"])
+async def test_create_git_sync_config_without_all_repos_is_rejected(client, provider):
+    """git providers must select repos via /batch or set all_repos; a plain create
+    with neither would be a zero-source, zero-unit no-op, so it is rejected with
+    400 instead of silently acknowledging triggers."""
+    ac, _ = client
+    resp = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": f"{provider}-bare",
+            "provider": provider,
+            "sync_targets": ["git"],
+        },
+    )
+    assert resp.status_code == 400, resp.text
+    assert "all_repos" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["github", "gitlab"])
+async def test_create_git_all_repos_sync_config_is_integration_native(
+    client, session_maker, provider
+):
+    """git all_repos plain create is integration-native and planner-managed;
+    sources are populated separately via POST /integrations/{id}/discover."""
+    ac, _ = client
+    create_resp = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": f"{provider}-allrepos",
+            "provider": provider,
+            "sync_targets": ["git"],
+            "sync_options": {"all_repos": True},
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = create_resp.json()["id"]
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, uuid.UUID(config_id))
+        assert config is not None
+        assert config.integration_id is not None
+        assert config.planner_managed is True
 
 
 @pytest.mark.asyncio
@@ -1473,7 +1623,7 @@ async def test_sync_config_repositories_ignore_untagged_sources(client, session_
         session.add(
             IntegrationSource(
                 org_id=config.org_id,
-                integration_id=config.migrated_integration_id,
+                integration_id=config.integration_id,
                 provider="github",
                 source_type="repository",
                 external_id="acme/discovered",

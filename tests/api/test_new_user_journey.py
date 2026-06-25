@@ -4,7 +4,7 @@ import importlib
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -18,6 +18,14 @@ from dev_health_ops.api.services.auth import AuthenticatedUser, AuthService
 from dev_health_ops.models.audit import AuditLog
 from dev_health_ops.models.email_verification_token import EmailVerificationToken
 from dev_health_ops.models.git import Base
+from dev_health_ops.models.integrations import (
+    Integration,
+    IntegrationDataset,
+    IntegrationSource,
+    SyncDispatchOutbox,
+    SyncRun,
+    SyncRunUnit,
+)
 from dev_health_ops.models.licensing import OrgLicense, TierLimit
 from dev_health_ops.models.settings import (
     IntegrationCredential,
@@ -43,6 +51,12 @@ _TABLES = tables_of(
     EmailVerificationToken,
     IntegrationCredential,
     SyncConfiguration,
+    Integration,
+    IntegrationSource,
+    IntegrationDataset,
+    SyncRun,
+    SyncRunUnit,
+    SyncDispatchOutbox,
     ScheduledJob,
     JobRun,
     OrgLicense,
@@ -245,16 +259,26 @@ async def test_full_journey_register_login_create_credential_create_sync_config(
 
     sync_resp = await ac.post(
         "/api/v1/admin/sync-configs",
-        json={"name": "journey-sync", "provider": "github", "sync_targets": []},
+        json={
+            "name": "journey-sync",
+            "provider": "github",
+            "sync_targets": [],
+            "sync_options": {"all_repos": True},
+        },
     )
     assert sync_resp.status_code == 201
     config_id = sync_resp.json()["id"]
 
-    # The bare POST /sync-configs create path is deprecated: a config that is
-    # not linked to a migrated integration cannot be triggered under planner-only
-    # routing, so the manual trigger returns 400.
-    trigger_resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
-    assert trigger_resp.status_code == 400
+    # The config is created integration-native (linked to an Integration), so it
+    # is triggerable: the manual trigger routes through the fan-out planner.
+    mock_dispatch = MagicMock()
+    mock_dispatch.apply_async.return_value = MagicMock(id="journey-task-id")
+    with patch(
+        "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
+    ):
+        trigger_resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
+    assert trigger_resp.status_code == 202, trigger_resp.text
+    mock_dispatch.apply_async.assert_called_once()
 
 
 @pytest.mark.asyncio

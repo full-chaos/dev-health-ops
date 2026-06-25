@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Protocol, cast
@@ -216,10 +216,10 @@ async def _active_repo_usage_count_for_limit(session: AsyncSession, org_id: str)
         for config in active_config_rows
         if config.parent_id is None
         and bool(config.planner_managed)
-        and config.migrated_integration_id is not None
+        and config.integration_id is not None
     ]
     planner_integration_ids = [
-        config.migrated_integration_id
+        config.integration_id
         for config in active_config_rows
         if config.id in planner_parent_ids
     ]
@@ -670,7 +670,7 @@ def _is_planner_source_for_config(
 async def _planner_sources_for_config(
     session: AsyncSession, org_id: str, config: SyncConfiguration
 ) -> list[IntegrationSource]:
-    integration_id = getattr(config, "migrated_integration_id", None)
+    integration_id = getattr(config, "integration_id", None)
     if integration_id is None:
         return []
     result = await session.execute(
@@ -735,7 +735,7 @@ async def _replace_planner_repository_selection(
     config: SyncConfiguration,
     payload: SyncConfigRepositorySelectionUpdate,
 ) -> SyncConfigRepositorySelection:
-    integration_id = getattr(config, "migrated_integration_id", None)
+    integration_id = getattr(config, "integration_id", None)
     if integration_id is None:
         raise HTTPException(
             status_code=409,
@@ -833,7 +833,7 @@ async def _assert_single_planner_parent_for_integration(
     count_stmt = select(func.count(SyncConfiguration.id)).where(
         SyncConfiguration.org_id == org_id,
         SyncConfiguration.planner_managed.is_(True),
-        SyncConfiguration.migrated_integration_id == integration_id,
+        SyncConfiguration.integration_id == integration_id,
         SyncConfiguration.parent_id.is_(None),
     )
     planner_parent_count = (await session.execute(count_stmt)).scalar_one()
@@ -843,6 +843,116 @@ async def _assert_single_planner_parent_for_integration(
             f"integration {integration_id} is linked to {planner_parent_count} "
             "planner-managed parent sync configurations"
         )
+
+
+def _non_git_source_rows(
+    provider: str,
+    sync_options: dict[str, Any],
+    name: str,
+    org_id: str,
+    integration_id: uuid.UUID,
+    config_id: uuid.UUID,
+) -> list[IntegrationSource]:
+    """Materialize the single planner source for a non-git provider config.
+
+    Non-git providers (jira, linear, launchdarkly) carry no repo list and have
+    no source-discovery path (``sync/discovery.py`` only maps github/gitlab).
+    The planner builds units as enabled sources x enabled datasets, so a config
+    with zero sources plans zero units. Resolve the source ``external_id`` from
+    ``sync_options`` (the run-time key the dataset adapters consume, e.g. the
+    Jira project key) so every non-git config materializes exactly one
+    planner-tagged source.
+    """
+    external_id = str(
+        sync_options.get("project_id")
+        or sync_options.get("project_key")
+        or sync_options.get("team_id")
+        or sync_options.get("repo")
+        or name
+    )
+    source_type = "project" if provider.lower() in {"jira", "linear"} else "source"
+    full_name = str(sync_options.get("full_name") or external_id)
+    return [
+        IntegrationSource(
+            org_id=org_id,
+            integration_id=integration_id,
+            provider=provider,
+            source_type=source_type,
+            external_id=external_id,
+            name=name,
+            full_name=full_name,
+            metadata_={"planner_managed_sync_config_id": str(config_id)},
+            is_enabled=True,
+        )
+    ]
+
+
+async def _create_planner_managed_config(
+    session: AsyncSession,
+    org_id: str,
+    *,
+    name: str,
+    provider: str,
+    credential_id: str | None,
+    sync_targets: list[str],
+    parent_options: dict[str, Any],
+    schedule_cron: str | None,
+    timezone: str | None,
+    build_source_rows: Callable[[uuid.UUID, uuid.UUID], list[IntegrationSource]],
+) -> tuple[SyncConfiguration, Integration]:
+    """Single integration-native write path for ALL providers.
+
+    Creates the ``Integration``, its planner-managed ``SyncConfiguration``
+    (``integration_id`` set, ``planner_managed=True``), the enabled
+    ``IntegrationDataset`` rows, the caller-built ``IntegrationSource`` rows, and
+    the scheduled-job anchor. There is no bare ``SyncConfiguration`` insert path
+    anywhere, so a config can never be created unlinked from its integration and
+    the planner can always route it.
+    """
+    credential_uuid = uuid.UUID(credential_id) if credential_id else None
+    integration = Integration(
+        org_id=org_id,
+        provider=provider,
+        credential_id=credential_uuid,
+        name=name,
+        config=parent_options,
+        is_active=True,
+        schedule_cron=schedule_cron,
+        timezone=timezone,
+    )
+    session.add(integration)
+    await session.flush()
+
+    parent = SyncConfiguration(
+        name=name,
+        provider=provider,
+        org_id=org_id,
+        credential_id=credential_uuid,
+        sync_targets=sync_targets,
+        sync_options=parent_options,
+        is_active=True,
+        integration_id=integration.id,
+        planner_managed=True,
+    )
+    session.add(parent)
+    await session.flush()
+    await _assert_single_planner_parent_for_integration(session, org_id, integration.id)
+
+    source_rows = build_source_rows(integration.id, parent.id)
+    dataset_rows = [
+        IntegrationDataset(
+            org_id=org_id,
+            integration_id=integration.id,
+            dataset_key=dataset_key,
+            is_enabled=True,
+            options={"legacy_targets": list(sync_targets)},
+        )
+        for dataset_key in _planner_dataset_keys(provider, sync_targets)
+    ]
+    session.add_all([*source_rows, *dataset_rows])
+    await _upsert_scheduled_job(session, parent, org_id)
+    await session.flush()
+    return parent, integration
 
 
 @router.get("/sync-targets")
@@ -856,7 +966,7 @@ async def get_provider_sync_targets() -> dict[str, list[str]]:
     description=(
         "List sync configurations. "
         "Child sync configs (rows with a non-null ``parent_id`` or linked to a "
-        "migrated integration via ``migrated_integration_id``/``migrated_source_id``) "
+        "migrated integration via ``integration_id``/``source_id``) "
         "are **deprecated** and hidden by default when the "
         "``HIDE_MIGRATED_CHILD_CONFIGS`` feature flag is enabled. "
         "Pass ``?include_migrated=true`` to include them (support/rollback)."
@@ -885,8 +995,8 @@ async def list_sync_configs(
     # configs from the default list response. A config is considered a
     # "migrated child" when any of the following are true:
     #   - parent_id is set (legacy child config), OR
-    #   - migrated_source_id is set (linked to an integration-era source).
-    # The parent SyncConfiguration gets migrated_integration_id set by the
+    #   - source_id is set (linked to an integration-era source).
+    # The parent SyncConfiguration gets integration_id set by the
     # migration and is the rollback anchor, so it is NOT hidden.
     # Callers may pass ?include_migrated=true to bypass this filter for
     # support or rollback access.
@@ -902,7 +1012,7 @@ async def list_sync_configs(
             for c in configs
             if (
                 getattr(c, "parent_id", None) is None
-                and getattr(c, "migrated_source_id", None) is None
+                and getattr(c, "source_id", None) is None
             )
         ]
 
@@ -1171,60 +1281,25 @@ async def batch_create_sync_configs(
         if effective_gitlab_url != DEFAULT_GITLAB_URL:
             parent_options["gitlab_url"] = effective_gitlab_url
 
-    integration = Integration(
-        org_id=org_id,
-        provider=payload.provider,
-        credential_id=uuid.UUID(payload.credential_id)
-        if payload.credential_id
-        else None,
+    parent, integration = await _create_planner_managed_config(
+        session,
+        org_id,
         name=payload.name,
-        config=parent_options,
-        is_active=True,
+        provider=payload.provider,
+        credential_id=payload.credential_id,
+        sync_targets=payload.sync_targets,
+        parent_options=parent_options,
         schedule_cron=payload.schedule_cron,
         timezone=payload.timezone,
+        build_source_rows=lambda integration_id, config_id: _planner_source_rows(
+            payload,
+            parent_options,
+            gitlab_projects,
+            org_id,
+            integration_id,
+            config_id,
+        ),
     )
-    session.add(integration)
-    await session.flush()
-
-    parent = SyncConfiguration(
-        name=payload.name,
-        provider=payload.provider,
-        org_id=org_id,
-        credential_id=uuid.UUID(payload.credential_id)
-        if payload.credential_id
-        else None,
-        sync_targets=payload.sync_targets,
-        sync_options=parent_options,
-        is_active=True,
-        migrated_integration_id=integration.id,
-        planner_managed=True,
-    )
-    session.add(parent)
-    await session.flush()
-    await _assert_single_planner_parent_for_integration(session, org_id, integration.id)
-
-    source_rows = _planner_source_rows(
-        payload,
-        parent_options,
-        gitlab_projects,
-        org_id,
-        integration.id,
-        parent.id,
-    )
-    dataset_rows = [
-        IntegrationDataset(
-            org_id=org_id,
-            integration_id=integration.id,
-            dataset_key=dataset_key,
-            is_enabled=True,
-            options={"legacy_targets": list(payload.sync_targets)},
-        )
-        for dataset_key in _planner_dataset_keys(payload.provider, payload.sync_targets)
-    ]
-    session.add_all([*source_rows, *dataset_rows])
-
-    await _upsert_scheduled_job(session, parent, org_id)
-    await session.flush()
 
     return SyncConfigBatchResponse(
         parent=_sync_config_to_response(parent, children_count=0),
@@ -1239,7 +1314,6 @@ async def create_sync_config(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SyncConfigResponse:
-    svc = SyncConfigurationService(session, org_id)
 
     # Fix 1 (HIGH): Enforce repo limit before creating a new sync config.
     await _acquire_repo_limit_create_lock(session, org_id)
@@ -1329,15 +1403,47 @@ async def create_sync_config(
                 ),
             )
 
-    config = await svc.create(
+    # github/gitlab specify repos either explicitly (via POST /sync-configs/batch)
+    # or token-wide via all_repos. A plain create with neither would materialize
+    # zero sources and plan zero units while still returning 202 (a silent no-op),
+    # so reject it and steer the caller to the right path.
+    if payload.provider.lower() in {"github", "gitlab"} and not bool(
+        sync_options.get("all_repos")
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "github/gitlab sync configs require repository selection via "
+                "POST /sync-configs/batch, or sync_options.all_repos=true"
+            ),
+        )
+
+    def _build_sources(
+        integration_id: uuid.UUID, config_id: uuid.UUID
+    ) -> list[IntegrationSource]:
+        if payload.provider.lower() in {"github", "gitlab"}:
+            return []
+        return _non_git_source_rows(
+            payload.provider,
+            sync_options,
+            payload.name,
+            org_id,
+            integration_id,
+            config_id,
+        )
+
+    config, integration = await _create_planner_managed_config(
+        session,
+        org_id,
         name=payload.name,
         provider=payload.provider,
-        sync_targets=payload.sync_targets,
-        sync_options=sync_options,
         credential_id=payload.credential_id,
+        sync_targets=payload.sync_targets,
+        parent_options=sync_options,
+        schedule_cron=payload.schedule_cron,
+        timezone=payload.timezone,
+        build_source_rows=_build_sources,
     )
-    await _upsert_scheduled_job(session, config, org_id)
-    await session.flush()
     return _sync_config_to_response(config)
 
 
@@ -1608,7 +1714,7 @@ async def trigger_sync_config(
     if plan_request is None:
         raise HTTPException(
             status_code=400,
-            detail="Sync configuration is not linked to a migrated integration",
+            detail="Sync configuration has no linked integration",
         )
     await session.run_sync(
         lambda sync_session: _preflight_planner_credential(sync_session, config)
@@ -1700,7 +1806,7 @@ async def trigger_sync_config_backfill(
     if planner_backfill_request is None:
         raise HTTPException(
             status_code=400,
-            detail="Sync configuration is not linked to a migrated integration",
+            detail="Sync configuration has no linked integration",
         )
     planner_backfill_request = replace(
         planner_backfill_request,

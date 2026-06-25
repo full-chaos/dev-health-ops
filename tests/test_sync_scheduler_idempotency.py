@@ -88,7 +88,7 @@ def _make_config(
     and one enabled dataset so the scheduler can route it through the fan-out
     planner. Pass ``migrated=False`` to exercise the planner-only skip path.
     """
-    migrated_integration_id: uuid.UUID | None = None
+    integration_id: uuid.UUID | None = None
     if migrated:
         integration = Integration(
             org_id=org_id,
@@ -122,7 +122,7 @@ def _make_config(
             ]
         )
         session.flush()
-        migrated_integration_id = integration.id
+        integration_id = integration.id
 
     config = SyncConfiguration(
         name=name,
@@ -135,7 +135,7 @@ def _make_config(
         if sync_options is not None
         else {"owner": "org", "repo": "repo", "schedule_cron": "0 * * * *"},
         is_active=True,
-        migrated_integration_id=migrated_integration_id,
+        integration_id=integration_id,
     )
     if last_sync_at is not None:
         config.last_sync_at = last_sync_at

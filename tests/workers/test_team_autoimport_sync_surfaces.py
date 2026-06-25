@@ -223,7 +223,7 @@ def _seed_run_with_config(
         org_id=_ORG,
         sync_targets=["work-items"],
         sync_options=sync_options if sync_options is not None else {},
-        migrated_integration_id=integration.id,
+        integration_id=integration.id,
         parent_id=None,
         planner_managed=True,
     )
@@ -374,7 +374,7 @@ def test_post_sync_team_autoimport_skips_when_integration_missing(
         org_id=_ORG,
         sync_targets=["work-items"],
         sync_options={"auto_import_teams": True},
-        migrated_integration_id=orphan_integration_id,
+        integration_id=orphan_integration_id,
         parent_id=None,
         planner_managed=True,
     )

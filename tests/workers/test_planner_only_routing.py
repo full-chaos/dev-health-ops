@@ -2,7 +2,7 @@
 
 Asserts that manual "Sync now", scheduler, and backfill ALL route through
 plan_sync_run + dispatch_sync_run, and that an unmigrated config (no
-migrated_integration_id) causes:
+integration_id) causes:
   - manual trigger  → planner_request_for_config_if_routed returns None
                        (the HTTP layer converts this to HTTP 400)
   - scheduler       → _maybe_dispatch_config returns False (skip)
@@ -134,7 +134,7 @@ def _seed_config(
         sync_targets=["git"],
         sync_options={"schedule_cron": schedule_cron} if schedule_cron else {},
         is_active=is_active,
-        migrated_integration_id=integration.id if migrated else None,
+        integration_id=integration.id if migrated else None,
     )
     session.add(config)
     session.flush()
@@ -147,7 +147,7 @@ def _seed_config(
 
 
 def test_unmigrated_config_returns_none_from_planner_request(db_session):
-    """An unmigrated config (no migrated_integration_id) must return None.
+    """An unmigrated config (no integration_id) must return None.
 
     The HTTP layer converts None → HTTP 400.  This test exercises the real
     routing helper without going through the HTTP stack.
@@ -164,7 +164,7 @@ def test_unmigrated_config_returns_none_from_planner_request(db_session):
 
     assert result is None, (
         "planner_request_for_config_if_routed must return None for an unmigrated "
-        "config (no migrated_integration_id) — the HTTP layer maps this to HTTP 400"
+        "config (no integration_id) — the HTTP layer maps this to HTTP 400"
     )
 
 

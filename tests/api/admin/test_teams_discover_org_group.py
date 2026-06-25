@@ -34,7 +34,6 @@ from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.configuration import (
     GitLabDiscoveryResult,
     IntegrationCredentialsService,
-    SyncConfigurationService,
 )
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.settings import (
@@ -118,13 +117,15 @@ async def _seed_sync_config(
     org_id: str = ORG_ID,
 ) -> None:
     async with session_maker() as session:
-        svc = SyncConfigurationService(session, org_id)
-        config = await svc.create(
+        config = SyncConfiguration(
             name=name,
             provider=provider,
+            org_id=org_id,
             sync_targets=["git"],
             sync_options=sync_options,
         )
+        session.add(config)
+        await session.flush()
         if not is_active:
             config.is_active = False
         await session.commit()

@@ -109,6 +109,38 @@ def test_dispatch_partitioned_materialize_includes_allow_unscoped_when_true() ->
     assert chunk_kwargs["allow_unscoped"] is True
 
 
+def test_dispatch_partitioned_materialize_uses_env_batch_defaults(monkeypatch) -> None:
+    monkeypatch.setenv("INVESTMENT_LLM_BATCH_MODE", "provider_batch")
+    monkeypatch.setenv("INVESTMENT_LLM_BATCH_MIN_ITEMS", "11")
+    monkeypatch.setenv("INVESTMENT_LLM_BATCH_POLL_INTERVAL_SECONDS", "3.5")
+    monkeypatch.setenv("INVESTMENT_LLM_BATCH_TIMEOUT_SECONDS", "123")
+    with (
+        patch(
+            "dev_health_ops.metrics.sinks.factory.create_sink",
+            return_value=_FakeSink(),
+        ),
+        patch(
+            "dev_health_ops.work_graph.investment.queries.fetch_work_graph_edges",
+            return_value=[_edge(1)],
+        ),
+        patch(
+            "dev_health_ops.workers.work_graph_tasks.celery_app.signature",
+            side_effect=_signature_factory,
+        ),
+        patch("dev_health_ops.workers.work_graph_tasks.chord") as mock_chord,
+    ):
+        mock_chord.return_value = MagicMock()
+        task = cast(Any, dispatch_investment_materialize_partitioned)
+        task.run(db_url="clickhouse://x", org_id="org-1", chunk_size=2)
+
+    header = mock_chord.call_args.args[0]
+    chunk_kwargs = header[0].sig_kwargs["kwargs"]
+    assert chunk_kwargs["llm_batch_mode"] == "provider_batch"
+    assert chunk_kwargs["llm_batch_min_items"] == 11
+    assert chunk_kwargs["llm_batch_poll_interval_seconds"] == 3.5
+    assert chunk_kwargs["llm_batch_timeout_seconds"] == 123.0
+
+
 def test_dispatch_partitioned_materialize_skips_marker_for_windowed_run() -> None:
     with (
         patch(

@@ -127,7 +127,11 @@ class BudgetGuard:
                 estimates = ()
             estimates_by_unit[str(unit.id)] = estimates
             for estimate in estimates:
-                budget_keys.add(_budget_key(estimate.bucket.to_dict()))
+                budget_keys.add(
+                    _budget_key(
+                        estimate.bucket.to_dict(), route_family=estimate.route_family
+                    )
+                )
 
         _acquire_budget_advisory_locks(session, sorted(budget_keys))
         consumed_by_bucket = _active_budget_consumption(
@@ -186,7 +190,9 @@ class BudgetGuard:
                     )
             else:
                 for estimate in estimates:
-                    budget_key = _budget_key(estimate.bucket.to_dict())
+                    budget_key = _budget_key(
+                        estimate.bucket.to_dict(), route_family=estimate.route_family
+                    )
                     consumed_by_bucket[budget_key] += estimate.estimated_units
                 for observation in unit_observations:
                     observation["decision"] = "allowed"
@@ -246,8 +252,13 @@ def _observe_estimate(
     record_consumption: bool = True,
 ) -> dict[str, Any]:
     bucket = estimate.bucket.to_dict()
-    budget_key = _budget_key(bucket)
-    limit = _limit_for_bucket(bucket, limits=limits, default_limit=default_limit)
+    budget_key = _budget_key(bucket, route_family=estimate.route_family)
+    limit = _limit_for_bucket(
+        bucket,
+        route_family=estimate.route_family,
+        limits=limits,
+        default_limit=default_limit,
+    )
     previous_units = consumed_by_bucket[budget_key]
     projected_units = previous_units + estimate.estimated_units
     if record_consumption:
@@ -377,7 +388,9 @@ def _active_budget_consumption(
             )
             continue
         for estimate in estimates:
-            budget_key = _budget_key(estimate.bucket.to_dict())
+            budget_key = _budget_key(
+                estimate.bucket.to_dict(), route_family=estimate.route_family
+            )
             if budget_key in budget_keys:
                 consumed_by_bucket[budget_key] += estimate.estimated_units
     return consumed_by_bucket
@@ -443,7 +456,11 @@ def _parse_budget_limits(raw_limits: str | None) -> dict[str, int]:
 
 
 def _limit_for_bucket(
-    bucket: Mapping[str, str], *, limits: Mapping[str, int], default_limit: int
+    bucket: Mapping[str, str],
+    *,
+    route_family: str,
+    limits: Mapping[str, int],
+    default_limit: int,
 ) -> int:
     provider = bucket.get("provider", "")
     org_id = bucket.get("org_id", "")
@@ -451,6 +468,10 @@ def _limit_for_bucket(
     credential = bucket.get("credential_fingerprint", "")
     dimension = bucket.get("dimension", "")
     candidates = (
+        f"{provider}:{org_id}:{host}:{credential}:{dimension}:{route_family}",
+        f"{provider}:{host}:{dimension}:{route_family}",
+        f"{provider}:{dimension}:{route_family}",
+        f"{dimension}:{route_family}",
         f"{provider}:{org_id}:{host}:{credential}:{dimension}",
         f"{provider}:{host}:{dimension}",
         f"{provider}:{dimension}",
@@ -463,7 +484,7 @@ def _limit_for_bucket(
     return default_limit
 
 
-def _budget_key(bucket: Mapping[str, str]) -> str:
+def _budget_key(bucket: Mapping[str, str], *, route_family: str) -> str:
     return ":".join(
         (
             bucket.get("provider", ""),
@@ -471,6 +492,7 @@ def _budget_key(bucket: Mapping[str, str]) -> str:
             bucket.get("host", ""),
             bucket.get("credential_fingerprint", ""),
             bucket.get("dimension", ""),
+            route_family,
         )
     )
 

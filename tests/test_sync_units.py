@@ -2000,6 +2000,47 @@ def test_dispatch_sync_run_budget_release_after_terminal_unit(db_session, monkey
     assert completed.status == SyncRunUnitStatus.SUCCESS.value
 
 
+def test_dispatch_sync_run_github_budget_route_family_isolates_contents_blob(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_units
+
+    run, candidate = _seed_run(db_session)
+    candidate.dataset_key = "blame"
+    candidate.processor_flags = {"sync_blame": True}
+    active_files = SyncRunUnit(
+        org_id=run.org_id,
+        sync_run_id=run.id,
+        integration_id=candidate.integration_id,
+        source_id=candidate.source_id,
+        provider="github",
+        dataset_key="files",
+        cost_class="medium",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunUnitStatus.DISPATCHING.value,
+        attempts=0,
+        processor_flags={"sync_files": True},
+    )
+    run.total_units = 2
+    db_session.add(active_files)
+    db_session.flush()
+    active_files.updated_at = datetime.now(timezone.utc)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv(
+        "SYNC_BUDGET_BUCKET_LIMITS",
+        json.dumps({"github:contents_blob:blame": 8, "github:contents_blob": 1}),
+    )
+
+    result = sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(candidate)
+    db_session.refresh(active_files)
+    assert result == {"status": "dispatched", "queued_units": 1}
+    assert candidate.status == SyncRunUnitStatus.DISPATCHING.value
+    assert active_files.status == SyncRunUnitStatus.DISPATCHING.value
+
+
 def test_dispatch_sync_run_does_not_terminalize_when_chord_enqueue_fails(
     db_session, monkeypatch
 ):

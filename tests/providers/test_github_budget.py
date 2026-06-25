@@ -5,6 +5,11 @@ from datetime import datetime, timezone
 
 from dev_health_ops.providers.github.budget import GitHubBudgetEstimator
 from dev_health_ops.sync.budget import BudgetDimension, estimate_provider_budget
+from dev_health_ops.sync.budget_guard import (
+    _budget_key,
+    _limit_for_bucket,
+    _parse_budget_limits,
+)
 from dev_health_ops.workers.sync_bootstrap import SyncTaskContext
 
 WINDOW_START = datetime(2026, 1, 10, tzinfo=timezone.utc)
@@ -56,6 +61,14 @@ def test_github_budget_estimator_returns_core_budget_for_repo_metadata() -> None
     assert estimate.to_dict()["bucket"]["dimension"] == "rest_core"
 
 
+def test_github_budget_light_metadata_stays_on_core_route_family() -> None:
+    estimates = GitHubBudgetEstimator().estimate(_context(dataset_key="repo-metadata"))
+
+    assert [
+        (estimate.bucket.dimension, estimate.route_family) for estimate in estimates
+    ] == [(BudgetDimension.REST_CORE, "repo")]
+
+
 def test_github_budget_estimator_splits_pr_social_pressure() -> None:
     estimates = GitHubBudgetEstimator().estimate(_context(dataset_key="pr-comments"))
 
@@ -66,6 +79,54 @@ def test_github_budget_estimator_splits_pr_social_pressure() -> None:
         BudgetDimension.SECONDARY_ABUSE_RISK,
     }
     assert {estimate.route_family for estimate in estimates} == {"prs", "pr_social"}
+
+
+def test_github_budget_route_family_limits_override_dimension_defaults() -> None:
+    files_contents = next(
+        estimate
+        for estimate in GitHubBudgetEstimator().estimate(_context(dataset_key="files"))
+        if estimate.bucket.dimension is BudgetDimension.CONTENTS_BLOB
+    )
+    blame_contents = next(
+        estimate
+        for estimate in GitHubBudgetEstimator().estimate(_context(dataset_key="blame"))
+        if estimate.bucket.dimension is BudgetDimension.CONTENTS_BLOB
+    )
+    limits = _parse_budget_limits(
+        '{"github:contents_blob:files": 7, "github:contents_blob": 1}'
+    )
+
+    assert _budget_key(
+        files_contents.bucket.to_dict(), route_family=files_contents.route_family
+    ).endswith(":contents_blob:files")
+    assert (
+        _limit_for_bucket(
+            files_contents.bucket.to_dict(),
+            route_family=files_contents.route_family,
+            limits=limits,
+            default_limit=100,
+        )
+        == 7
+    )
+    assert (
+        _limit_for_bucket(
+            blame_contents.bucket.to_dict(),
+            route_family=blame_contents.route_family,
+            limits=limits,
+            default_limit=100,
+        )
+        == 1
+    )
+
+
+def test_github_budget_route_family_override_parsing_ignores_invalid_values() -> None:
+    limits = _parse_budget_limits(
+        '{"github:contents_blob:files": "8", "bad": "nope", "negative": -1}'
+    )
+
+    assert limits == {"github:contents_blob:files": 8, "negative": 0}
+    assert _parse_budget_limits("not-json") == {}
+    assert _parse_budget_limits("[]") == {}
 
 
 def test_github_budget_estimator_uses_work_item_pr_flag_for_pr_expansion() -> None:

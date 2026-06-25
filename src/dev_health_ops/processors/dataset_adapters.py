@@ -180,11 +180,13 @@ def _work_item_kwargs(context: SyncTaskContext) -> dict[str, Any]:
             "gitlab_url": gitlab_url,
         }
     if context.provider == "github":
+        flags = _explicit_flags(context)
+        kwargs["include_issues"] = context.dataset_key in _WORK_ITEM_DATASETS
         # CHAOS-646: only ingest PRs as work items when the PRS dataset is also
         # enabled for this config. The planner stamps ``sync_prs`` on the github
         # work-items unit (False when PRs are not selected); None would let the
         # provider fall back to the GITHUB_INCLUDE_PRS env default (PRs ON).
-        kwargs["include_pull_requests"] = _explicit_flags(context)["sync_prs"]
+        kwargs["include_pull_requests"] = flags["sync_prs"]
     return kwargs
 
 

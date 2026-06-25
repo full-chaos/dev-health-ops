@@ -309,6 +309,7 @@ async def _project_team_rows(
         await project_team_rows_with_store(
             store=team_store,
             org_id=org_id,
+            provider="github",
             team_rows=team_rows,
             team_writer=sink.insert_teams,
             discovered_at=discovered_at,
@@ -318,6 +319,7 @@ async def _project_team_rows(
         await project_provider_team_rows(
             dsn=sink.dsn,
             org_id=org_id,
+            provider="github",
             team_rows=team_rows,
             team_writer=sink.insert_teams,
             discovered_at=discovered_at,

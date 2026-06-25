@@ -44,12 +44,16 @@ class FakeProjectorStore:
             row = self.team_rows.get(str(parameters["team_id"]))
             return [dict(row)] if row else []
         if "FROM team_drift_changes" in query:
+            team_id = parameters.get("team_id")
+            provider = parameters.get("provider")
+            pending_only = "status = 'pending'" in query
             return [
                 dict(row)
                 for row in self.drift_rows.values()
                 if row["org_id"] == parameters["org_id"]
-                and row["entity_id"] == parameters["team_id"]
-                and row["provider"] == parameters["provider"]
+                and (team_id is None or row["entity_id"] == team_id)
+                and (provider is None or row["provider"] == provider)
+                and (not pending_only or row["status"] == "pending")
             ]
         return []
 
@@ -74,6 +78,26 @@ def test_auto_apply_policy_writes_observation_and_catalog() -> None:
     assert store.observations[0]["name"] == "Platform"
     assert team_writes == [row]
     assert store.drift_inserts == []
+
+
+def test_auto_apply_forces_org_id_on_observation_and_catalog_write() -> None:
+    store = FakeProjectorStore()
+    team_writes: list[dict[str, Any]] = []
+
+    async def write_teams(rows: list[dict[str, Any]]) -> None:
+        team_writes.extend(dict(row) for row in rows)
+
+    row = {**_team_row(name="Platform"), "org_id": "wrong-org"}
+    asyncio.run(
+        ClickHouseTeamDriftProjector(
+            store=cast(Any, store),
+            org_id="org-1",
+            team_writer=write_teams,
+        ).project_team(row)
+    )
+
+    assert store.observations[0]["org_id"] == "org-1"
+    assert team_writes[0]["org_id"] == "org-1"
 
 
 def test_flag_policy_emits_value_fingerprinted_pending_change() -> None:
@@ -113,6 +137,25 @@ def test_decided_change_is_not_reinserted_as_pending() -> None:
     assert [row["status"] for row in store.drift_inserts] == ["pending"]
 
 
+def test_decided_change_is_not_reinserted_when_native_key_changes() -> None:
+    store = _store_with_flag_policy()
+    store.team_rows["team-1"] = _catalog_row(name="Old")
+
+    asyncio.run(_project(store, _team_row(name="New")))
+    change_id = store.drift_inserts[0]["change_id"]
+    store.drift_rows[change_id] = {
+        **store.drift_rows[change_id],
+        "status": "dismissed",
+        "native_team_key": "OLD",
+        "updated_at": datetime.now(timezone.utc),
+    }
+
+    asyncio.run(_project(store, {**_team_row(name="New"), "native_team_key": "NEW"}))
+
+    assert store.drift_rows[change_id]["status"] == "dismissed"
+    assert [row["status"] for row in store.drift_inserts] == ["pending"]
+
+
 def test_changed_provider_value_supersedes_prior_pending_change() -> None:
     store = _store_with_flag_policy()
     store.team_rows["team-1"] = _catalog_row(name="Old")
@@ -143,17 +186,78 @@ def test_disappeared_drift_resolves_prior_pending_change() -> None:
     assert [row["status"] for row in store.drift_inserts] == ["pending", "resolved"]
 
 
+def test_empty_provider_discovery_resolves_pending_provider_changes() -> None:
+    store = _store_with_flag_policy()
+    store.team_rows["team-1"] = _catalog_row(name="Old")
+
+    asyncio.run(_project(store, _team_row(name="New")))
+    change_id = store.drift_inserts[0]["change_id"]
+    asyncio.run(
+        ClickHouseTeamDriftProjector(
+            store=cast(Any, store), org_id="org-1"
+        ).project_many([], provider="linear", resolve_missing_provider_changes=True)
+    )
+
+    assert store.drift_rows[change_id]["status"] == "resolved"
+    assert [row["status"] for row in store.drift_inserts] == ["pending", "resolved"]
+
+
+def test_missing_team_in_provider_discovery_resolves_pending_change() -> None:
+    store = _store_with_flag_policy()
+    store.team_rows["team-1"] = _catalog_row(name="Old")
+    store.team_rows["team-2"] = {**_catalog_row(name="Stable"), "id": "team-2"}
+    store.policy_rows["team-2"] = {
+        "sync_policy": 1,
+        "managed_fields": ["name"],
+    }
+
+    asyncio.run(_project(store, _team_row(name="New")))
+    change_id = store.drift_inserts[0]["change_id"]
+    asyncio.run(
+        ClickHouseTeamDriftProjector(
+            store=cast(Any, store), org_id="org-1"
+        ).project_many(
+            [{**_team_row(name="Stable"), "id": "team-2", "native_team_key": "TEAM2"}],
+            provider="linear",
+            resolve_missing_provider_changes=True,
+        )
+    )
+
+    assert store.drift_rows[change_id]["status"] == "resolved"
+
+
+def test_list_field_change_id_is_order_stable() -> None:
+    store = _store_with_flag_policy(managed_fields=["members"])
+    store.team_rows["team-1"] = _catalog_row(name="Platform")
+
+    asyncio.run(_project(store, {**_team_row(name="Platform"), "members": ["b", "a"]}))
+    first_change_id = store.drift_inserts[0]["change_id"]
+    store.drift_rows[first_change_id] = {
+        **store.drift_rows[first_change_id],
+        "status": "dismissed",
+        "updated_at": datetime.now(timezone.utc),
+    }
+    asyncio.run(
+        _project(store, {**_team_row(name="Platform"), "members": ["a", "b", "a"]})
+    )
+
+    assert store.drift_rows[first_change_id]["status"] == "dismissed"
+    assert [row["status"] for row in store.drift_inserts] == ["pending"]
+
+
 async def _project(store: FakeProjectorStore, row: dict[str, Any]) -> None:
     await ClickHouseTeamDriftProjector(
         store=cast(Any, store), org_id="org-1"
     ).project_team(row)
 
 
-def _store_with_flag_policy() -> FakeProjectorStore:
+def _store_with_flag_policy(
+    *, managed_fields: list[str] | None = None
+) -> FakeProjectorStore:
     store = FakeProjectorStore()
     store.policy_rows["team-1"] = {
         "sync_policy": 1,
-        "managed_fields": ["name"],
+        "managed_fields": managed_fields or ["name"],
     }
     return store
 

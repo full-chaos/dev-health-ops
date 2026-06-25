@@ -96,9 +96,11 @@ async def project_provider_team_rows(
     *,
     dsn: str,
     org_id: str,
+    provider: str | None = None,
     team_rows: list[dict[str, Any]],
     team_writer: TeamWriter,
     discovered_at: datetime | None = None,
+    resolve_missing_provider_changes: bool = False,
 ) -> None:
     from dev_health_ops.storage.clickhouse import ClickHouseStore
 
@@ -107,9 +109,11 @@ async def project_provider_team_rows(
         await project_team_rows_with_store(
             store=store,
             org_id=org_id,
+            provider=provider,
             team_rows=team_rows,
             team_writer=team_writer,
             discovered_at=discovered_at,
+            resolve_missing_provider_changes=resolve_missing_provider_changes,
         )
 
 
@@ -117,16 +121,23 @@ async def project_team_rows_with_store(
     *,
     store: ClickHouseStore,
     org_id: str,
+    provider: str | None = None,
     team_rows: list[dict[str, Any]],
     team_writer: TeamWriter | None = None,
     discovered_at: datetime | None = None,
+    resolve_missing_provider_changes: bool = False,
 ) -> None:
     projector = ClickHouseTeamDriftProjector(
         store=store,
         org_id=org_id,
         team_writer=team_writer,
     )
-    await projector.project_many(team_rows, discovered_at=discovered_at)
+    await projector.project_many(
+        team_rows,
+        provider=provider,
+        discovered_at=discovered_at,
+        resolve_missing_provider_changes=resolve_missing_provider_changes,
+    )
 
 
 class ClickHouseTeamDriftProjector:
@@ -145,10 +156,22 @@ class ClickHouseTeamDriftProjector:
         self,
         team_rows: Sequence[dict[str, Any]],
         *,
+        provider: str | None = None,
         discovered_at: datetime | None = None,
+        resolve_missing_provider_changes: bool = False,
     ) -> None:
+        observed: list[dict[str, Any]] = []
         for team_row in team_rows:
-            await self.project_team(team_row, discovered_at=discovered_at)
+            observed.append(
+                await self.project_team(team_row, discovered_at=discovered_at)
+            )
+        provider_name = provider or _provider_from_observed(observed)
+        if provider_name and resolve_missing_provider_changes:
+            await self.resolve_missing_provider_changes(
+                provider=provider_name,
+                observed=observed,
+                now=_utc_now(),
+            )
 
     async def project_team(
         self,
@@ -158,7 +181,7 @@ class ClickHouseTeamDriftProjector:
         discovered_at: datetime | None = None,
         apply_catalog: bool = True,
         detect_drift: bool = True,
-    ) -> None:
+    ) -> dict[str, Any]:
         now = _utc_now()
         observed = _observed_row(
             self.org_id,
@@ -169,27 +192,27 @@ class ClickHouseTeamDriftProjector:
         await self._insert_observation(observed)
 
         if not apply_catalog and not detect_drift:
-            return
+            return observed
 
         policy, managed_fields = await self._sync_policy(observed["team_id"])
         pending_changes = await self._change_rows(
             team_id=observed["team_id"],
-            provider=observed["provider"],
-            native_team_key=observed["native_team_key"],
         )
 
         if policy == AUTO_APPLY_POLICY:
             if apply_catalog:
-                await self.team_writer([catalog_row or team_row])
+                await self.team_writer(
+                    [_catalog_row_for_write(self.org_id, catalog_row or team_row)]
+                )
             await self._mark_pending(
                 pending_changes,
                 status=STATUS_RESOLVED,
                 now=now,
             )
-            return
+            return observed
 
         if policy != FLAG_FOR_REVIEW_POLICY or not detect_drift:
-            return
+            return observed
 
         existing = await self._team_row(observed["team_id"])
         await self._project_field_changes(
@@ -199,6 +222,7 @@ class ClickHouseTeamDriftProjector:
             existing_changes=pending_changes,
             now=now,
         )
+        return observed
 
     async def record_observation(
         self,
@@ -214,6 +238,35 @@ class ClickHouseTeamDriftProjector:
                 discovered_at=discovered_at or now,
                 updated_at=now,
             )
+        )
+
+    async def resolve_missing_provider_changes(
+        self,
+        *,
+        provider: str,
+        observed: Sequence[dict[str, Any]],
+        now: datetime,
+    ) -> None:
+        pending = await self._pending_provider_changes(provider=provider)
+        if not pending:
+            return
+        observed_team_ids = {str(row.get("team_id") or "") for row in observed}
+        observed_native_keys = {
+            str(row.get("native_team_key") or "")
+            for row in observed
+            if row.get("native_team_key")
+        }
+        missing = [
+            row
+            for row in pending
+            if not _change_observed(
+                row,
+                observed_team_ids=observed_team_ids,
+                observed_native_keys=observed_native_keys,
+            )
+        ]
+        await self._insert_changes(
+            _status_rows(missing, status=STATUS_RESOLVED, now=now)
         )
 
     async def _project_field_changes(
@@ -339,29 +392,32 @@ class ClickHouseTeamDriftProjector:
         self,
         *,
         team_id: str,
-        provider: str,
-        native_team_key: str,
     ) -> list[dict[str, Any]]:
-        rows = await self._query_dicts(
+        return await self._query_dicts(
             f"""
             SELECT {", ".join(_CHANGE_COLUMNS)}
             FROM team_drift_changes FINAL
             WHERE org_id = {{org_id:String}}
               AND entity_type = 'team'
               AND entity_id = {{team_id:String}}
-              AND provider = {{provider:String}}
               AND change_type = 'field_changed'
             """,
-            {"org_id": self.org_id, "team_id": team_id, "provider": provider},
+            {"org_id": self.org_id, "team_id": team_id},
         )
-        if native_team_key:
-            return [
-                row
-                for row in rows
-                if not row.get("native_team_key")
-                or str(row.get("native_team_key")) == native_team_key
-            ]
-        return rows
+
+    async def _pending_provider_changes(self, *, provider: str) -> list[dict[str, Any]]:
+        return await self._query_dicts(
+            f"""
+            SELECT {", ".join(_CHANGE_COLUMNS)}
+            FROM team_drift_changes FINAL
+            WHERE org_id = {{org_id:String}}
+              AND entity_type = 'team'
+              AND provider = {{provider:String}}
+              AND change_type = 'field_changed'
+              AND status = 'pending'
+            """,
+            {"org_id": self.org_id, "provider": provider},
+        )
 
     async def _query_dicts(
         self, query: str, parameters: dict[str, Any]
@@ -392,7 +448,7 @@ def _observed_row(
     updated_at: datetime,
 ) -> dict[str, Any]:
     return {
-        "org_id": str(team_row.get("org_id") or org_id),
+        "org_id": org_id,
         "provider": str(team_row.get("provider") or ""),
         "native_team_key": str(
             team_row.get("native_team_key") or team_row.get("id") or ""
@@ -412,7 +468,7 @@ def _observed_row(
 
 def _field_json(row: dict[str, Any] | None, field: str) -> str:
     if field in JSON_FIELDS:
-        value: Any = _list_field(None if row is None else row.get(field))
+        value: Any = _comparison_list_field(None if row is None else row.get(field))
     else:
         value = None if row is None else row.get(field)
     return _canonical_json(value)
@@ -430,6 +486,35 @@ def _list_field(value: Any) -> list[str]:
     if isinstance(value, list | tuple | set):
         return [str(item) for item in value if item is not None]
     return []
+
+
+def _comparison_list_field(value: Any) -> list[str]:
+    return sorted(set(_list_field(value)))
+
+
+def _catalog_row_for_write(org_id: str, team_row: dict[str, Any]) -> dict[str, Any]:
+    row = dict(team_row)
+    row["org_id"] = org_id
+    return row
+
+
+def _provider_from_observed(observed: Sequence[dict[str, Any]]) -> str | None:
+    providers = {str(row.get("provider") or "") for row in observed}
+    providers.discard("")
+    if len(providers) == 1:
+        return next(iter(providers))
+    return None
+
+
+def _change_observed(
+    row: dict[str, Any],
+    *,
+    observed_team_ids: set[str],
+    observed_native_keys: set[str],
+) -> bool:
+    entity_id = str(row.get("entity_id") or row.get("team_id") or "")
+    native_team_key = str(row.get("native_team_key") or "")
+    return entity_id in observed_team_ids or native_team_key in observed_native_keys
 
 
 def _managed_fields(value: Any) -> tuple[str, ...]:

@@ -1,7 +1,7 @@
 """Tests for CHAOS-2536 / CHAOS-2647: planner (fanout) backfill JobRun anchoring.
 
 Covers:
-- Endpoint: an unmigrated config (no ``migrated_integration_id``) is planner-only
+- Endpoint: an unmigrated config (no ``integration_id``) is planner-only
   and returns HTTP 400 without creating any records or dispatching.
 - Endpoint (fanout path): creates a visible PENDING JobRun anchored to the sync
   ScheduledJob and threads the planner ``sync_run_id`` into it.
@@ -146,9 +146,17 @@ async def client(session_maker, seeded_state):
 
 
 async def _create_sync_config(ac, name: str = "my-sync", provider: str = "github"):
+    # github/gitlab plain creates are token-wide (all_repos); non-git providers
+    # ignore the flag and materialize a single source. Either way the config is
+    # integration-native and triggerable.
     return await ac.post(
         "/api/v1/admin/sync-configs",
-        json={"name": name, "provider": provider, "sync_targets": []},
+        json={
+            "name": name,
+            "provider": provider,
+            "sync_targets": [],
+            "sync_options": {"all_repos": True},
+        },
     )
 
 
@@ -189,7 +197,7 @@ async def _link_migrated_integration(
 
     This is what makes the config eligible for the planner/fan-out backfill
     path (``planner_request_for_config_if_routed`` returns a request only when
-    ``migrated_integration_id`` is set).
+    ``integration_id`` is set).
     """
     integration_id = uuid.uuid4()
     async with session_maker() as session:
@@ -200,7 +208,7 @@ async def _link_migrated_integration(
                 )
             )
         ).scalar_one()
-        setattr(cfg, "migrated_integration_id", integration_id)
+        setattr(cfg, "integration_id", integration_id)
         if planner_managed:
             cfg.planner_managed = True
         await session.commit()
@@ -237,15 +245,19 @@ def _patch_dispatch(
 
 
 @pytest.mark.asyncio
-async def test_backfill_unmigrated_config_returns_400(client, session_maker):
-    """A config with no migrated integration is planner-only -> HTTP 400.
+async def test_backfill_config_created_via_plain_endpoint_succeeds(
+    client, session_maker
+):
+    """A config created via POST /sync-configs is integration-native, so backfill
+    routes through the fan-out planner and is accepted.
 
-    The legacy bare-config backfill path is deprecated (CHAOS-2647): such a
-    config must be rejected without creating a BackfillJob/JobRun or dispatching.
+    Regression guard: non-git providers fall through to the plain create endpoint
+    and must be backfillable, not rejected with the old 'no linked integration'
+    400 that only git providers (routed via /batch) avoided.
     """
     ac, _ = client
 
-    create_resp = await _create_sync_config(ac, name="bf-unmigrated", provider="github")
+    create_resp = await _create_sync_config(ac, name="bf-native", provider="linear")
     assert create_resp.status_code == 201
     config_id = create_resp.json()["id"]
 
@@ -255,15 +267,12 @@ async def test_backfill_unmigrated_config_returns_400(client, session_maker):
             json={"since": "2026-01-01", "before": "2026-01-08"},
         )
 
-    assert resp.status_code == 400, resp.text
-    assert "not linked to a migrated integration" in resp.json()["detail"]
-    mock_dispatch.apply_async.assert_not_called()
+    assert resp.status_code == 202, resp.text
+    mock_dispatch.apply_async.assert_called_once()
 
     async with session_maker() as session:
-        job_runs = (await session.execute(select(JobRun))).scalars().all()
         backfill_jobs = (await session.execute(select(BackfillJob))).scalars().all()
-    assert job_runs == []
-    assert backfill_jobs == []
+    assert len(backfill_jobs) == 1
 
 
 # ---------------------------------------------------------------------------

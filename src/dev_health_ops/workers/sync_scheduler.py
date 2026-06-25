@@ -256,7 +256,7 @@ def _maybe_dispatch_config(
     )
     if request is None:
         logger.warning(
-            "Skipping sync config %s because it is not linked to a migrated integration",
+            "Skipping sync config %s because it has no linked integration",
             config.id,
         )
         return False

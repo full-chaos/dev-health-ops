@@ -36,8 +36,8 @@ def _config(
     *,
     provider: str = "github",
     sync_targets: list[str] | None = None,
-    migrated_integration_id: uuid.UUID | None = None,
-    migrated_source_id: uuid.UUID | None = None,
+    integration_id: uuid.UUID | None = None,
+    source_id: uuid.UUID | None = None,
     parent_id: uuid.UUID | None = None,
     planner_managed: bool = False,
 ) -> SyncConfiguration:
@@ -47,8 +47,8 @@ def _config(
         provider=provider,
         sync_targets=sync_targets if sync_targets is not None else ["git"],
         sync_options={},
-        migrated_integration_id=migrated_integration_id,
-        migrated_source_id=migrated_source_id,
+        integration_id=integration_id,
+        source_id=source_id,
         parent_id=parent_id,
         planner_managed=planner_managed,
     )
@@ -117,7 +117,7 @@ def test_parent_config_plans_whole_integration(db_session):
     config = _config(
         db_session,
         sync_targets=["git", "prs"],
-        migrated_integration_id=integration_id,
+        integration_id=integration_id,
     )
     req = plan_request_for_config(config, triggered_by="schedule")
 
@@ -138,8 +138,8 @@ def test_child_config_scopes_to_source_and_datasets(db_session):
         db_session,
         provider="github",
         sync_targets=["prs"],
-        migrated_integration_id=integration_id,
-        migrated_source_id=source_id,
+        integration_id=integration_id,
+        source_id=source_id,
     )
     req = plan_request_for_config(config, triggered_by="manual")
 
@@ -157,8 +157,8 @@ def test_child_config_without_targets_falls_back_to_all_datasets(db_session):
     config = _config(
         db_session,
         sync_targets=[],
-        migrated_integration_id=integration_id,
-        migrated_source_id=source_id,
+        integration_id=integration_id,
+        source_id=source_id,
     )
     req = plan_request_for_config(config, triggered_by="manual")
 
@@ -171,7 +171,7 @@ def test_child_config_without_targets_falls_back_to_all_datasets(db_session):
 def test_mode_override(db_session):
     config = _config(
         db_session,
-        migrated_integration_id=uuid.uuid4(),
+        integration_id=uuid.uuid4(),
     )
     req = plan_request_for_config(config, triggered_by="manual", mode="backfill")
     assert req is not None
@@ -180,9 +180,7 @@ def test_mode_override(db_session):
 
 def test_planner_managed_parent_routes(db_session):
     integration_id = uuid.uuid4()
-    config = _config(
-        db_session, migrated_integration_id=integration_id, planner_managed=True
-    )
+    config = _config(db_session, integration_id=integration_id, planner_managed=True)
     _source(db_session, integration_id)
 
     req = planner_request_for_config_if_routed(
@@ -200,7 +198,7 @@ def test_planner_managed_parent_scopes_to_tagged_enabled_sources(db_session, pro
     config = _config(
         db_session,
         provider=provider,
-        migrated_integration_id=integration_id,
+        integration_id=integration_id,
         planner_managed=True,
     )
     tag = {PLANNER_TAG_KEY: str(config.id)}
@@ -260,8 +258,8 @@ def test_planner_managed_child_keeps_single_source_scope(db_session):
     )
     child = _config(
         db_session,
-        migrated_integration_id=integration_id,
-        migrated_source_id=source.id,
+        integration_id=integration_id,
+        source_id=source.id,
         planner_managed=True,
     )
 
@@ -278,7 +276,7 @@ def test_planner_managed_parent_with_zero_tagged_enabled_sources_syncs_nothing(
     _integration(db_session, integration_id)
     config = _config(
         db_session,
-        migrated_integration_id=integration_id,
+        integration_id=integration_id,
         planner_managed=True,
     )
     _integration_source(db_session, integration_id, full_name="full-chaos/untagged")
@@ -307,7 +305,7 @@ def test_non_planner_managed_parent_keeps_all_enabled_semantics(
     # to carry the planner tag.
     integration_id = uuid.uuid4()
     _integration(db_session, integration_id)
-    config = _config(db_session, migrated_integration_id=integration_id)
+    config = _config(db_session, integration_id=integration_id)
     _integration_source(
         db_session,
         integration_id,
@@ -389,7 +387,7 @@ def test_mark_sync_run_failed_stamps_canonical_config(db_session):
         name="canonical",
         provider="github",
         sync_targets=["git"],
-        migrated_integration_id=run.integration_id,
+        integration_id=run.integration_id,
     )
     db_session.add(config)
     db_session.commit()
@@ -415,14 +413,14 @@ def test_mark_sync_run_failed_stamps_oldest_duplicate_parent_config(db_session):
         name="canonical-older",
         provider="github",
         sync_targets=["git"],
-        migrated_integration_id=run.integration_id,
+        integration_id=run.integration_id,
     )
     newer = SyncConfiguration(
         org_id=ORG_ID,
         name="canonical-newer",
         provider="github",
         sync_targets=["git"],
-        migrated_integration_id=run.integration_id,
+        integration_id=run.integration_id,
     )
     older.created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
     newer.created_at = datetime(2026, 1, 2, tzinfo=timezone.utc)

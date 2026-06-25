@@ -468,7 +468,6 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     # Bare ``migrate postgres`` / ``migrate clickhouse`` default to upgrade.
     ("migrate", "postgres"): frozenset({_REQ_POSTGRES}),
     ("migrate", "clickhouse"): frozenset({_REQ_CLICKHOUSE}),
-    ("migrate", "configs-to-integrations"): frozenset({_REQ_POSTGRES}),
 }
 
 _REQUIREMENT_MESSAGES: dict[str, str] = {
@@ -601,7 +600,6 @@ def build_parser() -> argparse.ArgumentParser:
         completeness,
         coverage,
         perf,
-        planner_configs,
         schema,
     )
     from dev_health_ops.audit.ai_governance import cli as ai_governance_cli
@@ -684,7 +682,6 @@ def build_parser() -> argparse.ArgumentParser:
     schema.register_commands(audit_subparsers)
     perf.register_commands(audit_subparsers)
     coverage.register_commands(audit_subparsers)
-    planner_configs.register_commands(audit_subparsers)
 
     # ---- fixtures ----
     fixtures_runner.register_commands(sub)

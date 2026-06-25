@@ -27,6 +27,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.git import Base
+from dev_health_ops.models.integrations import (
+    Integration,
+    IntegrationDataset,
+    IntegrationSource,
+)
 from dev_health_ops.models.licensing import OrgLicense, TierLimit
 from dev_health_ops.models.settings import (
     IntegrationCredential,
@@ -48,6 +53,9 @@ _TABLES = tables_of(
     TierLimit,
     IntegrationCredential,
     SyncConfiguration,
+    Integration,
+    IntegrationSource,
+    IntegrationDataset,
     ScheduledJob,
     JobRun,
     Subscription,
@@ -140,7 +148,10 @@ def _make_client(session_maker, state):
 
 
 async def _create_config(ac, name: str, **extra):
-    payload = {"name": name, "provider": "github", "sync_targets": [], **extra}
+    # Use a non-git provider so each config materializes exactly one planner
+    # IntegrationSource (the unit the repo-limit counts). A github config with
+    # no repos/all_repos creates zero sources and would not consume a slot.
+    payload = {"name": name, "provider": "linear", "sync_targets": [], **extra}
     return await ac.post("/api/v1/admin/sync-configs", json=payload)
 
 

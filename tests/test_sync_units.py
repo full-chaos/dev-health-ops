@@ -967,7 +967,7 @@ def test_finalize_once_only_dispatches_metrics_once(db_session, monkeypatch):
         name="canonical",
         provider="github",
         sync_targets=["git"],
-        migrated_integration_id=run.integration_id,
+        integration_id=run.integration_id,
     )
     db_session.add(config)
     unit.status = SyncRunUnitStatus.SUCCESS.value
@@ -1017,7 +1017,7 @@ def test_finalize_aggregates_partial_failed(db_session, monkeypatch):
         name="canonical-partial",
         provider="github",
         sync_targets=["git", "prs"],
-        migrated_integration_id=run.integration_id,
+        integration_id=run.integration_id,
     )
     db_session.add(config)
     unit.status = SyncRunUnitStatus.SUCCESS.value
@@ -1300,7 +1300,7 @@ def test_dispatch_sync_run_continues_accepted_run_after_planner_config_pause(
         provider="github",
         sync_targets=["git"],
         sync_options={},
-        migrated_integration_id=run.integration_id,
+        integration_id=run.integration_id,
         is_active=False,
     )
     db_session.add(config)
@@ -1354,7 +1354,7 @@ def test_paused_config_with_running_and_planned_units_dispatches_planned(
         provider="github",
         sync_targets=["git", "prs"],
         sync_options={},
-        migrated_integration_id=run.integration_id,
+        integration_id=run.integration_id,
         is_active=False,
     )
     run.status = SyncRunStatus.DISPATCHING.value
@@ -1458,7 +1458,7 @@ def test_paused_config_with_stale_dispatching_reclaims_accepted_work(
         provider="github",
         sync_targets=["git", "prs", "issues"],
         sync_options={},
-        migrated_integration_id=run.integration_id,
+        integration_id=run.integration_id,
         is_active=False,
     )
     run.status = SyncRunStatus.DISPATCHING.value
@@ -1656,7 +1656,7 @@ def test_dispatch_sync_run_continues_accepted_run_after_child_config_pause(
         provider="github",
         sync_targets=["git"],
         sync_options={},
-        migrated_integration_id=run.integration_id,
+        integration_id=run.integration_id,
         is_active=True,
     )
     db_session.add(parent_config)
@@ -1668,8 +1668,8 @@ def test_dispatch_sync_run_continues_accepted_run_after_child_config_pause(
         provider="github",
         sync_targets=["git"],
         sync_options={},
-        migrated_integration_id=run.integration_id,
-        migrated_source_id=unit.source_id,
+        integration_id=run.integration_id,
+        source_id=unit.source_id,
         is_active=False,
     )
     db_session.add(child_config)
@@ -1896,7 +1896,7 @@ def test_post_sync_dispatch_includes_window(db_session, monkeypatch):
         name="canonical-window",
         provider="github",
         sync_targets=["git"],
-        migrated_integration_id=run.integration_id,
+        integration_id=run.integration_id,
     )
     db_session.add(config)
     # Give the unit explicit window bounds.
@@ -1965,7 +1965,7 @@ def test_post_sync_dispatch_none_window_unit_unbounds_lower(db_session, monkeypa
         name="mixed-window",
         provider="github",
         sync_targets=["git"],
-        migrated_integration_id=run.integration_id,
+        integration_id=run.integration_id,
     )
     db_session.add(config)
     db_session.flush()

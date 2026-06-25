@@ -49,29 +49,6 @@ class SyncConfigurationService:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def create(
-        self,
-        name: str,
-        provider: str,
-        sync_targets: list[str],
-        sync_options: dict[str, Any] | None = None,
-        credential_id: str | None = None,
-    ) -> SyncConfiguration:
-        """Create a new sync configuration."""
-        import uuid as uuid_module
-
-        config = SyncConfiguration(
-            name=name,
-            provider=provider,
-            org_id=self.org_id,
-            credential_id=uuid_module.UUID(credential_id) if credential_id else None,
-            sync_targets=sync_targets,
-            sync_options=sync_options or {},
-        )
-        self.session.add(config)
-        await self.session.flush()
-        return config
-
     async def update(
         self,
         name: str,

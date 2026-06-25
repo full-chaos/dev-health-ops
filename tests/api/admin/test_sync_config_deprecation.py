@@ -153,14 +153,14 @@ async def _seed_configs(session_maker, org_id: str):
             provider="github",
             org_id=org_id,
             sync_targets=["git"],
-            migrated_integration_id=uuid.uuid4(),
+            integration_id=uuid.uuid4(),
         )
         child_migrated_source = SyncConfiguration(
             name="child-migrated-source",
             provider="github",
             org_id=org_id,
             sync_targets=["git"],
-            migrated_source_id=uuid.uuid4(),
+            source_id=uuid.uuid4(),
         )
         session.add_all(
             [child_legacy, child_migrated_integration, child_migrated_source]
@@ -170,8 +170,8 @@ async def _seed_configs(session_maker, org_id: str):
         return {
             "parent_id": str(parent.id),
             "child_legacy_id": str(child_legacy.id),
-            "child_migrated_integration_id": str(child_migrated_integration.id),
-            "child_migrated_source_id": str(child_migrated_source.id),
+            "child_integration_id": str(child_migrated_integration.id),
+            "child_source_id": str(child_migrated_source.id),
         }
 
 
@@ -194,7 +194,7 @@ async def test_list_hides_migrated_children_when_flag_on(client, session_maker):
     names = {c["name"] for c in resp.json()}
     assert "parent-config" in names
     assert "child-legacy" not in names
-    # migrated_integration_id marks the PARENT (rollback anchor) -> stays visible
+    # integration_id marks the PARENT (rollback anchor) -> stays visible
     assert "migrated-parent-anchor" in names
     assert "child-migrated-source" not in names
 
@@ -301,13 +301,13 @@ async def test_batch_creates_planner_parent_when_planner_flag_active(
 
         source_result = await session.execute(
             select(IntegrationSource).where(
-                IntegrationSource.integration_id == parent.migrated_integration_id
+                IntegrationSource.integration_id == parent.integration_id
             )
         )
         sources = source_result.scalars().all()
 
     assert parent.planner_managed is True
-    assert parent.migrated_integration_id is not None
+    assert parent.integration_id is not None
     assert children == []
     assert {source.external_id for source in sources} == {
         "myorg/repo-a",
@@ -353,17 +353,17 @@ async def test_batch_creates_planner_parent_when_planner_flag_inactive(
         )
         children = child_result.scalars().all()
 
-        integration = await session.get(Integration, parent.migrated_integration_id)
+        integration = await session.get(Integration, parent.integration_id)
 
         dataset_result = await session.execute(
             select(IntegrationDataset).where(
-                IntegrationDataset.integration_id == parent.migrated_integration_id
+                IntegrationDataset.integration_id == parent.integration_id
             )
         )
         datasets = dataset_result.scalars().all()
 
     assert parent.planner_managed is True
-    assert parent.migrated_integration_id is not None
+    assert parent.integration_id is not None
     assert children == []
     assert integration is not None
     assert {dataset.dataset_key for dataset in datasets} == {
@@ -396,7 +396,7 @@ async def test_planner_parent_integration_invariant_rejects_second_parent(
                     provider="github",
                     org_id=org_id,
                     sync_targets=["git"],
-                    migrated_integration_id=integration.id,
+                    integration_id=integration.id,
                     planner_managed=True,
                 ),
                 SyncConfiguration(
@@ -404,7 +404,7 @@ async def test_planner_parent_integration_invariant_rejects_second_parent(
                     provider="github",
                     org_id=org_id,
                     sync_targets=["git"],
-                    migrated_integration_id=integration.id,
+                    integration_id=integration.id,
                     planner_managed=True,
                 ),
             ]
@@ -443,7 +443,12 @@ async def test_create_sync_config_still_works(client):
     with patch.dict("os.environ", {"HIDE_MIGRATED_CHILD_CONFIGS": "true"}):
         resp = await ac.post(
             "/api/v1/admin/sync-configs",
-            json={"name": "new-config", "provider": "github", "sync_targets": []},
+            json={
+                "name": "new-config",
+                "provider": "github",
+                "sync_targets": [],
+                "sync_options": {"all_repos": True},
+            },
         )
 
     assert resp.status_code == 201

@@ -267,6 +267,7 @@ def populate(
                 project_team_rows_with_store(
                     store=team_store,
                     org_id=org_id,
+                    provider="linear",
                     team_rows=team_rows,
                     team_writer=sink.insert_teams,
                     discovered_at=now,
@@ -277,6 +278,7 @@ def populate(
                 project_provider_team_rows(
                     dsn=_clickhouse_dsn(scope),
                     org_id=org_id,
+                    provider="linear",
                     team_rows=team_rows,
                     team_writer=sink.insert_teams,
                     discovered_at=now,

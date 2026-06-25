@@ -402,6 +402,7 @@ class ConfirmInferredMembersResponse(BaseModel):
 
 
 class FlaggedChange(BaseModel):
+    change_id: str
     team_id: str
     team_name: str
     change_type: str
@@ -419,6 +420,11 @@ class PendingChangesResponse(BaseModel):
 class ApproveChangesRequest(BaseModel):
     change_ids: list[str] = Field(default_factory=list)
     approve_all: bool = False
+
+
+class DismissChangesRequest(BaseModel):
+    change_ids: list[str] = Field(default_factory=list)
+    dismiss_all: bool = False
 
 
 # ---- User schemas ----

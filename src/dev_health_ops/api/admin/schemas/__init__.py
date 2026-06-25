@@ -28,6 +28,7 @@ from dev_health_ops.api.admin.schemas_flat import (  # noqa: F401
     DiscoveredRepo,
     DiscoveredReposResponse,
     DiscoveredTeam,
+    DismissChangesRequest,
     FeatureFlagResponse,
     FeatureFlagUpdateRequest,
     FeatureOverrideCreate,

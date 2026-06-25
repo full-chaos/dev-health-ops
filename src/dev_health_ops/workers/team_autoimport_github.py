@@ -7,6 +7,10 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from typing import Any, cast
 
+from dev_health_ops.api.services.configuration.clickhouse_team_drift_projector import (
+    project_provider_team_rows,
+    project_team_rows_with_store,
+)
 from dev_health_ops.api.services.configuration.team_discovery import (
     TeamDiscoveryService,
 )
@@ -24,6 +28,7 @@ PROVIDER = "github"
 PROVIDER_ACCESS_PRIORITY = 300
 BASE_SPECIFICITY = 100
 CHILD_SPECIFICITY_STEP = 10
+_REAL_CLICKHOUSE_SINK_TYPE = ClickHouseMetricsSink
 
 
 def populate(
@@ -31,15 +36,24 @@ def populate(
     org_id: str,
     credentials: dict[str, Any],
     scope: dict[str, Any],
-    **_: Any,
+    **kwargs: Any,
 ) -> dict[str, Any]:
     return asyncio.run(
-        _populate_async(org_id=org_id, credentials=credentials, scope=scope)
+        _populate_async(
+            org_id=org_id,
+            credentials=credentials,
+            scope=scope,
+            team_store=kwargs.get("team_store"),
+        )
     )
 
 
 async def _populate_async(
-    *, org_id: str, credentials: dict[str, Any], scope: dict[str, Any]
+    *,
+    org_id: str,
+    credentials: dict[str, Any],
+    scope: dict[str, Any],
+    team_store: Any | None = None,
 ) -> dict[str, Any]:
     if not _provider_capable():
         return _zero_summary(org_id=org_id, reason="provider_not_import_capable")
@@ -83,7 +97,13 @@ async def _populate_async(
         team_row["members"] = member_roster.get(str(team_row["id"]), [])
 
     sink = _sink(scope)
-    await sink.insert_teams(team_rows)
+    await _project_team_rows(
+        org_id=org_id,
+        team_rows=team_rows,
+        sink=sink,
+        team_store=team_store,
+        discovered_at=now,
+    )
     sink.write_team_repo_ownership(repo_rows)
     sink.write_team_memberships(membership_rows)
 
@@ -275,6 +295,35 @@ def _sink(scope: Mapping[str, Any]) -> ClickHouseMetricsSink:
     if not dsn:
         raise ValueError("CLICKHOUSE_URI is required for GitHub team auto-import")
     return ClickHouseMetricsSink(dsn=dsn)
+
+
+async def _project_team_rows(
+    *,
+    org_id: str,
+    team_rows: list[dict[str, Any]],
+    sink: ClickHouseMetricsSink,
+    team_store: Any | None,
+    discovered_at: datetime,
+) -> None:
+    if team_store is not None:
+        await project_team_rows_with_store(
+            store=team_store,
+            org_id=org_id,
+            team_rows=team_rows,
+            team_writer=sink.insert_teams,
+            discovered_at=discovered_at,
+        )
+        return
+    if isinstance(sink, _REAL_CLICKHOUSE_SINK_TYPE):
+        await project_provider_team_rows(
+            dsn=sink.dsn,
+            org_id=org_id,
+            team_rows=team_rows,
+            team_writer=sink.insert_teams,
+            discovered_at=discovered_at,
+        )
+        return
+    await sink.insert_teams(team_rows)
 
 
 def _team_id(provider_team_id: str) -> str:

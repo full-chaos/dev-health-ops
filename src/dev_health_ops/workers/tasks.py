@@ -38,6 +38,7 @@ from dev_health_ops.workers.task_utils import (
     _resolve_env_credentials,
 )
 from dev_health_ops.workers.team_autoimport import run_post_sync_team_autoimport
+from dev_health_ops.workers.team_drift_sync import sync_team_drift
 from dev_health_ops.workers.work_graph_tasks import (
     dispatch_investment_materialize_partitioned,
     dispatch_membership_backfill,
@@ -84,6 +85,7 @@ __all__ = [
     "run_release_impact_job",
     "run_sync_unit",
     "run_post_sync_team_autoimport",
+    "sync_team_drift",
     "run_work_graph_build",
     "send_billing_notification",
 ]

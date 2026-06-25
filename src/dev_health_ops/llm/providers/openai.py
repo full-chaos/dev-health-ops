@@ -14,6 +14,8 @@ Notes:
 from __future__ import annotations
 
 import asyncio
+import io
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -32,6 +34,15 @@ from .base import (
     CompletionResult,
     LLMProviderBase,
     usage_token_count,
+)
+from .batch import (
+    BatchCapability,
+    BatchItemRequest,
+    BatchItemResult,
+    BatchJobState,
+    BatchJobStatus,
+    BatchJobSubmission,
+    BatchProviderFeature,
 )
 
 logger = logging.getLogger(__name__)
@@ -67,6 +78,151 @@ def system_message(prompt: str) -> str:
         "Do NOT introduce new conclusions or recommendations.\n"
         "Return ONLY valid JSON."
     )
+
+
+def _map_openai_batch_status(status: str) -> BatchJobStatus:
+    normalized = (status or "").strip().lower()
+    if normalized in {"validating", "in_progress", "finalizing"}:
+        return BatchJobStatus.RUNNING
+    if normalized == "completed":
+        return BatchJobStatus.SUCCEEDED
+    if normalized in {"failed", "expired"}:
+        return (
+            BatchJobStatus.EXPIRED if normalized == "expired" else BatchJobStatus.FAILED
+        )
+    if normalized in {"cancelling", "cancelled"}:
+        return BatchJobStatus.CANCELLED
+    return BatchJobStatus.SUBMITTED
+
+
+async def _openai_file_text(client: Any, file_id: str) -> str:
+    content = await client.files.content(file_id)
+    text_attr = getattr(content, "text", None)
+    if callable(text_attr):
+        maybe_text = text_attr()
+        if isinstance(maybe_text, str):
+            return maybe_text
+    read_attr = getattr(content, "read", None)
+    if callable(read_attr):
+        raw = read_attr()
+        if isinstance(raw, bytes):
+            return raw.decode("utf-8")
+        if isinstance(raw, str):
+            return raw
+    if isinstance(content, bytes):
+        return content.decode("utf-8")
+    return str(content)
+
+
+def _extract_batch_response_text(body: object) -> str | None:
+    if not isinstance(body, dict):
+        return None
+    output_text = body.get("output_text")
+    if isinstance(output_text, str) and output_text.strip():
+        return validate_json_or_empty(output_text) or output_text
+    choices = body.get("choices")
+    if isinstance(choices, list) and choices:
+        first = choices[0]
+        if isinstance(first, dict):
+            message = first.get("message")
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str):
+                    return validate_json_or_empty(content) or content
+    output = body.get("output")
+    if isinstance(output, list):
+        parts: list[str] = []
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content")
+            if not isinstance(content, list):
+                continue
+            for chunk in content:
+                if isinstance(chunk, dict):
+                    text = chunk.get("text")
+                    if isinstance(text, str):
+                        parts.append(text)
+        joined = "".join(parts)
+        if joined:
+            return validate_json_or_empty(joined) or joined
+    return None
+
+
+def _parse_openai_batch_lines(text: str) -> list[BatchItemResult]:
+    results: list[BatchItemResult] = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        payload = json.loads(line)
+        custom_id = str(payload.get("custom_id") or "")
+        error = payload.get("error")
+        if isinstance(error, dict):
+            results.append(
+                BatchItemResult(
+                    custom_id=custom_id,
+                    error_code=str(error.get("code") or error.get("type") or "error"),
+                    error_message=str(error.get("message") or error),
+                    provider_metadata=_batch_payload_metadata(payload),
+                )
+            )
+            continue
+        response = payload.get("response")
+        if isinstance(response, dict):
+            body = response.get("body")
+            raw_response = _extract_batch_response_text(body)
+            status_code = response.get("status_code")
+            if raw_response is not None:
+                results.append(
+                    BatchItemResult(
+                        custom_id=custom_id,
+                        raw_response=raw_response,
+                        provider_metadata=_batch_payload_metadata(payload),
+                    )
+                )
+            else:
+                results.append(
+                    BatchItemResult(
+                        custom_id=custom_id,
+                        error_code=f"http_{status_code or 'unknown'}",
+                        error_message="Batch response did not contain completion text",
+                        provider_metadata=_batch_payload_metadata(payload),
+                    )
+                )
+    return results
+
+
+def _batch_payload_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    if payload.get("id") is not None:
+        metadata["id"] = str(payload["id"])
+    if payload.get("custom_id") is not None:
+        metadata["custom_id"] = str(payload["custom_id"])
+    response = payload.get("response")
+    if isinstance(response, dict):
+        if response.get("request_id") is not None:
+            metadata["request_id"] = str(response["request_id"])
+        if response.get("status_code") is not None:
+            metadata["status_code"] = response["status_code"]
+        body = response.get("body")
+        if isinstance(body, dict):
+            usage = body.get("usage")
+            if isinstance(usage, dict):
+                input_tokens = usage.get("input_tokens", usage.get("prompt_tokens"))
+                output_tokens = usage.get(
+                    "output_tokens", usage.get("completion_tokens")
+                )
+                if input_tokens is not None:
+                    metadata["input_tokens"] = int(input_tokens or 0)
+                if output_tokens is not None:
+                    metadata["output_tokens"] = int(output_tokens or 0)
+    error = payload.get("error")
+    if isinstance(error, dict):
+        if error.get("code") is not None:
+            metadata["error_code"] = str(error["code"])
+        if error.get("type") is not None:
+            metadata["error_type"] = str(error["type"])
+    return metadata
 
 
 def categorization_json_schema() -> dict[str, Any]:
@@ -168,6 +324,21 @@ class OpenAIProvider(LLMProviderBase):
     async def complete(self, prompt: str) -> CompletionResult:
         return await self._impl.complete(prompt)
 
+    def batch_capability(self, model: str | None = None) -> BatchCapability:
+        return self._impl.batch_capability(model)
+
+    async def submit_batch(self, items: list[BatchItemRequest]) -> BatchJobSubmission:
+        return await self._impl.submit_batch(items)
+
+    async def poll_batch(self, provider_job_id: str) -> BatchJobState:
+        return await self._impl.poll_batch(provider_job_id)
+
+    async def fetch_batch_results(self, provider_job_id: str) -> list[BatchItemResult]:
+        return await self._impl.fetch_batch_results(provider_job_id)
+
+    async def cancel_batch(self, provider_job_id: str) -> None:
+        await self._impl.cancel_batch(provider_job_id)
+
     async def aclose(self) -> None:
         await self._impl.aclose()
 
@@ -242,6 +413,139 @@ class _OpenAIProviderBase(LLMProviderBase):
 
     async def complete(self, prompt: str) -> CompletionResult:
         raise NotImplementedError
+
+    def batch_capability(self, model: str | None = None) -> BatchCapability:
+        resolved_model = model or self.cfg.model
+        return BatchCapability(
+            provider=self.cfg.validation_provider_name,
+            model=resolved_model,
+            supported=True,
+            features=frozenset(
+                {
+                    BatchProviderFeature.SUBMIT,
+                    BatchProviderFeature.POLL,
+                    BatchProviderFeature.FETCH_RESULTS,
+                    BatchProviderFeature.CANCEL,
+                }
+            ),
+        )
+
+    def _batch_endpoint(self) -> str:
+        return (
+            "/v1/responses"
+            if _is_gpt5_family(self.cfg.model)
+            else "/v1/chat/completions"
+        )
+
+    def _batch_body(self, prompt: str) -> dict[str, Any]:
+        sys_msg = system_message(prompt)
+        if _is_gpt5_family(self.cfg.model):
+            text_format: dict[str, Any]
+            if is_json_schema_prompt(prompt):
+                text_format = {
+                    "format": {
+                        "type": "json_schema",
+                        "name": "categorization",
+                        "strict": True,
+                        "schema": categorization_json_schema(),
+                    }
+                }
+            else:
+                text_format = {"format": {"type": "json_object"}}
+            body: dict[str, Any] = {
+                "model": self.cfg.model,
+                "instructions": sys_msg,
+                "input": prompt,
+                "text": text_format,
+                "reasoning": {"effort": "low"},
+                "max_output_tokens": max(self.cfg.max_output_tokens, 2048),
+            }
+            if self._supports_temperature():
+                body["temperature"] = self.cfg.temperature
+            return body
+        body = {
+            "model": self.cfg.model,
+            "messages": [
+                {"role": "system", "content": sys_msg},
+                {"role": "user", "content": prompt},
+            ],
+            "response_format": {"type": "json_object"},
+            "max_completion_tokens": max(self.cfg.max_output_tokens, 2048),
+        }
+        if self._supports_temperature():
+            body["temperature"] = self.cfg.temperature
+        return body
+
+    def _batch_line(self, item: BatchItemRequest) -> str:
+        return json.dumps(
+            {
+                "custom_id": item.custom_id,
+                "method": "POST",
+                "url": self._batch_endpoint(),
+                "body": self._batch_body(item.prompt),
+            },
+            separators=(",", ":"),
+        )
+
+    async def submit_batch(self, items: list[BatchItemRequest]) -> BatchJobSubmission:
+        if not items:
+            raise ValueError("Cannot submit an empty provider batch")
+        client = self._get_client()
+        payload = "\n".join(self._batch_line(item) for item in items).encode("utf-8")
+        file_obj = io.BytesIO(payload)
+        file_obj.name = "investment-categorization-batch.jsonl"
+        uploaded = await client.files.create(file=file_obj, purpose="batch")
+        batch = await client.batches.create(
+            input_file_id=uploaded.id,
+            endpoint=self._batch_endpoint(),
+            completion_window="24h",
+            metadata={"source": "investment_materialize"},
+        )
+        return BatchJobSubmission(
+            provider_job_id=batch.id,
+            provider=self.cfg.validation_provider_name,
+            model=self.cfg.model,
+            item_count=len(items),
+            metadata={"input_file_id": uploaded.id},
+        )
+
+    async def poll_batch(self, provider_job_id: str) -> BatchJobState:
+        client = self._get_client()
+        batch = await client.batches.retrieve(provider_job_id)
+        status = _map_openai_batch_status(str(getattr(batch, "status", "")))
+        counts = getattr(batch, "request_counts", None)
+        total = int(getattr(counts, "total", 0) or 0)
+        completed = int(getattr(counts, "completed", 0) or 0)
+        failed = int(getattr(counts, "failed", 0) or 0)
+        return BatchJobState(
+            provider_job_id=provider_job_id,
+            status=status,
+            total_count=total,
+            completed_count=completed,
+            failed_count=failed,
+            metadata={
+                "output_file_id": getattr(batch, "output_file_id", None),
+                "error_file_id": getattr(batch, "error_file_id", None),
+            },
+        )
+
+    async def fetch_batch_results(self, provider_job_id: str) -> list[BatchItemResult]:
+        client = self._get_client()
+        batch = await client.batches.retrieve(provider_job_id)
+        results: list[BatchItemResult] = []
+        output_file_id = getattr(batch, "output_file_id", None)
+        error_file_id = getattr(batch, "error_file_id", None)
+        if output_file_id:
+            output_text = await _openai_file_text(client, output_file_id)
+            results.extend(_parse_openai_batch_lines(output_text))
+        if error_file_id:
+            error_text = await _openai_file_text(client, error_file_id)
+            results.extend(_parse_openai_batch_lines(error_text))
+        return results
+
+    async def cancel_batch(self, provider_job_id: str) -> None:
+        client = self._get_client()
+        await client.batches.cancel(provider_job_id)
 
     async def _retry_transient_error(
         self,
@@ -384,12 +688,12 @@ class OpenAIGPT5Provider(_OpenAIProviderBase):
 
                 # Final failure: return empty string (caller handles)
                 logger.error(
-                    "Invalid JSON returned from responses API (reason=%s, is_schema=%s, p_len=%d, budget=%d). Sample=%s",
+                    "Invalid JSON returned from responses API (reason=%s, is_schema=%s, p_len=%d, budget=%d, content_length=%d).",
                     finish_reason,
                     is_schema_prompt,
                     len(prompt),
                     token_budget,
-                    (content.strip()[:200] + "...") if content else "<empty>",
+                    len(content.strip()),
                 )
                 return self._completion_result("", usage)
 
@@ -477,12 +781,12 @@ class OpenAIGPTLegacyProvider(_OpenAIProviderBase):
 
                 is_schema_prompt = is_json_schema_prompt(prompt)
                 logger.error(
-                    "Invalid JSON returned from chat completions (reason=%s, is_schema=%s, p_len=%d, budget=%d). Sample=%s",
+                    "Invalid JSON returned from chat completions (reason=%s, is_schema=%s, p_len=%d, budget=%d, content_length=%d).",
                     finish_reason,
                     is_schema_prompt,
                     len(prompt),
                     max_tokens,
-                    (content.strip()[:200] + "...") if content else "<empty>",
+                    len(content.strip()),
                 )
                 return self._completion_result("", usage)
 

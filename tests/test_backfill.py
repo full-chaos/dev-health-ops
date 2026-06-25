@@ -260,6 +260,7 @@ def test_run_backfill_github_includes_prs_when_prs_target_enabled(
     )
 
     assert captured["provider"] == "github"
+    assert captured["include_issues"] is True
     assert captured["include_pull_requests"] is True
 
 
@@ -288,6 +289,61 @@ def test_run_backfill_github_excludes_prs_when_prs_target_disabled(
     )
 
     assert captured["provider"] == "github"
+    assert captured["include_issues"] is True
+    assert captured["include_pull_requests"] is False
+
+
+def test_run_backfill_github_prs_only_excludes_issues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_org = "55555555-5555-5555-5555-555555555555"
+    _patch_session_with_config(
+        monkeypatch,
+        _FakeConfig(config_org, provider="github", sync_targets=["prs"]),
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner.run_work_items_sync_job",
+        lambda *args, **kwargs: captured.update(kwargs),
+    )
+
+    run_backfill_for_config(
+        db_url="clickhouse://local",
+        sync_config_id="66666666-6666-6666-6666-666666666666",
+        org_id=None,
+        since=date(2026, 1, 1),
+        before=date(2026, 1, 3),
+    )
+
+    assert captured["provider"] == "github"
+    assert captured["include_issues"] is False
+    assert captured["include_pull_requests"] is True
+
+
+def test_run_backfill_github_empty_targets_default_to_issues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_org = "55555555-5555-5555-5555-555555555555"
+    _patch_session_with_config(
+        monkeypatch,
+        _FakeConfig(config_org, provider="github", sync_targets=[]),
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner.run_work_items_sync_job",
+        lambda *args, **kwargs: captured.update(kwargs),
+    )
+
+    run_backfill_for_config(
+        db_url="clickhouse://local",
+        sync_config_id="66666666-6666-6666-6666-666666666666",
+        org_id=None,
+        since=date(2026, 1, 1),
+        before=date(2026, 1, 3),
+    )
+
+    assert captured["provider"] == "github"
+    assert captured["include_issues"] is True
     assert captured["include_pull_requests"] is False
 
 
@@ -315,4 +371,5 @@ def test_run_backfill_non_github_leaves_include_pull_requests_unset(
     )
 
     assert captured["provider"] == "gitlab"
+    assert captured["include_issues"] is None
     assert captured["include_pull_requests"] is None

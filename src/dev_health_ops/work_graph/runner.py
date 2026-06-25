@@ -9,6 +9,10 @@ from dev_health_ops.work_graph.builder import BuildConfig, WorkGraphBuilder
 from dev_health_ops.work_graph.investment.materialize import (
     MaterializeConfig,
     materialize_investments,
+    resolve_llm_batch_min_items,
+    resolve_llm_batch_mode,
+    resolve_llm_batch_poll_interval_seconds,
+    resolve_llm_batch_timeout_seconds,
 )
 
 
@@ -233,6 +237,16 @@ def run_investment_materialization(ns: argparse.Namespace) -> int:
         force=getattr(ns, "force", False),
         org_id=org_id,
         allow_unscoped=getattr(ns, "allow_unscoped", False),
+        llm_batch_mode=resolve_llm_batch_mode(getattr(ns, "llm_batch_mode", None)),
+        llm_batch_min_items=resolve_llm_batch_min_items(
+            getattr(ns, "llm_batch_min_items", None)
+        ),
+        llm_batch_poll_interval_seconds=resolve_llm_batch_poll_interval_seconds(
+            getattr(ns, "llm_batch_poll_interval_seconds", None)
+        ),
+        llm_batch_timeout_seconds=resolve_llm_batch_timeout_seconds(
+            getattr(ns, "llm_batch_timeout_seconds", None)
+        ),
     )
 
     # CHAOS-2433 round-4 finding #1: the materializer writes work_unit_investments
@@ -458,6 +472,34 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     )
     investment_materialize.add_argument(
         "--force", action="store_true", help="Force re-materialization."
+    )
+    investment_materialize.add_argument(
+        "--llm-batch-mode",
+        choices=("sync", "auto", "provider_batch"),
+        default=argparse.SUPPRESS,
+        help="LLM categorization execution mode. Env: INVESTMENT_LLM_BATCH_MODE. "
+        "Default: sync.",
+    )
+    investment_materialize.add_argument(
+        "--llm-batch-min-items",
+        type=int,
+        default=argparse.SUPPRESS,
+        help="Minimum eligible LLM items before auto mode uses provider batch. "
+        "Env: INVESTMENT_LLM_BATCH_MIN_ITEMS. Default: 25.",
+    )
+    investment_materialize.add_argument(
+        "--llm-batch-poll-interval-seconds",
+        type=float,
+        default=argparse.SUPPRESS,
+        help="Provider batch polling interval for CLI/worker completion waits. "
+        "Env: INVESTMENT_LLM_BATCH_POLL_INTERVAL_SECONDS. Default: 30.",
+    )
+    investment_materialize.add_argument(
+        "--llm-batch-timeout-seconds",
+        type=float,
+        default=argparse.SUPPRESS,
+        help="Provider batch timeout for CLI/worker completion waits. "
+        "Env: INVESTMENT_LLM_BATCH_TIMEOUT_SECONDS. Default: 3000.",
     )
     investment_materialize.add_argument(
         "--allow-unscoped",

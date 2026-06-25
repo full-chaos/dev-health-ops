@@ -27,6 +27,12 @@ from .integrations import (
     SyncRunUnit,
     SyncRunUnitStatus,
 )
+from .investment_batch import (
+    InvestmentBatchItem,
+    InvestmentBatchItemStatus,
+    InvestmentBatchJob,
+    InvestmentBatchJobStatus,
+)
 from .invoices import Invoice, InvoiceLineItem
 from .ip_allowlist import OrgIPAllowlist
 from .licensing import (
@@ -113,6 +119,10 @@ __all__ = [
     "IntegrationDataset",
     "IntegrationProvider",
     "IntegrationSource",
+    "InvestmentBatchItem",
+    "InvestmentBatchItemStatus",
+    "InvestmentBatchJob",
+    "InvestmentBatchJobStatus",
     "Invoice",
     "InvoiceLineItem",
     "JobRun",

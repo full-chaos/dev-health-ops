@@ -76,6 +76,50 @@ dev-hops investment materialize \
 | `--persist-evidence-snippets` | **on** | Persist extractive evidence quotes to `work_unit_investment_quotes` |
 | `--no-persist-evidence-snippets` | off | Skip quote persistence for storage-constrained backfills |
 | `--force` | off | Force re-materialization |
+| `--llm-batch-mode` | `sync` | LLM execution mode: `sync`, `auto`, or `provider_batch`; env: `INVESTMENT_LLM_BATCH_MODE` |
+| `--llm-batch-min-items` | `25` | Minimum eligible items before `auto` chooses provider batch; env: `INVESTMENT_LLM_BATCH_MIN_ITEMS` |
+| `--llm-batch-poll-interval-seconds` | `30` | Poll interval for CLI/worker provider batch completion waits; env: `INVESTMENT_LLM_BATCH_POLL_INTERVAL_SECONDS` |
+| `--llm-batch-timeout-seconds` | `3000` | Timeout for CLI/worker provider batch completion waits; env: `INVESTMENT_LLM_BATCH_TIMEOUT_SECONDS` |
+
+### Provider batch mode
+
+The default `sync` mode keeps the existing one-request-per-WorkUnit behavior.
+`auto` uses provider batch only when the selected provider supports it and the
+eligible item count is at least `--llm-batch-min-items`; otherwise it logs the
+reason and uses `sync`. `provider_batch` requires provider batch support and fails
+clearly if the selected provider does not support it.
+
+Queue runners use the same defaults from environment when a task payload omits
+batch kwargs. Set these on Celery workers to enable batch mode for post-sync and
+scheduled materialization without changing dispatch call sites:
+
+```bash
+export INVESTMENT_LLM_BATCH_MODE=auto
+export INVESTMENT_LLM_BATCH_MIN_ITEMS=25
+export INVESTMENT_LLM_BATCH_POLL_INTERVAL_SECONDS=30
+export INVESTMENT_LLM_BATCH_TIMEOUT_SECONDS=3000
+```
+
+Explicit CLI flags or task kwargs override the environment for that run.
+
+Provider support:
+
+| Provider | Batch support | Notes |
+| --- | --- | --- |
+| `openai` | yes | Uses OpenAI JSONL batch jobs and maps `custom_id` back to WorkUnits. |
+| `qwen` | yes | Uses DashScope/OpenAI-compatible batch configuration; no OpenAI credentials required. |
+| `mock`, `none`, `anthropic`, `gemini`, local-only aliases | no | `auto` falls back to `sync`; `provider_batch` fails. |
+
+Batch job and per-item state is mutable control-plane data stored in Postgres.
+Final `work_unit_investments` and evidence quotes still write only through the
+ClickHouse investment sink. Every eligible item ends in one terminal outcome:
+reused/skipped, validated provider result, repaired result, or deterministic
+fallback. Only terminal validated or fallback outcomes are written to ClickHouse.
+
+HTTP-triggered sync paths enqueue or resume work without blocking the request.
+The Celery materialization chain does not advance membership projection/finalization
+until provider-batch outcomes have been written to ClickHouse, so downstream reads
+do not project from stale investments.
 
 For local OpenAI-compatible servers, set the endpoint before running the command:
 

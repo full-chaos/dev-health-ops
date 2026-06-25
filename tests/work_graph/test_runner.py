@@ -272,6 +272,70 @@ def test_cli_materialize_threads_inline_llm_credentials_and_concurrency():
     backfill_mock.assert_not_called()
 
 
+def test_cli_materialize_threads_batch_settings():
+    fake_materialize, materialize_mock, backfill_mock = (
+        _patch_materialize_and_projection()
+    )
+
+    with (
+        patch(
+            "dev_health_ops.work_graph.runner.materialize_investments",
+            fake_materialize,
+        ),
+        patch(
+            "dev_health_ops.work_graph.investment.backfill.backfill_memberships",
+            backfill_mock,
+        ),
+    ):
+        rc = run_investment_materialization(
+            _materialize_ns(
+                repo_id=["repo-uuid-1"],
+                llm_batch_mode="auto",
+                llm_batch_min_items=3,
+                llm_batch_poll_interval_seconds=0.5,
+                llm_batch_timeout_seconds=12.0,
+            )
+        )
+
+    assert rc == 0
+    config = materialize_mock.call_args.args[0]
+    assert config.llm_batch_mode == "auto"
+    assert config.llm_batch_min_items == 3
+    assert config.llm_batch_poll_interval_seconds == 0.5
+    assert config.llm_batch_timeout_seconds == 12.0
+    backfill_mock.assert_not_called()
+
+
+def test_cli_materialize_uses_env_batch_defaults(monkeypatch):
+    monkeypatch.setenv("INVESTMENT_LLM_BATCH_MODE", "auto")
+    monkeypatch.setenv("INVESTMENT_LLM_BATCH_MIN_ITEMS", "7")
+    monkeypatch.setenv("INVESTMENT_LLM_BATCH_POLL_INTERVAL_SECONDS", "1.5")
+    monkeypatch.setenv("INVESTMENT_LLM_BATCH_TIMEOUT_SECONDS", "42")
+    fake_materialize, materialize_mock, backfill_mock = (
+        _patch_materialize_and_projection()
+    )
+
+    with (
+        patch(
+            "dev_health_ops.work_graph.runner.materialize_investments",
+            fake_materialize,
+        ),
+        patch(
+            "dev_health_ops.work_graph.investment.backfill.backfill_memberships",
+            backfill_mock,
+        ),
+    ):
+        rc = run_investment_materialization(_materialize_ns(repo_id=["repo-uuid-1"]))
+
+    assert rc == 0
+    config = materialize_mock.call_args.args[0]
+    assert config.llm_batch_mode == "auto"
+    assert config.llm_batch_min_items == 7
+    assert config.llm_batch_poll_interval_seconds == 1.5
+    assert config.llm_batch_timeout_seconds == 42.0
+    backfill_mock.assert_not_called()
+
+
 def test_cli_materialize_threads_allow_unscoped():
     fake_materialize, materialize_mock, backfill_mock = (
         _patch_materialize_and_projection()

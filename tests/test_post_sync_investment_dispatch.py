@@ -324,6 +324,49 @@ def test_run_investment_materialize_empty_org_id_becomes_none() -> None:
     assert captured["org_id"] is None
 
 
+def test_run_investment_materialize_uses_env_batch_defaults(monkeypatch) -> None:
+    from typing import Any, cast
+
+    from dev_health_ops.workers.work_graph_tasks import run_investment_materialize
+
+    monkeypatch.setenv("INVESTMENT_LLM_BATCH_MODE", "auto")
+    monkeypatch.setenv("INVESTMENT_LLM_BATCH_MIN_ITEMS", "9")
+    monkeypatch.setenv("INVESTMENT_LLM_BATCH_POLL_INTERVAL_SECONDS", "2.5")
+    monkeypatch.setenv("INVESTMENT_LLM_BATCH_TIMEOUT_SECONDS", "99")
+    captured: dict[str, Any] = {}
+
+    class _FakeConfig:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+    with (
+        patch(
+            "dev_health_ops.work_graph.investment.materialize.MaterializeConfig",
+            _FakeConfig,
+        ),
+        patch(
+            "dev_health_ops.work_graph.investment.materialize.materialize_investments",
+            return_value=None,
+        ),
+        patch(
+            "dev_health_ops.workers.work_graph_tasks.run_async",
+            side_effect=closing_coroutine_runner(
+                {"components": 0, "records": 0, "quotes": 0}
+            ),
+        ),
+    ):
+        task = cast(Any, run_investment_materialize)
+        result = task.run(
+            db_url="clickhouse://x", org_id="org-123", llm_provider="mock"
+        )
+
+    assert result["status"] == "success"
+    assert captured["llm_batch_mode"] == "auto"
+    assert captured["llm_batch_min_items"] == 9
+    assert captured["llm_batch_poll_interval_seconds"] == 2.5
+    assert captured["llm_batch_timeout_seconds"] == 99.0
+
+
 def test_run_investment_materialize_resolves_worker_llm_credentials(
     monkeypatch,
 ) -> None:

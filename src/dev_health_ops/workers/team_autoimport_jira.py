@@ -11,6 +11,9 @@ from typing import Any, Protocol, TypeVar, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dev_health_ops.api.services.configuration.clickhouse_identity_drift import (
+    split_memberships_for_review,
+)
 from dev_health_ops.api.services.configuration.clickhouse_team_drift_projector import (
     project_provider_team_rows,
     project_team_rows_with_store,
@@ -327,6 +330,7 @@ def populate(
 
     sink, should_close = _sink_from_kwargs(scope, kwargs)
     try:
+        team_store = _team_store_from_kwargs(sink, kwargs)
         for link in _load_jira_legacy_links(sink, org_id=org_id):
             project_key = str(link.get("project_key") or "")
             ops_team_id = str(link.get("ops_team_id") or "")
@@ -362,7 +366,37 @@ def populate(
                 )
             )
 
-        team_store = _team_store_from_kwargs(sink, kwargs)
+        projects = _dedupe_projects(project_rows)
+        members = _dedupe_members(member_rows)
+        memberships = _dedupe_memberships(membership_rows)
+        ownership = _dedupe_ownership(ownership_rows)
+        review_store = team_store if team_store is not None else None
+        if review_store is not None:
+            memberships = _run(
+                split_memberships_for_review(
+                    store=review_store,
+                    org_id=org_id,
+                    rows=memberships,
+                    observed_team_ids=_observed_team_ids("jira", team_rows),
+                    discovered_at=now,
+                )
+            )
+        elif isinstance(sink, _REAL_CLICKHOUSE_SINK_TYPE):
+            from dev_health_ops.storage.clickhouse import ClickHouseStore
+
+            async def split_with_store() -> list[TeamMembershipRecord]:
+                async with ClickHouseStore(_clickhouse_dsn(scope)) as store:
+                    store.org_id = org_id
+                    return await split_memberships_for_review(
+                        store=store,
+                        org_id=org_id,
+                        rows=memberships,
+                        observed_team_ids=_observed_team_ids("jira", team_rows),
+                        discovered_at=now,
+                    )
+
+            memberships = _run(split_with_store())
+        _apply_roster(team_rows, memberships)
         if team_store is not None:
             _run(
                 project_team_rows_with_store(
@@ -387,10 +421,6 @@ def populate(
             )
         else:
             _run(sink.insert_teams(team_rows))
-        projects = _dedupe_projects(project_rows)
-        members = _dedupe_members(member_rows)
-        memberships = _dedupe_memberships(membership_rows)
-        ownership = _dedupe_ownership(ownership_rows)
         sink.write_projects(projects)
         sink.write_members(members)
         sink.write_team_memberships(memberships)
@@ -411,3 +441,22 @@ def populate(
         "team_repo_ownership_imported": 0,
         "work_item_team_attributions_imported": 0,
     }
+
+
+def _apply_roster(
+    team_rows: list[dict[str, Any]], rows: list[TeamMembershipRecord]
+) -> None:
+    roster: dict[str, list[str]] = {}
+    for row in rows:
+        roster_for_team = roster.setdefault(str(row.team_id), [])
+        for value in (row.raw_provider_user_id, row.raw_email):
+            if value and value not in roster_for_team:
+                roster_for_team.append(str(value))
+    for team_row in team_rows:
+        team_row["members"] = roster.get(str(team_row["id"]), [])
+
+
+def _observed_team_ids(
+    provider: str, team_rows: list[dict[str, Any]]
+) -> tuple[tuple[str, str], ...]:
+    return tuple((provider, str(row["id"])) for row in team_rows)

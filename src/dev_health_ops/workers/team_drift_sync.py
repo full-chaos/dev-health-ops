@@ -39,18 +39,33 @@ async def _sync_team_drift_async(org_id: str) -> dict[str, Any]:
     db_url = _validate_worker_clickhouse_uri(_get_db_url())
     configs = _configured_provider_syncs(org_id)
     provider_results: list[dict[str, Any]] = []
+    team_rows_by_provider: dict[str, list[dict[str, Any]]] = {}
+    discovered_at_by_provider: dict[str, datetime] = {}
+    complete_by_provider: dict[str, bool] = {}
     async with ClickHouseStore(db_url) as store:
         store.org_id = org_id
         for config in configs:
+            complete_by_provider.setdefault(config.provider, True)
             result = await _discover_provider_team_rows(org_id=org_id, config=config)
             provider_results.append(result)
             if result.get("status") != "success":
+                complete_by_provider[config.provider] = False
                 continue
+            if not _provider_scan_complete(result):
+                complete_by_provider[config.provider] = False
+            team_rows_by_provider.setdefault(config.provider, []).extend(
+                list(result["team_rows"])
+            )
+            discovered_at_by_provider[config.provider] = result["discovered_at"]
+
+        for provider, team_rows in team_rows_by_provider.items():
             await project_team_rows_with_store(
                 store=store,
                 org_id=org_id,
-                team_rows=list(result["team_rows"]),
-                discovered_at=result["discovered_at"],
+                provider=provider,
+                team_rows=team_rows,
+                discovered_at=discovered_at_by_provider[provider],
+                resolve_missing_provider_changes=complete_by_provider[provider],
             )
     return {
         "status": "success",
@@ -196,6 +211,7 @@ async def _discover_gitlab(*, org_id: str, config: _DriftSyncConfig) -> dict[str
     response = _success(
         config, _team_rows(org_id=org_id, teams=result.teams, now=now), now
     )
+    response["complete"] = not result.truncated
     if result.truncated:
         response["warnings"] = list(result.warnings)
     return response
@@ -217,7 +233,10 @@ async def _discover_jira(*, org_id: str, config: _DriftSyncConfig) -> dict[str, 
         api_token=jira_credentials.api_token,
         url=jira_credentials.base_url,
     )
-    return _success(config, _generic_team_rows(org_id, "jira", teams, now), now)
+    response = _success(config, _generic_team_rows(org_id, "jira", teams, now), now)
+    response["complete"] = False
+    response["warnings"] = ["jira_project_discovery_is_bounded"]
+    return response
 
 
 async def _discover_linear(*, org_id: str, config: _DriftSyncConfig) -> dict[str, Any]:
@@ -275,6 +294,14 @@ def _success(
         "teams_discovered": len(team_rows),
         "discovered_at": discovered_at,
     }
+
+
+def _provider_scan_complete(result: dict[str, Any]) -> bool:
+    return bool(
+        result.get("status") == "success"
+        and result.get("complete", True)
+        and not result.get("warnings")
+    )
 
 
 def _skipped(

@@ -233,6 +233,14 @@ def run_investment_materialization(ns: argparse.Namespace) -> int:
         force=getattr(ns, "force", False),
         org_id=org_id,
         allow_unscoped=getattr(ns, "allow_unscoped", False),
+        llm_batch_mode=getattr(ns, "llm_batch_mode", "sync"),
+        llm_batch_min_items=int(getattr(ns, "llm_batch_min_items", 25) or 25),
+        llm_batch_poll_interval_seconds=float(
+            getattr(ns, "llm_batch_poll_interval_seconds", 30.0) or 30.0
+        ),
+        llm_batch_timeout_seconds=float(
+            getattr(ns, "llm_batch_timeout_seconds", 3000.0) or 3000.0
+        ),
     )
 
     # CHAOS-2433 round-4 finding #1: the materializer writes work_unit_investments
@@ -458,6 +466,30 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     )
     investment_materialize.add_argument(
         "--force", action="store_true", help="Force re-materialization."
+    )
+    investment_materialize.add_argument(
+        "--llm-batch-mode",
+        choices=("sync", "auto", "provider_batch"),
+        default="sync",
+        help="LLM categorization execution mode (default: sync).",
+    )
+    investment_materialize.add_argument(
+        "--llm-batch-min-items",
+        type=int,
+        default=25,
+        help="Minimum eligible LLM items before auto mode uses provider batch.",
+    )
+    investment_materialize.add_argument(
+        "--llm-batch-poll-interval-seconds",
+        type=float,
+        default=30.0,
+        help="Provider batch polling interval for CLI/worker completion waits.",
+    )
+    investment_materialize.add_argument(
+        "--llm-batch-timeout-seconds",
+        type=float,
+        default=3000.0,
+        help="Provider batch timeout for CLI/worker completion waits.",
     )
     investment_materialize.add_argument(
         "--allow-unscoped",

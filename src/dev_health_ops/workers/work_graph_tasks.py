@@ -170,6 +170,10 @@ def run_investment_materialize(
     force: bool = False,
     org_id: str = "",
     allow_unscoped: bool = False,
+    llm_batch_mode: str = "sync",
+    llm_batch_min_items: int = 25,
+    llm_batch_poll_interval_seconds: float = 30.0,
+    llm_batch_timeout_seconds: float = 3000.0,
 ) -> dict:
     """Materialize investment distributions from work graph.
 
@@ -233,6 +237,10 @@ def run_investment_materialize(
             force=force,
             org_id=org_id or None,
             allow_unscoped=allow_unscoped,
+            llm_batch_mode=llm_batch_mode,
+            llm_batch_min_items=llm_batch_min_items,
+            llm_batch_poll_interval_seconds=llm_batch_poll_interval_seconds,
+            llm_batch_timeout_seconds=llm_batch_timeout_seconds,
         )
         stats = run_async(materialize_investments(config))
         return {"status": "success", "stats": stats}
@@ -273,6 +281,10 @@ def run_investment_materialize_chunk(
     computed_at: str = "",
     component_indexes: list[int] | None = None,
     chunk_index: int = 0,
+    llm_batch_mode: str = "sync",
+    llm_batch_min_items: int = 25,
+    llm_batch_poll_interval_seconds: float = 30.0,
+    llm_batch_timeout_seconds: float = 3000.0,
 ) -> dict:
     from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.llm import LLMAuthError, LLMError, resolve_provider_name
@@ -349,6 +361,11 @@ def run_investment_materialize_chunk(
             run_id=run_id,
             computed_at=shared_computed_at,
             component_indexes=component_indexes,
+            chunk_index=chunk_index,
+            llm_batch_mode=llm_batch_mode,
+            llm_batch_min_items=llm_batch_min_items,
+            llm_batch_poll_interval_seconds=llm_batch_poll_interval_seconds,
+            llm_batch_timeout_seconds=llm_batch_timeout_seconds,
         )
         stats = run_async(materialize_investments(config))
 
@@ -459,6 +476,10 @@ def dispatch_investment_materialize_partitioned(
     org_id: str = "",
     allow_unscoped: bool = False,
     chunk_size: int | None = None,
+    llm_batch_mode: str = "sync",
+    llm_batch_min_items: int = 25,
+    llm_batch_poll_interval_seconds: float = 30.0,
+    llm_batch_timeout_seconds: float = 3000.0,
 ) -> dict:
     from dev_health_ops.metrics.sinks.factory import create_sink
     from dev_health_ops.work_graph.investment.materialize import (
@@ -505,6 +526,10 @@ def dispatch_investment_materialize_partitioned(
             "llm_provider": llm_provider,
             "llm_model": llm_model,
             "llm_concurrency": llm_concurrency,
+            "llm_batch_mode": llm_batch_mode,
+            "llm_batch_min_items": llm_batch_min_items,
+            "llm_batch_poll_interval_seconds": llm_batch_poll_interval_seconds,
+            "llm_batch_timeout_seconds": llm_batch_timeout_seconds,
             "force": force,
             "org_id": org_id,
             "run_id": run_id,

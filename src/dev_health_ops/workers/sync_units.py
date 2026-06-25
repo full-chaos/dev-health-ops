@@ -50,13 +50,16 @@ from typing import Any, TypedDict
 
 from celery import chord, group
 from sqlalchemy import select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.models import (
     BackfillJob,
     JobRun,
     JobRunStatus,
+    SyncComputeCheckpoint,
+    SyncComputeCheckpointStatus,
+    SyncComputeType,
     SyncDispatchOutbox,
     SyncRun,
     SyncRunMode,
@@ -89,6 +92,7 @@ from dev_health_ops.workers.sync_bootstrap import (
     SyncTaskBootstrap,
     SyncTaskContext,
 )
+from dev_health_ops.workers.task_utils import _GIT_TARGETS, _WORK_ITEM_TARGETS
 
 logger = logging.getLogger(__name__)
 _runtime_cache = ProviderRuntimeCache()
@@ -859,6 +863,15 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
             stats=result_payload,
         )
         sync_observers_for_terminal_sync_run(session, run)
+        try:
+            _checkpoint_successful_compute_inputs(
+                session, units, checkpointed_at=completed_at
+            )
+        except SQLAlchemyError as exc:
+            logger.warning(
+                "finalize_sync_run.compute_checkpoint_failed",
+                extra={"sync_run_id": sync_run_id, "error": str(exc)},
+            )
         session.flush()
 
         nested = session.begin_nested()
@@ -908,6 +921,62 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
         "failed_units": failed_count,
         "post_sync_targets": post_sync_targets,
     }
+
+
+def _checkpoint_successful_compute_inputs(
+    session,
+    units: list[SyncRunUnit],
+    *,
+    checkpointed_at: datetime,
+) -> None:
+    from dev_health_ops.sync.planner import map_datasets_to_legacy_targets
+
+    work_graph_targets = _GIT_TARGETS | _WORK_ITEM_TARGETS
+    for unit in units:
+        if unit.status != SyncRunUnitStatus.SUCCESS.value:
+            continue
+        legacy_targets = map_datasets_to_legacy_targets(
+            str(unit.provider), [str(unit.dataset_key)]
+        )
+        if not legacy_targets.intersection(work_graph_targets):
+            continue
+        checkpoint = SyncComputeCheckpoint(
+            org_id=str(unit.org_id),
+            sync_run_id=unit.sync_run_id,
+            sync_run_unit_id=unit.id,
+            source_id=unit.source_id,
+            provider=str(unit.provider),
+            dataset_key=str(unit.dataset_key),
+            compute_type=SyncComputeType.WORK_GRAPH.value,
+            status=SyncComputeCheckpointStatus.READY.value,
+            window_start=unit.since_at,
+            window_end=unit.before_at,
+            checkpointed_at=checkpointed_at,
+            checkpoint_metadata={
+                "cost_class": str(unit.cost_class),
+                "mode": str(unit.mode),
+                "legacy_targets": sorted(legacy_targets),
+            },
+        )
+        nested = session.begin_nested()
+        try:
+            session.add(checkpoint)
+            session.flush()
+        except IntegrityError:
+            nested.rollback()
+        except SQLAlchemyError as exc:
+            nested.rollback()
+            logger.warning(
+                "finalize_sync_run.compute_checkpoint_unit_failed",
+                extra={
+                    "sync_run_id": str(unit.sync_run_id),
+                    "unit_id": str(unit.id),
+                    "compute_type": SyncComputeType.WORK_GRAPH.value,
+                    "error": str(exc),
+                },
+            )
+        else:
+            nested.commit()
 
 
 def _run_has_dispatching_or_running_units(session, run_uuid: uuid.UUID) -> bool:

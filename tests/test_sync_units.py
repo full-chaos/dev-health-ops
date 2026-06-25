@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from dev_health_ops.models import (
@@ -18,6 +19,9 @@ from dev_health_ops.models import (
     JobRun,
     JobRunStatus,
     ScheduledJob,
+    SyncComputeCheckpoint,
+    SyncComputeCheckpointStatus,
+    SyncComputeType,
     SyncConfiguration,
     SyncDispatchOutbox,
     SyncRun,
@@ -1147,6 +1151,122 @@ def test_finalize_aggregates_partial_failed(db_session, monkeypatch):
     assert run.failed_units == 1
     assert config.last_sync_success is False
     assert config.last_sync_error == "Sync run completed with failed units"
+
+
+def test_finalize_writes_ready_compute_checkpoints_for_successful_work_graph_units(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(db_session)
+    unit.status = SyncRunUnitStatus.SUCCESS.value
+    unit.since_at = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    unit.before_at = datetime(2026, 6, 2, tzinfo=timezone.utc)
+    failed_prs = SyncRunUnit(
+        org_id=run.org_id,
+        sync_run_id=run.id,
+        integration_id=unit.integration_id,
+        source_id=unit.source_id,
+        provider="github",
+        dataset_key="prs",
+        cost_class="medium",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunUnitStatus.FAILED.value,
+        attempts=1,
+    )
+    deployments = SyncRunUnit(
+        org_id=run.org_id,
+        sync_run_id=run.id,
+        integration_id=unit.integration_id,
+        source_id=unit.source_id,
+        provider="github",
+        dataset_key="deployments",
+        cost_class="medium",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunUnitStatus.SUCCESS.value,
+        attempts=1,
+    )
+    run.total_units = 3
+    db_session.add_all([failed_prs, deployments])
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+
+    result = sync_units.finalize_sync_run(str(run.id))
+    second = sync_units.finalize_sync_run(str(run.id))
+
+    assert result["status"] == "finalized"
+    assert second["status"] == "already_dispatched"
+    checkpoints = db_session.query(SyncComputeCheckpoint).all()
+    assert len(checkpoints) == 1
+    checkpoint = checkpoints[0]
+    assert checkpoint.sync_run_unit_id == unit.id
+    assert checkpoint.compute_type == SyncComputeType.WORK_GRAPH.value
+    assert checkpoint.status == SyncComputeCheckpointStatus.READY.value
+    assert checkpoint.window_start == unit.since_at
+    assert checkpoint.window_end == unit.before_at
+    assert checkpoint.completed_at is None
+    assert checkpoint.checkpoint_metadata == {
+        "cost_class": "medium",
+        "mode": SyncRunMode.INCREMENTAL.value,
+        "legacy_targets": ["git"],
+    }
+
+
+def test_finalize_does_not_checkpoint_until_all_units_terminal(db_session, monkeypatch):
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(db_session)
+    unit.status = SyncRunUnitStatus.SUCCESS.value
+    running = SyncRunUnit(
+        org_id=run.org_id,
+        sync_run_id=run.id,
+        integration_id=unit.integration_id,
+        source_id=unit.source_id,
+        provider="github",
+        dataset_key="prs",
+        cost_class="medium",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunUnitStatus.RUNNING.value,
+        attempts=1,
+    )
+    run.total_units = 2
+    db_session.add(running)
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+
+    result = sync_units.finalize_sync_run(str(run.id))
+
+    assert result["status"] == "pending"
+    assert db_session.query(SyncComputeCheckpoint).count() == 0
+
+
+def test_finalize_continues_when_compute_checkpointing_fails(db_session, monkeypatch):
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(db_session)
+    unit.status = SyncRunUnitStatus.SUCCESS.value
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+
+    def fail_checkpoint(*_args, **_kwargs):
+        raise SQLAlchemyError("checkpoint unavailable")
+
+    monkeypatch.setattr(
+        sync_units, "_checkpoint_successful_compute_inputs", fail_checkpoint
+    )
+
+    result = sync_units.finalize_sync_run(str(run.id))
+
+    db_session.refresh(run)
+    assert result["status"] == "finalized"
+    assert run.status == SyncRunStatus.SUCCESS.value
+    assert db_session.query(SyncRunPostDispatch).count() == 1
+    assert (
+        db_session.query(SyncDispatchOutbox)
+        .filter(SyncDispatchOutbox.kind == OUTBOX_KIND_POST_SYNC)
+        .count()
+        == 1
+    )
 
 
 def test_build_post_sync_dispatch_payload_matches_finalize_window_fields(db_session):

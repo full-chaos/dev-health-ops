@@ -169,6 +169,10 @@ def _build_prompt(source_block: str) -> str:
     return f"{prompt}\n\nSource text (quotes must be exact substrings):\n(EMPTY)"
 
 
+def build_categorization_prompt(bundle: TextBundle) -> str:
+    return _build_prompt(bundle.source_block)
+
+
 def _build_repair_prompt(errors: list[str], source_block: str) -> str:
     errors_text = "\n".join(f"- {err}" for err in errors)
     repair = REPAIR_PROMPT.format(errors=errors_text)
@@ -191,7 +195,32 @@ async def categorize_text_bundle(
     output_tokens = _token_count(raw_completion.output_tokens)
     llm_calls = 1
     resolved_model = raw_completion.model
-    payload, parse_errors = parse_llm_json(raw_completion.text)
+    return await categorize_text_bundle_completion(
+        bundle,
+        raw_completion.text,
+        llm_provider=llm_provider,
+        llm_model=llm_model,
+        provider=provider,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        llm_calls=llm_calls,
+        resolved_model=resolved_model,
+    )
+
+
+async def categorize_text_bundle_completion(
+    bundle: TextBundle,
+    completion_text: str,
+    *,
+    llm_provider: str,
+    llm_model: str | None = None,
+    provider: LLMProvider | None = None,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    llm_calls: int = 0,
+    resolved_model: str | None = None,
+) -> CategorizationOutcome:
+    payload, parse_errors = parse_llm_json(completion_text)
     if parse_errors:
         validation = LLMValidationResult(
             ok=False,

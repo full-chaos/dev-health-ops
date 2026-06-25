@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import uuid
@@ -10,7 +11,10 @@ from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from time import monotonic
 from typing import Any
+
+from sqlalchemy.exc import IntegrityError
 
 from dev_health_ops.llm import (
     LLMAuthError,
@@ -24,6 +28,13 @@ from dev_health_ops.llm import (
     resolve_model_name,
     resolve_provider_name,
 )
+from dev_health_ops.llm.providers.batch import (
+    BatchItemRequest,
+    BatchItemResult,
+    BatchItemStatus,
+    BatchJobStatus,
+    batch_capability_for,
+)
 from dev_health_ops.llm.providers.none import NoneProvider
 from dev_health_ops.metrics.llm_token_usage import write_llm_token_usage
 from dev_health_ops.metrics.schemas import (
@@ -33,10 +44,16 @@ from dev_health_ops.metrics.schemas import (
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.metrics.sinks.factory import create_sink
 from dev_health_ops.work_graph.ids import parse_commit_from_id, parse_pr_from_id
+from dev_health_ops.work_graph.investment.batch_store import (
+    InvestmentBatchItemSpec,
+    InvestmentBatchStore,
+)
 from dev_health_ops.work_graph.investment.categorize import (
     PROMPT_VERSION,
     TAXONOMY_VERSION,
+    build_categorization_prompt,
     categorize_text_bundle,
+    categorize_text_bundle_completion,
     fallback_outcome,
 )
 from dev_health_ops.work_graph.investment.constants import (
@@ -133,6 +150,435 @@ def _effective_model_version(provider: str, model: str | None) -> str:
         f"provider={provider};model={resolved_model};"
         f"taxonomy={TAXONOMY_VERSION};prompt={PROMPT_VERSION}"
     )
+
+
+def _batch_contract_version() -> str:
+    return f"taxonomy={TAXONOMY_VERSION};prompt={PROMPT_VERSION};batch=v1"
+
+
+def _batch_error_label(exc: Exception) -> str:
+    return type(exc).__name__
+
+
+def _batch_correlation_id(run_id: str, chunk_index: int | None) -> str:
+    if chunk_index is None:
+        return run_id
+    return f"{run_id}:chunk:{chunk_index}"
+
+
+def _batch_custom_id(batch_correlation_id: str, component_index: int) -> str:
+    return f"{batch_correlation_id}-{component_index}"
+
+
+def _create_batch_job(
+    *,
+    org_id: str,
+    provider: str,
+    model: str,
+    run_id: str,
+    local_correlation_id: str,
+    specs: list[InvestmentBatchItemSpec],
+) -> str:
+    from dev_health_ops.db import get_postgres_session_sync
+
+    with get_postgres_session_sync() as session:
+        store = InvestmentBatchStore(session, org_id)
+        existing = store.get_job_by_correlation(local_correlation_id)
+        if existing is not None:
+            return str(existing.id)
+        try:
+            job = store.create_job(
+                provider=provider,
+                model=model,
+                run_id=run_id,
+                prompt_version=PROMPT_VERSION,
+                contract_version=_batch_contract_version(),
+                items=specs,
+                local_correlation_id=local_correlation_id,
+            )
+        except IntegrityError:
+            session.rollback()
+            store = InvestmentBatchStore(session, org_id)
+            existing = store.get_job_by_correlation(local_correlation_id)
+            if existing is None:
+                raise
+            return str(existing.id)
+        return str(job.id)
+
+
+def _transition_batch_job(
+    *,
+    org_id: str,
+    job_id: str,
+    status: str,
+    provider_job_id: str | None = None,
+    error: str | None = None,
+    provider_metadata: dict[str, Any] | None = None,
+) -> None:
+    from dev_health_ops.db import get_postgres_session_sync
+
+    with get_postgres_session_sync() as session:
+        store = InvestmentBatchStore(session, org_id)
+        job = store.get_job(job_id)
+        if job is not None:
+            store.transition_job(
+                job,
+                status,
+                provider_job_id=provider_job_id,
+                error=error,
+                provider_metadata=provider_metadata,
+            )
+
+
+def _transition_batch_item(
+    *,
+    org_id: str,
+    job_id: str,
+    custom_id: str,
+    status: str,
+    provider_response: dict[str, Any] | None = None,
+    provider_error: dict[str, Any] | None = None,
+    audit: dict[str, Any] | None = None,
+) -> None:
+    from dev_health_ops.db import get_postgres_session_sync
+
+    with get_postgres_session_sync() as session:
+        store = InvestmentBatchStore(session, org_id)
+        item = store.get_item_by_custom_id(job_id=job_id, custom_id=custom_id)
+        if item is not None:
+            store.transition_item(
+                item,
+                status,
+                provider_response=provider_response,
+                provider_error=provider_error,
+                audit=audit,
+            )
+
+
+def _update_batch_counts(*, org_id: str, job_id: str) -> None:
+    from dev_health_ops.db import get_postgres_session_sync
+
+    with get_postgres_session_sync() as session:
+        store = InvestmentBatchStore(session, org_id)
+        job = store.get_job(job_id)
+        if job is not None:
+            completed, failed = store.terminal_counts(job)
+            terminal_status = job.status
+            if job.status not in {
+                BatchJobStatus.FAILED.value,
+                BatchJobStatus.CANCELLED.value,
+                BatchJobStatus.EXPIRED.value,
+            } and completed >= int(job.total_items or 0):
+                terminal_status = BatchJobStatus.SUCCEEDED.value
+            store.transition_job(job, terminal_status)
+            job.completed_items = completed
+            job.failed_items = failed
+            session.flush()
+
+
+async def _fallback_unresolved_batch_items(
+    *,
+    org_id: str,
+    job_id: str,
+    pending_llm: list[tuple[int, Any]],
+    run_id: str,
+    batch_correlation_id: str,
+    audit_reason: str,
+    provider_error: dict[str, Any] | None = None,
+) -> dict[int, Any]:
+    outcomes: dict[int, Any] = {}
+    for idx, _bundle in pending_llm:
+        outcomes[idx] = fallback_outcome("llm_task_failed")
+        await asyncio.to_thread(
+            _transition_batch_item,
+            org_id=org_id,
+            job_id=job_id,
+            custom_id=_batch_custom_id(batch_correlation_id, idx),
+            status=BatchItemStatus.FALLBACK.value,
+            provider_error=provider_error,
+            audit={"reason": audit_reason},
+        )
+    await asyncio.to_thread(_update_batch_counts, org_id=org_id, job_id=job_id)
+    return outcomes
+
+
+async def _categorize_with_provider_batch(
+    *,
+    config: MaterializeConfig,
+    provider_instance: Any,
+    resolved_llm_provider: str,
+    model_version: str,
+    run_id: str,
+    pending_llm: list[tuple[int, Any]],
+    preprocessed: dict[int, PreprocessedComponent],
+) -> dict[int, Any] | None:
+    if not pending_llm:
+        return {}
+    capability = batch_capability_for(provider_instance, config.llm_model)
+    if not capability.supported:
+        if config.llm_batch_mode == "provider_batch":
+            raise ValueError(
+                f"LLM provider '{resolved_llm_provider}' does not support provider_batch"
+            )
+        logger.info(
+            "LLM batch mode auto fell back to sync: provider=%s reason=%s",
+            resolved_llm_provider,
+            capability.reason or "unsupported",
+        )
+        return None
+    if (
+        config.llm_batch_mode == "auto"
+        and len(pending_llm) < config.llm_batch_min_items
+    ):
+        logger.info(
+            "LLM batch mode auto fell back to sync: pending=%d threshold=%d",
+            len(pending_llm),
+            config.llm_batch_min_items,
+        )
+        return None
+
+    org_id = config.org_id or ""
+    batch_correlation_id = _batch_correlation_id(run_id, config.chunk_index)
+    specs = [
+        InvestmentBatchItemSpec(
+            work_unit_id=preprocessed[idx].unit_id,
+            component_index=idx,
+            custom_id=_batch_custom_id(batch_correlation_id, idx),
+            input_hash=bundle.input_hash,
+        )
+        for idx, bundle in pending_llm
+    ]
+    job_id = await asyncio.to_thread(
+        _create_batch_job,
+        org_id=org_id,
+        provider=resolved_llm_provider,
+        model=model_version,
+        run_id=run_id,
+        local_correlation_id=batch_correlation_id,
+        specs=specs,
+    )
+    await asyncio.to_thread(
+        _transition_batch_job,
+        org_id=org_id,
+        job_id=job_id,
+        status=BatchJobStatus.SUBMITTING.value,
+    )
+
+    requests = [
+        BatchItemRequest(
+            custom_id=_batch_custom_id(batch_correlation_id, idx),
+            prompt=build_categorization_prompt(bundle),
+            metadata={
+                "org_id": org_id,
+                "work_unit_id": preprocessed[idx].unit_id,
+                "component_index": idx,
+                "input_hash": bundle.input_hash,
+            },
+        )
+        for idx, bundle in pending_llm
+    ]
+    try:
+        submission = await provider_instance.submit_batch(requests)
+    except Exception as exc:
+        await asyncio.to_thread(
+            _transition_batch_job,
+            org_id=org_id,
+            job_id=job_id,
+            status=BatchJobStatus.FAILED.value,
+            error=_batch_error_label(exc),
+        )
+        raise
+
+    await asyncio.to_thread(
+        _transition_batch_job,
+        org_id=org_id,
+        job_id=job_id,
+        status=BatchJobStatus.SUBMITTED.value,
+        provider_job_id=submission.provider_job_id,
+        provider_metadata=submission.metadata,
+    )
+    for request in requests:
+        await asyncio.to_thread(
+            _transition_batch_item,
+            org_id=org_id,
+            job_id=job_id,
+            custom_id=request.custom_id,
+            status=BatchItemStatus.SUBMITTED.value,
+        )
+
+    started = monotonic()
+    final_state = None
+    while monotonic() - started < config.llm_batch_timeout_seconds:
+        final_state = await provider_instance.poll_batch(submission.provider_job_id)
+        await asyncio.to_thread(
+            _transition_batch_job,
+            org_id=org_id,
+            job_id=job_id,
+            status=final_state.status.value,
+            provider_metadata=final_state.metadata,
+        )
+        if final_state.status in {
+            BatchJobStatus.SUCCEEDED,
+            BatchJobStatus.FAILED,
+            BatchJobStatus.CANCELLED,
+            BatchJobStatus.EXPIRED,
+        }:
+            break
+        await asyncio.sleep(config.llm_batch_poll_interval_seconds)
+
+    if final_state is None or final_state.status not in {
+        BatchJobStatus.SUCCEEDED,
+        BatchJobStatus.FAILED,
+        BatchJobStatus.CANCELLED,
+        BatchJobStatus.EXPIRED,
+    }:
+        cancel_batch = getattr(provider_instance, "cancel_batch", None)
+        if callable(cancel_batch):
+            try:
+                maybe_cancelled = cancel_batch(submission.provider_job_id)
+                if inspect.isawaitable(maybe_cancelled):
+                    await maybe_cancelled
+            except Exception as exc:
+                logger.warning(
+                    "Provider batch cancellation failed: provider=%s job_id=%s error_type=%s",
+                    resolved_llm_provider,
+                    submission.provider_job_id,
+                    _batch_error_label(exc),
+                )
+        await asyncio.to_thread(
+            _transition_batch_job,
+            org_id=org_id,
+            job_id=job_id,
+            status=BatchJobStatus.EXPIRED.value,
+            error="provider batch timed out",
+        )
+        return await _fallback_unresolved_batch_items(
+            org_id=org_id,
+            job_id=job_id,
+            pending_llm=pending_llm,
+            run_id=run_id,
+            batch_correlation_id=batch_correlation_id,
+            audit_reason="provider_batch_timeout",
+        )
+
+    if final_state.status != BatchJobStatus.SUCCEEDED:
+        return await _fallback_unresolved_batch_items(
+            org_id=org_id,
+            job_id=job_id,
+            pending_llm=pending_llm,
+            run_id=run_id,
+            batch_correlation_id=batch_correlation_id,
+            audit_reason=f"provider_batch_{final_state.status.value}",
+            provider_error={"status": final_state.status.value},
+        )
+
+    try:
+        raw_results = await provider_instance.fetch_batch_results(
+            submission.provider_job_id
+        )
+    except Exception as exc:
+        await asyncio.to_thread(
+            _transition_batch_job,
+            org_id=org_id,
+            job_id=job_id,
+            status=BatchJobStatus.FAILED.value,
+            error=_batch_error_label(exc),
+        )
+        return await _fallback_unresolved_batch_items(
+            org_id=org_id,
+            job_id=job_id,
+            pending_llm=pending_llm,
+            run_id=run_id,
+            batch_correlation_id=batch_correlation_id,
+            audit_reason="provider_batch_fetch_failed",
+            provider_error={"error_type": _batch_error_label(exc)},
+        )
+    results_by_custom_id: dict[str, BatchItemResult] = {
+        result.custom_id: result for result in raw_results if result.custom_id
+    }
+    outcomes: dict[int, Any] = {}
+    for idx, bundle in pending_llm:
+        custom_id = _batch_custom_id(batch_correlation_id, idx)
+        item_result = results_by_custom_id.get(custom_id)
+        if item_result is None:
+            outcome = fallback_outcome("llm_task_failed")
+            await asyncio.to_thread(
+                _transition_batch_item,
+                org_id=org_id,
+                job_id=job_id,
+                custom_id=custom_id,
+                status=BatchItemStatus.FALLBACK.value,
+                audit={"reason": "missing_batch_result"},
+            )
+        elif item_result.succeeded and item_result.raw_response is not None:
+            try:
+                outcome = await categorize_text_bundle_completion(
+                    bundle,
+                    item_result.raw_response,
+                    llm_provider=resolved_llm_provider,
+                    llm_model=config.llm_model,
+                    provider=provider_instance,
+                    input_tokens=int(
+                        item_result.provider_metadata.get("input_tokens") or 0
+                    ),
+                    output_tokens=int(
+                        item_result.provider_metadata.get("output_tokens") or 0
+                    ),
+                    llm_calls=1,
+                    resolved_model=model_version,
+                )
+            except Exception as exc:
+                outcome = fallback_outcome("llm_task_failed")
+                await asyncio.to_thread(
+                    _transition_batch_item,
+                    org_id=org_id,
+                    job_id=job_id,
+                    custom_id=custom_id,
+                    status=BatchItemStatus.FALLBACK.value,
+                    provider_error={"error_type": _batch_error_label(exc)},
+                    audit={"reason": "batch_result_validation_failed"},
+                )
+                outcomes[idx] = outcome
+                continue
+            status = (
+                BatchItemStatus.VALIDATED.value
+                if outcome.status == "ok"
+                else BatchItemStatus.REPAIRED.value
+                if outcome.status == "repaired"
+                else BatchItemStatus.FALLBACK.value
+            )
+            await asyncio.to_thread(
+                _transition_batch_item,
+                org_id=org_id,
+                job_id=job_id,
+                custom_id=custom_id,
+                status=status,
+                provider_response={"metadata": item_result.provider_metadata},
+                audit={"status": outcome.status, "errors": outcome.errors},
+            )
+        else:
+            outcome = fallback_outcome("llm_task_failed")
+            await asyncio.to_thread(
+                _transition_batch_item,
+                org_id=org_id,
+                job_id=job_id,
+                custom_id=custom_id,
+                status=BatchItemStatus.FALLBACK.value,
+                provider_error={
+                    "code": item_result.error_code,
+                    "message": item_result.error_message,
+                    "metadata": item_result.provider_metadata,
+                },
+            )
+        outcomes[idx] = outcome
+    await asyncio.to_thread(_update_batch_counts, org_id=org_id, job_id=job_id)
+    logger.info(
+        "Completed provider batch categorization: provider=%s items=%d job_id=%s",
+        resolved_llm_provider,
+        len(outcomes),
+        job_id,
+    )
+    return outcomes
 
 
 def _fetch_existing_investment_keys(
@@ -269,7 +715,24 @@ class MaterializeConfig:
     run_id: str | None = None
     computed_at: datetime | None = None
     component_indexes: list[int] | None = None
+    chunk_index: int | None = None
     allow_unscoped: bool = False
+    llm_batch_mode: str = "sync"
+    llm_batch_min_items: int = 25
+    llm_batch_poll_interval_seconds: float = 30.0
+    llm_batch_timeout_seconds: float = 3000.0
+
+    def __post_init__(self) -> None:
+        if self.llm_batch_mode not in {"sync", "auto", "provider_batch"}:
+            raise ValueError(
+                "llm_batch_mode must be one of: sync, auto, provider_batch"
+            )
+        if self.llm_batch_min_items < 1:
+            raise ValueError("llm_batch_min_items must be >= 1")
+        if self.llm_batch_poll_interval_seconds <= 0:
+            raise ValueError("llm_batch_poll_interval_seconds must be > 0")
+        if self.llm_batch_timeout_seconds <= 0:
+            raise ValueError("llm_batch_timeout_seconds must be > 0")
 
 
 def _build_components(
@@ -835,7 +1298,21 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
             finally:
                 await adaptive_concurrency.release()
 
-        if pending_llm:
+        batch_results: dict[int, Any] | None = None
+        if pending_llm and config.llm_batch_mode != "sync":
+            batch_results = await _categorize_with_provider_batch(
+                config=config,
+                provider_instance=provider_instance,
+                resolved_llm_provider=resolved_llm_provider,
+                model_version=model_version,
+                run_id=run_id,
+                pending_llm=pending_llm,
+                preprocessed=preprocessed,
+            )
+            if batch_results is not None:
+                llm_results.update(batch_results)
+
+        if pending_llm and batch_results is None:
             logger.info(
                 "Starting parallel LLM categorization (%d tasks, concurrency=%d)",
                 len(pending_llm),

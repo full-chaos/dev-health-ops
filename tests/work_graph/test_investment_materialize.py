@@ -12,6 +12,16 @@ from pathlib import Path
 import pytest
 
 from dev_health_ops.llm import LLMAuthError, LLMRateLimitError
+from dev_health_ops.llm.providers.batch import (
+    BatchCapability,
+    BatchItemRequest,
+    BatchItemResult,
+    BatchItemStatus,
+    BatchJobState,
+    BatchJobStatus,
+    BatchJobSubmission,
+    BatchProviderFeature,
+)
 from dev_health_ops.metrics.schemas import (
     LLMTokenUsageRecord,
     WorkUnitInvestmentEvidenceQuoteRecord,
@@ -23,6 +33,7 @@ from dev_health_ops.work_graph.investment.materialize import (
     MaterializeConfig,
     materialize_investments,
 )
+from dev_health_ops.work_graph.investment.utils import ensure_full_subcategory_vector
 
 
 class FakeSink:
@@ -69,6 +80,140 @@ class FakeSink:
 class FakeProvider:
     async def aclose(self) -> None:
         return None
+
+
+class FakeBatchProvider(FakeProvider):
+    def __init__(self, status: BatchJobStatus = BatchJobStatus.SUCCEEDED) -> None:
+        self.requests: list[BatchItemRequest] = []
+        self.status = status
+        self.fetch_calls = 0
+        self.cancel_calls = 0
+
+    def batch_capability(self, model=None):
+        return BatchCapability(
+            provider="openai",
+            model=model or "gpt-test",
+            supported=True,
+            features=frozenset(
+                {
+                    BatchProviderFeature.SUBMIT,
+                    BatchProviderFeature.POLL,
+                    BatchProviderFeature.FETCH_RESULTS,
+                }
+            ),
+        )
+
+    async def submit_batch(self, items):
+        self.requests = list(items)
+        return BatchJobSubmission(
+            provider_job_id="provider-batch-1",
+            provider="openai",
+            model="gpt-test",
+            item_count=len(items),
+        )
+
+    async def poll_batch(self, provider_job_id):
+        return BatchJobState(
+            provider_job_id=provider_job_id,
+            status=self.status,
+            total_count=len(self.requests),
+            completed_count=len(self.requests)
+            if self.status == BatchJobStatus.SUCCEEDED
+            else 0,
+            failed_count=len(self.requests)
+            if self.status == BatchJobStatus.FAILED
+            else 0,
+        )
+
+    async def fetch_batch_results(self, provider_job_id):
+        self.fetch_calls += 1
+        payload = {
+            "subcategories": ensure_full_subcategory_vector(
+                {"feature_delivery.roadmap": 1.0}
+            ),
+            "evidence_quotes": [
+                {"quote": "Ship workflow improvement 1", "source": "issue", "id": "E1"}
+            ],
+            "uncertainty": "Limited evidence.",
+        }
+        return [
+            BatchItemResult(
+                custom_id=request.custom_id,
+                raw_response=json.dumps(payload),
+                provider_metadata={"input_tokens": 11, "output_tokens": 7},
+            )
+            for request in self.requests
+        ]
+
+    async def cancel_batch(self, provider_job_id):
+        self.cancel_calls += 1
+
+
+class PartialBatchProvider(FakeBatchProvider):
+    async def fetch_batch_results(self, provider_job_id):
+        self.fetch_calls += 1
+        results: list[BatchItemResult] = []
+        for idx, request in enumerate(self.requests):
+            if idx == 0:
+                payload = {
+                    "subcategories": ensure_full_subcategory_vector(
+                        {"feature_delivery.roadmap": 1.0}
+                    ),
+                    "evidence_quotes": [
+                        {
+                            "quote": "Ship workflow improvement 1",
+                            "source": "issue",
+                            "id": "E1",
+                        }
+                    ],
+                    "uncertainty": "Limited evidence.",
+                }
+                results.append(
+                    BatchItemResult(
+                        custom_id=request.custom_id,
+                        raw_response=json.dumps(payload),
+                        provider_metadata={"input_tokens": 11, "output_tokens": 7},
+                    )
+                )
+            elif idx == 1:
+                results.append(
+                    BatchItemResult(
+                        custom_id=request.custom_id,
+                        error_code="provider_item_failed",
+                        error_message="provider rejected item",
+                        provider_metadata={"status_code": 429},
+                    )
+                )
+        return results
+
+
+def test_materialize_config_defaults_to_sync_batch_mode():
+    config = MaterializeConfig(
+        dsn="clickhouse://localhost:9000/default",
+        from_ts=datetime.now(timezone.utc) - timedelta(days=1),
+        to_ts=datetime.now(timezone.utc),
+        repo_ids=None,
+        llm_provider="mock",
+        persist_evidence_snippets=True,
+        llm_model=None,
+    )
+
+    assert config.llm_batch_mode == "sync"
+    assert config.llm_batch_min_items == 25
+
+
+def test_materialize_config_rejects_invalid_batch_mode():
+    with pytest.raises(ValueError, match="llm_batch_mode"):
+        MaterializeConfig(
+            dsn="clickhouse://localhost:9000/default",
+            from_ts=datetime.now(timezone.utc) - timedelta(days=1),
+            to_ts=datetime.now(timezone.utc),
+            repo_ids=None,
+            llm_provider="mock",
+            persist_evidence_snippets=True,
+            llm_model=None,
+            llm_batch_mode="invalid",
+        )
 
 
 def _sample_data():
@@ -289,6 +434,366 @@ async def test_materialize_mock_provider_permits_empty_org(monkeypatch):
 
     assert stats["records"] == 1
     assert sink.investment_rows[0].org_id == ""
+
+
+@pytest.mark.asyncio
+async def test_materialize_provider_batch_writes_investment_records(monkeypatch):
+    _repo_ids, edges, work_items, commits = _multi_component_data(1)
+    sink = FakeSink()
+    batch_provider = FakeBatchProvider()
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.get_provider",
+        lambda *args, **kwargs: batch_provider,
+    )
+    _patch_queries(monkeypatch, edges, work_items, commits)
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._create_batch_job",
+        lambda **kwargs: "batch-job-1",
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._transition_batch_job",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._transition_batch_item",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._update_batch_counts",
+        lambda **kwargs: None,
+    )
+
+    now = datetime.now(timezone.utc)
+    stats = await materialize_investments(
+        MaterializeConfig(
+            dsn="clickhouse://localhost:8123/default",
+            from_ts=now - timedelta(days=5),
+            to_ts=now,
+            repo_ids=None,
+            llm_provider="openai",
+            persist_evidence_snippets=True,
+            llm_model="gpt-test",
+            org_id="org-a",
+            llm_batch_mode="provider_batch",
+            llm_batch_poll_interval_seconds=0.01,
+        )
+    )
+
+    assert stats["records"] == 1
+    assert len(batch_provider.requests) == 1
+    assert sink.investment_rows[0].categorization_status == "ok"
+    assert sink.investment_rows[0].subcategory_distribution_json[
+        "feature_delivery.roadmap"
+    ] == pytest.approx(1.0)
+    assert sink.quote_rows[0].quote == "Ship workflow improvement 1"
+    assert sink.llm_token_rows[0].input_tokens == 11
+    assert sink.llm_token_rows[0].output_tokens == 7
+
+
+@pytest.mark.asyncio
+async def test_materialize_provider_batch_uses_chunk_scoped_correlation(monkeypatch):
+    _repo_ids, edges, work_items, commits = _multi_component_data(2)
+    sink = FakeSink()
+    batch_provider = FakeBatchProvider()
+    created_jobs: list[dict] = []
+
+    def _record_created_job(**kwargs):
+        created_jobs.append(kwargs)
+        return "batch-job-1"
+
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.get_provider",
+        lambda *args, **kwargs: batch_provider,
+    )
+    _patch_queries(monkeypatch, edges, work_items, commits)
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._create_batch_job",
+        _record_created_job,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._transition_batch_job",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._transition_batch_item",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._update_batch_counts",
+        lambda **kwargs: None,
+    )
+
+    now = datetime.now(timezone.utc)
+    stats = await materialize_investments(
+        MaterializeConfig(
+            dsn="clickhouse://localhost:8123/default",
+            from_ts=now - timedelta(days=5),
+            to_ts=now,
+            repo_ids=None,
+            llm_provider="openai",
+            persist_evidence_snippets=False,
+            llm_model="gpt-test",
+            org_id="org-a",
+            run_id="shared-run",
+            component_indexes=[1],
+            chunk_index=1,
+            llm_batch_mode="provider_batch",
+            llm_batch_poll_interval_seconds=0.01,
+        )
+    )
+
+    assert stats["records"] == 1
+    assert created_jobs[0]["run_id"] == "shared-run"
+    assert created_jobs[0]["local_correlation_id"] == "shared-run:chunk:1"
+    assert created_jobs[0]["specs"][0].custom_id == "shared-run:chunk:1-0"
+    assert batch_provider.requests[0].custom_id == "shared-run:chunk:1-0"
+
+
+@pytest.mark.asyncio
+async def test_materialize_provider_batch_failed_job_falls_back_without_fetch(
+    monkeypatch,
+):
+    _repo_ids, edges, work_items, commits = _multi_component_data(1)
+    sink = FakeSink()
+    batch_provider = FakeBatchProvider(status=BatchJobStatus.FAILED)
+    item_transitions: list[dict] = []
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.get_provider",
+        lambda *args, **kwargs: batch_provider,
+    )
+    _patch_queries(monkeypatch, edges, work_items, commits)
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._create_batch_job",
+        lambda **kwargs: "batch-job-1",
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._transition_batch_job",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._transition_batch_item",
+        lambda **kwargs: item_transitions.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._update_batch_counts",
+        lambda **kwargs: None,
+    )
+
+    now = datetime.now(timezone.utc)
+    stats = await materialize_investments(
+        MaterializeConfig(
+            dsn="clickhouse://localhost:8123/default",
+            from_ts=now - timedelta(days=5),
+            to_ts=now,
+            repo_ids=None,
+            llm_provider="openai",
+            persist_evidence_snippets=False,
+            llm_model="gpt-test",
+            org_id="org-a",
+            llm_batch_mode="provider_batch",
+            llm_batch_poll_interval_seconds=0.01,
+        )
+    )
+
+    assert stats["records"] == 1
+    assert batch_provider.fetch_calls == 0
+    assert sink.investment_rows[0].categorization_status == "llm_task_failed"
+    assert any(
+        transition["status"] == BatchItemStatus.FALLBACK.value
+        and transition["audit"] == {"reason": "provider_batch_failed"}
+        for transition in item_transitions
+    )
+
+
+@pytest.mark.asyncio
+async def test_materialize_provider_batch_partial_item_failures_fall_back(monkeypatch):
+    _repo_ids, edges, work_items, commits = _multi_component_data(3)
+    sink = FakeSink()
+    batch_provider = PartialBatchProvider()
+    item_transitions: list[dict] = []
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.get_provider",
+        lambda *args, **kwargs: batch_provider,
+    )
+    _patch_queries(monkeypatch, edges, work_items, commits)
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._create_batch_job",
+        lambda **kwargs: "batch-job-1",
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._transition_batch_job",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._transition_batch_item",
+        lambda **kwargs: item_transitions.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._update_batch_counts",
+        lambda **kwargs: None,
+    )
+
+    now = datetime.now(timezone.utc)
+    stats = await materialize_investments(
+        MaterializeConfig(
+            dsn="clickhouse://localhost:8123/default",
+            from_ts=now - timedelta(days=5),
+            to_ts=now,
+            repo_ids=None,
+            llm_provider="openai",
+            persist_evidence_snippets=False,
+            llm_model="gpt-test",
+            org_id="org-a",
+            llm_batch_mode="provider_batch",
+            llm_batch_poll_interval_seconds=0.01,
+        )
+    )
+
+    assert stats["records"] == 3
+    assert [row.categorization_status for row in sink.investment_rows].count("ok") == 1
+    assert [row.categorization_status for row in sink.investment_rows].count(
+        "llm_task_failed"
+    ) == 2
+    assert any(
+        transition["status"] == BatchItemStatus.FALLBACK.value
+        and transition.get("provider_error", {}).get("code") == "provider_item_failed"
+        for transition in item_transitions
+    )
+    assert any(
+        transition["status"] == BatchItemStatus.FALLBACK.value
+        and transition.get("audit") == {"reason": "missing_batch_result"}
+        for transition in item_transitions
+    )
+
+
+@pytest.mark.asyncio
+async def test_materialize_provider_batch_validation_error_terminalizes_item(
+    monkeypatch,
+):
+    _repo_ids, edges, work_items, commits = _multi_component_data(1)
+    sink = FakeSink()
+    batch_provider = FakeBatchProvider()
+    item_transitions: list[dict] = []
+
+    async def _raise_validation_error(*args, **kwargs):
+        raise RuntimeError("repair provider unavailable")
+
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.get_provider",
+        lambda *args, **kwargs: batch_provider,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.categorize_text_bundle_completion",
+        _raise_validation_error,
+    )
+    _patch_queries(monkeypatch, edges, work_items, commits)
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._create_batch_job",
+        lambda **kwargs: "batch-job-1",
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._transition_batch_job",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._transition_batch_item",
+        lambda **kwargs: item_transitions.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._update_batch_counts",
+        lambda **kwargs: None,
+    )
+
+    now = datetime.now(timezone.utc)
+    stats = await materialize_investments(
+        MaterializeConfig(
+            dsn="clickhouse://localhost:8123/default",
+            from_ts=now - timedelta(days=5),
+            to_ts=now,
+            repo_ids=None,
+            llm_provider="openai",
+            persist_evidence_snippets=False,
+            llm_model="gpt-test",
+            org_id="org-a",
+            llm_batch_mode="provider_batch",
+            llm_batch_poll_interval_seconds=0.01,
+        )
+    )
+
+    assert stats["records"] == 1
+    assert sink.investment_rows[0].categorization_status == "llm_task_failed"
+    assert any(
+        transition["status"] == BatchItemStatus.FALLBACK.value
+        and transition["audit"] == {"reason": "batch_result_validation_failed"}
+        for transition in item_transitions
+    )
+
+
+@pytest.mark.asyncio
+async def test_materialize_provider_batch_timeout_cancels_batch(monkeypatch):
+    _repo_ids, edges, work_items, commits = _multi_component_data(1)
+    sink = FakeSink()
+    batch_provider = FakeBatchProvider(status=BatchJobStatus.RUNNING)
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.get_provider",
+        lambda *args, **kwargs: batch_provider,
+    )
+    _patch_queries(monkeypatch, edges, work_items, commits)
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._create_batch_job",
+        lambda **kwargs: "batch-job-1",
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._transition_batch_job",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._transition_batch_item",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._update_batch_counts",
+        lambda **kwargs: None,
+    )
+
+    now = datetime.now(timezone.utc)
+    stats = await materialize_investments(
+        MaterializeConfig(
+            dsn="clickhouse://localhost:8123/default",
+            from_ts=now - timedelta(days=5),
+            to_ts=now,
+            repo_ids=None,
+            llm_provider="openai",
+            persist_evidence_snippets=False,
+            llm_model="gpt-test",
+            org_id="org-a",
+            llm_batch_mode="provider_batch",
+            llm_batch_poll_interval_seconds=0.01,
+            llm_batch_timeout_seconds=0.01,
+        )
+    )
+
+    assert stats["records"] == 1
+    assert batch_provider.cancel_calls == 1
+    assert batch_provider.fetch_calls == 0
 
 
 @pytest.mark.asyncio

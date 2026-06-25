@@ -271,7 +271,11 @@ def test_run_sync_unit_success_persists_status_and_incremental_watermark(
     db_session.refresh(unit)
     assert unit.status == SyncRunUnitStatus.SUCCESS.value
     assert unit.attempts == 1
-    assert unit.result == {"ok": True}
+    assert unit.result is not None
+    assert unit.result["ok"] is True
+    budget_estimate = unit.result["observations"]["budget_estimate"]
+    assert budget_estimate[0]["bucket"]["provider"] == "github"
+    assert budget_estimate[0]["bucket"]["dimension"] == "rest_core"
     assert unit.lease_owner is None
     assert unit.lease_expires_at is None
     assert unit.last_heartbeat_at is not None
@@ -317,7 +321,75 @@ def test_run_sync_unit_success_survives_finalize_enqueue_failure(
     db_session.refresh(unit)
     assert result["status"] == "success"
     assert unit.status == SyncRunUnitStatus.SUCCESS.value
+    assert unit.result is not None
+    assert unit.result["ok"] is True
+    assert "budget_estimate" in unit.result["observations"]
+
+
+def test_run_sync_unit_budget_estimator_failure_does_not_fail_unit(
+    db_session, monkeypatch
+):
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    finalize_calls = _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        dataset_adapters, "run_dataset_unit", lambda ctx, runtime: {"ok": True}
+    )
+
+    def fail_estimate(_ctx):
+        raise RuntimeError("budget estimator unavailable")
+
+    monkeypatch.setattr(sync_units, "estimate_provider_budget", fail_estimate)
+
+    result = getattr(sync_units.run_sync_unit, "run")(str(unit.id))
+
+    db_session.refresh(unit)
+    assert result["status"] == "success"
+    assert unit.status == SyncRunUnitStatus.SUCCESS.value
     assert unit.result == {"ok": True}
+    assert finalize_calls == [((str(run.id),), "sync")]
+
+
+def test_run_sync_unit_budget_observation_handles_malformed_adapter_observations(
+    db_session, monkeypatch
+):
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    finalize_calls = _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        dataset_adapters,
+        "run_dataset_unit",
+        lambda ctx, runtime: {"ok": True, "observations": ["malformed"]},
+    )
+
+    result = getattr(sync_units.run_sync_unit, "run")(str(unit.id))
+
+    db_session.refresh(unit)
+    assert result["status"] == "success"
+    assert unit.status == SyncRunUnitStatus.SUCCESS.value
+    assert unit.result is not None
+    assert unit.result["ok"] is True
+    assert (
+        unit.result["observations"]["budget_estimate"][0]["bucket"]["provider"]
+        == "github"
+    )
+    assert finalize_calls == [((str(run.id),), "sync")]
 
 
 def test_run_sync_unit_success_skips_watermark_for_backfill(db_session, monkeypatch):

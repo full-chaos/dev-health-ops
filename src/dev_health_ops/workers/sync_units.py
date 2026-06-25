@@ -44,6 +44,7 @@ import logging
 import os
 import threading
 import uuid
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any, TypedDict
 
@@ -64,6 +65,7 @@ from dev_health_ops.models import (
     SyncRunUnit,
     SyncRunUnitStatus,
 )
+from dev_health_ops.sync.budget import estimate_provider_budget
 from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_DISPATCH,
     OUTBOX_KIND_FINALIZE,
@@ -84,6 +86,7 @@ from dev_health_ops.workers.rate_limit_defer import plan_rate_limit_deferral
 from dev_health_ops.workers.sync_bootstrap import (
     ProviderRuntimeCache,
     SyncTaskBootstrap,
+    SyncTaskContext,
 )
 
 logger = logging.getLogger(__name__)
@@ -140,6 +143,37 @@ def _classify_error(exc: BaseException) -> str:
         if pattern in msg:
             return category
     return "adapter_error"
+
+
+def _budget_estimate_audit(
+    ctx: SyncTaskContext, log_ctx: dict[str, Any]
+) -> list[dict[str, Any]] | None:
+    try:
+        estimates = estimate_provider_budget(ctx)
+    except Exception as exc:
+        logger.warning(
+            "run_sync_unit.budget_estimate_failed",
+            extra={**log_ctx, "error": str(exc)},
+        )
+        return None
+    if not estimates:
+        return None
+    return [estimate.to_dict() for estimate in estimates]
+
+
+def _attach_budget_observation(
+    result: dict[str, Any], budget_audit: list[dict[str, Any]] | None
+) -> dict[str, Any]:
+    if budget_audit is None:
+        return result
+    result_payload = dict(result)
+    raw_observations = result_payload.get("observations")
+    observations = (
+        dict(raw_observations) if isinstance(raw_observations, Mapping) else {}
+    )
+    observations["budget_estimate"] = budget_audit
+    result_payload["observations"] = observations
+    return result_payload
 
 
 @celery_app.task(queue="sync", name="dev_health_ops.workers.tasks.dispatch_sync_run")
@@ -455,10 +489,15 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     "reason": "lease_lost",
                 }
 
-        logger.info("run_sync_unit.started", extra=_log_ctx)
+        budget_audit = _budget_estimate_audit(ctx, _log_ctx)
+        started_extra = dict(_log_ctx)
+        if budget_audit is not None:
+            started_extra["budget_estimate"] = budget_audit
+        logger.info("run_sync_unit.started", extra=started_extra)
 
         runtime = _runtime_cache.get(ctx)
         result = run_dataset_unit(ctx, runtime)
+        result_payload = _attach_budget_observation(dict(result or {}), budget_audit)
 
         completed_at = datetime.now(timezone.utc)
         duration_seconds = max(0, int((completed_at - started_at).total_seconds()))
@@ -477,7 +516,7 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                 .values(
                     status=SyncRunUnitStatus.SUCCESS.value,
                     duration_seconds=duration_seconds,
-                    result=dict(result or {}),
+                    result=result_payload,
                     error=None,
                     lease_owner=None,
                     lease_expires_at=None,

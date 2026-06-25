@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import json
 import logging
+import os
 import uuid
 from collections import Counter
 from collections.abc import Iterable
@@ -697,6 +698,53 @@ def _membership_categories(
     return out
 
 
+_LLM_BATCH_MODES = {"sync", "auto", "provider_batch"}
+
+
+def resolve_llm_batch_mode(value: object | None = None) -> str:
+    raw = value if value is not None else os.getenv("INVESTMENT_LLM_BATCH_MODE", "sync")
+    mode = str(raw or "sync").strip().lower().replace("-", "_")
+    if mode not in _LLM_BATCH_MODES:
+        raise ValueError("llm_batch_mode must be one of: sync, auto, provider_batch")
+    return mode
+
+
+def resolve_llm_batch_min_items(value: object | None = None) -> int:
+    raw = (
+        value
+        if value is not None
+        else os.getenv("INVESTMENT_LLM_BATCH_MIN_ITEMS", "25")
+    )
+    try:
+        return max(1, int(str(raw)))
+    except (TypeError, ValueError):
+        return 25
+
+
+def resolve_llm_batch_poll_interval_seconds(value: object | None = None) -> float:
+    raw = (
+        value
+        if value is not None
+        else os.getenv("INVESTMENT_LLM_BATCH_POLL_INTERVAL_SECONDS", "30")
+    )
+    try:
+        return max(0.001, float(str(raw)))
+    except (TypeError, ValueError):
+        return 30.0
+
+
+def resolve_llm_batch_timeout_seconds(value: object | None = None) -> float:
+    raw = (
+        value
+        if value is not None
+        else os.getenv("INVESTMENT_LLM_BATCH_TIMEOUT_SECONDS", "3000")
+    )
+    try:
+        return max(0.001, float(str(raw)))
+    except (TypeError, ValueError):
+        return 3000.0
+
+
 @dataclass(frozen=True)
 class MaterializeConfig:
     dsn: str
@@ -723,7 +771,7 @@ class MaterializeConfig:
     llm_batch_timeout_seconds: float = 3000.0
 
     def __post_init__(self) -> None:
-        if self.llm_batch_mode not in {"sync", "auto", "provider_batch"}:
+        if self.llm_batch_mode not in _LLM_BATCH_MODES:
             raise ValueError(
                 "llm_batch_mode must be one of: sync, auto, provider_batch"
             )

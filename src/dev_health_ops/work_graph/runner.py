@@ -9,6 +9,10 @@ from dev_health_ops.work_graph.builder import BuildConfig, WorkGraphBuilder
 from dev_health_ops.work_graph.investment.materialize import (
     MaterializeConfig,
     materialize_investments,
+    resolve_llm_batch_min_items,
+    resolve_llm_batch_mode,
+    resolve_llm_batch_poll_interval_seconds,
+    resolve_llm_batch_timeout_seconds,
 )
 
 
@@ -233,13 +237,15 @@ def run_investment_materialization(ns: argparse.Namespace) -> int:
         force=getattr(ns, "force", False),
         org_id=org_id,
         allow_unscoped=getattr(ns, "allow_unscoped", False),
-        llm_batch_mode=getattr(ns, "llm_batch_mode", "sync"),
-        llm_batch_min_items=int(getattr(ns, "llm_batch_min_items", 25) or 25),
-        llm_batch_poll_interval_seconds=float(
-            getattr(ns, "llm_batch_poll_interval_seconds", 30.0) or 30.0
+        llm_batch_mode=resolve_llm_batch_mode(getattr(ns, "llm_batch_mode", None)),
+        llm_batch_min_items=resolve_llm_batch_min_items(
+            getattr(ns, "llm_batch_min_items", None)
         ),
-        llm_batch_timeout_seconds=float(
-            getattr(ns, "llm_batch_timeout_seconds", 3000.0) or 3000.0
+        llm_batch_poll_interval_seconds=resolve_llm_batch_poll_interval_seconds(
+            getattr(ns, "llm_batch_poll_interval_seconds", None)
+        ),
+        llm_batch_timeout_seconds=resolve_llm_batch_timeout_seconds(
+            getattr(ns, "llm_batch_timeout_seconds", None)
         ),
     )
 
@@ -470,26 +476,30 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     investment_materialize.add_argument(
         "--llm-batch-mode",
         choices=("sync", "auto", "provider_batch"),
-        default="sync",
-        help="LLM categorization execution mode (default: sync).",
+        default=argparse.SUPPRESS,
+        help="LLM categorization execution mode. Env: INVESTMENT_LLM_BATCH_MODE. "
+        "Default: sync.",
     )
     investment_materialize.add_argument(
         "--llm-batch-min-items",
         type=int,
-        default=25,
-        help="Minimum eligible LLM items before auto mode uses provider batch.",
+        default=argparse.SUPPRESS,
+        help="Minimum eligible LLM items before auto mode uses provider batch. "
+        "Env: INVESTMENT_LLM_BATCH_MIN_ITEMS. Default: 25.",
     )
     investment_materialize.add_argument(
         "--llm-batch-poll-interval-seconds",
         type=float,
-        default=30.0,
-        help="Provider batch polling interval for CLI/worker completion waits.",
+        default=argparse.SUPPRESS,
+        help="Provider batch polling interval for CLI/worker completion waits. "
+        "Env: INVESTMENT_LLM_BATCH_POLL_INTERVAL_SECONDS. Default: 30.",
     )
     investment_materialize.add_argument(
         "--llm-batch-timeout-seconds",
         type=float,
-        default=3000.0,
-        help="Provider batch timeout for CLI/worker completion waits.",
+        default=argparse.SUPPRESS,
+        help="Provider batch timeout for CLI/worker completion waits. "
+        "Env: INVESTMENT_LLM_BATCH_TIMEOUT_SECONDS. Default: 3000.",
     )
     investment_materialize.add_argument(
         "--allow-unscoped",

@@ -143,8 +143,8 @@ class ClickHouseTeamDriftService:
                 c.new_value_json,
                 c.first_seen_at,
                 c.last_seen_at
-            FROM team_drift_changes FINAL AS c
-            LEFT JOIN teams FINAL AS t
+            FROM team_drift_changes AS c FINAL
+            LEFT JOIN teams AS t FINAL
                 ON t.org_id = c.org_id AND t.id = c.entity_id
             WHERE {where}
             ORDER BY c.first_seen_at DESC, c.change_id

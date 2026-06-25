@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import importlib
 import logging
+import uuid
 from collections.abc import Callable, Mapping
 from typing import Any, cast
 
 from dev_health_ops.providers.team_capabilities import team_provider_capabilities
+from dev_health_ops.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
@@ -135,4 +137,137 @@ def run_team_autoimport(
         "provider": normalized_provider,
         "org_id": org_id,
         **dict(summary),
+    }
+
+
+@celery_app.task(
+    queue="sync",
+    name="dev_health_ops.workers.tasks.run_post_sync_team_autoimport",
+)
+def run_post_sync_team_autoimport(sync_run_id: str) -> dict[str, Any]:
+    """Refresh team/project/member attribution after a successful sync run.
+
+    Restores the legacy post-sync team auto-import (CHAOS-2647) on the unitized
+    fan-out path. The post-sync relay dispatches this once per terminal SyncRun
+    when the run's canonical config has ``auto_import_teams`` enabled. Credentials
+    are resolved from the run's ``Integration.credential_id`` — the SAME source the
+    unit workers used — so auto-import authenticates identically to the sync that
+    just completed (never the legacy ``SyncConfiguration.credential_id`` row, which
+    can drift). Best-effort and non-fatal: :func:`run_team_autoimport` capability-
+    gates providers and swallows populator exceptions, so a failure here never
+    fails the sync.
+    """
+    from dev_health_ops.db import get_postgres_session_sync
+    from dev_health_ops.models import (
+        Integration,
+        IntegrationCredential,
+        SyncRun,
+        SyncRunStatus,
+    )
+    from dev_health_ops.sync.trigger_routing import (
+        canonical_sync_config_for_sync_run,
+    )
+    from dev_health_ops.workers.task_utils import (
+        _credential_mapping,
+        _get_db_url,
+        _resolve_env_credentials,
+    )
+
+    run_uuid = uuid.UUID(str(sync_run_id))
+    with get_postgres_session_sync() as session:
+        run = session.query(SyncRun).filter(SyncRun.id == run_uuid).one_or_none()
+        if run is None:
+            return {
+                "status": "skipped",
+                "reason": "run_not_found",
+                "sync_run_id": sync_run_id,
+            }
+        # Gate on SUCCESS: the relay only dispatches once per terminal run, but a
+        # partial/failed run can still have some successful units; team auto-import
+        # must only run for a fully successful sync (mirrors the legacy path, which
+        # ran it only on the success branch).
+        if run.status != SyncRunStatus.SUCCESS.value:
+            return {
+                "status": "skipped",
+                "reason": "run_not_successful",
+                "sync_run_id": sync_run_id,
+                "run_status": str(run.status),
+            }
+
+        config = canonical_sync_config_for_sync_run(session, run)
+        if config is None:
+            return {
+                "status": "skipped",
+                "reason": "no_canonical_config",
+                "sync_run_id": sync_run_id,
+            }
+        sync_options = dict(config.sync_options or {})
+        if not sync_options.get("auto_import_teams"):
+            return {
+                "status": "skipped",
+                "reason": "auto_import_disabled",
+                "sync_run_id": sync_run_id,
+            }
+
+        provider = str(config.provider or "").strip().lower()
+        org_id = str(run.org_id)
+        sync_targets = [str(t) for t in (config.sync_targets or [])]
+        config_id = str(config.id)
+        triggered_by = str(run.triggered_by)
+
+        integration = (
+            session.query(Integration)
+            .filter(
+                Integration.id == run.integration_id,
+                Integration.org_id == org_id,
+            )
+            .one_or_none()
+        )
+        if integration is None:
+            # Mirror the unit workers (SyncTaskBootstrap.load treats a missing
+            # integration as an error): skip rather than silently authenticating
+            # with env credentials that may not match the synced integration.
+            return {
+                "status": "skipped",
+                "reason": "integration_not_found",
+                "sync_run_id": sync_run_id,
+            }
+        credential_id = integration.credential_id
+        if credential_id is None:
+            credentials: dict[str, Any] = dict(_resolve_env_credentials(provider))
+        else:
+            credential = (
+                session.query(IntegrationCredential)
+                .filter(
+                    IntegrationCredential.id == credential_id,
+                    IntegrationCredential.org_id == org_id,
+                )
+                .one_or_none()
+            )
+            if credential is None:
+                return {
+                    "status": "skipped",
+                    "reason": "credential_not_found",
+                    "sync_run_id": sync_run_id,
+                }
+            credentials = _credential_mapping(credential)
+
+    summary = run_team_autoimport(
+        provider=provider,
+        org_id=org_id,
+        credentials=credentials,
+        scope={
+            "mode": "sync_config",
+            "sync_config_id": config_id,
+            "sync_targets": sync_targets,
+            "sync_options": sync_options,
+            "triggered_by": triggered_by,
+        },
+        analytics_db_url=_get_db_url(),
+    )
+    return {
+        "status": "dispatched",
+        "sync_run_id": sync_run_id,
+        "provider": provider,
+        "team_autoimport": summary,
     }

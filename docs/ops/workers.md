@@ -24,11 +24,11 @@ Operators can trigger background operations on-demand through three primary API 
 
 1. **Data Sync Trigger**
    * **Endpoint**: `POST /api/v1/admin/sync-configs/{config_id}/trigger` (defined in `api/admin/routers/sync.py:997-1164`)
-   * **Flow**: For migrated sync configurations with `sync.migrated_trigger_routing_enabled`, builds a `SyncPlanRequest`, creates a `SyncRun`, and enqueues `dispatch_sync_run` onto the `sync` queue. Legacy configurations still create a `ScheduledJob` and a `PENDING` `JobRun`, then enqueue either `run_sync_config` or `dispatch_batch_sync` onto the `sync` queue.
+   * **Flow**: Builds a `SyncPlanRequest` from the config's migrated integration, plans a `SyncRun` (one `SyncRunUnit` per source/dataset/window), and enqueues `dispatch_sync_run` onto the `sync` queue. The integration planner is the only routing path — the legacy `run_sync_config` / `dispatch_batch_sync` in-process workers were removed in CHAOS-2647.
 
 2. **Historical Backfill Trigger**
    * **Endpoint**: `POST /api/v1/admin/sync-configs/{config_id}/backfill` (defined in `api/admin/routers/sync.py:1167-1233`)
-   * **Flow**: Creates a `BackfillJob` record and triggers `run_backfill.delay` on the `backfill` queue.
+   * **Flow**: Creates a `BackfillJob` record, plans a backfill-mode `SyncRun`, and enqueues `dispatch_sync_run` onto the `sync` queue (fan-out). The `BackfillJob` is linked to its run via a `sync_run:<id>` marker on `celery_task_id`, so `finalize_sync_run` updates its status and chunk counts.
 
 3. **Report Execution Trigger**
    * **Trigger**: GraphQL `triggerReport` mutation or the "Run Now" button in the Report Center UI.
@@ -40,13 +40,13 @@ The following table maps bare CLI commands to their Celery task equivalents, tri
 
 | CLI Command (Inline, May Fail) | Celery Task Equivalent | Trigger Path | Required Worker Env |
 |---|---|---|---|
-| `dev-hops sync git/prs/cicd/deployments/incidents/security/tests` | Migrated configs: `dispatch_sync_run` → `run_sync_unit` → `finalize_sync_run`; legacy configs: `run_sync_config` / `dispatch_batch_sync` | `POST /api/v1/admin/sync-configs/{config_id}/trigger` | `GITHUB_TOKEN`, `GITLAB_TOKEN`, `JIRA_API_TOKEN`, `JIRA_EMAIL` |
-| `dev-hops sync work-items` | Migrated configs: `dispatch_sync_run` → `run_sync_unit` → `finalize_sync_run`; legacy sync-config trigger: `run_sync_config` / `dispatch_batch_sync` with work-items handled inside the worker; standalone worker wrapper: `run_work_items_sync` | `POST /api/v1/admin/sync-configs/{config_id}/trigger` | `GITHUB_TOKEN`, `GITLAB_TOKEN`, `JIRA_API_TOKEN`, `JIRA_EMAIL` |
+| `dev-hops sync git/prs/cicd/deployments/incidents/security/tests` | `dispatch_sync_run` → `run_sync_unit` → `finalize_sync_run` | `POST /api/v1/admin/sync-configs/{config_id}/trigger` | `GITHUB_TOKEN`, `GITLAB_TOKEN`, `JIRA_API_TOKEN`, `JIRA_EMAIL` |
+| `dev-hops sync work-items` | `dispatch_sync_run` → `run_sync_unit` → `finalize_sync_run` | `POST /api/v1/admin/sync-configs/{config_id}/trigger` | `GITHUB_TOKEN`, `GITLAB_TOKEN`, `JIRA_API_TOKEN`, `JIRA_EMAIL` |
 | `dev-hops metrics daily` | `run_daily_metrics` / `dispatch_daily_metrics_partitioned` | Periodic Beat Schedule | `CLICKHOUSE_URI`, `DATABASE_URI` |
 | `dev-hops recommendations compute` | `run_recommendations_job` | Periodic Beat Schedule | `CLICKHOUSE_URI`, `DATABASE_URI` |
 | `dev-hops work-graph build` | `run_work_graph_build` | Periodic Beat Schedule | `CLICKHOUSE_URI`, `DATABASE_URI` |
 | `dev-hops investment materialize` | `run_investment_materialize` | Periodic Beat Schedule | `CLICKHOUSE_URI`, `DATABASE_URI`, `OPENAI_API_KEY` (or other LLM keys) |
-| `dev-hops backfill run` | `run_backfill` | `POST /api/v1/admin/sync-configs/{config_id}/backfill` | `CLICKHOUSE_URI`, `DATABASE_URI`, provider tokens |
+| `dev-hops backfill run` | `dispatch_sync_run` → `run_sync_unit` → `finalize_sync_run` (backfill-mode `SyncRun`) | `POST /api/v1/admin/sync-configs/{config_id}/backfill` | `CLICKHOUSE_URI`, `DATABASE_URI`, provider tokens |
 
 Triggering `run_investment_materialize` via the worker ensures the worker-side LLM API key applies. This avoids the silent `MockProvider` fallback that the bare CLI hits when no key is present in the caller's environment (tracked in Linear CHAOS-2476).
 
@@ -100,10 +100,10 @@ celery -A dev_health_ops.workers.celery_app beat --loglevel=INFO
 |-------|---------|
 | `default` | Scheduling dispatchers, health checks, heartbeat |
 | `metrics` | Daily metrics, complexity, DORA, capacity forecast, investment |
-| `sync` | Git, PR, and work-item syncs, batch sync |
+| `sync` | Unitized sync dispatch/execution/post-sync relay (git, PR, work-item) + team auto-import |
 | `sync.<provider>` | Provider-specific sync queues (e.g., `sync.github`, `sync.gitlab`, `sync.linear`, `sync.jira`, `sync.launchdarkly`) |
 | `sync.<provider>.<class>` | Cost-class sub-queues (CHAOS-2517): `light`/`medium` on `worker`, `heavy` on `worker-heavy`. Always declared in `task_queues`; routing gated by `SYNC_COST_CLASS_QUEUES`. **Two-phase rollout: expand consumer `-Q` lists first, then flip the flag on producers.** |
-| `backfill` | Historical data backfill operations |
+| `backfill` | Legacy/reserved — unused after CHAOS-2647 (API backfill now plans a backfill-mode `SyncRun` and dispatches on `sync`) |
 | `reports` | AI report execution (SavedReport to ReportRun) |
 | `webhooks` | Webhook event processing, billing notifications |
 | `ingest` | Stream ingestion consumer |
@@ -120,11 +120,8 @@ The system registers Celery tasks under the `workers/` directory. The primary re
 | `run_sync_unit` | None | `sync` (or `sync.<provider>` / cost-class queue) | Executes exactly one planned source/dataset/window unit and updates its status. Source: `sync_units.py:193-293`. |
 | `finalize_sync_run` | None | `sync` | Aggregates unit statuses and dispatches post-sync work once all units are terminal. Source: `sync_units.py:295-513`. |
 | `reconcile_sync_dispatch` | None | `sync` (beat, 60s) | Sole durable relay for the dispatch outbox: expires dead-lease RUNNING units, then materializes + relays `dispatch_sync_run`/`finalize_sync_run`/`post_sync` wakeups for stranded runs. See [Dispatch Outbox](../architecture/dispatch-outbox.md) (CHAOS-2581). Source: `sync_reconciler.py`. |
-| `run_sync_config` | `sync git/prs/cicd/deployments/incidents/security/tests` + work-items | `sync` (or `sync.<provider>`) | Syncs a single repository configuration. Source: `sync_runtime.py:408-527`. |
-| `dispatch_batch_sync` | None | `sync` | Discovers repositories in an organization and schedules syncs. Source: `sync_batch.py:301`. |
-| `_batch_sync_callback` | None | `sync` | Callback task for batch sync completion. Source: `sync_batch.py:267`. |
-| `_run_sync_for_repo` | None | `sync` | Runs sync for a single repository within a batch. Source: `sync_batch.py:550`. |
-| `run_work_items_sync` | `sync work-items` | `sync` | Syncs work items from a provider. Source: `sync_misc.py:12-68`. |
+| ~~`run_sync_config` / `dispatch_batch_sync` / `_batch_sync_callback` / `_run_sync_for_repo` / `run_work_items_sync`~~ | — | — | **Removed in CHAOS-2647.** The legacy in-process sync workers (`sync_runtime.py`, `sync_batch.py`, `sync_misc.py`) are deleted; all sync now flows through the unitized `dispatch_sync_run` → `run_sync_unit` → `finalize_sync_run` planner path. |
+| `run_post_sync_team_autoimport` | None | `sync` | Refreshes team/project/member attribution after a successful `SyncRun` whose canonical config has `auto_import_teams` enabled. Dispatched once per terminal run by the post-sync relay; resolves credentials from the run's `Integration.credential_id`. Source: `team_autoimport.py`. |
 | ~~`sync_team_drift` / `reconcile_team_members`~~ | — | — | **Deleted in CHAOS-2600 CS6 (CHAOS-2607).** Both Celery tasks and `workers/sync_team.py` are removed (they were fail-closed no-ops in CS5). ClickHouse is the team/identity system of record; the Postgres drift engine + member-reconcile no longer exist. |
 | `run_daily_metrics` | `metrics daily` | `metrics` | Computes daily repository and user metrics. Source: `metrics_daily.py`. |
 | `dispatch_daily_metrics_partitioned` | `metrics daily` (partitioned) | `default` | Partitions daily metrics across organizations and fans out. Source: `metrics_partitioned.py`. |
@@ -148,7 +145,7 @@ The system registers Celery tasks under the `workers/` directory. The primary re
 | `phone_home_heartbeat` | None | `default` | Daily heartbeat for deployment telemetry. Source: `system_ops.py`. |
 | `execute_saved_report` | None | `reports` | Executes a SavedReport plan and persists markdown. Source: `report_task.py`. |
 | `dispatch_scheduled_reports` | None | `default` | Fans out scheduled report executions. Source: `report_scheduler.py`. |
-| `run_backfill` | `backfill run` | `backfill` | Runs chunked historical sync with progress tracking. Source: `sync_backfill.py:14-173`. |
+| ~~`run_backfill`~~ | `backfill run` | — | **Removed in CHAOS-2647.** The API backfill path now plans a backfill-mode `SyncRun` and fans out through `dispatch_sync_run` → `run_sync_unit` → `finalize_sync_run`; the standalone `backfill`-queue task and `sync_backfill.py` are deleted. |
 | `dispatch_scheduled_syncs` | None | `default` | Fans out organization sync configurations. Source: `sync_scheduler.py`. |
 | `dispatch_scheduled_metrics` | None | `default` | Fans out scheduled metrics. Source: `metrics_daily.py`. |
 | `monitor_queue_depths` | None | `monitoring` | Monitors queue depths. Source: `queue_monitor.py`. |

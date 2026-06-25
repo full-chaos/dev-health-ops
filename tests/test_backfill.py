@@ -117,11 +117,13 @@ class _FakeConfig:
         org_id: str,
         provider: str = "github",
         sync_options: dict[str, object] | None = None,
+        sync_targets: list[str] | None = None,
     ) -> None:
         self.id = org_id
         self.org_id = org_id
         self.provider = provider
         self.sync_options = sync_options or {}
+        self.sync_targets = sync_targets or []
 
 
 def _patch_session_with_config(monkeypatch: pytest.MonkeyPatch, config: object) -> None:
@@ -231,3 +233,86 @@ def test_run_backfill_forwards_jira_query_scope(
     assert captured["provider"] == "jira"
     assert captured["jira_project_keys"] == ["OPS"]
     assert captured["jira_jql"] == "project = OPS"
+
+
+def test_run_backfill_github_includes_prs_when_prs_target_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-646: github backfill ingests PRs as work items when the 'prs' target
+    is enabled (mirrors the unitized path's planner-stamped sync_prs)."""
+    config_org = "55555555-5555-5555-5555-555555555555"
+    _patch_session_with_config(
+        monkeypatch,
+        _FakeConfig(config_org, provider="github", sync_targets=["work-items", "prs"]),
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner.run_work_items_sync_job",
+        lambda *args, **kwargs: captured.update(kwargs),
+    )
+
+    run_backfill_for_config(
+        db_url="clickhouse://local",
+        sync_config_id="66666666-6666-6666-6666-666666666666",
+        org_id=None,
+        since=date(2026, 1, 1),
+        before=date(2026, 1, 3),
+    )
+
+    assert captured["provider"] == "github"
+    assert captured["include_pull_requests"] is True
+
+
+def test_run_backfill_github_excludes_prs_when_prs_target_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-646 regression: with 'prs' off, github backfill must NOT ingest PRs as
+    work items. None would let the provider fall back to GITHUB_INCLUDE_PRS (ON)."""
+    config_org = "55555555-5555-5555-5555-555555555555"
+    _patch_session_with_config(
+        monkeypatch,
+        _FakeConfig(config_org, provider="github", sync_targets=["work-items"]),
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner.run_work_items_sync_job",
+        lambda *args, **kwargs: captured.update(kwargs),
+    )
+
+    run_backfill_for_config(
+        db_url="clickhouse://local",
+        sync_config_id="66666666-6666-6666-6666-666666666666",
+        org_id=None,
+        since=date(2026, 1, 1),
+        before=date(2026, 1, 3),
+    )
+
+    assert captured["provider"] == "github"
+    assert captured["include_pull_requests"] is False
+
+
+def test_run_backfill_non_github_leaves_include_pull_requests_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only github threads include_pull_requests; other providers leave it None."""
+    config_org = "55555555-5555-5555-5555-555555555555"
+    _patch_session_with_config(
+        monkeypatch,
+        _FakeConfig(config_org, provider="gitlab", sync_targets=["work-items", "prs"]),
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner.run_work_items_sync_job",
+        lambda *args, **kwargs: captured.update(kwargs),
+    )
+
+    run_backfill_for_config(
+        db_url="clickhouse://local",
+        sync_config_id="66666666-6666-6666-6666-666666666666",
+        org_id=None,
+        since=date(2026, 1, 1),
+        before=date(2026, 1, 3),
+    )
+
+    assert captured["provider"] == "gitlab"
+    assert captured["include_pull_requests"] is None

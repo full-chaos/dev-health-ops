@@ -45,12 +45,13 @@ import os
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, TypedDict
 
 from celery import chord, group
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
+from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.models import (
     BackfillJob,
     JobRun,
@@ -77,12 +78,13 @@ from dev_health_ops.sync.trigger_routing import (
 )
 from dev_health_ops.sync.watermarks import set_watermark
 from dev_health_ops.workers.celery_app import celery_app
+from dev_health_ops.workers.post_sync_dispatch import build_post_sync_dispatch_payload
 from dev_health_ops.workers.queues import _cost_class_queues_enabled
+from dev_health_ops.workers.rate_limit_defer import plan_rate_limit_deferral
 from dev_health_ops.workers.sync_bootstrap import (
     ProviderRuntimeCache,
     SyncTaskBootstrap,
 )
-from dev_health_ops.workers.sync_runtime import build_post_sync_dispatch_payload
 
 logger = logging.getLogger(__name__)
 _runtime_cache = ProviderRuntimeCache()
@@ -91,6 +93,12 @@ _TERMINAL_RUN_STATUSES = {
     SyncRunStatus.PARTIAL_FAILED.value,
     SyncRunStatus.FAILED.value,
 }
+
+
+class _PendingUnitCounts(TypedDict):
+    dispatchable: int
+    in_flight: int
+    next_deferred_at: datetime | None
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +279,7 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
     with get_postgres_session_sync() as session:
         run_uuid_check = uuid.UUID(str(sync_run_id))
         pending_counts = _pending_unit_counts(session, run_uuid_check)
+    next_deferred_at = pending_counts["next_deferred_at"]
     if pending_counts["dispatchable"] > 0:
         try:
             _schedule_redispatch(sync_run_id)
@@ -302,6 +311,28 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
             "status": "waiting_inflight",
             "queued_units": 0,
             "in_flight_units": pending_counts["in_flight"],
+        }
+    if next_deferred_at is not None:
+        try:
+            _schedule_redispatch(sync_run_id, available_at=next_deferred_at)
+        except Exception as exc:
+            logger.exception(
+                "dispatch_sync_run.deferred_redispatch_publish_failed",
+                extra={"sync_run_id": sync_run_id, "error": str(exc)},
+            )
+            raise
+        logger.info(
+            "dispatch_sync_run.deferred",
+            extra={
+                "sync_run_id": sync_run_id,
+                "queued_units": 0,
+                "next_deferred_at": next_deferred_at.isoformat(),
+            },
+        )
+        return {
+            "status": "deferred",
+            "queued_units": 0,
+            "next_deferred_at": next_deferred_at.isoformat(),
         }
     # No pending work — finalize (idempotent; handles zero-unit and already-finalized).
     logger.info(
@@ -339,6 +370,7 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
     heartbeat_thread: threading.Thread | None = None
     # Unit context fields for structured logging — populated once ctx is loaded.
     _log_ctx: dict[str, Any] = {"unit_id": unit_id}
+    unit: SyncRunUnit | None = None
     try:
         with get_postgres_session_sync() as session:
             unit = _load_unit(session, unit_id)
@@ -489,66 +521,126 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
             "unit_id": unit_id,
             "duration_seconds": duration_seconds,
         }
-    except Exception as exc:
+    except RateLimitException as exc:
         if terminal_txn_started:
             raise
-        completed_at = datetime.now(timezone.utc)
-        duration_seconds = max(0, int((completed_at - started_at).total_seconds()))
-        error_category = _classify_error(exc)
+        if unit is None:
+            terminal_txn_started = True
+            failure_result, should_finalize = _stamp_sync_unit_failed(
+                unit_id=unit_id,
+                sync_run_id=sync_run_id,
+                lease_owner=lease_owner,
+                started_at=started_at,
+                exc=exc,
+                log_ctx=_log_ctx,
+            )
+            return failure_result
+        deferral = plan_rate_limit_deferral(
+            retry_after_seconds=getattr(exc, "retry_after_seconds", None),
+            attempts=unit.rate_limit_deferrals,
+            first_seen_at=unit.rate_limit_first_seen_at.isoformat()
+            if unit.rate_limit_first_seen_at
+            else None,
+        )
+        if deferral is None:
+            terminal_txn_started = True
+            failure_result, should_finalize = _stamp_sync_unit_failed(
+                unit_id=unit_id,
+                sync_run_id=sync_run_id,
+                lease_owner=lease_owner,
+                started_at=started_at,
+                exc=exc,
+                log_ctx=_log_ctx,
+            )
+            return failure_result
+
+        now = datetime.now(timezone.utc)
+        not_before = datetime.fromisoformat(deferral.not_before)
+        first_seen_at = datetime.fromisoformat(deferral.first_seen_at)
         terminal_txn_started = True
         with get_postgres_session_sync() as session:
-            terminal_result = session.execute(
+            deferred_result: Any = session.execute(
                 update(SyncRunUnit)
                 .where(
                     SyncRunUnit.id == uuid.UUID(str(unit_id)),
                     SyncRunUnit.status == SyncRunUnitStatus.RUNNING.value,
                     SyncRunUnit.lease_owner == lease_owner,
                     SyncRunUnit.lease_expires_at.is_not(None),
-                    SyncRunUnit.lease_expires_at > completed_at,
+                    SyncRunUnit.lease_expires_at > now,
                     SyncRunUnit.sync_run_id.in_(_nonterminal_run_ids_select()),
                 )
                 .values(
-                    status=SyncRunUnitStatus.FAILED.value,
-                    duration_seconds=duration_seconds,
+                    status=SyncRunUnitStatus.RETRYING.value,
+                    available_at=not_before,
+                    rate_limit_deferrals=deferral.attempts,
+                    rate_limit_first_seen_at=first_seen_at,
                     error=str(exc),
-                    result={"error_category": error_category},
+                    result={
+                        "error_category": "rate_limit",
+                        "retry_after_seconds": getattr(
+                            exc, "retry_after_seconds", None
+                        ),
+                        "not_before": deferral.not_before,
+                        "rate_limit_deferrals": deferral.attempts,
+                    },
                     lease_owner=None,
                     lease_expires_at=None,
-                    last_heartbeat_at=completed_at,
-                    updated_at=completed_at,
+                    last_heartbeat_at=now,
+                    updated_at=now,
                 )
                 .execution_options(synchronize_session=False)
             )
-            if int(terminal_result.rowcount or 0) == 0:
+            if int(deferred_result.rowcount or 0) == 0:
                 return {
                     "status": "skipped",
                     "unit_id": unit_id,
                     "reason": "lease_lost",
                 }
             if sync_run_id is not None:
+                # Earlier-wins upsert (CHAOS-2647): we deliberately do NOT
+                # force-set available_at=not_before here. A revived past dispatch
+                # wakeup may be consumed as a no-op while all remaining units are
+                # future RETRYING; the reconciler's periodic _dispatchable_run_ids
+                # scan re-materializes dispatch once available_at <= now (bounded
+                # delay, never stuck). Forcing not_before is unsafe: it would
+                # overwrite the earlier countdown _schedule_redispatch arms for
+                # capped PLANNED siblings, delaying their dispatch. The precision
+                # loss is negligible versus provider rate-limit backoff windows.
                 upsert_outbox_wakeup(
                     session,
                     sync_run_id=sync_run_id,
-                    kind=OUTBOX_KIND_FINALIZE,
-                    available_at=completed_at,
-                    now=completed_at,
+                    kind=OUTBOX_KIND_DISPATCH,
+                    available_at=not_before,
+                    now=now,
                 )
             session.flush()
-            should_finalize = True
-        logger.exception(
-            "run_sync_unit.failed",
+        logger.info(
+            "run_sync_unit.rate_limited_deferred",
             extra={
                 **_log_ctx,
-                "duration_seconds": duration_seconds,
-                "error_category": error_category,
+                "not_before": deferral.not_before,
+                "rate_limit_deferrals": deferral.attempts,
             },
         )
         return {
-            "status": "failed",
+            "status": "rate_limited_deferred",
             "unit_id": unit_id,
-            "error": str(exc),
-            "error_category": error_category,
+            "not_before": deferral.not_before,
+            "rate_limit_deferrals": deferral.attempts,
         }
+    except Exception as exc:
+        if terminal_txn_started:
+            raise
+        terminal_txn_started = True
+        failure_result, should_finalize = _stamp_sync_unit_failed(
+            unit_id=unit_id,
+            sync_run_id=sync_run_id,
+            lease_owner=lease_owner,
+            started_at=started_at,
+            exc=exc,
+            log_ctx=_log_ctx,
+        )
+        return failure_result
     finally:
         if heartbeat_stop is not None:
             heartbeat_stop.set()
@@ -564,6 +656,80 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     "run_sync_unit.finalize_enqueue_failed",
                     extra={"sync_run_id": sync_run_id, "unit_id": unit_id},
                 )
+
+
+def _stamp_sync_unit_failed(
+    *,
+    unit_id: str,
+    sync_run_id: str | None,
+    lease_owner: str | None,
+    started_at: datetime,
+    exc: BaseException,
+    log_ctx: dict[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    from dev_health_ops.db import get_postgres_session_sync
+
+    completed_at = datetime.now(timezone.utc)
+    duration_seconds = max(0, int((completed_at - started_at).total_seconds()))
+    error_category = _classify_error(exc)
+    with get_postgres_session_sync() as session:
+        terminal_result: Any = session.execute(
+            update(SyncRunUnit)
+            .where(
+                SyncRunUnit.id == uuid.UUID(str(unit_id)),
+                SyncRunUnit.status == SyncRunUnitStatus.RUNNING.value,
+                SyncRunUnit.lease_owner == lease_owner,
+                SyncRunUnit.lease_expires_at.is_not(None),
+                SyncRunUnit.lease_expires_at > completed_at,
+                SyncRunUnit.sync_run_id.in_(_nonterminal_run_ids_select()),
+            )
+            .values(
+                status=SyncRunUnitStatus.FAILED.value,
+                duration_seconds=duration_seconds,
+                error=str(exc),
+                result={"error_category": error_category},
+                lease_owner=None,
+                lease_expires_at=None,
+                last_heartbeat_at=completed_at,
+                updated_at=completed_at,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if int(terminal_result.rowcount or 0) == 0:
+            return (
+                {
+                    "status": "skipped",
+                    "unit_id": unit_id,
+                    "reason": "lease_lost",
+                },
+                False,
+            )
+        if sync_run_id is not None:
+            upsert_outbox_wakeup(
+                session,
+                sync_run_id=sync_run_id,
+                kind=OUTBOX_KIND_FINALIZE,
+                available_at=completed_at,
+                now=completed_at,
+            )
+        session.flush()
+    logger.exception(
+        "run_sync_unit.failed",
+        extra={
+            **log_ctx,
+            "duration_seconds": duration_seconds,
+            "error_category": error_category,
+        },
+    )
+    return (
+        {
+            "status": "failed",
+            "unit_id": unit_id,
+            "error": str(exc),
+            "error_category": error_category,
+        },
+        True,
+    )
 
 
 @celery_app.task(queue="sync", name="dev_health_ops.workers.tasks.finalize_sync_run")
@@ -711,11 +877,13 @@ def _run_has_dispatching_or_running_units(session, run_uuid: uuid.UUID) -> bool:
     )
 
 
-def _pending_unit_counts(session, run_uuid: uuid.UUID) -> dict[str, int]:
+def _pending_unit_counts(session, run_uuid: uuid.UUID) -> _PendingUnitCounts:
     now = datetime.now(timezone.utc)
     stale_dispatch_cutoff = now - timedelta(seconds=_stale_dispatch_seconds())
     units = (
-        session.query(SyncRunUnit.status, SyncRunUnit.updated_at)
+        session.query(
+            SyncRunUnit.status, SyncRunUnit.updated_at, SyncRunUnit.available_at
+        )
         .filter(
             SyncRunUnit.sync_run_id == run_uuid,
             SyncRunUnit.status.in_(
@@ -731,7 +899,8 @@ def _pending_unit_counts(session, run_uuid: uuid.UUID) -> dict[str, int]:
     )
     dispatchable = 0
     in_flight = 0
-    for status, updated_at in units:
+    next_deferred_at: datetime | None = None
+    for status, updated_at, available_at in units:
         if status == SyncRunUnitStatus.PLANNED.value:
             dispatchable += 1
         elif status == SyncRunUnitStatus.DISPATCHING.value:
@@ -742,9 +911,19 @@ def _pending_unit_counts(session, run_uuid: uuid.UUID) -> dict[str, int]:
                 dispatchable += 1
             else:
                 in_flight += 1
-        else:
+        elif status == SyncRunUnitStatus.RUNNING.value:
             in_flight += 1
-    return {"dispatchable": dispatchable, "in_flight": in_flight}
+        elif available_at is not None:
+            deferred_at = _as_aware(available_at)
+            if deferred_at <= now:
+                dispatchable += 1
+            elif next_deferred_at is None or deferred_at < next_deferred_at:
+                next_deferred_at = deferred_at
+    return {
+        "dispatchable": dispatchable,
+        "in_flight": in_flight,
+        "next_deferred_at": next_deferred_at,
+    }
 
 
 def sync_observers_for_terminal_sync_run(session, run: SyncRun) -> None:
@@ -863,10 +1042,11 @@ def _claim_units(
 ) -> list[SyncRunUnit]:
     """Atomically claim dispatchable units for a run.
 
-    Fresh ``planned`` units are claimed with an atomic ``UPDATE ... RETURNING``
-    so two concurrent ``dispatch_sync_run`` calls cannot both enqueue the same
-    unit (no double-queue / duplicate provider writes).  Stale ``dispatching``
-    units (a worker died before the unit started running) are reclaimed by age.
+    Fresh ``planned`` units and due ``retrying`` units are claimed with atomic
+    ``UPDATE ... RETURNING`` statements so two concurrent ``dispatch_sync_run``
+    calls cannot both enqueue the same unit (no double-queue / duplicate provider
+    writes).  Stale ``dispatching`` units (a worker died before the unit started
+    running) are reclaimed by age.
 
     F2 fix: RUNNING units are NEVER reclaimed here.  ``run_sync_unit`` does not
     heartbeat during the provider call, so a legitimately long-running unit past
@@ -879,7 +1059,7 @@ def _claim_units(
 
     ``capped_ids`` is the set of unit IDs that the concurrency guard deferred.
     Those units are left in PLANNED status so a later redispatch can claim them
-    once slots free up.
+    once slots free up.  Due RETRYING units obey the same cap exclusion.
     """
     now = datetime.now(timezone.utc)
     # Build the WHERE clause for the atomic claim, excluding capped units.
@@ -902,6 +1082,33 @@ def _claim_units(
         .scalars()
         .all()
     )
+
+    retrying_where = [
+        SyncRunUnit.sync_run_id == run_uuid,
+        SyncRunUnit.status == SyncRunUnitStatus.RETRYING.value,
+        SyncRunUnit.available_at.is_not(None),
+        SyncRunUnit.available_at <= now,
+    ]
+    if capped_ids:
+        retrying_where.append(
+            ~SyncRunUnit.id.in_([uuid.UUID(cid) for cid in capped_ids])
+        )
+    due_retrying: set[uuid.UUID] = set(
+        session.execute(
+            update(SyncRunUnit)
+            .where(*retrying_where)
+            .values(
+                status=SyncRunUnitStatus.DISPATCHING.value,
+                updated_at=now,
+                available_at=None,
+            )
+            .returning(SyncRunUnit.id)
+            .execution_options(synchronize_session=False)
+        )
+        .scalars()
+        .all()
+    )
+    claimed_ids.update(due_retrying)
 
     # Reclaim stale DISPATCHING units only (F2: RUNNING is never reclaimed).
     # A DISPATCHING unit that is stale means the worker was enqueued but never
@@ -1073,18 +1280,21 @@ def _heartbeat_unit_lease(
             )
 
 
-def _schedule_redispatch(sync_run_id: str) -> None:
+def _schedule_redispatch(
+    sync_run_id: str, *, available_at: datetime | None = None
+) -> None:
     try:
         from dev_health_ops.db import get_postgres_session_sync
 
         countdown = int(os.getenv("SYNC_DISPATCH_REDISPATCH_COUNTDOWN", "60"))
         now = datetime.now(timezone.utc)
+        redispatch_at = available_at or now + timedelta(seconds=countdown)
         with get_postgres_session_sync() as session:
             upsert_outbox_wakeup(
                 session,
                 sync_run_id=sync_run_id,
                 kind=OUTBOX_KIND_DISPATCH,
-                available_at=now + timedelta(seconds=countdown),
+                available_at=redispatch_at,
                 now=now,
             )
             session.execute(
@@ -1096,7 +1306,7 @@ def _schedule_redispatch(sync_run_id: str) -> None:
                     SyncDispatchOutbox.claim_token.is_(None),
                 )
                 .values(
-                    available_at=now + timedelta(seconds=countdown),
+                    available_at=redispatch_at,
                     updated_at=now,
                 )
                 .execution_options(synchronize_session=False)
@@ -1104,7 +1314,11 @@ def _schedule_redispatch(sync_run_id: str) -> None:
             session.flush()
         logger.info(
             "dispatch_sync_run.redispatch_rearmed",
-            extra={"sync_run_id": sync_run_id, "countdown": countdown},
+            extra={
+                "sync_run_id": sync_run_id,
+                "countdown": countdown,
+                "available_at": redispatch_at.isoformat(),
+            },
         )
     except Exception:
         logger.exception(

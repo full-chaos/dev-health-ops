@@ -173,7 +173,7 @@ def _patch_reconciler_enqueues(
     finalize_side_effect: Callable[..., Any] | None = None,
     post_sync_side_effect: Callable[..., Any] | None = None,
 ) -> tuple[list[tuple[Any, Any]], list[tuple[Any, Any]], list[dict[str, Any]]]:
-    from dev_health_ops.workers import sync_runtime, sync_units
+    from dev_health_ops.workers import post_sync_dispatch, sync_units
 
     dispatches: list[tuple[Any, Any]] = []
     finalizers: list[tuple[Any, Any]] = []
@@ -200,7 +200,7 @@ def _patch_reconciler_enqueues(
     monkeypatch.setattr(sync_units.dispatch_sync_run, "apply_async", dispatch_apply)
     monkeypatch.setattr(sync_units.finalize_sync_run, "apply_async", finalize_apply)
     monkeypatch.setattr(
-        sync_runtime,
+        post_sync_dispatch,
         "_dispatch_post_sync_tasks",
         dispatch_post_sync,
     )
@@ -916,6 +916,8 @@ def test_a6_post_sync_metrics_receive_exact_covered_window(
             "to_date": "2026-05-20",
             "work_graph_from_date": "2026-05-10T00:00:00+00:00",
             "work_graph_to_date": "2026-05-21T00:00:00+00:00",
+            "auto_import_teams": False,
+            "sync_run_id": str(run.id),
         }
     ]
     assert (

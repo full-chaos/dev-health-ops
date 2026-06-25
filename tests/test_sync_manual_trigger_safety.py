@@ -1,3 +1,16 @@
+"""Manual "Sync now" trigger safety (CHAOS-2647).
+
+The legacy ``sync_runtime``/``sync_tasks`` worker path was removed; manual
+triggers route through the fan-out planner (``plan_sync_run`` +
+``dispatch_sync_run``). These tests exercise the surviving safety guards on
+``trigger_sync_config`` at the function level:
+
+* cross-org service results are rejected (404);
+* a config not linked to a migrated integration is rejected (400, planner-only);
+* a dispatch-enqueue failure flips the committed-but-undispatched SyncRun to
+  FAILED via ``mark_sync_run_failed`` (best-effort fallback) and surfaces 503.
+"""
+
 from __future__ import annotations
 
 import uuid
@@ -6,124 +19,114 @@ from typing import Any, cast
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
 
 from dev_health_ops.api.admin.routers import sync as sync_router
-from dev_health_ops.workers import sync_runtime, sync_tasks
-
-
-class _NoConfigQuery:
-    def filter(self, *args):
-        return self
-
-    def one_or_none(self):
-        return None
-
-
-class _NoConfigSession:
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
-
-    def query(self, model):
-        return _NoConfigQuery()
-
-
-def test_run_sync_config_unknown_config_is_terminal_without_retry(monkeypatch):
-    retry_called = False
-
-    def fail_retry(*args, **kwargs):
-        nonlocal retry_called
-        retry_called = True
-        raise AssertionError("retry should not be called")
-
-    monkeypatch.setattr(
-        "dev_health_ops.db.get_postgres_session_sync",
-        lambda: _NoConfigSession(),
-    )
-    monkeypatch.setattr(sync_runtime, "organization_exists_sync", lambda *args: True)
-    monkeypatch.setattr(sync_runtime.run_sync_config, "retry", fail_retry)
-
-    with pytest.raises(sync_runtime._TerminalSyncError):
-        cast(Any, sync_runtime.run_sync_config).run(str(uuid.uuid4()), "org-a")
-
-    assert retry_called is False
-
-
-@pytest.mark.skip(
-    reason="Flaky in full-suite runs only (passes in isolation and local sqlite suite): "
-    "cross-test global-state pollution under CI service tier corrupts dispatch "
-    "capture. Test-infra bug, not a product regression. Tracked in CHAOS-2265."
+from dev_health_ops.models.git import Base
+from dev_health_ops.models.integrations import (
+    Integration,
+    IntegrationDataset,
+    IntegrationSource,
+    SyncRun,
+    SyncRunStatus,
 )
-@pytest.mark.asyncio
-async def test_trigger_sync_config_dispatches_resolved_config_id_and_org(monkeypatch):
-    monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
-    request_id = uuid.uuid4()
-    resolved_id = uuid.uuid4()
-    calls = []
-
-    class FakeService:
-        def __init__(self, session, org_id):
-            self.org_id = org_id
-
-        async def get_by_id(self, config_id):
-            assert config_id == str(request_id)
-            return SimpleNamespace(
-                id=resolved_id,
-                org_id=self.org_id,
-                provider="github",
-                sync_targets=["commits"],
-                sync_options={"owner": "full-chaos"},
-            )
-
-    class FakeTask:
-        def apply_async(self, kwargs=None, queue=None, **options):
-            calls.append({"kwargs": kwargs, "queue": queue})
-            return SimpleNamespace(id="task-1")
-
-    fake_batch_task = FakeTask()
-    monkeypatch.setattr(sync_router, "SyncConfigurationService", FakeService)
-    monkeypatch.setattr(sync_router, "_is_batch_eligible", lambda config: True)
-    monkeypatch.setattr(sync_tasks, "dispatch_batch_sync", fake_batch_task)
-
-    result = await sync_router.trigger_sync_config(
-        str(request_id), session=cast(Any, object()), org_id="org-a"
-    )
-
-    assert result["status"] == "triggered"
-    assert result["config_id"] == str(resolved_id)
-    assert result["task_id"] == "task-1"
-    assert len(calls) == 1
-    # CHAOS-2299: manual triggers route to the provider's dedicated queue.
-    assert calls[0]["queue"] == "sync.github"
-    dispatched_kwargs = calls[0]["kwargs"]
-    assert dispatched_kwargs["config_id"] == str(resolved_id)
-    assert dispatched_kwargs["org_id"] == "org-a"
-    assert dispatched_kwargs["triggered_by"] == "manual"
+from dev_health_ops.models.settings import SyncConfiguration
 
 
-@pytest.mark.skip(
-    reason="Flaky in full-suite runs only (shares the global-state pollution "
-    "vulnerability of the sibling dispatch test). Test-infra bug, not a product "
-    "regression. Tracked in CHAOS-2265."
-)
-@pytest.mark.asyncio
-async def test_trigger_sync_config_rejects_cross_org_service_result(monkeypatch):
-    class FakeService:
+class _FakeAsyncSession:
+    """Minimal async-session shim over a sync SQLAlchemy Session.
+
+    Exposes only the ``run_sync`` / ``commit`` surface that
+    ``trigger_sync_config`` uses, running the supplied callables against a real
+    sync session so the planner helpers persist as they do in production.
+    """
+
+    def __init__(self, sync_session: Any):
+        self._s = sync_session
+
+    async def run_sync(self, fn, *args, **kwargs):
+        return fn(self._s, *args, **kwargs)
+
+    async def commit(self) -> None:
+        commit = getattr(self._s, "commit", None)
+        if commit is not None:
+            commit()
+
+
+def _service_factory(config: Any):
+    class _Svc:
         def __init__(self, session, org_id):
             pass
 
         async def get_by_id(self, config_id):
-            return SimpleNamespace(
-                id=uuid.uuid4(),
-                org_id="org-b",
-                provider="github",
-                sync_targets=["commits"],
-                sync_options={"owner": "full-chaos"},
-            )
+            return config
 
-    monkeypatch.setattr(sync_router, "SyncConfigurationService", FakeService)
+    return _Svc
+
+
+def _seed_migrated_config(session: Session, org_id: str = "org-a") -> SyncConfiguration:
+    integration = Integration(
+        org_id=org_id,
+        provider="github",
+        name=f"integration-{uuid.uuid4()}",
+        config={},
+        is_active=True,
+    )
+    session.add(integration)
+    session.flush()
+    session.add_all(
+        [
+            IntegrationSource(
+                org_id=org_id,
+                integration_id=integration.id,
+                provider="github",
+                source_type="repository",
+                external_id="acme/repo",
+                name="repo",
+                full_name="acme/repo",
+                metadata_={},
+                is_enabled=True,
+            ),
+            IntegrationDataset(
+                org_id=org_id,
+                integration_id=integration.id,
+                dataset_key="commits",
+                is_enabled=True,
+                options={},
+            ),
+        ]
+    )
+    config = SyncConfiguration(
+        org_id=org_id,
+        name="manual-trigger",
+        provider="github",
+        sync_targets=["git"],
+        sync_options={},
+        is_active=True,
+        migrated_integration_id=integration.id,
+    )
+    session.add(config)
+    session.flush()
+    return config
+
+
+@pytest.mark.asyncio
+async def test_trigger_sync_config_rejects_cross_org_service_result(monkeypatch):
+    """A config whose org_id does not match the caller's org is treated as not
+    found (404) — the trigger must never act on another org's config."""
+
+    config = SimpleNamespace(
+        id=uuid.uuid4(),
+        org_id="org-b",
+        provider="github",
+        sync_targets=["git"],
+        sync_options={"owner": "full-chaos"},
+        is_active=True,
+    )
+    monkeypatch.setattr(
+        sync_router, "SyncConfigurationService", _service_factory(config)
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         await sync_router.trigger_sync_config(
@@ -131,3 +134,76 @@ async def test_trigger_sync_config_rejects_cross_org_service_result(monkeypatch)
         )
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_trigger_unmigrated_config_returns_400(monkeypatch):
+    """A config not linked to a migrated integration cannot be planner-routed,
+    so the manual trigger returns HTTP 400 instead of enqueuing legacy work."""
+
+    config = SimpleNamespace(
+        id=uuid.uuid4(),
+        org_id="org-a",
+        provider="github",
+        sync_targets=["git"],
+        sync_options={},
+        is_active=True,
+        migrated_integration_id=None,
+        migrated_source_id=None,
+        planner_managed=False,
+    )
+    monkeypatch.setattr(
+        sync_router, "SyncConfigurationService", _service_factory(config)
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await sync_router.trigger_sync_config(
+            str(config.id),
+            session=cast(Any, _FakeAsyncSession(object())),
+            org_id="org-a",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "not linked to a migrated integration" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_trigger_dispatch_enqueue_failure_marks_sync_run_failed(monkeypatch):
+    """When the fan-out dispatch enqueue fails after the planner SyncRun is
+    committed, the manual trigger surfaces 503 and the best-effort
+    ``mark_sync_run_failed`` fallback flips the stranded PLANNED run to FAILED."""
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    try:
+        with Session(engine) as sync_session:
+            config = _seed_migrated_config(sync_session, org_id="org-a")
+            sync_session.commit()
+
+            monkeypatch.setattr(
+                sync_router, "SyncConfigurationService", _service_factory(config)
+            )
+
+            class _FailingDispatch:
+                @staticmethod
+                def apply_async(*args, **kwargs):
+                    raise RuntimeError("broker down")
+
+            monkeypatch.setattr(sync_router, "dispatch_sync_run", _FailingDispatch)
+
+            with pytest.raises(HTTPException) as exc_info:
+                await sync_router.trigger_sync_config(
+                    str(config.id),
+                    session=cast(Any, _FakeAsyncSession(sync_session)),
+                    org_id="org-a",
+                )
+
+            assert exc_info.value.status_code == 503
+            assert "broker down" in exc_info.value.detail
+
+            runs = list(sync_session.execute(select(SyncRun)).scalars().all())
+            assert len(runs) == 1
+            assert runs[0].status == SyncRunStatus.FAILED.value
+            assert runs[0].error == "dispatch enqueue failed"
+    finally:
+        engine.dispose()

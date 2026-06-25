@@ -7,9 +7,6 @@ from typing import TYPE_CHECKING
 
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.org_guard import organization_exists_sync
-from dev_health_ops.workers.queues import sync_queue_for_provider
-from dev_health_ops.workers.sync_batch import _is_batch_eligible, dispatch_batch_sync
-from dev_health_ops.workers.sync_runtime import run_sync_config
 from dev_health_ops.workers.task_utils import (
     _as_datetime,
     _as_datetime_or_none,
@@ -246,19 +243,8 @@ def _maybe_dispatch_config(
         job.next_run_at = marker
     session.flush()
 
-    dispatch_kwargs = {
-        "config_id": str(sync_config_id),
-        "org_id": org_id,
-        "triggered_by": "schedule",
-    }
-    sync_queue = sync_queue_for_provider(_as_str(config.provider))
-    is_batch = _is_batch_eligible(config)
-
     session.commit()
 
-    # Migrated-trigger routing (CHAOS-2516): when the feature flag is enabled
-    # for this org AND the config was migrated, route through the fan-out
-    # planner instead of the legacy per-config tasks.
     from dev_health_ops.sync.planner import plan_sync_run
     from dev_health_ops.sync.trigger_routing import (
         planner_request_for_config_if_routed,
@@ -268,53 +254,32 @@ def _maybe_dispatch_config(
     request = planner_request_for_config_if_routed(
         session, config, triggered_by="schedule", mode="incremental"
     )
-    if request is not None:
-        planner_managed = bool(getattr(config, "planner_managed", False))
-        logger.info(
-            "Routing config %s through fan-out planner (migrated trigger routing)",
+    if request is None:
+        logger.warning(
+            "Skipping sync config %s because it is not linked to a migrated integration",
             config.id,
         )
-        try:
-            plan = plan_sync_run(session, request)
-            session.commit()
-        except Exception:
-            logger.exception(
-                "Fan-out planner failed for config %s",
-                config.id,
-            )
-            session.rollback()
-            if planner_managed:
-                return False
-        else:
-            try:
-                getattr(dispatch_sync_run, "apply_async")(
-                    args=(plan.sync_run_id,), queue="sync"
-                )
-            except Exception:
-                logger.warning(
-                    "sync_scheduler.dispatch_fastpath_failed",
-                    extra={
-                        "config_id": str(config.id),
-                        "sync_run_id": plan.sync_run_id,
-                    },
-                    exc_info=True,
-                )
-                return True
-            else:
-                return True
+        return False
 
-    # Per-provider routing (CHAOS-2299): "is Linear stuck?" must be one LLEN.
-    if is_batch:
-        getattr(dispatch_batch_sync, "apply_async")(
-            kwargs=dispatch_kwargs,
-            queue=sync_queue,
-        )
-    else:
-        getattr(run_sync_config, "apply_async")(
-            kwargs=dispatch_kwargs,
-            queue=sync_queue,
-        )
+    logger.info("Routing config %s through fan-out planner", config.id)
+    try:
+        plan = plan_sync_run(session, request)
+        session.commit()
+    except Exception:
+        logger.exception("Fan-out planner failed for config %s", config.id)
+        session.rollback()
+        return False
 
+    try:
+        getattr(dispatch_sync_run, "apply_async")(
+            args=(plan.sync_run_id,), queue="sync"
+        )
+    except Exception:
+        logger.warning(
+            "sync_scheduler.dispatch_fastpath_failed",
+            extra={"config_id": str(config.id), "sync_run_id": plan.sync_run_id},
+            exc_info=True,
+        )
     return True
 
 

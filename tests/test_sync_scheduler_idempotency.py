@@ -1,10 +1,15 @@
-"""Dispatch-time idempotency for the sync scheduler (CHAOS-2270).
+"""Dispatch-time idempotency for the sync scheduler (CHAOS-2270 / CHAOS-2647).
 
 `dispatch_scheduled_syncs` runs every beat tick, but `last_sync_at` only
 advances when a run completes, so without a dispatch marker every due config
 was re-enqueued on every tick and flooded the sync queue. These tests cover
 the `ScheduledJob.next_run_at` dispatch marker, the `is_running` staleness
 escape, and per-config error isolation.
+
+Post-CHAOS-2647 the scheduler routes integration-linked configs through the
+fan-out planner (``plan_sync_run`` + ``dispatch_sync_run``); the legacy
+``run_sync_config`` / ``dispatch_batch_sync`` worker path was removed. Configs
+not linked to a migrated integration are skipped (logged + counted as skipped).
 """
 
 from __future__ import annotations
@@ -15,15 +20,19 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from dev_health_ops.models.git import Base
+from dev_health_ops.models.integrations import (
+    Integration,
+    IntegrationDataset,
+    IntegrationSource,
+)
 from dev_health_ops.models.settings import (
-    JobRunStatus,
     JobStatus,
     ScheduledJob,
     SyncConfiguration,
@@ -63,26 +72,75 @@ def _hourly_croniter_module() -> SimpleNamespace:
 
 
 def _make_config(
+    session: Session,
     name: str = "test-config",
     last_sync_at: datetime | None = None,
     sync_options: dict | None = None,
     sync_targets: list | None = None,
     provider: str = "github",
+    org_id: str = "default",
+    *,
+    migrated: bool = True,
 ) -> SyncConfiguration:
+    """Create a SyncConfiguration, optionally linked to a migrated integration.
+
+    A migrated config (the default) gets an Integration plus one enabled source
+    and one enabled dataset so the scheduler can route it through the fan-out
+    planner. Pass ``migrated=False`` to exercise the planner-only skip path.
+    """
+    migrated_integration_id: uuid.UUID | None = None
+    if migrated:
+        integration = Integration(
+            org_id=org_id,
+            provider=provider,
+            name=f"integration-{name}-{uuid.uuid4()}",
+            config={},
+            is_active=True,
+        )
+        session.add(integration)
+        session.flush()
+        session.add_all(
+            [
+                IntegrationSource(
+                    org_id=org_id,
+                    integration_id=integration.id,
+                    provider=provider,
+                    source_type="repository",
+                    external_id=f"{name}/repo",
+                    name="repo",
+                    full_name=f"{name}/repo",
+                    metadata_={},
+                    is_enabled=True,
+                ),
+                IntegrationDataset(
+                    org_id=org_id,
+                    integration_id=integration.id,
+                    dataset_key="commits",
+                    is_enabled=True,
+                    options={},
+                ),
+            ]
+        )
+        session.flush()
+        migrated_integration_id = integration.id
+
     config = SyncConfiguration(
         name=name,
         provider=provider,
-        org_id="default",
+        org_id=org_id,
         sync_targets=sync_targets or ["git", "prs"],
-        # owner+repo set => not batch eligible; explicit schedule_cron so the
-        # manual-only gate (CHAOS-2297) doesn't skip dispatch in these tests.
+        # owner+repo set => explicit schedule_cron so the manual-only gate
+        # (CHAOS-2297) doesn't skip dispatch in these tests.
         sync_options=sync_options
         if sync_options is not None
         else {"owner": "org", "repo": "repo", "schedule_cron": "0 * * * *"},
         is_active=True,
+        migrated_integration_id=migrated_integration_id,
     )
     if last_sync_at is not None:
         config.last_sync_at = last_sync_at
+    session.add(config)
+    session.flush()
     return config
 
 
@@ -107,8 +165,14 @@ def _make_job(
     return job
 
 
-def _run_dispatch(monkeypatch, db_session) -> tuple[Any, MagicMock, MagicMock]:
-    """Wire mocks and return (task, run_sync_mock, batch_sync_mock)."""
+def _run_dispatch(monkeypatch, db_session) -> tuple[Any, MagicMock]:
+    """Wire mocks and return (task, dispatch_mock).
+
+    The scheduler routes due, integration-linked configs through
+    ``plan_sync_run`` + ``dispatch_sync_run.apply_async``; the test patches the
+    relocated ``dispatch_sync_run`` symbol so no real Celery enqueue happens.
+    """
+    from dev_health_ops.workers import sync_units as sync_units_mod
     from dev_health_ops.workers.sync_scheduler import dispatch_scheduled_syncs
 
     monkeypatch.setitem(sys.modules, "croniter", _hourly_croniter_module())
@@ -116,15 +180,13 @@ def _run_dispatch(monkeypatch, db_session) -> tuple[Any, MagicMock, MagicMock]:
         "dev_health_ops.db.get_postgres_session_sync",
         lambda: _fake_session_ctx(db_session),
     )
-    run_sync_mock = MagicMock()
-    batch_sync_mock = MagicMock()
     monkeypatch.setattr(
-        "dev_health_ops.workers.sync_scheduler.run_sync_config", run_sync_mock
+        "dev_health_ops.workers.sync_scheduler.organization_exists_sync",
+        lambda session, org_id_arg: True,
     )
-    monkeypatch.setattr(
-        "dev_health_ops.workers.sync_scheduler.dispatch_batch_sync", batch_sync_mock
-    )
-    return dispatch_scheduled_syncs, run_sync_mock, batch_sync_mock
+    dispatch_mock = MagicMock()
+    monkeypatch.setattr(sync_units_mod, "dispatch_sync_run", dispatch_mock)
+    return dispatch_scheduled_syncs, dispatch_mock
 
 
 def _call(task) -> dict:
@@ -146,61 +208,63 @@ class TestDispatchIdempotency:
         self, monkeypatch, db_session
     ):
         now = datetime.now(timezone.utc)
-        config = _make_config(last_sync_at=now - 2 * HOUR)
+        config = _make_config(db_session, last_sync_at=now - 2 * HOUR)
         job = _make_job(config)
-        db_session.add_all([config, job])
+        db_session.add(job)
         db_session.flush()
 
-        task, run_sync_mock, _ = _run_dispatch(monkeypatch, db_session)
+        task, dispatch_mock = _run_dispatch(monkeypatch, db_session)
 
         def assert_marker_stamped_before_enqueue(*_args, **_kwargs) -> None:
             assert job.next_run_at is not None
             assert _aware(job.next_run_at) > now
 
-        run_sync_mock.apply_async.side_effect = assert_marker_stamped_before_enqueue
+        dispatch_mock.apply_async.side_effect = assert_marker_stamped_before_enqueue
 
         first = _call(task)
         assert str(config.id) in first["dispatched"]
-        assert run_sync_mock.apply_async.call_count == 1
+        assert dispatch_mock.apply_async.call_count == 1
+        # Fan-out dispatch enqueues the planner run on the shared sync queue.
+        assert dispatch_mock.apply_async.call_args.kwargs["queue"] == "sync"
         # The dispatch marker was stamped to the next cron occurrence.
         assert job.next_run_at is not None
         assert _aware(job.next_run_at) > now
 
         second = _call(task)
         assert second["dispatched"] == []
-        assert run_sync_mock.apply_async.call_count == 1
+        assert dispatch_mock.apply_async.call_count == 1
 
     def test_expired_dispatch_marker_allows_redispatch(self, monkeypatch, db_session):
         now = datetime.now(timezone.utc)
-        config = _make_config(last_sync_at=now - 2 * HOUR)
+        config = _make_config(db_session, last_sync_at=now - 2 * HOUR)
         # Marker from a previous dispatch whose task was lost (queue purge,
         # worker crash) and whose cron occurrence has already passed.
         job = _make_job(config, next_run_at=now - timedelta(minutes=1))
-        db_session.add_all([config, job])
+        db_session.add(job)
         db_session.flush()
 
-        task, run_sync_mock, _ = _run_dispatch(monkeypatch, db_session)
+        task, dispatch_mock = _run_dispatch(monkeypatch, db_session)
 
         result = _call(task)
         assert str(config.id) in result["dispatched"]
-        assert run_sync_mock.apply_async.call_count == 1
+        assert dispatch_mock.apply_async.call_count == 1
         assert job.next_run_at is not None
         assert _aware(job.next_run_at) > now
 
     def test_fresh_is_running_marker_skips_dispatch(self, monkeypatch, db_session):
         now = datetime.now(timezone.utc)
-        config = _make_config(last_sync_at=now - 2 * HOUR)
+        config = _make_config(db_session, last_sync_at=now - 2 * HOUR)
         job = _make_job(
             config, is_running=True, last_run_at=now - timedelta(minutes=10)
         )
-        db_session.add_all([config, job])
+        db_session.add(job)
         db_session.flush()
 
-        task, run_sync_mock, _ = _run_dispatch(monkeypatch, db_session)
+        task, dispatch_mock = _run_dispatch(monkeypatch, db_session)
 
         result = _call(task)
         assert result["dispatched"] == []
-        run_sync_mock.apply_async.assert_not_called()
+        dispatch_mock.apply_async.assert_not_called()
         assert job.next_run_at is None
 
     def test_stale_is_running_marker_allows_redispatch(self, monkeypatch, db_session):
@@ -208,40 +272,40 @@ class TestDispatchIdempotency:
 
         now = datetime.now(timezone.utc)
         stale = now - timedelta(seconds=STALE_RUNNING_TTL_SECONDS + 60)
-        config = _make_config(last_sync_at=now - 2 * HOUR)
+        config = _make_config(db_session, last_sync_at=now - 2 * HOUR)
         # Worker crashed mid-run: is_running was never cleared.
         job = _make_job(config, is_running=True, last_run_at=stale)
-        db_session.add_all([config, job])
+        db_session.add(job)
         db_session.flush()
 
-        task, run_sync_mock, _ = _run_dispatch(monkeypatch, db_session)
+        task, dispatch_mock = _run_dispatch(monkeypatch, db_session)
 
         first = _call(task)
         assert str(config.id) in first["dispatched"]
-        assert run_sync_mock.apply_async.call_count == 1
+        assert dispatch_mock.apply_async.call_count == 1
 
         # The re-dispatch stamps next_run_at, so even with the flag still
         # wedged the config is enqueued at most once per cron interval.
         second = _call(task)
         assert second["dispatched"] == []
-        assert run_sync_mock.apply_async.call_count == 1
+        assert dispatch_mock.apply_async.call_count == 1
 
     def test_completed_run_resets_cycle_without_redispatch(
         self, monkeypatch, db_session
     ):
         now = datetime.now(timezone.utc)
-        config = _make_config(last_sync_at=now - 2 * HOUR)
+        config = _make_config(db_session, last_sync_at=now - 2 * HOUR)
         job = _make_job(config)
-        db_session.add_all([config, job])
+        db_session.add(job)
         db_session.flush()
 
-        task, run_sync_mock, _ = _run_dispatch(monkeypatch, db_session)
+        task, dispatch_mock = _run_dispatch(monkeypatch, db_session)
 
         _call(task)
-        assert run_sync_mock.apply_async.call_count == 1
+        assert dispatch_mock.apply_async.call_count == 1
 
-        # Simulate the consumer terminal transition (sync_runtime): the run
-        # completed, is_running cleared, last_sync_at advanced.
+        # Simulate the consumer terminal transition: the run completed,
+        # is_running cleared, last_sync_at advanced.
         job.is_running = False
         config.last_sync_at = now
         db_session.flush()
@@ -249,7 +313,7 @@ class TestDispatchIdempotency:
         # Still inside the same cron interval: nothing to dispatch.
         second = _call(task)
         assert second["dispatched"] == []
-        assert run_sync_mock.apply_async.call_count == 1
+        assert dispatch_mock.apply_async.call_count == 1
 
         # Next cron interval reached (marker expired AND config due again).
         job.next_run_at = now - timedelta(seconds=1)
@@ -258,22 +322,22 @@ class TestDispatchIdempotency:
 
         third = _call(task)
         assert str(config.id) in third["dispatched"]
-        assert run_sync_mock.apply_async.call_count == 2
+        assert dispatch_mock.apply_async.call_count == 2
 
     def test_creates_scheduled_job_row_when_missing(self, monkeypatch, db_session):
         now = datetime.now(timezone.utc)
         config = _make_config(
+            db_session,
             last_sync_at=now - 2 * HOUR,
             sync_options={"owner": "org", "repo": "repo", "schedule_cron": "0 * * * *"},
         )
-        db_session.add(config)
         db_session.flush()
 
-        task, run_sync_mock, _ = _run_dispatch(monkeypatch, db_session)
+        task, dispatch_mock = _run_dispatch(monkeypatch, db_session)
 
         first = _call(task)
         assert str(config.id) in first["dispatched"]
-        assert run_sync_mock.apply_async.call_count == 1
+        assert dispatch_mock.apply_async.call_count == 1
 
         job = (
             db_session.query(ScheduledJob)
@@ -289,217 +353,48 @@ class TestDispatchIdempotency:
 
         second = _call(task)
         assert second["dispatched"] == []
-        assert run_sync_mock.apply_async.call_count == 1
+        assert dispatch_mock.apply_async.call_count == 1
 
 
 class TestDispatchErrorIsolation:
     def test_bad_config_does_not_abort_remaining_configs(self, monkeypatch, db_session):
         now = datetime.now(timezone.utc)
-        bad_config = _make_config(name="bad-config", last_sync_at=now - 2 * HOUR)
+        bad_config = _make_config(
+            db_session, name="bad-config", last_sync_at=now - 2 * HOUR
+        )
         bad_job = _make_job(bad_config, schedule_cron="BAD")
-        good_config = _make_config(name="good-config", last_sync_at=now - 2 * HOUR)
+        good_config = _make_config(
+            db_session, name="good-config", last_sync_at=now - 2 * HOUR
+        )
         good_job = _make_job(good_config)
-        db_session.add_all([bad_config, bad_job, good_config, good_job])
+        db_session.add_all([bad_job, good_job])
         db_session.flush()
 
-        task, run_sync_mock, _ = _run_dispatch(monkeypatch, db_session)
+        task, dispatch_mock = _run_dispatch(monkeypatch, db_session)
 
         result = _call(task)
         assert result["errors"] == 1
         assert str(good_config.id) in result["dispatched"]
         assert str(bad_config.id) not in result["dispatched"]
-        assert run_sync_mock.apply_async.call_count == 1
+        assert dispatch_mock.apply_async.call_count == 1
 
 
-class TestConsumerClearsRunningMarker:
-    def test_terminal_failure_clears_is_running(self, monkeypatch, db_session):
-        """run_sync_config must clear is_running on failure, or the scheduler
-        would skip the config until the staleness TTL expires."""
-        from dev_health_ops.workers.sync_runtime import run_sync_config
+class TestUnmigratedConfigsSkipped:
+    """Planner-only routing: a config not linked to a migrated integration is
+    skipped by the scheduler (CHAOS-2647)."""
 
-        config = _make_config(
-            name="no-owner-repo",
-            # github + code targets but no owner/repo anywhere => terminal
-            # ValueError AFTER the job is marked running.
-            sync_options={},
-            sync_targets=["git"],
-        )
-        db_session.add(config)
-        db_session.flush()
-
-        monkeypatch.setattr(
-            "dev_health_ops.db.get_postgres_session_sync",
-            lambda: _fake_session_ctx(db_session),
-        )
-        monkeypatch.setattr(
-            "dev_health_ops.workers.sync_runtime._get_db_url",
-            lambda: "sqlite:///:memory:",
-        )
-
-        task: Any = run_sync_config
-        task.push_request(id=str(uuid.uuid4()), retries=0)
-        try:
-            with pytest.raises(ValueError, match="owner/repo"):
-                task(config_id=str(config.id), org_id="default")
-        finally:
-            task.pop_request()
-
-        job = (
-            db_session.query(ScheduledJob)
-            .filter(
-                ScheduledJob.sync_config_id == config.id,
-                ScheduledJob.job_type == "sync",
-            )
-            .one()
-        )
-        assert job.is_running is False
-        assert job.last_run_status == JobRunStatus.FAILED.value
-
-    def test_pickup_reconciles_job_status_with_config(self, monkeypatch, db_session):
-        """A job parked PAUSED (manual-only) must be reactivated when the
-        config gained an explicit schedule out-of-band (CHAOS-2297)."""
-        from dev_health_ops.workers.sync_runtime import run_sync_config
-
-        config = _make_config(
-            name="reactivate-me",
-            # Explicit cron, but no owner/repo => terminal ValueError AFTER
-            # the job row is resolved and reconciled.
-            sync_options={"schedule_cron": "0 * * * *"},
-            sync_targets=["git"],
-        )
-        db_session.add(config)
-        db_session.flush()
+    def test_unmigrated_config_is_skipped(self, monkeypatch, db_session):
+        now = datetime.now(timezone.utc)
+        config = _make_config(db_session, last_sync_at=now - 2 * HOUR, migrated=False)
         job = _make_job(config)
-        job.status = JobStatus.PAUSED.value
         db_session.add(job)
         db_session.flush()
 
-        monkeypatch.setattr(
-            "dev_health_ops.db.get_postgres_session_sync",
-            lambda: _fake_session_ctx(db_session),
-        )
-        monkeypatch.setattr(
-            "dev_health_ops.workers.sync_runtime._get_db_url",
-            lambda: "sqlite:///:memory:",
-        )
-
-        task: Any = run_sync_config
-        task.push_request(id=str(uuid.uuid4()), retries=0)
-        try:
-            with pytest.raises(ValueError, match="owner/repo"):
-                task(config_id=str(config.id), org_id="default")
-        finally:
-            task.pop_request()
-
-        assert job.status == JobStatus.ACTIVE.value
-
-
-class TestBatchRoutingStillStampsMarker:
-    @patch("dev_health_ops.workers.sync_scheduler.dispatch_batch_sync")
-    @patch("dev_health_ops.workers.sync_scheduler.run_sync_config")
-    def test_batch_config_dispatched_once(
-        self, run_sync_mock, batch_sync_mock, monkeypatch, db_session
-    ):
-        from dev_health_ops.workers.sync_scheduler import dispatch_scheduled_syncs
-
-        now = datetime.now(timezone.utc)
-        config = _make_config(
-            name="batch-config",
-            last_sync_at=now - 2 * HOUR,
-            sync_options={"search": "org/*", "schedule_cron": "0 * * * *"},
-        )
-        job = _make_job(config)
-        db_session.add_all([config, job])
-        db_session.flush()
-
-        monkeypatch.setitem(sys.modules, "croniter", _hourly_croniter_module())
-        monkeypatch.setattr(
-            "dev_health_ops.db.get_postgres_session_sync",
-            lambda: _fake_session_ctx(db_session),
-        )
-
-        task: Any = dispatch_scheduled_syncs
-        first = _call(task)
-        assert str(config.id) in first["dispatched"]
-        assert batch_sync_mock.apply_async.call_count == 1
-        run_sync_mock.apply_async.assert_not_called()
-
-        # Batch configs never advance last_sync_at from the scheduler's
-        # perspective; the marker alone must prevent the flood.
-        second = _call(task)
-        assert second["dispatched"] == []
-        assert batch_sync_mock.apply_async.call_count == 1
-
-
-class TestPerProviderQueueRouting:
-    """Scheduled dispatch routes to per-provider sync queues (CHAOS-2299)."""
-
-    @pytest.mark.parametrize(
-        ("provider", "expected_queue"),
-        [
-            ("github", "sync.github"),
-            ("gitlab", "sync.gitlab"),
-            ("linear", "sync.linear"),
-            ("jira", "sync.jira"),
-            ("launchdarkly", "sync.launchdarkly"),
-            ("mystery-provider", "sync"),
-        ],
-    )
-    def test_run_sync_config_dispatched_to_provider_queue(
-        self, monkeypatch, db_session, provider, expected_queue
-    ):
-        monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
-        now = datetime.now(timezone.utc)
-        config = _make_config(last_sync_at=now - 2 * HOUR, provider=provider)
-        job = _make_job(config)
-        db_session.add_all([config, job])
-        db_session.flush()
-
-        task, run_sync_mock, _ = _run_dispatch(monkeypatch, db_session)
+        task, dispatch_mock = _run_dispatch(monkeypatch, db_session)
 
         result = _call(task)
-        assert str(config.id) in result["dispatched"]
-        run_sync_mock.apply_async.assert_called_once()
-        assert run_sync_mock.apply_async.call_args.kwargs["queue"] == expected_queue
-
-    def test_batch_dispatch_routed_to_provider_queue(self, monkeypatch, db_session):
-        monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
-        now = datetime.now(timezone.utc)
-        config = _make_config(
-            name="batch-queue-config",
-            last_sync_at=now - 2 * HOUR,
-            sync_options={"search": "org/*", "schedule_cron": "0 * * * *"},
-        )
-        job = _make_job(config)
-        db_session.add_all([config, job])
-        db_session.flush()
-
-        task, run_sync_mock, batch_sync_mock = _run_dispatch(monkeypatch, db_session)
-
-        result = _call(task)
-        assert str(config.id) in result["dispatched"]
-        batch_sync_mock.apply_async.assert_called_once()
-        assert batch_sync_mock.apply_async.call_args.kwargs["queue"] == "sync.github"
-        run_sync_mock.apply_async.assert_not_called()
-
-    def test_flag_off_scheduled_dispatch_stays_on_shared_queue(
-        self, monkeypatch, db_session
-    ):
-        """PROVIDER_SYNC_QUEUES_ENABLED unset (default): scheduled dispatch
-        keeps using the legacy shared queue so old-`-Q` workers consume it."""
-        monkeypatch.delenv("PROVIDER_SYNC_QUEUES_ENABLED", raising=False)
-        now = datetime.now(timezone.utc)
-        config = _make_config(last_sync_at=now - 2 * HOUR, provider="github")
-        job = _make_job(config)
-        db_session.add_all([config, job])
-        db_session.flush()
-
-        task, run_sync_mock, _ = _run_dispatch(monkeypatch, db_session)
-
-        result = _call(task)
-        assert str(config.id) in result["dispatched"]
-        run_sync_mock.apply_async.assert_called_once()
-        assert run_sync_mock.apply_async.call_args.kwargs["queue"] == "sync"
+        assert result["dispatched"] == []
+        dispatch_mock.apply_async.assert_not_called()
 
 
 class TestManualOnlyConfigsNotDispatched:
@@ -508,34 +403,34 @@ class TestManualOnlyConfigsNotDispatched:
     def test_config_without_schedule_cron_is_skipped(self, monkeypatch, db_session):
         now = datetime.now(timezone.utc)
         config = _make_config(
+            db_session,
             last_sync_at=now - 2 * HOUR,
             sync_options={"owner": "org", "repo": "repo"},
         )
         # Legacy rows: ACTIVE job carrying the default hourly placeholder cron.
         job = _make_job(config)
-        db_session.add_all([config, job])
+        db_session.add(job)
         db_session.flush()
 
-        task, run_sync_mock, batch_sync_mock = _run_dispatch(monkeypatch, db_session)
+        task, dispatch_mock = _run_dispatch(monkeypatch, db_session)
 
         result = _call(task)
         assert result["dispatched"] == []
         assert result["errors"] == 0
-        run_sync_mock.apply_async.assert_not_called()
-        batch_sync_mock.apply_async.assert_not_called()
+        dispatch_mock.apply_async.assert_not_called()
         assert job.next_run_at is None
 
     def test_paused_job_is_skipped(self, monkeypatch, db_session):
         now = datetime.now(timezone.utc)
-        config = _make_config(last_sync_at=now - 2 * HOUR)
+        config = _make_config(db_session, last_sync_at=now - 2 * HOUR)
         job = _make_job(config)
         job.status = JobStatus.PAUSED.value
-        db_session.add_all([config, job])
+        db_session.add(job)
         db_session.flush()
 
-        task, run_sync_mock, _ = _run_dispatch(monkeypatch, db_session)
+        task, dispatch_mock = _run_dispatch(monkeypatch, db_session)
 
         result = _call(task)
         assert result["dispatched"] == []
-        run_sync_mock.apply_async.assert_not_called()
+        dispatch_mock.apply_async.assert_not_called()
         assert job.next_run_at is None

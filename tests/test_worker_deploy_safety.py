@@ -16,7 +16,7 @@ def test_worker_inspect_sanitizes_task_arguments(monkeypatch, capsys) -> None:
                 "worker@node": [
                     {
                         "id": "task-1",
-                        "name": "dev_health_ops.workers.tasks.run_sync_config",
+                        "name": "dev_health_ops.workers.tasks.dispatch_sync_run",
                         "args": ["sensitive-value"],
                         "kwargs": {"credential": "sensitive-value"},
                         "argsrepr": "('sensitive-value',)",
@@ -47,7 +47,7 @@ def test_worker_inspect_sanitizes_task_arguments(monkeypatch, capsys) -> None:
     assert task == {
         "delivery_info": {"redelivered": False, "routing_key": "sync.github"},
         "id": "task-1",
-        "name": "dev_health_ops.workers.tasks.run_sync_config",
+        "name": "dev_health_ops.workers.tasks.dispatch_sync_run",
     }
     assert "sensitive-value" not in output
     assert "args" not in task
@@ -80,7 +80,7 @@ def test_worker_inspect_sanitizes_nested_scheduled_request(monkeypatch, capsys) 
                         "priority": 3,
                         "request": {
                             "id": "task-2",
-                            "name": "dev_health_ops.workers.tasks.run_sync_config",
+                            "name": "dev_health_ops.workers.tasks.dispatch_sync_run",
                             "args": ["sensitive-value"],
                             "kwargs": {"credential": "sensitive-value"},
                             "headers": {"x-provider-credential": "sensitive-value"},
@@ -103,7 +103,7 @@ def test_worker_inspect_sanitizes_nested_scheduled_request(monkeypatch, capsys) 
         "delivery_info": {"routing_key": "sync.github"},
         "eta": "2026-01-01T00:00:00+00:00",
         "id": "task-2",
-        "name": "dev_health_ops.workers.tasks.run_sync_config",
+        "name": "dev_health_ops.workers.tasks.dispatch_sync_run",
         "priority": 3,
     }
     assert "sensitive-value" not in output
@@ -135,6 +135,11 @@ def test_worker_late_ack_exclusions_are_explicit() -> None:
 def test_worker_late_ack_exclusions_match_registered_tasks(monkeypatch) -> None:
     monkeypatch.setenv("OTEL_ENABLED", "false")
 
+    # Load the aggregator module so every task registers with the Celery app,
+    # exactly as the worker bootstrap (autodiscover on worker init) does. Without
+    # it, celery_app.tasks reflects only lazily-imported tasks and this
+    # deploy-safety check becomes order-dependent under -n distribution.
+    import dev_health_ops.workers.tasks  # noqa: F401
     from dev_health_ops.workers import config
     from dev_health_ops.workers.celery_app import celery_app
 

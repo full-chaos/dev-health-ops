@@ -4,7 +4,7 @@ import importlib
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -250,16 +250,11 @@ async def test_full_journey_register_login_create_credential_create_sync_config(
     assert sync_resp.status_code == 201
     config_id = sync_resp.json()["id"]
 
-    mock_task = MagicMock(id="fake-task-id")
-    mock_run = MagicMock()
-    mock_run.apply_async.return_value = mock_task
-
-    with patch("dev_health_ops.workers.sync_tasks.run_sync_config", mock_run):
-        trigger_resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
-
-    assert trigger_resp.status_code == 202
-    assert trigger_resp.json()["status"] == "triggered"
-    mock_run.apply_async.assert_called_once()
+    # The bare POST /sync-configs create path is deprecated: a config that is
+    # not linked to a migrated integration cannot be triggered under planner-only
+    # routing, so the manual trigger returns 400.
+    trigger_resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
+    assert trigger_resp.status_code == 400
 
 
 @pytest.mark.asyncio

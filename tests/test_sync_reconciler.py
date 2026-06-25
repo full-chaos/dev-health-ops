@@ -493,7 +493,7 @@ def test_reconciler_zero_unit_run_relays_finalize_and_terminalizes(
 def test_reconciler_relays_pending_post_sync_row_with_rebuilt_payload(
     db_session, monkeypatch
 ):
-    from dev_health_ops.workers import sync_reconciler, sync_runtime, sync_units
+    from dev_health_ops.workers import post_sync_dispatch, sync_reconciler, sync_units
 
     run, running, _planned = _seed_run(db_session, planned_units=0)
     running.status = SyncRunUnitStatus.SUCCESS.value
@@ -536,7 +536,7 @@ def test_reconciler_relays_pending_post_sync_row_with_rebuilt_payload(
         lambda args=None, queue=None: finalizers.append((args, queue)),
     )
     monkeypatch.setattr(
-        sync_runtime,
+        post_sync_dispatch,
         "_dispatch_post_sync_tasks",
         lambda **kwargs: post_sync_dispatches.append(kwargs),
     )
@@ -558,6 +558,8 @@ def test_reconciler_relays_pending_post_sync_row_with_rebuilt_payload(
         "to_date": "2026-06-03",
         "work_graph_from_date": "2026-06-01T00:00:00+00:00",
         "work_graph_to_date": "2026-06-04T00:00:00+00:00",
+        "auto_import_teams": False,
+        "sync_run_id": str(run.id),
     }
     assert post_sync_row.status == OUTBOX_STATUS_DISPATCHED
     assert post_sync_row.claim_token is None
@@ -566,7 +568,7 @@ def test_reconciler_relays_pending_post_sync_row_with_rebuilt_payload(
 def test_reconciler_materializes_missing_post_sync_outbox_for_ledger(
     db_session, monkeypatch
 ):
-    from dev_health_ops.workers import sync_reconciler, sync_runtime, sync_units
+    from dev_health_ops.workers import post_sync_dispatch, sync_reconciler, sync_units
 
     run, running, _planned = _seed_run(db_session, planned_units=0)
     running.status = SyncRunUnitStatus.SUCCESS.value
@@ -597,7 +599,7 @@ def test_reconciler_materializes_missing_post_sync_outbox_for_ledger(
         lambda args=None, queue=None: None,
     )
     monkeypatch.setattr(
-        sync_runtime,
+        post_sync_dispatch,
         "_dispatch_post_sync_tasks",
         lambda **kwargs: post_sync_dispatches.append(kwargs),
     )
@@ -694,7 +696,7 @@ def test_reconciler_finalize_precondition_noop_marks_outbox_dispatched(
 def test_reconciler_post_sync_precondition_noop_marks_outbox_dispatched(
     db_session, monkeypatch
 ):
-    from dev_health_ops.workers import sync_reconciler, sync_runtime, sync_units
+    from dev_health_ops.workers import post_sync_dispatch, sync_reconciler, sync_units
 
     run, running, _planned = _seed_run(db_session, planned_units=0)
     running.status = SyncRunUnitStatus.SUCCESS.value
@@ -724,7 +726,7 @@ def test_reconciler_post_sync_precondition_noop_marks_outbox_dispatched(
         lambda args=None, queue=None: finalizers.append((args, queue)),
     )
     monkeypatch.setattr(
-        sync_runtime,
+        post_sync_dispatch,
         "_dispatch_post_sync_tasks",
         lambda **kwargs: post_sync_dispatches.append(kwargs),
     )
@@ -744,7 +746,7 @@ def test_reconciler_post_sync_precondition_noop_marks_outbox_dispatched(
 def test_reconciler_unknown_outbox_kind_rearms_without_dispatching(
     db_session, monkeypatch
 ):
-    from dev_health_ops.workers import sync_reconciler, sync_runtime, sync_units
+    from dev_health_ops.workers import post_sync_dispatch, sync_reconciler, sync_units
 
     run, running, _planned = _seed_run(db_session, planned_units=0)
     running.status = SyncRunUnitStatus.SUCCESS.value
@@ -776,7 +778,7 @@ def test_reconciler_unknown_outbox_kind_rearms_without_dispatching(
         lambda args=None, queue=None: finalizers.append((args, queue)),
     )
     monkeypatch.setattr(
-        sync_runtime,
+        post_sync_dispatch,
         "_dispatch_post_sync_tasks",
         lambda **kwargs: post_sync_dispatches.append(kwargs),
     )
@@ -799,7 +801,7 @@ def test_reconciler_unknown_outbox_kind_rearms_without_dispatching(
 
 
 def test_reconciler_two_passes_do_not_double_publish_post_sync(db_session, monkeypatch):
-    from dev_health_ops.workers import sync_reconciler, sync_runtime, sync_units
+    from dev_health_ops.workers import post_sync_dispatch, sync_reconciler, sync_units
 
     run, running, _planned = _seed_run(db_session, planned_units=0)
     running.status = SyncRunUnitStatus.SUCCESS.value
@@ -836,7 +838,7 @@ def test_reconciler_two_passes_do_not_double_publish_post_sync(db_session, monke
         lambda args=None, queue=None: None,
     )
     monkeypatch.setattr(
-        sync_runtime,
+        post_sync_dispatch,
         "_dispatch_post_sync_tasks",
         lambda **kwargs: post_sync_dispatches.append(kwargs),
     )

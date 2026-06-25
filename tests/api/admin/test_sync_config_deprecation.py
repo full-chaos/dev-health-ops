@@ -34,12 +34,9 @@ from dev_health_ops.models.settings import (
     IntegrationCredential,
     JobRun,
     ScheduledJob,
-    Setting,
-    SettingCategory,
     SyncConfiguration,
 )
 from dev_health_ops.models.users import Organization, User
-from dev_health_ops.sync.config_migration import MIGRATED_TRIGGER_ROUTING_SETTING_KEY
 from tests._helpers import tables_of
 
 admin_router_module = importlib.import_module("dev_health_ops.api.admin")
@@ -54,7 +51,6 @@ _TABLES = tables_of(
     SyncConfiguration,
     ScheduledJob,
     JobRun,
-    Setting,
     Integration,
     IntegrationSource,
     IntegrationDataset,
@@ -179,19 +175,6 @@ async def _seed_configs(session_maker, org_id: str):
         }
 
 
-async def _seed_planner_flag(session_maker, org_id: str, value: str = "true"):
-    """Write the migrated_trigger_routing_enabled Setting row."""
-    async with session_maker() as session:
-        setting = Setting(
-            key=MIGRATED_TRIGGER_ROUTING_SETTING_KEY,
-            category=SettingCategory.SYNC.value,
-            value=value,
-            org_id=org_id,
-        )
-        session.add(setting)
-        await session.commit()
-
-
 # ---------------------------------------------------------------------------
 # HIDE_MIGRATED_CHILD_CONFIGS flag tests
 # ---------------------------------------------------------------------------
@@ -284,7 +267,6 @@ async def test_batch_creates_planner_parent_when_planner_flag_active(
 ):
     ac, seeded_state = client
     org_id = seeded_state["org_id"]
-    await _seed_planner_flag(session_maker, org_id, value="true")
 
     resp = await ac.post(
         "/api/v1/admin/sync-configs/batch",

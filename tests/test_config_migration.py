@@ -11,14 +11,9 @@ from dev_health_ops.models import (
     Integration,
     IntegrationDataset,
     IntegrationSource,
-    Setting,
-    SettingCategory,
     SyncConfiguration,
 )
-from dev_health_ops.sync.config_migration import (
-    MIGRATED_TRIGGER_ROUTING_SETTING_KEY,
-    migrate_configs_to_integrations,
-)
+from dev_health_ops.sync.config_migration import migrate_configs_to_integrations
 
 ORG_ID = "migration-org"
 
@@ -88,12 +83,6 @@ def test_parent_child_and_targets_migrate_to_integration_source_datasets(db_sess
     dataset_keys = {
         dataset.dataset_key for dataset in db_session.query(IntegrationDataset).all()
     }
-    setting = (
-        db_session.query(Setting)
-        .filter(Setting.key == MIGRATED_TRIGGER_ROUTING_SETTING_KEY)
-        .one()
-    )
-
     assert report.integrations_created == 1
     assert report.sources_created == 1
     assert parent.migrated_integration_id == integration.id
@@ -118,8 +107,6 @@ def test_parent_child_and_targets_migrate_to_integration_source_datasets(db_sess
         "pr-comments",
     }.issubset(dataset_keys)
     assert db_session.query(SyncConfiguration).count() == 2
-    assert setting.category == SettingCategory.SYNC.value
-    assert setting.value == "false"
 
 
 def test_migration_is_idempotent(db_session):

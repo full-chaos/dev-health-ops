@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from dev_health_ops.workers.sync_runtime import _dispatch_post_sync_tasks
+from dev_health_ops.workers.post_sync_dispatch import _dispatch_post_sync_tasks
 
 _DORA_TASK = "dev_health_ops.workers.tasks.run_dora_metrics"
 
@@ -34,11 +34,11 @@ def _run_dispatch(provider: str, sync_targets: list[str], org_id: str):
     """
     with (
         patch(
-            "dev_health_ops.workers.sync_runtime.celery_app.signature"
+            "dev_health_ops.workers.post_sync_dispatch.celery_app.signature"
         ) as mock_signature,
-        patch("dev_health_ops.workers.sync_runtime.chain") as mock_chain,
+        patch("dev_health_ops.workers.post_sync_dispatch.chain") as mock_chain,
         patch(
-            "dev_health_ops.workers.sync_runtime.celery_app.send_task"
+            "dev_health_ops.workers.post_sync_dispatch.celery_app.send_task"
         ) as mock_send_task,
     ):
 

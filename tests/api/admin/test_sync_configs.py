@@ -18,7 +18,9 @@ from dev_health_ops.models.integrations import (
     Integration,
     IntegrationDataset,
     IntegrationSource,
+    SyncDispatchOutbox,
     SyncRun,
+    SyncRunUnit,
 )
 from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.settings import (
@@ -28,6 +30,7 @@ from dev_health_ops.models.settings import (
     ScheduledJob,
     Setting,
     SyncConfiguration,
+    SyncWatermark,
 )
 from dev_health_ops.models.users import Organization, User
 from tests._helpers import tables_of
@@ -48,7 +51,10 @@ _TABLES = tables_of(
     Integration,
     IntegrationSource,
     IntegrationDataset,
+    SyncDispatchOutbox,
     SyncRun,
+    SyncRunUnit,
+    SyncWatermark,
 )
 
 
@@ -193,6 +199,65 @@ async def _create_sync_config(ac, name: str = "my-sync", provider: str = "github
         "/api/v1/admin/sync-configs",
         json={"name": name, "provider": provider, "sync_targets": []},
     )
+
+
+async def _create_migrated_config(
+    session_maker,
+    org_id: str,
+    *,
+    name: str = "migrated-sync",
+    provider: str = "github",
+    is_active: bool = True,
+) -> str:
+    """Insert an integration-linked SyncConfiguration + Integration/source/dataset.
+
+    Post-CHAOS-2647 only configs linked to a migrated integration can be
+    triggered/backfilled; bare configs return HTTP 400. Seeding the integration,
+    one enabled source and one enabled dataset lets the trigger endpoint route
+    through the fan-out planner (plan_sync_run + dispatch_sync_run).
+    """
+    async with session_maker() as session:
+        integration = Integration(
+            org_id=org_id,
+            provider=provider,
+            name=f"{name}-integration",
+            config={},
+            is_active=True,
+        )
+        session.add(integration)
+        await session.flush()
+        source = IntegrationSource(
+            org_id=org_id,
+            integration_id=integration.id,
+            provider=provider,
+            source_type="repository",
+            external_id="acme/repo",
+            name="repo",
+            full_name="acme/repo",
+            metadata_={},
+            is_enabled=True,
+        )
+        dataset = IntegrationDataset(
+            org_id=org_id,
+            integration_id=integration.id,
+            dataset_key="commits",
+            is_enabled=True,
+            options={},
+        )
+        config = SyncConfiguration(
+            org_id=org_id,
+            name=name,
+            provider=provider,
+            sync_targets=["git"],
+            sync_options={},
+            is_active=is_active,
+            migrated_integration_id=integration.id,
+        )
+        session.add_all([source, dataset, config])
+        await session.flush()
+        config_id = str(config.id)
+        await session.commit()
+    return config_id
 
 
 # ---------------------------------------------------------------------------
@@ -881,127 +946,55 @@ async def test_delete_nonexistent_sync_config_returns_404(client):
 
 
 @pytest.mark.asyncio
-async def test_trigger_sync_config_returns_202_with_task_id(client, monkeypatch):
+async def test_trigger_unmigrated_config_returns_400(client):
+    """CHAOS-2647: a bare config not linked to a migrated integration cannot be
+    triggered. Planner-only routing returns HTTP 400 instead of enqueuing a
+    legacy worker task."""
     ac, _ = client
-    monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
 
-    create_resp = await _create_sync_config(ac, name="trigger-test")
+    create_resp = await _create_sync_config(ac, name="trigger-unmigrated")
     assert create_resp.status_code == 201
     config_id = create_resp.json()["id"]
 
-    mock_task = MagicMock(id="fake-task-id")
-    mock_run = MagicMock()
-    mock_run.apply_async.return_value = mock_task
-
-    with patch("dev_health_ops.workers.sync_tasks.run_sync_config", mock_run):
-        resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
-
-    assert resp.status_code == 202
-    data = resp.json()
-    assert data["status"] == "triggered"
-    assert data["task_id"] == "fake-task-id"
-    assert data["config_id"] == config_id
-    # CHAOS-2299: manual triggers route to the provider's dedicated queue.
-    assert mock_run.apply_async.call_args.kwargs["queue"] == "sync.github"
-
-
-@pytest.mark.asyncio
-async def test_trigger_sync_config_routes_batch_eligible_to_batch_task(
-    client, monkeypatch
-):
-    ac, _ = client
-    monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
-
-    create_resp = await ac.post(
-        "/api/v1/admin/sync-configs",
-        json={
-            "name": "batch-trigger",
-            "provider": "github",
-            "sync_targets": ["git"],
-            "sync_options": {"search": "full-chaos"},
-        },
-    )
-    assert create_resp.status_code == 201, create_resp.text
-    config_id = create_resp.json()["id"]
-
-    mock_task = MagicMock(id="batch-task-id")
-    mock_batch = MagicMock()
-    mock_batch.apply_async.return_value = mock_task
-    mock_run = MagicMock()
-
-    with (
-        patch("dev_health_ops.workers.sync_tasks.dispatch_batch_sync", mock_batch),
-        patch("dev_health_ops.workers.sync_tasks.run_sync_config", mock_run),
+    mock_dispatch = MagicMock()
+    with patch(
+        "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
     ):
         resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
 
-    assert resp.status_code == 202
-    assert resp.json()["task_id"] == "batch-task-id"
-    mock_batch.apply_async.assert_called_once()
-    assert mock_batch.apply_async.call_args.kwargs["queue"] == "sync.github"
-    mock_run.apply_async.assert_not_called()
+    assert resp.status_code == 400
+    assert "not linked to a migrated integration" in resp.json()["detail"]
+    mock_dispatch.apply_async.assert_not_called()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("provider", "expected_queue"),
-    [
-        ("github", "sync.github"),
-        ("gitlab", "sync.gitlab"),
-        ("linear", "sync.linear"),
-        ("jira", "sync.jira"),
-        ("launchdarkly", "sync.launchdarkly"),
-        ("someday-provider", "sync"),
-    ],
-)
-async def test_trigger_routes_to_per_provider_queue(
-    client, provider, expected_queue, monkeypatch
+async def test_trigger_sync_config_returns_202_for_migrated_config(
+    client, session_maker
 ):
-    """CHAOS-2299: with PROVIDER_SYNC_QUEUES_ENABLED, manual triggers land on
-    sync.<provider>; unknown providers fall back to the shared sync queue."""
-    ac, _ = client
-    monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
-
-    create_resp = await _create_sync_config(
-        ac, name=f"queue-route-{provider}", provider=provider
+    """A migrated, integration-linked config triggers through the fan-out planner
+    and returns 202 with the planner sync_run_id."""
+    ac, seeded_state = client
+    config_id = await _create_migrated_config(
+        session_maker, seeded_state["org_id"], name="trigger-migrated"
     )
-    assert create_resp.status_code == 201, create_resp.text
-    config_id = create_resp.json()["id"]
 
-    mock_task = MagicMock(id="queue-task-id")
-    mock_run = MagicMock()
-    mock_run.apply_async.return_value = mock_task
+    mock_dispatch = MagicMock()
+    mock_dispatch.apply_async.return_value = MagicMock(id="fake-task-id")
 
-    with patch("dev_health_ops.workers.sync_tasks.run_sync_config", mock_run):
+    with patch(
+        "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
+    ):
         resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
 
-    assert resp.status_code == 202
-    mock_run.apply_async.assert_called_once()
-    assert mock_run.apply_async.call_args.kwargs["queue"] == expected_queue
-
-
-@pytest.mark.asyncio
-async def test_trigger_routes_to_shared_queue_when_flag_off(client, monkeypatch):
-    """CHAOS-2299 rollout safety: with the flag unset (the default), even
-    known providers stay on the legacy shared `sync` queue so workers that
-    have not expanded their -Q lists still consume every dispatch."""
-    ac, _ = client
-    monkeypatch.delenv("PROVIDER_SYNC_QUEUES_ENABLED", raising=False)
-
-    create_resp = await _create_sync_config(ac, name="queue-route-flag-off")
-    assert create_resp.status_code == 201, create_resp.text
-    config_id = create_resp.json()["id"]
-
-    mock_task = MagicMock(id="queue-task-id")
-    mock_run = MagicMock()
-    mock_run.apply_async.return_value = mock_task
-
-    with patch("dev_health_ops.workers.sync_tasks.run_sync_config", mock_run):
-        resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
-
-    assert resp.status_code == 202
-    mock_run.apply_async.assert_called_once()
-    assert mock_run.apply_async.call_args.kwargs["queue"] == "sync"
+    assert resp.status_code == 202, resp.text
+    data = resp.json()
+    assert data["status"] == "triggered"
+    assert data["config_id"] == config_id
+    assert data["sync_run_id"]
+    # Fan-out dispatch enqueues the planner run on the shared sync queue.
+    mock_dispatch.apply_async.assert_called_once()
+    assert mock_dispatch.apply_async.call_args.kwargs["queue"] == "sync"
+    assert mock_dispatch.apply_async.call_args.kwargs["args"] == (data["sync_run_id"],)
 
 
 @pytest.mark.asyncio
@@ -1014,17 +1007,22 @@ async def test_trigger_sync_config_nonexistent_returns_404(client):
 
 
 @pytest.mark.asyncio
-async def test_trigger_sync_config_celery_unavailable_returns_503(client):
-    ac, _ = client
+async def test_trigger_sync_config_celery_unavailable_returns_503(
+    client, session_maker
+):
+    ac, seeded_state = client
+    config_id = await _create_migrated_config(
+        session_maker, seeded_state["org_id"], name="celery-fail-test"
+    )
 
-    create_resp = await _create_sync_config(ac, name="celery-fail-test")
-    assert create_resp.status_code == 201
-    config_id = create_resp.json()["id"]
+    mock_dispatch = MagicMock()
+    mock_dispatch.apply_async.side_effect = Exception(
+        "Celery broker connection refused"
+    )
 
-    mock_run = MagicMock()
-    mock_run.apply_async.side_effect = Exception("Celery broker connection refused")
-
-    with patch("dev_health_ops.workers.sync_tasks.run_sync_config", mock_run):
+    with patch(
+        "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
+    ):
         resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
 
     assert resp.status_code == 503
@@ -1141,25 +1139,23 @@ async def test_update_targets_correct_provider(client):
 
 @pytest.mark.asyncio
 async def test_trigger_creates_pending_job_run(client, session_maker):
-    """Trigger must persist a PENDING JobRun before dispatching the Celery task."""
+    """Trigger must persist a PENDING JobRun before dispatching the fan-out run."""
     from dev_health_ops.models.settings import JobRun, JobRunStatus
 
-    ac, _ = client
-
-    create_resp = await _create_sync_config(
-        ac, name="pending-run-test", provider="github"
+    ac, seeded_state = client
+    config_id = await _create_migrated_config(
+        session_maker, seeded_state["org_id"], name="pending-run-test"
     )
-    assert create_resp.status_code == 201
-    config_id = create_resp.json()["id"]
 
-    mock_task = MagicMock(id="pending-task-id")
-    mock_run = MagicMock()
-    mock_run.apply_async.return_value = mock_task
+    mock_dispatch = MagicMock()
+    mock_dispatch.apply_async.return_value = MagicMock(id="pending-task-id")
 
-    with patch("dev_health_ops.workers.sync_tasks.run_sync_config", mock_run):
+    with patch(
+        "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
+    ):
         resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
 
-    assert resp.status_code == 202
+    assert resp.status_code == 202, resp.text
     data = resp.json()
     assert data["status"] == "triggered"
     assert "run_id" in data
@@ -1178,46 +1174,17 @@ async def test_trigger_creates_pending_job_run(client, session_maker):
 
 
 @pytest.mark.asyncio
-async def test_trigger_passes_pending_run_id_to_task(client):
-    """Trigger must pass pending_run_id kwarg to the dispatched Celery task."""
-    ac, _ = client
-
-    create_resp = await _create_sync_config(
-        ac, name="run-id-thread-test", provider="github"
-    )
-    assert create_resp.status_code == 201
-    config_id = create_resp.json()["id"]
-
-    mock_task = MagicMock(id="threaded-task-id")
-    mock_run = MagicMock()
-    mock_run.apply_async.return_value = mock_task
-
-    with patch("dev_health_ops.workers.sync_tasks.run_sync_config", mock_run):
-        resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
-
-    assert resp.status_code == 202
-    run_id = resp.json()["run_id"]
-
-    # The task must have been called with pending_run_id matching the returned run_id.
-    call_kwargs = mock_run.apply_async.call_args.kwargs["kwargs"]
-    assert call_kwargs.get("pending_run_id") == run_id
-
-
-@pytest.mark.asyncio
 async def test_trigger_commits_pending_job_run_before_enqueue(client, session_maker):
     from sqlalchemy import create_engine
     from sqlalchemy.orm import Session
 
-    ac, _ = client
-
-    create_resp = await _create_sync_config(
-        ac, name="pre-enqueue-commit-test", provider="github"
+    ac, seeded_state = client
+    config_id = await _create_migrated_config(
+        session_maker, seeded_state["org_id"], name="pre-enqueue-commit-test"
     )
-    assert create_resp.status_code == 201
-    config_id = create_resp.json()["id"]
     sync_url = str(session_maker.kw["bind"].url).replace("sqlite+aiosqlite", "sqlite")
 
-    def assert_pending_run_is_visible(**_kwargs):
+    def assert_pending_run_is_visible(*_args, **_kwargs):
         engine = create_engine(sync_url)
         try:
             with Session(engine) as session:
@@ -1226,13 +1193,15 @@ async def test_trigger_commits_pending_job_run_before_enqueue(client, session_ma
             engine.dispose()
         return MagicMock(id="visible-task-id")
 
-    mock_run = MagicMock()
-    mock_run.apply_async.side_effect = assert_pending_run_is_visible
+    mock_dispatch = MagicMock()
+    mock_dispatch.apply_async.side_effect = assert_pending_run_is_visible
 
-    with patch("dev_health_ops.workers.sync_tasks.run_sync_config", mock_run):
+    with patch(
+        "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
+    ):
         resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
 
-    assert resp.status_code == 202
+    assert resp.status_code == 202, resp.text
 
 
 @pytest.mark.asyncio
@@ -1241,18 +1210,17 @@ async def test_trigger_marks_pending_job_run_failed_when_enqueue_fails(
 ):
     from dev_health_ops.models.settings import JobRunStatus
 
-    ac, _ = client
-
-    create_resp = await _create_sync_config(
-        ac, name="enqueue-failure-test", provider="github"
+    ac, seeded_state = client
+    config_id = await _create_migrated_config(
+        session_maker, seeded_state["org_id"], name="enqueue-failure-test"
     )
-    assert create_resp.status_code == 201
-    config_id = create_resp.json()["id"]
 
-    mock_run = MagicMock()
-    mock_run.apply_async.side_effect = RuntimeError("broker down")
+    mock_dispatch = MagicMock()
+    mock_dispatch.apply_async.side_effect = RuntimeError("broker down")
 
-    with patch("dev_health_ops.workers.sync_tasks.run_sync_config", mock_run):
+    with patch(
+        "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
+    ):
         resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
 
     assert resp.status_code == 503
@@ -1303,20 +1271,14 @@ async def test_trigger_inactive_config_returns_409_without_execution(
             target_id = child.id
         await session.commit()
 
-    mock_run = MagicMock()
-    mock_batch = MagicMock()
     mock_dispatch = MagicMock()
-    with (
-        patch("dev_health_ops.workers.sync_tasks.run_sync_config", mock_run),
-        patch("dev_health_ops.workers.sync_tasks.dispatch_batch_sync", mock_batch),
-        patch("dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch),
+    with patch(
+        "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
     ):
         resp = await ac.post(f"/api/v1/admin/sync-configs/{target_id}/trigger")
 
     assert resp.status_code == 409
     assert "paused" in resp.json()["detail"]
-    mock_run.apply_async.assert_not_called()
-    mock_batch.apply_async.assert_not_called()
     mock_dispatch.apply_async.assert_not_called()
 
     async with session_maker() as session:
@@ -1324,76 +1286,6 @@ async def test_trigger_inactive_config_returns_409_without_execution(
         sync_runs = (await session.execute(select(SyncRun))).scalars().all()
     assert job_runs == []
     assert sync_runs == []
-
-
-def test_sync_tasks_accept_pending_run_id_kwarg():
-    """The dispatched Celery tasks must accept every kwarg the trigger endpoint
-    passes. Celery validates kwargs against the task signature at dispatch time,
-    so a missing parameter fails the API request itself (regression: PR #846
-    clobbered the pending_run_id parameter that PR #844 added to run_sync_config).
-    """
-    import inspect
-
-    from dev_health_ops.workers.sync_tasks import (
-        dispatch_batch_sync,
-        run_sync_config,
-    )
-
-    for task in (run_sync_config, dispatch_batch_sync):
-        params = inspect.signature(task.run).parameters
-        for kwarg in ("config_id", "org_id", "triggered_by", "pending_run_id"):
-            assert kwarg in params, f"{task.name} is missing kwarg {kwarg!r}"
-
-
-@pytest.mark.asyncio
-async def test_trigger_batch_creates_pending_job_run(client, session_maker):
-    """Batch-eligible trigger must also persist a PENDING JobRun."""
-    from dev_health_ops.models.settings import JobRun, JobRunStatus
-
-    ac, _ = client
-
-    create_resp = await ac.post(
-        "/api/v1/admin/sync-configs",
-        json={
-            "name": "batch-pending-run",
-            "provider": "github",
-            "sync_targets": ["git"],
-            "sync_options": {"search": "full-chaos"},
-        },
-    )
-    assert create_resp.status_code == 201, create_resp.text
-    config_id = create_resp.json()["id"]
-
-    mock_task = MagicMock(id="batch-pending-task-id")
-    mock_batch = MagicMock()
-    mock_batch.apply_async.return_value = mock_task
-    mock_run = MagicMock()
-
-    with (
-        patch("dev_health_ops.workers.sync_tasks.dispatch_batch_sync", mock_batch),
-        patch("dev_health_ops.workers.sync_tasks.run_sync_config", mock_run),
-    ):
-        resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
-
-    assert resp.status_code == 202
-    data = resp.json()
-    assert "run_id" in data
-    run_id = data["run_id"]
-
-    # Verify a PENDING JobRun row was persisted for the batch parent.
-    async with session_maker() as session:
-        result = await session.execute(
-            select(JobRun).where(JobRun.id == uuid.UUID(run_id))
-        )
-        run = result.scalar_one_or_none()
-
-    assert run is not None
-    assert run.status == JobRunStatus.PENDING.value
-
-    # Batch task must have been called with pending_run_id.
-    call_kwargs = mock_batch.apply_async.call_args.kwargs["kwargs"]
-    assert call_kwargs.get("pending_run_id") == run_id
-    mock_run.apply_async.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ import logging
 import os
 import uuid
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Protocol, cast
 
@@ -50,8 +51,6 @@ from dev_health_ops.sync.trigger_routing import (
     mark_sync_run_failed,
     planner_request_for_config_if_routed,
 )
-from dev_health_ops.workers.queues import sync_queue_for_provider
-from dev_health_ops.workers.sync_batch import _is_batch_eligible
 from dev_health_ops.workers.sync_units import dispatch_sync_run
 
 from .common import get_session
@@ -113,6 +112,9 @@ def _mark_backfill_job_failed(
     bf_job.status = "failed"
     bf_job.error_message = error
     bf_job.completed_at = completed_at
+    # The dispatch never enqueued (or its task id is meaningless), so drop any
+    # pre-dispatch sync_run marker: the run is separately terminalized as failed.
+    bf_job.celery_task_id = None
     sync_session.flush()
 
 
@@ -199,39 +201,6 @@ def _ensure_pending_sync_job_run(
     sync_session.add(run)
     sync_session.flush()
     return str(run.id)
-
-
-async def _is_planner_active(session: AsyncSession, org_id: str) -> bool:
-    """Return True when the integration planner is active for this org.
-
-    Reads the ``sync.migrated_trigger_routing_enabled`` Setting row written
-    by the CHAOS-2516 migration helper.
-    """
-    from dev_health_ops.models.settings import Setting, SettingCategory
-    from dev_health_ops.sync.config_migration import (
-        MIGRATED_TRIGGER_ROUTING_SETTING_KEY,
-    )
-
-    def _check(sync_session) -> bool:
-        row = (
-            sync_session.query(Setting)
-            .filter(
-                Setting.org_id == org_id,
-                Setting.category == SettingCategory.SYNC.value,
-                Setting.key == MIGRATED_TRIGGER_ROUTING_SETTING_KEY,
-            )
-            .one_or_none()
-        )
-        if row is None:
-            return False
-        return str(getattr(row, "value", "") or "").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
-
-    return await session.run_sync(_check)
 
 
 async def _active_repo_usage_count_for_limit(session: AsyncSession, org_id: str) -> int:
@@ -1119,13 +1088,12 @@ async def _resolve_gitlab_batch_projects(
     response_model=SyncConfigBatchResponse,
     status_code=201,
     description=(
-        "Create a parent sync config + one child per repo. "
-        "**Deprecated (CHAOS-2520):** Child sync configs are deprecated in favour of "
-        "the integration/source/dataset model introduced in CHAOS-2507. "
-        "When the integration planner is active (``sync.migrated_trigger_routing_enabled`` "
-        "setting is enabled for the org), this endpoint creates the parent config only "
-        "and returns zero children. Legacy behaviour is preserved when the planner is "
-        "inactive (rollback path)."
+        "Create a parent sync config backed by the integration/source/dataset "
+        "model. **Deprecated (CHAOS-2520):** the legacy child-per-repo sync "
+        "configs are removed in favour of that model (CHAOS-2507). The "
+        "integration planner is now the only routing path, so this endpoint "
+        "always creates the parent config plus its integration/source/dataset "
+        "rows and returns zero children."
     ),
 )
 async def batch_create_sync_configs(
@@ -1133,16 +1101,16 @@ async def batch_create_sync_configs(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SyncConfigBatchResponse:
-    """Create a parent sync config + one child per repo.
+    """Create a parent sync config backed by the integration/source/dataset model.
 
-    Child ``sync_options`` are provider-shaped:
+    Per-source options are provider-shaped:
 
-    - **github**: each child carries ``repo`` (plus ``owner`` inherited from
-      the parent options); child name is ``{owner}/{repo}``.
-    - **gitlab**: each child carries an integer ``project_id`` plus ``group``
-      (and ``gitlab_url`` when present in the parent options), matching what
-      the sync runtime expects (``workers/sync_runtime.py`` requires
-      ``project_id``). ``payload.repos`` entries may be either numeric GitLab
+    - **github**: each planner source row carries ``repo`` (plus ``owner``
+      inherited from the parent options); the source name is ``{owner}/{repo}``.
+    - **gitlab**: each planner source row carries an integer ``project_id`` plus
+      ``group`` (and ``gitlab_url`` when present in the parent options), which the
+      unitized GitLab dataset adapter requires to address a project.
+      ``payload.repos`` entries may be either numeric GitLab
       project ids or project names, which are resolved to ids by listing the
       group's projects via the stored credential. Name entries therefore
       require ``credential_id`` and a ``group``/``owner`` in ``sync_options``;
@@ -1155,16 +1123,15 @@ async def batch_create_sync_configs(
       are used as project ids as-is, with no listing call. The effective
       ``gitlab_url`` (``sync_options.gitlab_url`` → credential ``url`` →
       ``https://gitlab.com``) is persisted into parent and child options when
-      it is not the public default, so self-hosted children sync against the
-      same instance used for resolution. Child name is the project's
+      it is not the public default, so self-hosted sources sync against the
+      same instance used for resolution. The source name is the project's
       ``path_with_namespace`` when known.
 
     .. deprecated:: CHAOS-2520
-        Child sync configs are deprecated. When the integration planner is
-        active (``sync.migrated_trigger_routing_enabled`` setting), new
-        integrations must use the integration/source/dataset model instead.
-        This endpoint will create the parent config only (zero children) when
-        the planner flag is enabled.
+        Child sync configs are removed. The integration planner is the only
+        routing path; new integrations use the integration/source/dataset model.
+        This endpoint always creates the parent config only (zero children) plus
+        the integration/source/dataset rows it routes through.
     """
     await _acquire_repo_limit_create_lock(session, org_id)
     current_count = await _active_repo_usage_count_for_limit(session, org_id)
@@ -1638,110 +1605,62 @@ async def trigger_sync_config(
             sync_session, config, triggered_by="manual", mode="incremental"
         )
     )
-    if plan_request is not None:
-        await session.run_sync(
-            lambda sync_session: _preflight_planner_credential(sync_session, config)
+    if plan_request is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Sync configuration is not linked to a migrated integration",
         )
-        try:
-            plan = await session.run_sync(
-                lambda sync_session: plan_sync_run(sync_session, plan_request)
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        planner_pending_run_id = await session.run_sync(
-            lambda sync_session: _ensure_pending_sync_job_run(
-                sync_session,
-                config,
-                org_id,
-                "manual",
-                {"sync_run_id": plan.sync_run_id},
-            )
-        )
-        await session.commit()
-        try:
-            dispatch_result = getattr(dispatch_sync_run, "apply_async")(
-                args=(plan.sync_run_id,), queue="sync"
-            )
-        except Exception as exc:
-            error_message = f"dispatch enqueue failed: {exc}"
-            await session.run_sync(
-                lambda s: mark_sync_run_failed(
-                    s, plan.sync_run_id, "dispatch enqueue failed"
-                )
-            )
-            await session.run_sync(
-                lambda s: _mark_job_run_failed(s, planner_pending_run_id, error_message)
-            )
-            await session.commit()
-            raise HTTPException(
-                status_code=503, detail=f"Task queue unavailable: {exc}"
-            )
-        dispatch_task_id = str(getattr(dispatch_result, "id", "") or "")
-        await session.run_sync(
-            lambda s: _merge_job_run_result(
-                s,
-                planner_pending_run_id,
-                {"dispatch_task_id": dispatch_task_id} if dispatch_task_id else None,
-            )
-        )
-        await session.commit()
-        return {
-            "status": "triggered",
-            "config_id": str(config.id),
-            "sync_run_id": plan.sync_run_id,
-            "run_id": planner_pending_run_id,
-            "total_units": plan.total_units,
-        }
-
+    await session.run_sync(
+        lambda sync_session: _preflight_planner_credential(sync_session, config)
+    )
     try:
-        from dev_health_ops.workers.sync_tasks import (
-            dispatch_batch_sync,
-            run_sync_config,
+        plan = await session.run_sync(
+            lambda sync_session: plan_sync_run(sync_session, plan_request)
         )
-
-        # Create a PENDING JobRun synchronously so the UI shows status immediately.
-        # Ensure the ScheduledJob row exists first (worker also does this, but we
-        # need the job_id to create the JobRun).
-        pending_run_id: str = await session.run_sync(
-            lambda sync_session: _ensure_pending_sync_job_run(
-                sync_session, config, org_id, "manual"
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    planner_pending_run_id = await session.run_sync(
+        lambda sync_session: _ensure_pending_sync_job_run(
+            sync_session,
+            config,
+            org_id,
+            "manual",
+            {"sync_run_id": plan.sync_run_id},
+        )
+    )
+    await session.commit()
+    try:
+        dispatch_result = getattr(dispatch_sync_run, "apply_async")(
+            args=(plan.sync_run_id,), queue="sync"
+        )
+    except Exception as exc:
+        error_message = f"dispatch enqueue failed: {exc}"
+        await session.run_sync(
+            lambda s: mark_sync_run_failed(
+                s, plan.sync_run_id, "dispatch enqueue failed"
             )
+        )
+        await session.run_sync(
+            lambda s: _mark_job_run_failed(s, planner_pending_run_id, error_message)
         )
         await session.commit()
-
-        is_batch = _is_batch_eligible(config)
-        task = dispatch_batch_sync if is_batch else run_sync_config
-        # Per-provider queue routing (CHAOS-2299): an explicit apply_async
-        # queue overrides the task decorator's queue="sync" default.
-        try:
-            result = getattr(task, "apply_async")(
-                kwargs={
-                    "config_id": str(config.id),
-                    "org_id": str(config.org_id),
-                    "triggered_by": "manual",
-                    "pending_run_id": pending_run_id,
-                },
-                queue=sync_queue_for_provider(str(config.provider or "")),
-            )
-        except Exception as e:
-            error_message = f"dispatch enqueue failed: {e}"
-            await session.run_sync(
-                lambda sync_session: _mark_job_run_failed(
-                    sync_session, pending_run_id, error_message
-                )
-            )
-            await session.commit()
-            raise HTTPException(status_code=503, detail=f"Task queue unavailable: {e}")
-        return {
-            "status": "triggered",
-            "config_id": str(config.id),
-            "task_id": result.id,
-            "run_id": pending_run_id,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Task queue unavailable: {e}")
+        raise HTTPException(status_code=503, detail=f"Task queue unavailable: {exc}")
+    dispatch_task_id = str(getattr(dispatch_result, "id", "") or "")
+    await session.run_sync(
+        lambda s: _merge_job_run_result(
+            s,
+            planner_pending_run_id,
+            {"dispatch_task_id": dispatch_task_id} if dispatch_task_id else None,
+        )
+    )
+    await session.commit()
+    return {
+        "status": "triggered",
+        "config_id": str(config.id),
+        "sync_run_id": plan.sync_run_id,
+        "run_id": planner_pending_run_id,
+        "total_units": plan.total_units,
+    }
 
 
 @router.post("/sync-configs/{config_id}/backfill", status_code=202)
@@ -1771,55 +1690,70 @@ async def trigger_sync_config_backfill(
     if not allowed:
         raise HTTPException(status_code=403, detail=reason or "Backfill not allowed")
 
-    from dev_health_ops.backfill.chunker import chunk_date_range
     from dev_health_ops.models.backfill import BackfillJob as BackfillJobModel
 
-    windows = chunk_date_range(since=payload.since, before=payload.before, chunk_days=7)
     planner_backfill_request = await session.run_sync(
         lambda sync_session: planner_request_for_config_if_routed(
             sync_session, config, triggered_by="backfill", mode="backfill"
         )
     )
-    fanout_backfill = planner_backfill_request is not None
-    if fanout_backfill:
-        await session.run_sync(
-            lambda sync_session: _preflight_planner_credential(sync_session, config)
+    if planner_backfill_request is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Sync configuration is not linked to a migrated integration",
         )
+    planner_backfill_request = replace(
+        planner_backfill_request,
+        since=datetime.combine(payload.since, datetime.min.time(), tzinfo=timezone.utc),
+        before=datetime.combine(
+            payload.before, datetime.max.time(), tzinfo=timezone.utc
+        ),
+    )
+    await session.run_sync(
+        lambda sync_session: _preflight_planner_credential(sync_session, config)
+    )
     backfill_job = BackfillJobModel(
         org_id=org_id,
         sync_config_id=uuid.UUID(config_id),
         status="pending",
         since_date=payload.since,
         before_date=payload.before,
-        total_chunks=0 if fanout_backfill else len(windows),
+        total_chunks=0,
     )
     session.add(backfill_job)
     await session.flush()
     backfill_job_id = str(backfill_job.id)
 
     try:
-        from dev_health_ops.workers.sync_tasks import run_backfill
-
         pending_run_id = await session.run_sync(
             lambda sync_session: _ensure_pending_sync_job_run(
                 sync_session,
                 config,
                 org_id,
                 "backfill",
-                {"planner_managed": fanout_backfill},
+                {"planner_managed": True},
             )
         )
+        plan = await session.run_sync(
+            lambda sync_session: plan_sync_run(sync_session, planner_backfill_request)
+        )
+        await session.run_sync(
+            lambda s: _merge_job_run_result(
+                s, pending_run_id, {"sync_run_id": plan.sync_run_id}
+            )
+        )
+
+        # Persist the sync_run marker BEFORE dispatch so a crash between enqueue
+        # and the post-dispatch commit still lets finalize_sync_run link this
+        # BackfillJob (matched via celery_task_id.contains("sync_run:<id>")). On
+        # enqueue failure the marker is cleared in _mark_backfill_job_failed.
+        backfill_job.celery_task_id = f"sync_run:{plan.sync_run_id}"
 
         await session.commit()
 
         try:
-            result = getattr(run_backfill, "delay")(
-                sync_config_id=str(config.id),
-                since=payload.since.isoformat(),
-                before=payload.before.isoformat(),
-                org_id=org_id,
-                backfill_job_id=backfill_job_id,
-                pending_run_id=pending_run_id,
+            result = getattr(dispatch_sync_run, "apply_async")(
+                args=(plan.sync_run_id,), queue="sync"
             )
         except Exception as e:
             error_message = f"enqueue failed: {e}"
@@ -1835,16 +1769,22 @@ async def trigger_sync_config_backfill(
                         sync_session, pending_run_id, error_message
                     )
                 )
+            await session.run_sync(
+                lambda sync_session: mark_sync_run_failed(
+                    sync_session, plan.sync_run_id, "dispatch enqueue failed"
+                )
+            )
             await session.commit()
             raise HTTPException(status_code=503, detail=f"Task queue unavailable: {e}")
-        backfill_job.celery_task_id = result.id
+        backfill_job.celery_task_id = f"{result.id}|sync_run:{plan.sync_run_id}"
         await session.commit()
         return {
             "status": "accepted",
             "config_id": str(config.id),
             "task_id": result.id,
             "backfill_job_id": backfill_job_id,
-            "mode": "fanout" if fanout_backfill else "legacy",
+            "sync_run_id": plan.sync_run_id,
+            "mode": "fanout",
             "since": payload.since.isoformat(),
             "before": payload.before.isoformat(),
         }

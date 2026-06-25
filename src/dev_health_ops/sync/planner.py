@@ -240,6 +240,23 @@ def _load_enabled_datasets(
     return list(query.order_by(IntegrationDataset.dataset_key).all())
 
 
+def _prs_dataset_enabled(provider: str, datasets: list[IntegrationDataset]) -> bool:
+    """True if any enabled dataset maps to the legacy ``prs`` target.
+
+    The github work-items sync ingests PRs as work items only when the PRS
+    dataset family is enabled (CHAOS-646); the legacy worker passed
+    ``include_pull_requests=("prs" in sync_targets)``. The unitized work-items
+    unit cannot see sibling datasets at run time, so the planner stamps this as
+    a ``sync_prs`` processor flag on the work-items unit (consumed by
+    ``processors/dataset_adapters._work_item_kwargs``).
+    """
+    for dataset in datasets:
+        spec = get_dataset_spec(provider, dataset.dataset_key)
+        if spec is not None and "prs" in spec.legacy_targets:
+            return True
+    return False
+
+
 def _build_planned_units(
     *,
     session: Session,
@@ -253,10 +270,20 @@ def _build_planned_units(
     planned_units: list[PlannedUnit] = []
     for source in sources:
         provider = source.provider
+        prs_enabled = _prs_dataset_enabled(provider, datasets)
         for dataset in datasets:
             spec = get_dataset_spec(provider, dataset.dataset_key)
             if spec is None or not spec.supported:
                 continue
+
+            processor_flags = dict(spec.processor_flags)
+            # CHAOS-646: github work-items ingest PRs as work items only when
+            # the PRS dataset is also enabled for this config. The work-items
+            # unit has no sibling-dataset visibility at run time, so stamp the
+            # signal here for ``_work_item_kwargs`` to thread into
+            # ``run_work_items_sync_job(include_pull_requests=...)``.
+            if provider == "github" and "work-items" in spec.legacy_targets:
+                processor_flags["sync_prs"] = prs_enabled
 
             windows = _resolve_windows(
                 session=session,
@@ -282,7 +309,7 @@ def _build_planned_units(
                         mode=mode,
                         window_start=window_start,
                         window_end=window_end,
-                        processor_flags=dict(spec.processor_flags),
+                        processor_flags=dict(processor_flags),
                     )
                 )
     return planned_units

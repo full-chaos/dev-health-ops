@@ -27,7 +27,7 @@ from unittest.mock import MagicMock, patch
 # Import connectors first to defuse the providers._base <-> connectors circular
 # import that otherwise ERRORs isolated collection (mirrors CHAOS-2370).
 import dev_health_ops.connectors  # noqa: F401
-from dev_health_ops.workers.sync_runtime import _dispatch_post_sync_tasks
+from dev_health_ops.workers.post_sync_dispatch import _dispatch_post_sync_tasks
 from tests._helpers import closing_coroutine_runner
 
 _INVESTMENT_TASK = (
@@ -45,11 +45,11 @@ def _run_dispatch(provider: str, sync_targets: list[str], org_id: str):
     """
     with (
         patch(
-            "dev_health_ops.workers.sync_runtime.celery_app.signature"
+            "dev_health_ops.workers.post_sync_dispatch.celery_app.signature"
         ) as mock_signature,
-        patch("dev_health_ops.workers.sync_runtime.chain") as mock_chain,
+        patch("dev_health_ops.workers.post_sync_dispatch.chain") as mock_chain,
         patch(
-            "dev_health_ops.workers.sync_runtime.celery_app.send_task"
+            "dev_health_ops.workers.post_sync_dispatch.celery_app.send_task"
         ) as mock_send_task,
     ):
         # Each signature() call returns a distinct marker carrying its args so
@@ -165,15 +165,15 @@ def test_daily_metrics_dispatched_with_work_items_only_jira() -> None:
 
 
 def test_post_sync_dispatch_forwards_backfill_window() -> None:
-    from dev_health_ops.workers.sync_runtime import _dispatch_post_sync_tasks
+    from dev_health_ops.workers.post_sync_dispatch import _dispatch_post_sync_tasks
 
     with (
         patch(
-            "dev_health_ops.workers.sync_runtime.celery_app.signature"
+            "dev_health_ops.workers.post_sync_dispatch.celery_app.signature"
         ) as window_signature,
-        patch("dev_health_ops.workers.sync_runtime.chain") as window_chain,
+        patch("dev_health_ops.workers.post_sync_dispatch.chain") as window_chain,
         patch(
-            "dev_health_ops.workers.sync_runtime.celery_app.send_task"
+            "dev_health_ops.workers.post_sync_dispatch.celery_app.send_task"
         ) as window_send_task,
     ):
 

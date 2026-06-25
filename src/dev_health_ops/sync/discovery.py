@@ -37,7 +37,7 @@ def _now_utc() -> datetime:
 def _resolve_credentials(integration: Integration) -> dict[str, Any]:
     """Resolve credentials for *integration* into a flat mapping.
 
-    Mirrors the pattern used in ``sync_batch.dispatch_batch_sync``:
+    Mirrors sync source discovery used by fan-out planning:
     - If the integration has a ``credential_id``, load the
       ``IntegrationCredential`` row and decrypt it via
       ``workers.task_utils._credential_mapping``.

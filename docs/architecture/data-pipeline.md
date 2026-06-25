@@ -257,7 +257,7 @@ Backfill depth is gated by organization billing tier:
 - `backfill/chunker.py` -- `chunk_date_range()` splits date ranges into windows
 - `backfill/runner.py` -- `run_backfill_for_config()` orchestrates chunked sync
 - `backfill/cli.py` -- `dev-hops backfill run` CLI command
-- `workers/tasks.py` -- `run_backfill` Celery task on `backfill` queue
+- `workers/sync_units.py` -- `dispatch_sync_run` → `run_sync_unit` → `finalize_sync_run` fan-out on the `sync` queue (API backfill plans a backfill-mode `SyncRun`; the standalone `run_backfill` task was removed in CHAOS-2647)
 - `models/backfill.py` -- `BackfillJob` PostgreSQL model for progress tracking
 - `api/services/backfill.py` -- `BackfillJobService` async CRUD for API layer
 

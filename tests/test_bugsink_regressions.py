@@ -15,11 +15,6 @@ if "croniter" not in sys.modules:
 from dev_health_ops.metrics.checkpoints import get_checkpoint  # noqa: E402
 from dev_health_ops.models.checkpoints import CheckpointStatus  # noqa: E402
 from dev_health_ops.models.git import Base  # noqa: E402
-from dev_health_ops.models.settings import (  # noqa: E402
-    JobStatus,
-    ScheduledJob,
-    SyncConfiguration,
-)
 from tests._helpers import closing_coroutine_runner  # noqa: E402
 
 
@@ -35,82 +30,6 @@ def db_session():
 @contextmanager
 def _fake_session_ctx(session):
     yield session
-
-
-def _make_config(
-    provider="github",
-    sync_options=None,
-    sync_targets=None,
-    is_active=True,
-    name="test-config",
-    org_id="default",
-):
-    return SyncConfiguration(
-        name=name,
-        provider=provider,
-        org_id=org_id,
-        sync_targets=sync_targets or ["git", "prs"],
-        sync_options=sync_options or {},
-        is_active=is_active,
-    )
-
-
-@patch("dev_health_ops.storage.run_with_store")
-@patch("dev_health_ops.workers.sync_runtime._dispatch_post_sync_tasks")
-@patch(
-    "dev_health_ops.workers.sync_runtime._resolve_env_credentials",
-    return_value={"token": "test"},
-)
-@patch("dev_health_ops.db.get_postgres_session_sync")
-def test_run_sync_config_with_multiple_job_types_no_collision(
-    mock_get_session,
-    mock_resolve_creds,
-    mock_post_sync,
-    mock_run_with_store,
-    db_session,
-):
-    from dev_health_ops.workers.sync_runtime import run_sync_config
-
-    config = _make_config(
-        provider="github",
-        sync_options={"owner": "my-org", "repo": "my-repo"},
-        sync_targets=["git"],
-    )
-    db_session.add(config)
-    db_session.flush()
-
-    sync_job = ScheduledJob(
-        name="sync-job",
-        job_type="sync",
-        schedule_cron="0 * * * *",
-        org_id="default",
-        job_config={"provider": "github", "sync_config_id": str(config.id)},
-        sync_config_id=config.id,
-        status=JobStatus.ACTIVE.value,
-    )
-    backfill_job = ScheduledJob(
-        name="backfill-job",
-        job_type="backfill",
-        schedule_cron="0 0 * * *",
-        org_id="default",
-        job_config={"provider": "github", "sync_config_id": str(config.id)},
-        sync_config_id=config.id,
-        status=JobStatus.ACTIVE.value,
-    )
-    db_session.add_all([sync_job, backfill_job])
-    db_session.flush()
-
-    mock_get_session.side_effect = lambda: _fake_session_ctx(db_session)
-    mock_run_with_store.return_value = None
-
-    task = run_sync_config
-    task.push_request(id="bugsink-sync-jobtype")
-    try:
-        result = task(config_id=str(config.id), org_id="default")
-    finally:
-        task.pop_request()
-
-    assert result["status"] == "success"
 
 
 @patch("dev_health_ops.workers.metrics_partitioned.chord")

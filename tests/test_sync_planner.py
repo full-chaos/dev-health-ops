@@ -858,3 +858,53 @@ def test_cold_start_does_not_cover_backfill_before_older_than_depth(db_session):
     # Cold-start starts at now-depth, which is AFTER the old backfill `before`,
     # so the residual gap [backfill_before, since] is non-empty.
     assert since > backfill_before
+
+
+def test_github_work_items_unit_carries_prs_signal_when_prs_enabled(db_session):
+    """CHAOS-646: when the PRS dataset is enabled, the planner stamps
+    ``sync_prs=True`` on the github work-items unit so the adapter threads
+    ``include_pull_requests=True`` into the work-items sync."""
+    integration = _create_integration(db_session, provider="github")
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, "work-items")
+    _create_dataset(db_session, integration, "prs")
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    work_items_units = [u for u in units if u.dataset_key == "work-items"]
+    assert work_items_units
+    for unit in work_items_units:
+        assert (unit.processor_flags or {}).get("sync_prs") is True
+
+
+def test_github_work_items_unit_omits_prs_signal_when_prs_disabled(db_session):
+    """CHAOS-646 regression: with the PRS dataset off, the work-items unit must
+    carry ``sync_prs=False`` so PRs are NOT ingested as work items."""
+    integration = _create_integration(db_session, provider="github")
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, "work-items")
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    work_items_units = [u for u in units if u.dataset_key == "work-items"]
+    assert work_items_units
+    for unit in work_items_units:
+        assert (unit.processor_flags or {}).get("sync_prs") is False

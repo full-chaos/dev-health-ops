@@ -41,8 +41,10 @@ The hard capability already exists. The missing pieces are glue + one gap fix.
 ## Gaps
 
 1. **Background sync ignores App auth (bug, prerequisite).**
-   `workers/sync_runtime.py` (~L508) and `discovery/repos.py` extract only the
-   `"token"` key and raise `ValueError("Missing GitHub token ...")` when absent.
+   the unitized sync path's github credential resolution
+   (`processors/dataset_adapters.py` / `metrics/job_work_items.py`) and
+   `discovery/repos.py` extract only the `"token"` key and raise
+   `ValueError("Missing GitHub token ...")` when absent.
    App-auth sync configs therefore **fail in the Celery worker today**.
 2. **No installation persistence.** No `installation_id -> org` mapping table and
    no install callback. App auth today requires an admin to manually paste
@@ -59,12 +61,15 @@ The hard capability already exists. The missing pieces are glue + one gap fix.
 
 Without this, none of the later phases produce working syncs.
 
-- Make `workers/sync_runtime.py` and `discovery/repos.py` resolve a full
-  `GitHubCredentials` (PAT **or** App) instead of grabbing the `"token"` key.
+- Make the unitized github credential resolution
+  (`processors/dataset_adapters.py` / `metrics/job_work_items.py`) and
+  `discovery/repos.py` resolve a full `GitHubCredentials` (PAT **or** App)
+  instead of grabbing the `"token"` key.
   Reuse `GitHubCredentials.is_app_auth` and the existing resolver.
 - Add a worker test that runs a sync with an App-auth sync config.
 
-Touches: `src/dev_health_ops/workers/sync_runtime.py`,
+Touches: `src/dev_health_ops/processors/dataset_adapters.py`,
+`src/dev_health_ops/metrics/job_work_items.py`,
 `src/dev_health_ops/discovery/repos.py`, `tests/`.
 
 ### Phase 1 — Frictionless install capture (ops + web)

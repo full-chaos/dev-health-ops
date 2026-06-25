@@ -1,4 +1,4 @@
-"""Migrated-config trigger routing (CHAOS-2516).
+"""SyncConfiguration to fan-out planner request routing.
 
 The config migration (``config_migration.py``) links each legacy
 ``SyncConfiguration`` to integration-era records:
@@ -7,16 +7,10 @@ The config migration (``config_migration.py``) links each legacy
 * a *child* config gets both ``migrated_integration_id`` (the parent's
   Integration) and ``migrated_source_id`` (its own IntegrationSource).
 
-The migration also writes a per-org feature flag Setting
-(``sync.migrated_trigger_routing_enabled``). When that flag is enabled, the
-legacy trigger surfaces — the admin "Sync Now" endpoint and the scheduled-sync
-beat — must route a *migrated* config through the fan-out planner
-(``plan_sync_run`` + ``dispatch_sync_run``) instead of the old per-config path.
-
-This module is the single source of truth for that routing decision so the API
-(async session, via ``run_sync``) and the beat (sync session) share identical
-semantics. Rollback is purely the flag: when it is off, callers fall back to the
-legacy path and this module's :func:`plan_request_for_config` is never reached.
+The admin "Sync Now" endpoint and scheduled-sync beat route configs through the
+fan-out planner (``plan_sync_run`` + ``dispatch_sync_run``). Configs that were
+not linked to integration-era records cannot be routed and callers fail or skip
+explicitly instead of falling back to deleted legacy workers.
 
 The outbox and reconciler relay now recover committed PLANNED runs. This module's `mark_sync_run_failed` helper is kept as a legacy, best-effort fallback for the non-outbox path.
 """
@@ -36,10 +30,6 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from dev_health_ops.models.settings import SyncConfiguration
-
-MIGRATED_TRIGGER_ROUTING_SETTING_KEY = "sync.migrated_trigger_routing_enabled"
-
-_TRUTHY = {"1", "true", "yes", "on"}
 
 logger = logging.getLogger(__name__)
 
@@ -72,52 +62,6 @@ def map_sync_mode(intent: str) -> str:
     return intent
 
 
-def is_migrated_trigger_routing_enabled(session: Session, org_id: str) -> bool:
-    """Return True when the integration planner is active for ``org_id``.
-
-    Synchronous read of the ``sync.migrated_trigger_routing_enabled`` Setting
-    row written by the CHAOS-2516 migration helper. Missing row => disabled,
-    which keeps un-migrated orgs on the legacy path.
-
-    A read failure (``OperationalError``, e.g. the Setting table is absent or a
-    transient DB error) also returns ``False``: the flag is opt-in, so "cannot
-    determine" maps to the legacy path -- the rollback-safe default. This is
-    strictly safer than raising, which would make the beat skip the config
-    entirely (no sync at all) instead of falling back to the legacy per-config
-    path. The session is rolled back before returning so the caller can keep
-    using it: on PostgreSQL a failed statement aborts the transaction until
-    rollback, which would otherwise break the very legacy path we fall back to.
-    """
-    from sqlalchemy.exc import OperationalError
-
-    from dev_health_ops.models.settings import Setting, SettingCategory
-
-    try:
-        row = (
-            session.query(Setting)
-            .filter(
-                Setting.org_id == org_id,
-                Setting.category == SettingCategory.SYNC.value,
-                Setting.key == MIGRATED_TRIGGER_ROUTING_SETTING_KEY,
-            )
-            .one_or_none()
-        )
-    except OperationalError:
-        # Clear the aborted transaction so the caller's legacy-path DB work
-        # (PENDING JobRun create, dispatch bookkeeping) runs on a clean session.
-        try:
-            session.rollback()
-        except Exception as rollback_err:
-            logger.debug(
-                "Rollback failed after OperationalError while reading migrated trigger routing flag; proceeding with legacy-path fallback.",
-                exc_info=rollback_err,
-            )
-        return False
-    if row is None:
-        return False
-    return str(getattr(row, "value", "") or "").strip().lower() in _TRUTHY
-
-
 def _dataset_keys_for_config(config: SyncConfiguration) -> tuple[str, ...]:
     """Map a config's legacy ``sync_targets`` to integration dataset keys.
 
@@ -143,7 +87,9 @@ def plan_request_for_config(
     """Build a :class:`SyncPlanRequest` for a migrated config, else ``None``.
 
     Returns ``None`` when the config was never migrated (no
-    ``migrated_integration_id``), signalling the caller to use the legacy path.
+    ``migrated_integration_id``). The integration planner is the only routing
+    path (the legacy worker was removed in CHAOS-2647), so the caller must fail
+    or skip when no planner route exists.
 
     Routing semantics:
 
@@ -177,9 +123,10 @@ def plan_request_for_config(
         dataset_keys = child_dataset_keys or None
 
     # Promote incremental -> full_resync when the config's sync_options carry
-    # the legacy full_resync flag (mirrors sync_runtime.py:656 / sync_batch.py:657).
-    # Only promote when the caller passed the default "incremental" mode; an
-    # explicit backfill or full_resync from the caller is never overridden.
+    # the legacy full_resync flag (preserves the removed legacy worker's
+    # full_resync promotion semantics). Only promote when the caller passed the
+    # default "incremental" mode; an explicit backfill or full_resync from the
+    # caller is never overridden.
     if mode == SyncRunMode.INCREMENTAL.value:
         sync_options = getattr(config, "sync_options", None) or {}
         if bool(sync_options.get("full_resync")):
@@ -193,17 +140,6 @@ def plan_request_for_config(
         source_ids=source_ids,
         dataset_keys=dataset_keys,
     )
-
-
-def should_route_config_to_planner(session: Session, config: SyncConfiguration) -> bool:
-    integration_id = getattr(config, "migrated_integration_id", None)
-    if integration_id is None:
-        return False
-
-    if bool(getattr(config, "planner_managed", False)):
-        return True
-
-    return is_migrated_trigger_routing_enabled(session, str(config.org_id))
 
 
 def _planner_scoped_source_ids(
@@ -249,8 +185,6 @@ def planner_request_for_config_if_routed(
     user-selected enabled sources) while leaving child configs and flag-routed
     non-planner-managed parents on their existing semantics.
     """
-    if not should_route_config_to_planner(session, config):
-        return None
     request = plan_request_for_config(config, triggered_by=triggered_by, mode=mode)
     if (
         request is not None
@@ -424,13 +358,10 @@ def mark_sync_run_failed(session: Session, sync_run_id: str, error: str) -> None
 
 
 __all__ = [
-    "MIGRATED_TRIGGER_ROUTING_SETTING_KEY",
     "canonical_sync_config_for_sync_run",
-    "is_migrated_trigger_routing_enabled",
     "map_sync_mode",
     "mark_sync_run_failed",
     "planner_request_for_config_if_routed",
     "plan_request_for_config",
-    "should_route_config_to_planner",
     "stamp_sync_run_canonical_config",
 ]

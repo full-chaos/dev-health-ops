@@ -98,6 +98,72 @@ def test_work_client_get_repo_classifies_primary_rate_limit_403(monkeypatch) -> 
     gate.penalize.assert_called_once_with(5.0)
 
 
+def test_work_client_records_rest_usage_from_pygithub_rate_limit_state() -> None:
+    client, _graphql, _gate = _client()
+    cast(Any, client.github).rate_limiting = (42, 5000)
+    cast(Any, client.github).rate_limiting_resettime = 1234567890
+    cast(Any, client.github).get_repo = MagicMock(return_value=object())
+
+    client.get_repo(owner="full-chaos", repo="dev-health-web")
+
+    observations = client.drain_usage_observations()
+    assert observations == [
+        {
+            "transport": "rest",
+            "operation": "GET /repos/full-chaos/dev-health-web",
+            "request_count": 1,
+            "rate_limit": {
+                "remaining": "42",
+                "reset": "1234567890",
+                "limit": "5000",
+            },
+        }
+    ]
+
+
+def test_work_client_records_graphql_usage_from_headers_and_rate_limit_payload() -> (
+    None
+):
+    client, graphql, _gate = _client()
+    graphql.query.return_value = {"viewer": {"login": "octocat"}}
+    graphql.last_response_status = 200
+    graphql.last_response_headers = {
+        "x-ratelimit-remaining": "4998",
+        "x-ratelimit-reset": "1234567890",
+        "x-github-request-id": "REQ:1",
+        "authorization": "must-not-leak",
+    }
+    graphql.last_rate_limit_data = {
+        "limit": 5000,
+        "remaining": 4998,
+        "used": 2,
+        "resetAt": "2026-01-01T00:00:00Z",
+    }
+
+    client._query_graphql("POST /graphql test", "query { viewer { login } }")
+
+    observations = client.drain_usage_observations()
+    assert observations == [
+        {
+            "transport": "graphql",
+            "operation": "POST /graphql test",
+            "request_count": 1,
+            "latest_status": 200,
+            "latest_headers": {
+                "x-ratelimit-remaining": "4998",
+                "x-ratelimit-reset": "1234567890",
+                "x-github-request-id": "REQ:1",
+            },
+            "rate_limit": {
+                "limit": 5000,
+                "remaining": 4998,
+                "used": 2,
+                "resetAt": "2026-01-01T00:00:00Z",
+            },
+        }
+    ]
+
+
 def test_work_client_get_repo_classifies_permission_403() -> None:
     from github.GithubException import GithubException
 

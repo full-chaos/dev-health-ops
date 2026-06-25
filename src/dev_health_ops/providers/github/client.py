@@ -32,12 +32,16 @@ from dev_health_ops.providers._ratelimit import gate_call
 logger = logging.getLogger(__name__)
 
 _DIAGNOSTIC_HEADER_NAMES = (
+    "x-ratelimit-limit",
     "x-ratelimit-remaining",
     "x-ratelimit-reset",
+    "x-ratelimit-used",
+    "x-ratelimit-resource",
     "retry-after",
     "x-github-request-id",
     "x-accepted-github-permissions",
 )
+_MAX_USAGE_OBSERVATION_KEYS = 50
 
 _TItem = TypeVar("_TItem")
 
@@ -283,6 +287,8 @@ class GitHubWorkClient:
             host=host,
             config=RateLimitConfig(initial_backoff_seconds=1.0),
         )
+        self._usage_observations: dict[tuple[str, str], dict[str, Any]] = {}
+        self._usage_observation_overflow = 0
         self._app_token_provider: GitHubAppTokenProvider | None = None
 
         token = auth.token
@@ -352,9 +358,128 @@ class GitHubWorkClient:
     def _call_github(self, operation: str, call: Callable[[], _TItem]) -> _TItem:
         with gate_call(self.gate):
             try:
-                return call()
+                result = call()
+                self._record_rest_usage(operation)
+                return result
             except Exception as exc:
                 self._raise_github_exception(exc, operation=operation)
+
+    def _query_graphql(
+        self,
+        operation: str,
+        query: str,
+        *,
+        variables: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        data = self.graphql.query(query, variables=variables)
+        headers = getattr(self.graphql, "last_response_headers", {})
+        status = getattr(self.graphql, "last_response_status", None)
+        rate_limit_data = getattr(self.graphql, "last_rate_limit_data", None)
+        rate_limit = dict(rate_limit_data) if isinstance(rate_limit_data, dict) else {}
+        self._record_usage_observation(
+            transport="graphql",
+            operation=operation,
+            headers=_diagnostic_headers(headers),
+            rate_limit=rate_limit,
+            status=status if isinstance(status, int) else None,
+        )
+        return data
+
+    def _record_usage_observation(
+        self,
+        *,
+        transport: str,
+        operation: str,
+        headers: dict[str, str],
+        rate_limit: dict[str, Any],
+        status: int | None = None,
+    ) -> None:
+        if not headers and not rate_limit and status is None:
+            return
+        key = (transport, operation)
+        observations = getattr(self, "_usage_observations", None)
+        if observations is None:
+            observations = {}
+            self._usage_observations = observations
+        observation = observations.get(key)
+        if observation is None:
+            if len(observations) >= _MAX_USAGE_OBSERVATION_KEYS:
+                self._usage_observation_overflow = (
+                    getattr(self, "_usage_observation_overflow", 0) + 1
+                )
+                return
+            observation = {
+                "transport": transport,
+                "operation": operation,
+                "request_count": 0,
+            }
+            observations[key] = observation
+        observation["request_count"] = int(observation["request_count"]) + 1
+        if status is not None:
+            observation["latest_status"] = status
+        if headers:
+            observation["latest_headers"] = dict(headers)
+        if rate_limit:
+            observation["rate_limit"] = dict(rate_limit)
+
+    def _record_rest_usage(
+        self,
+        operation: str,
+        *,
+        headers: dict[str, str] | None = None,
+        status: int | None = None,
+    ) -> None:
+        safe_headers = _diagnostic_headers(headers or {})
+        rate_limit: dict[str, Any] = {}
+        remaining = safe_headers.get("x-ratelimit-remaining")
+        reset = safe_headers.get("x-ratelimit-reset")
+        limit = safe_headers.get("x-ratelimit-limit")
+        used = safe_headers.get("x-ratelimit-used")
+        resource = safe_headers.get("x-ratelimit-resource")
+
+        if remaining is None or limit is None:
+            rate_limiting = getattr(self.github, "rate_limiting", None)
+            if isinstance(rate_limiting, Sequence) and len(rate_limiting) >= 2:
+                remaining = remaining or str(rate_limiting[0])
+                limit = limit or str(rate_limiting[1])
+        if reset is None:
+            reset_time = getattr(self.github, "rate_limiting_resettime", None)
+            if reset_time is not None:
+                reset = str(reset_time)
+
+        for name, value in {
+            "remaining": remaining,
+            "reset": reset,
+            "limit": limit,
+            "used": used,
+            "resource": resource,
+        }.items():
+            if value is not None:
+                rate_limit[name] = value
+        self._record_usage_observation(
+            transport="rest",
+            operation=operation,
+            headers=safe_headers,
+            rate_limit=rate_limit,
+            status=status,
+        )
+
+    def drain_usage_observations(self) -> list[dict[str, Any]]:
+        usage_observations = getattr(self, "_usage_observations", {})
+        observations = [dict(value) for value in usage_observations.values()]
+        overflow = getattr(self, "_usage_observation_overflow", 0)
+        if overflow:
+            observations.append(
+                {
+                    "transport": "summary",
+                    "operation": "overflow",
+                    "dropped_operation_count": overflow,
+                }
+            )
+        usage_observations.clear()
+        self._usage_observations = usage_observations
+        self._usage_observation_overflow = 0
+        return observations
 
     def _raise_github_exception(self, exc: Exception, *, operation: str) -> NoReturn:
         from github import GithubException, RateLimitExceededException
@@ -364,6 +489,7 @@ class GitHubWorkClient:
         if isinstance(exc, RateLimitException):
             raise exc
         if isinstance(exc, RateLimitExceededException):
+            self._record_rest_usage(operation)
             raise RateLimitException(
                 f"GitHub rate limit on {operation}: {exc}",
                 retry_after_seconds=self._rate_limit_reset_delay_seconds(),
@@ -373,6 +499,11 @@ class GitHubWorkClient:
 
         status = getattr(exc, "status", None)
         headers = _diagnostic_headers(getattr(exc, "headers", None))
+        self._record_rest_usage(
+            operation,
+            headers=headers,
+            status=status if isinstance(status, int) else None,
+        )
         message = _github_error_message(getattr(exc, "data", None))
         if status == 401:
             raise AuthenticationException(
@@ -459,6 +590,7 @@ class GitHubWorkClient:
         with gate_call(self.gate):
             try:
                 yield from self._iter_with_limit(source, limit=limit, skip=skip)
+                self._record_rest_usage(operation)
             except Exception as exc:
                 self._raise_github_exception(exc, operation=operation)
 
@@ -805,7 +937,8 @@ class GitHubWorkClient:
         }}
         """
         with gate_call(self.gate):
-            data = self.graphql.query(
+            data = self._query_graphql(
+                "POST /graphql PR social data",
                 query,
                 variables={"owner": owner, "repo": repo},
             )
@@ -837,7 +970,8 @@ class GitHubWorkClient:
         }
         """
         with gate_call(self.gate):
-            data = self.graphql.query(
+            data = self._query_graphql(
+                "POST /graphql PR review comments",
                 query,
                 variables={"reviewId": review_id, "first": first, "after": after},
             )
@@ -1131,7 +1265,8 @@ class GitHubWorkClient:
         fetched = 0
         while True:
             with gate_call(self.gate):
-                data = self.graphql.query(
+                data = self._query_graphql(
+                    "POST /graphql project v2 items",
                     query,
                     variables={
                         "login": org_login,
@@ -1243,7 +1378,8 @@ class GitHubWorkClient:
         }
         """
 
-        data = self.graphql.query(
+        data = self._query_graphql(
+            "POST /graphql project v2 item changes",
             query,
             variables={
                 "itemId": item_id,

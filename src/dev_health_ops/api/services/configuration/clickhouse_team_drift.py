@@ -14,19 +14,6 @@ if TYPE_CHECKING:
     from dev_health_ops.storage.clickhouse import ClickHouseStore
 
 
-_CHANGE_COLUMNS = (
-    "change_id",
-    "entity_id",
-    "provider",
-    "native_team_key",
-    "change_type",
-    "field",
-    "old_value_json",
-    "new_value_json",
-    "first_seen_at",
-    "last_seen_at",
-)
-
 _OBSERVATION_COLUMNS = (
     "team_id",
     "name",

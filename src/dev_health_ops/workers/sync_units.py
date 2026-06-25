@@ -262,6 +262,10 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
             )
 
         BudgetGuard.observe_run(session, sync_run_id, capped_unit_ids=capped_ids)
+        budget_result = BudgetGuard.enforce_run(
+            session, sync_run_id, capped_unit_ids=capped_ids
+        )
+        capped_ids = frozenset((*capped_ids, *budget_result.deferred_unit_ids))
 
         units = _claim_units(session, run_uuid, capped_ids=capped_ids)
         signatures = []
@@ -298,7 +302,11 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         callback.set(queue="sync")
         try:
             chord(group(signatures), callback).apply_async()
-            if capped_ids:
+            if budget_result.next_deferred_at is not None:
+                _schedule_redispatch(
+                    sync_run_id, available_at=budget_result.next_deferred_at
+                )
+            elif capped_ids:
                 _schedule_redispatch(sync_run_id)
         except Exception as exc:
             logger.exception(

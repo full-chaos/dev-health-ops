@@ -1859,6 +1859,147 @@ def test_dispatch_sync_run_logs_budget_guard_would_defer_without_deferring(
     assert record.suggested_available_at is not None
 
 
+def test_dispatch_sync_run_enforces_budget_deferral(db_session, monkeypatch):
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(db_session)
+    _patch_db_session(monkeypatch, db_session)
+    dispatch_calls, finalize_calls, chord_calls = _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv("SYNC_BUDGET_BUCKET_LIMITS", json.dumps({"github:rest_core": 1}))
+    monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_SECONDS", "120")
+    monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
+
+    result = sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(run)
+    db_session.refresh(unit)
+    assert result["status"] == "deferred"
+    assert result["queued_units"] == 0
+    assert run.status == SyncRunStatus.PLANNED.value
+    assert unit.status == SyncRunUnitStatus.RETRYING.value
+    assert unit.available_at is not None
+    available_at = _aware(unit.available_at)
+    assert available_at > datetime.now(timezone.utc) + timedelta(seconds=90)
+    assert unit.result is not None
+    assert unit.result["error_category"] == "budget_deferred"
+    assert unit.result["budget_guard"][0]["decision"] == "deferred"
+    assert dispatch_calls == []
+    assert finalize_calls == []
+    assert chord_calls == []
+
+
+def test_dispatch_sync_run_budget_reservation_blocks_second_unit(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_units
+
+    run, first = _seed_run(db_session)
+    second = SyncRunUnit(
+        org_id=run.org_id,
+        sync_run_id=run.id,
+        integration_id=first.integration_id,
+        source_id=first.source_id,
+        provider="github",
+        dataset_key="commits",
+        cost_class="medium",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunUnitStatus.PLANNED.value,
+        attempts=0,
+        processor_flags={"sync_git": True},
+    )
+    run.total_units = 2
+    db_session.add(second)
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv("SYNC_BUDGET_BUCKET_LIMITS", json.dumps({"github:rest_core": 2}))
+    monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_SECONDS", "60")
+    monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
+
+    result = sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(first)
+    db_session.refresh(second)
+    assert result == {"status": "dispatched", "queued_units": 1}
+    statuses = {first.status, second.status}
+    assert statuses == {
+        SyncRunUnitStatus.DISPATCHING.value,
+        SyncRunUnitStatus.RETRYING.value,
+    }
+    deferred = first if first.status == SyncRunUnitStatus.RETRYING.value else second
+    assert deferred.available_at is not None
+    assert deferred.result is not None
+    assert deferred.result["error_category"] == "budget_deferred"
+
+
+def test_dispatch_sync_run_budget_reservation_expires(db_session, monkeypatch):
+    from dev_health_ops.workers import sync_units
+
+    run, planned = _seed_run(db_session)
+    stale_reserved = SyncRunUnit(
+        org_id=run.org_id,
+        sync_run_id=run.id,
+        integration_id=planned.integration_id,
+        source_id=planned.source_id,
+        provider="github",
+        dataset_key="issues",
+        cost_class="medium",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunUnitStatus.DISPATCHING.value,
+        attempts=0,
+        processor_flags={"sync_issues": True},
+    )
+    run.total_units = 2
+    db_session.add(stale_reserved)
+    db_session.flush()
+    stale_reserved.updated_at = datetime.now(timezone.utc) - timedelta(minutes=30)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv("SYNC_BUDGET_BUCKET_LIMITS", json.dumps({"github:rest_core": 2}))
+
+    result = sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(planned)
+    db_session.refresh(stale_reserved)
+    assert result == {"status": "dispatched", "queued_units": 2}
+    assert planned.status == SyncRunUnitStatus.DISPATCHING.value
+    assert stale_reserved.status == SyncRunUnitStatus.DISPATCHING.value
+
+
+def test_dispatch_sync_run_budget_release_after_terminal_unit(db_session, monkeypatch):
+    from dev_health_ops.workers import sync_units
+
+    run, planned = _seed_run(db_session)
+    completed = SyncRunUnit(
+        org_id=run.org_id,
+        sync_run_id=run.id,
+        integration_id=planned.integration_id,
+        source_id=planned.source_id,
+        provider="github",
+        dataset_key="issues",
+        cost_class="medium",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunUnitStatus.SUCCESS.value,
+        attempts=1,
+        result={"ok": True},
+        processor_flags={"sync_issues": True},
+    )
+    run.total_units = 2
+    db_session.add(completed)
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv("SYNC_BUDGET_BUCKET_LIMITS", json.dumps({"github:rest_core": 2}))
+
+    result = sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(planned)
+    db_session.refresh(completed)
+    assert result == {"status": "dispatched", "queued_units": 1}
+    assert planned.status == SyncRunUnitStatus.DISPATCHING.value
+    assert completed.status == SyncRunUnitStatus.SUCCESS.value
+
+
 def test_dispatch_sync_run_does_not_terminalize_when_chord_enqueue_fails(
     db_session, monkeypatch
 ):

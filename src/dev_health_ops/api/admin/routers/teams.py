@@ -7,6 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.admin.middleware import get_admin_org_id
 from dev_health_ops.api.admin.schemas import (
+    ApproveChangesRequest,
+    DismissChangesRequest,
+    PendingChangesResponse,
     TeamDiscoverResponse,
     TeamImportRequest,
     TeamImportResponse,
@@ -22,6 +25,9 @@ from dev_health_ops.api.services.configuration import (
 )
 from dev_health_ops.api.services.configuration.clickhouse_team_admin import (
     ClickHouseTeamAdminService,
+)
+from dev_health_ops.api.services.configuration.clickhouse_team_drift import (
+    ClickHouseTeamDriftService,
 )
 from dev_health_ops.credentials.resolver import github_credentials_from_mapping
 from dev_health_ops.storage.clickhouse import ClickHouseStore
@@ -330,59 +336,72 @@ async def import_teams(
 
 
 # --- Team drift review -----------------------------------------------------
-# The drift-review surface was built on the Postgres ``TeamMapping``
-# flagged-changes machinery, which was removed when ClickHouse became the team
-# system of record (CHAOS-2600). The backing service + Postgres tables are gone
-# (CS6), so these endpoints are disabled (HTTP 501) rather than returning fake
-# success; a ClickHouse-backed rebuild is tracked by CHAOS-2622. They remain as
-# pure 501 stubs (no deleted PG code) so the dev-health-web admin keeps getting a
-# clean 501 instead of a bogus 404 from the ``/teams/{team_id}`` fallthrough;
-# the endpoints + their web caller are removed together in CS7.
+# CHAOS-2622 rebuilds drift review natively on ClickHouse after the old
+# Postgres ``TeamMapping.flagged_changes`` machinery was removed in
+# CHAOS-2600 CS6. The endpoints stay live and are backed by
+# ``team_drift_changes`` + ``team_provider_observations``; the web caller is
+# repointed to stable ``change_id`` decisions instead of the old index path.
 #
 # ROUTING: the static paths (``/teams/pending-changes``,
 # ``/teams/trigger-drift-sync``) are declared BEFORE the ``/teams/{team_id}``
 # path-param route so FastAPI matches them rather than treating the literal as a
 # team id.
 
-_DRIFT_DISABLED_DETAIL = (
-    "Team drift review is disabled; the Postgres flagged-changes machinery was "
-    "removed in CHAOS-2600 CS6. A ClickHouse-backed rebuild is tracked by "
-    "CHAOS-2622."
-)
 
-
-@router.get("/teams/pending-changes")
+@router.get("/teams/pending-changes", response_model=PendingChangesResponse)
 async def get_pending_changes(
+    store: ClickHouseStore = Depends(get_clickhouse_store),
     org_id: str = Depends(get_admin_org_id),
-) -> dict[str, Any]:
-    raise HTTPException(status_code=501, detail=_DRIFT_DISABLED_DETAIL)
+) -> PendingChangesResponse:
+    svc = ClickHouseTeamDriftService(store, org_id)
+    changes = await svc.get_pending_changes()
+    return PendingChangesResponse(changes=changes, total=len(changes))
 
 
 @router.post("/teams/{team_id}/approve-changes")
 async def approve_team_changes(
     team_id: str,
-    change_indices: list[int] | None = None,
-    approve_all: bool = False,
+    payload: ApproveChangesRequest,
+    store: ClickHouseStore = Depends(get_clickhouse_store),
     org_id: str = Depends(get_admin_org_id),
 ) -> dict[str, Any]:
-    raise HTTPException(status_code=501, detail=_DRIFT_DISABLED_DETAIL)
+    svc = ClickHouseTeamDriftService(store, org_id)
+    return await svc.approve(
+        team_id=team_id,
+        change_ids=payload.change_ids,
+        approve_all=payload.approve_all,
+        decided_by=org_id,
+    )
 
 
 @router.post("/teams/{team_id}/dismiss-changes")
 async def dismiss_team_changes(
     team_id: str,
-    change_indices: list[int] | None = None,
-    dismiss_all: bool = False,
+    payload: DismissChangesRequest,
+    store: ClickHouseStore = Depends(get_clickhouse_store),
     org_id: str = Depends(get_admin_org_id),
 ) -> dict[str, Any]:
-    raise HTTPException(status_code=501, detail=_DRIFT_DISABLED_DETAIL)
+    svc = ClickHouseTeamDriftService(store, org_id)
+    return await svc.dismiss(
+        team_id=team_id,
+        change_ids=payload.change_ids,
+        dismiss_all=payload.dismiss_all,
+        decided_by=org_id,
+    )
 
 
 @router.post("/teams/trigger-drift-sync")
 async def trigger_drift_sync(
     org_id: str = Depends(get_admin_org_id),
 ) -> dict[str, Any]:
-    raise HTTPException(status_code=501, detail=_DRIFT_DISABLED_DETAIL)
+    from dev_health_ops.workers.celery_app import celery_app
+
+    # TODO(CHAOS-2653): replace name-based dispatch with the concrete
+    # ``sync_team_drift`` task import once the worker lane lands it.
+    async_result = celery_app.signature(
+        "sync_team_drift", kwargs={"org_id": org_id}, queue="sync"
+    ).apply_async()
+    return {"triggered": True, "task_id": str(async_result.id)}
 
 
 @router.get("/teams/{team_id}", response_model=TeamMappingResponse)

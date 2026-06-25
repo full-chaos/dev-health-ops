@@ -33,6 +33,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from dev_health_ops.api.services.configuration.clickhouse_team_drift_projector import (
+    ClickHouseTeamDriftProjector,
+)
+
 if TYPE_CHECKING:
     from dev_health_ops.storage.clickhouse import ClickHouseStore
 
@@ -327,6 +331,7 @@ class ClickHouseTeamAdminService:
         skipped = 0
         merged = 0
         details: list[dict[str, Any]] = []
+        projector = ClickHouseTeamDriftProjector(store=self.store, org_id=self.org_id)
 
         for team in teams:
             provider_type = getattr(team, "provider_type", "")
@@ -340,8 +345,27 @@ class ClickHouseTeamAdminService:
             else:
                 team_id = provider_team_id
 
+            associations = getattr(team, "associations", None) or {}
+            name = getattr(team, "name", team_id)
+            description = getattr(team, "description", None)
+            now = datetime.now(timezone.utc)
+            observed_row = {
+                "id": team_id,
+                "name": name,
+                "description": description,
+                "members": [],
+                "project_keys": associations.get("project_keys", []),
+                "repo_patterns": associations.get("repo_patterns", []),
+                "is_active": True,
+                "updated_at": now,
+                "org_id": self.org_id,
+                "provider": provider_type,
+                "native_team_key": provider_team_id,
+                "parent_team_id": None,
+            }
             existing = await self.get(team_id)
             if existing is not None and on_conflict == "skip":
+                await projector.record_observation(observed_row, discovered_at=now)
                 skipped += 1
                 details.append(
                     {
@@ -352,13 +376,27 @@ class ClickHouseTeamAdminService:
                 )
                 continue
 
-            associations = getattr(team, "associations", None) or {}
-            await self.create_or_update(
-                team_id=team_id,
-                name=getattr(team, "name", team_id),
-                description=getattr(team, "description", None),
-                repo_patterns=associations.get("repo_patterns", []),
-                project_keys=associations.get("project_keys", []),
+            await projector.project_team(
+                observed_row,
+                catalog_row={
+                    "id": team_id,
+                    "team_uuid": existing.team_uuid
+                    if existing is not None
+                    else uuid.uuid5(
+                        uuid.NAMESPACE_URL, f"team:{self.org_id}:{team_id}"
+                    ),
+                    "name": name,
+                    "description": description,
+                    "members": existing.members if existing is not None else [],
+                    "project_keys": associations.get("project_keys", []),
+                    "repo_patterns": associations.get("repo_patterns", []),
+                    "is_active": 1,
+                    "org_id": self.org_id,
+                    "provider": "",
+                    "native_team_key": None,
+                    "updated_at": now,
+                },
+                discovered_at=now,
             )
 
             if existing is None:

@@ -10,6 +10,10 @@ from typing import Any, Protocol, TypeVar, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dev_health_ops.api.services.configuration.clickhouse_team_drift_projector import (
+    project_provider_team_rows,
+    project_team_rows_with_store,
+)
 from dev_health_ops.api.services.configuration.team_discovery import (
     TeamDiscoveryService,
 )
@@ -26,6 +30,7 @@ from dev_health_ops.metrics.schemas import (
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
 _T = TypeVar("_T")
+_REAL_CLICKHOUSE_SINK_TYPE = ClickHouseMetricsSink
 
 
 class _DimensionSink(Protocol):
@@ -69,10 +74,20 @@ def _sink_from_kwargs(
     injected = kwargs.get("sink")
     if injected is not None:
         return cast(_DimensionSink, injected), False
+    return cast(_DimensionSink, ClickHouseMetricsSink(dsn=_clickhouse_dsn(scope))), True
+
+
+def _clickhouse_dsn(scope: dict[str, Any]) -> str:
     dsn = str(scope.get("analytics_db") or os.getenv("CLICKHOUSE_URI") or "")
     if not dsn:
         raise ValueError("ClickHouse DSN is required for Linear team auto-import")
-    return cast(_DimensionSink, ClickHouseMetricsSink(dsn=dsn)), True
+    return dsn
+
+
+def _team_store_from_kwargs(sink: _DimensionSink, kwargs: dict[str, Any]) -> Any | None:
+    return kwargs.get("team_store") or (
+        sink if hasattr(sink, "insert_team_provider_observations") else None
+    )
 
 
 def _team_id(team: Any) -> str:
@@ -246,7 +261,29 @@ def populate(
 
     sink, should_close = _sink_from_kwargs(scope, kwargs)
     try:
-        _run(sink.insert_teams(team_rows))
+        team_store = _team_store_from_kwargs(sink, kwargs)
+        if team_store is not None:
+            _run(
+                project_team_rows_with_store(
+                    store=team_store,
+                    org_id=org_id,
+                    team_rows=team_rows,
+                    team_writer=sink.insert_teams,
+                    discovered_at=now,
+                )
+            )
+        elif isinstance(sink, _REAL_CLICKHOUSE_SINK_TYPE):
+            _run(
+                project_provider_team_rows(
+                    dsn=_clickhouse_dsn(scope),
+                    org_id=org_id,
+                    team_rows=team_rows,
+                    team_writer=sink.insert_teams,
+                    discovered_at=now,
+                )
+            )
+        else:
+            _run(sink.insert_teams(team_rows))
         projects = _dedupe_projects(project_rows)
         members = _dedupe_members(member_rows)
         memberships = _dedupe_memberships(membership_rows)

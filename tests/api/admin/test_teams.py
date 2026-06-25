@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib
+import json
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -311,20 +313,128 @@ async def test_admin_created_team_has_empty_provider(client):
     assert row["is_active"] == 1
 
 
+def _pending_drift_row(
+    org_id: str, *, change_id: str, field: str, old: object, new: object
+) -> dict[str, object]:
+    now = datetime.now(timezone.utc)
+    return {
+        "org_id": org_id,
+        "change_id": change_id,
+        "entity_type": "team",
+        "entity_id": "platform",
+        "provider": "linear",
+        "native_team_key": "PLAT",
+        "change_type": "field_changed",
+        "field": field,
+        "old_value_json": json.dumps(old, separators=(",", ":")),
+        "new_value_json": json.dumps(new, separators=(",", ":")),
+        "status": "pending",
+        "first_seen_at": now,
+        "last_seen_at": now,
+    }
+
+
 @pytest.mark.asyncio
-async def test_drift_review_endpoints_disabled_501(client):
-    # The team drift-review surface is disabled (HTTP 501), not faked as success
-    # and not falling through to GET /teams/{team_id} (which would 404). The
-    # ClickHouse-backed rebuild is tracked by CHAOS-2622. These stubs keep the
-    # dev-health-web admin contract a clean 501 until CS7 removes both sides.
-    async_client, _, _ = client
-    calls = [
-        ("get", "/api/v1/admin/teams/pending-changes"),
-        ("post", "/api/v1/admin/teams/some-team/approve-changes"),
-        ("post", "/api/v1/admin/teams/some-team/dismiss-changes"),
-        ("post", "/api/v1/admin/teams/trigger-drift-sync"),
-    ]
-    for method, url in calls:
-        response = await getattr(async_client, method)(url)
-        assert response.status_code == 501, (method, url)
-        assert "CHAOS-2622" in response.json()["detail"], (method, url)
+async def test_pending_changes_returns_change_id(client):
+    # CHAOS-2622: the drift-review endpoints are live (ClickHouse-backed), not
+    # 501 stubs. pending-changes exposes a stable ``change_id`` per flagged change.
+    async_client, seeded_state, ch_store = client
+    org_id = seeded_state["org_id"]
+    await ch_store.insert_teams(
+        [{"id": "platform", "name": "Platform", "org_id": org_id, "is_active": 1}]
+    )
+    await ch_store.insert_team_drift_changes(
+        [
+            _pending_drift_row(
+                org_id,
+                change_id="chg-1",
+                field="name",
+                old="Platform",
+                new="Platform Eng",
+            )
+        ]
+    )
+
+    response = await async_client.get("/api/v1/admin/teams/pending-changes")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    change = body["changes"][0]
+    assert change["change_id"] == "chg-1"
+    assert change["team_id"] == "platform"
+    assert change["team_name"] == "Platform"
+    assert change["field"] == "name"
+    assert change["new_value"] == "Platform Eng"
+
+
+@pytest.mark.asyncio
+async def test_approve_changes_accepts_change_ids(client):
+    # The wire is change_id-based: {change_ids: [...]} applies the observed value
+    # into the catalog and resolves the change (no longer index-based).
+    async_client, seeded_state, ch_store = client
+    org_id = seeded_state["org_id"]
+    await ch_store.insert_teams(
+        [{"id": "platform", "name": "Platform", "org_id": org_id, "is_active": 1}]
+    )
+    ch_store.set_provider_observation(
+        org_id=org_id, team_id="platform", name="Platform Eng"
+    )
+    await ch_store.insert_team_drift_changes(
+        [
+            _pending_drift_row(
+                org_id,
+                change_id="chg-1",
+                field="name",
+                old="Platform",
+                new="Platform Eng",
+            )
+        ]
+    )
+
+    response = await async_client.post(
+        "/api/v1/admin/teams/platform/approve-changes",
+        json={"change_ids": ["chg-1"]},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["approved"] == 1
+    assert body["change_ids"] == ["chg-1"]
+    # The observed value is now the catalog value.
+    assert ch_store.rows[(org_id, "platform")]["name"] == "Platform Eng"
+    # The change is resolved out of the pending lane.
+    follow = await async_client.get("/api/v1/admin/teams/pending-changes")
+    assert follow.json()["total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_dismiss_changes_accepts_change_ids(client):
+    async_client, seeded_state, ch_store = client
+    org_id = seeded_state["org_id"]
+    await ch_store.insert_teams(
+        [{"id": "platform", "name": "Platform", "org_id": org_id, "is_active": 1}]
+    )
+    await ch_store.insert_team_drift_changes(
+        [
+            _pending_drift_row(
+                org_id,
+                change_id="chg-1",
+                field="name",
+                old="Platform",
+                new="Platform Eng",
+            )
+        ]
+    )
+
+    response = await async_client.post(
+        "/api/v1/admin/teams/platform/dismiss-changes",
+        json={"change_ids": ["chg-1"]},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["dismissed"] == 1
+    assert body["change_ids"] == ["chg-1"]
+    # Catalog is untouched by a dismiss.
+    assert ch_store.rows[(org_id, "platform")]["name"] == "Platform"
+    # The change leaves the pending lane.
+    follow = await async_client.get("/api/v1/admin/teams/pending-changes")
+    assert follow.json()["total"] == 0

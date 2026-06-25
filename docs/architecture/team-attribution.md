@@ -42,7 +42,9 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 > tables and models are **deleted** (Alembic `0020`), along with the `TeamMappingService` /
 > `IdentityMappingService` / `TeamDriftSyncService` classes, the `sync-team-drift` /
 > `reconcile-team-members` tasks, and the Postgres-backed drift engine. (The four admin drift-review
-> endpoints remain as HTTP 501 stubs until CS7 removes them with the web caller — CHAOS-2608.) (CS5 had already deleted the
+> endpoints currently stand as HTTP 501 stubs and are being **rebuilt natively on ClickHouse — not
+> deleted — under CHAOS-2622**; see §0.5. The earlier "removed in CS7 with the web caller —
+> CHAOS-2608" intent is superseded — CHAOS-2608 is an unrelated Done web ticket.) (CS5 had already deleted the
 > Postgres→ClickHouse team bridge `providers/team_bridge.py` and `providers/team_reconcile.py`.) Admin
 > team/identity CRUD goes through `ClickHouseTeamAdminService` + `ClickHouseIdentityStore`, writing the
 > ClickHouse `teams` and `identities` tables directly. Identity membership uses **surgical replacement**
@@ -210,6 +212,70 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   resolves to its team via both the canonical ladder and the roster — previously the roster stored a
   bare login the resolver never matched, so member attribution silently missed for no-email
   github/gitlab/jira assignees. The matrix above is the source of truth for what is/ isn't proven.
+
+### 0.5 Drift-review reconciliation (CHAOS-2622) — rebuilt on ClickHouse
+
+The CHAOS-2600 migration dropped the Postgres-backed **drift-review** surface as collateral: the
+admin workflow that detects when provider discovery disagrees with the curated/manual config and
+lets an admin approve or dismiss each change. It was built on Postgres `TeamMapping` columns
+(`flagged_changes` / `sync_policy` / `managed_fields`) + `TeamDriftSyncService`, all deleted in CS6,
+leaving the four admin endpoints as HTTP 501 stubs. **CHAOS-2622 rebuilds it natively on ClickHouse
+— the four endpoints and the web `PendingChangesPanel` are NOT deleted.** (The earlier "removed in
+CS7 with the web caller — CHAOS-2608" intent is superseded; CHAOS-2608 is an unrelated Done web
+ticket that never touched these endpoints.)
+
+**Provider-observed vs curated split.** A faithful rebuild re-separates the two layers that Postgres
+held in `TeamMapping` and that the CH `teams` `ReplacingMergeTree` collapsed into a single curated
+row. Three sidecar `ReplacingMergeTree` tables hold the review state, while `teams FINAL` stays the
+resolved catalog every reader (§0.1–0.2) keeps using:
+
+| Table | Role |
+|---|---|
+| `team_sync_policies` | per-team drift policy sidecar (`sync_policy`, `managed_fields`); kept off `teams` because `ClickHouseTeamAdminService.create_or_update` rewrites the whole team row (`provider=""`, `native_team_key=None`) on every update and would clobber any policy stored there |
+| `team_provider_observations` | provider-observed truth layer — what discovery last saw, keyed `(org_id, provider, native_team_key)` |
+| `team_drift_changes` | pending-review read model (decision table) keyed `(org_id, change_id)`; `status ∈ pending / approved / dismissed / resolved / superseded` |
+
+**Policy (low-cardinality, default-safe).** `sync_policy = 0` (auto-apply) is the default, so
+existing orgs see **no behavior change** — discovery writes straight to `teams`. Only `policy 1`
+(flag-for-review) routes managed-field changes (`name`, `description`, `project_keys`,
+`repo_patterns`; `members` is a display-only catalog field this slice and does **not** yet gate
+`team_memberships`) into the pending lane instead of clobbering the catalog. `policy 2` is
+manual/none. `status` / `change_type` are low-cardinality strings, not `Enum8`, to avoid
+enum-widening migration ordering before new values can be emitted.
+
+**Drift-aware projector.** The final team write in the four auto-importers
+(`workers/team_autoimport_{github,gitlab,jira,linear}.py`) **and**
+`ClickHouseTeamAdminService.import_teams` route through one projector instead of scattering policy
+logic: it always records the latest `team_provider_observations` row, reads the team's policy, then
+either applies observed values into `teams` (policy 0, current behavior) or emits/refreshes a
+`team_drift_changes` pending row per changed managed field (policy 1).
+
+**`change_id` value-fingerprint + lifecycle (correctness-critical).** `change_id =
+hash(org_id, entity_type, entity_id, change_type, field, old_value_json, new_value_json)` —
+it fingerprints the *values*, not just `(team, field)`, so a dismissed `A→B` does not wrongly
+suppress a later `A→C`. The projector enforces:
+
+- **No resurrection** — if a `change_id` already exists as `dismissed` or `approved`, do NOT
+  re-insert a `pending` row for the same value pair; only a *different* fingerprint creates new
+  pending drift.
+- **Supersede** — a provider value change for the same `(team, field)` marks the prior `pending`
+  row `superseded` and inserts a new `pending` row.
+- **Resolve** — drift that disappears from discovery marks stale `pending` rows `resolved`.
+
+**Endpoints repointed by `change_id`.** `ClickHouseTeamDriftService` backs the four endpoints over
+`team_drift_changes FINAL`: `GET /admin/teams/pending-changes` lists flagged drift; approve/dismiss
+act **by `change_id`** (`{change_ids: [...], approve_all|dismiss_all}`, replacing the old racy
+index-based wire) — approve applies the observed value into `teams` via `create_or_update` and marks
+the change `approved`, dismiss marks it `dismissed` (catalog unchanged); `POST
+/admin/teams/trigger-drift-sync` dispatches the `sync_team_drift` Celery task on the `sync` queue
+(worker-supplied provider credentials). The web side adds `FlaggedChange.change_id` and sends
+`change_ids`. All three tables join the org-deletion purge path.
+
+> **Identities/members slice (sequenced second).** Member/identity drift +
+> `manual_attribution_fallbacks(scope_type='member')` reconciliation reuses `team_drift_changes` via
+> `entity_type='identity'` (or a parallel `identity_drift_changes` table if the shape diverges) and
+> must gate the `team_memberships` attribution dimension — not just the `teams.members` roster —
+> applying membership changes surgically by facet (never a full recompute). See the CHAOS-2622 plan §4.4.
 
 ---
 

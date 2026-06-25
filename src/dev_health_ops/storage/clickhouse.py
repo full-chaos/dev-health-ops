@@ -101,6 +101,14 @@ class ClickHouseStore:
         return json.dumps(value, default=str)
 
     @staticmethod
+    def _json_column(value: Any) -> str:
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, default=str)
+        if value is None:
+            return "null"
+        return str(value)
+
+    @staticmethod
     def _item_getter(item: Any):
         if isinstance(item, dict):
             return item.get
@@ -1637,6 +1645,142 @@ class ClickHouseStore:
                 "updated_at",
             ],
             rows,
+        )
+
+    async def insert_team_sync_policies(self, rows: list[Any]) -> None:
+        if not rows:
+            return
+        synced_at = self._normalize_datetime(datetime.now(timezone.utc))
+        payload: list[dict[str, Any]] = []
+        for item in rows:
+            get = self._item_getter(item)
+            payload.append(
+                {
+                    "org_id": str(get("org_id") or self.org_id or ""),
+                    "team_id": str(get("team_id") or ""),
+                    "sync_policy": int(get("sync_policy", 0) or 0),
+                    "managed_fields": list(get("managed_fields") or []),
+                    "updated_by": get("updated_by"),
+                    "updated_at": self._normalize_datetime(get("updated_at"))
+                    or synced_at,
+                }
+            )
+        await self._insert_rows(
+            "team_sync_policies",
+            [
+                "org_id",
+                "team_id",
+                "sync_policy",
+                "managed_fields",
+                "updated_by",
+                "updated_at",
+            ],
+            payload,
+        )
+
+    async def insert_team_provider_observations(self, rows: list[Any]) -> None:
+        if not rows:
+            return
+        synced_at = self._normalize_datetime(datetime.now(timezone.utc))
+        payload: list[dict[str, Any]] = []
+        for item in rows:
+            get = self._item_getter(item)
+            payload.append(
+                {
+                    "org_id": str(get("org_id") or self.org_id or ""),
+                    "provider": str(get("provider") or ""),
+                    "native_team_key": str(get("native_team_key") or ""),
+                    "team_id": str(get("team_id") or ""),
+                    "name": get("name"),
+                    "description": get("description"),
+                    "members_json": self._json_column(
+                        get("members_json", get("members", []))
+                    ),
+                    "project_keys_json": self._json_column(
+                        get("project_keys_json", get("project_keys", []))
+                    ),
+                    "repo_patterns_json": self._json_column(
+                        get("repo_patterns_json", get("repo_patterns", []))
+                    ),
+                    "is_active": int(get("is_active", 1) or 0),
+                    "parent_team_id": get("parent_team_id"),
+                    "discovered_at": self._normalize_datetime(get("discovered_at"))
+                    or synced_at,
+                    "updated_at": self._normalize_datetime(get("updated_at"))
+                    or synced_at,
+                }
+            )
+        await self._insert_rows(
+            "team_provider_observations",
+            [
+                "org_id",
+                "provider",
+                "native_team_key",
+                "team_id",
+                "name",
+                "description",
+                "members_json",
+                "project_keys_json",
+                "repo_patterns_json",
+                "is_active",
+                "parent_team_id",
+                "discovered_at",
+                "updated_at",
+            ],
+            payload,
+        )
+
+    async def insert_team_drift_changes(self, rows: list[Any]) -> None:
+        if not rows:
+            return
+        synced_at = self._normalize_datetime(datetime.now(timezone.utc))
+        payload: list[dict[str, Any]] = []
+        for item in rows:
+            get = self._item_getter(item)
+            payload.append(
+                {
+                    "org_id": str(get("org_id") or self.org_id or ""),
+                    "change_id": str(get("change_id") or ""),
+                    "entity_type": str(get("entity_type") or ""),
+                    "entity_id": str(get("entity_id") or ""),
+                    "provider": str(get("provider") or ""),
+                    "native_team_key": get("native_team_key"),
+                    "change_type": str(get("change_type") or ""),
+                    "field": get("field"),
+                    "old_value_json": self._json_column(get("old_value_json")),
+                    "new_value_json": self._json_column(get("new_value_json")),
+                    "status": str(get("status") or ""),
+                    "first_seen_at": self._normalize_datetime(get("first_seen_at"))
+                    or synced_at,
+                    "last_seen_at": self._normalize_datetime(get("last_seen_at"))
+                    or synced_at,
+                    "decided_at": self._normalize_datetime(get("decided_at")),
+                    "decided_by": get("decided_by"),
+                    "updated_at": self._normalize_datetime(get("updated_at"))
+                    or synced_at,
+                }
+            )
+        await self._insert_rows(
+            "team_drift_changes",
+            [
+                "org_id",
+                "change_id",
+                "entity_type",
+                "entity_id",
+                "provider",
+                "native_team_key",
+                "change_type",
+                "field",
+                "old_value_json",
+                "new_value_json",
+                "status",
+                "first_seen_at",
+                "last_seen_at",
+                "decided_at",
+                "decided_by",
+                "updated_at",
+            ],
+            payload,
         )
 
     async def insert_projects(self, rows: list[Any]) -> None:

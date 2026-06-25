@@ -238,10 +238,12 @@ resolved catalog every reader (§0.1–0.2) keeps using:
 **Policy (low-cardinality, default-safe).** `sync_policy = 0` (auto-apply) is the default, so
 existing orgs see **no behavior change** — discovery writes straight to `teams`. Only `policy 1`
 (flag-for-review) routes managed-field changes (`name`, `description`, `project_keys`,
-`repo_patterns`; `members` is a display-only catalog field this slice and does **not** yet gate
-`team_memberships`) into the pending lane instead of clobbering the catalog. `policy 2` is
-manual/none. `status` / `change_type` are low-cardinality strings, not `Enum8`, to avoid
-enum-widening migration ordering before new values can be emitted.
+`repo_patterns`) into the pending lane instead of clobbering the catalog. Provider membership
+imports also gate attribution-impacting `team_memberships` rows when they conflict with a manual
+membership or `manual_attribution_fallbacks(scope_type='member')`; the `teams.members` roster is
+then updated surgically on approval. `policy 2` is manual/none. `status` / `change_type` are
+low-cardinality strings, not `Enum8`, to avoid enum-widening migration ordering before new values
+can be emitted.
 
 **Drift-aware projector.** The final team write in the four auto-importers
 (`workers/team_autoimport_{github,gitlab,jira,linear}.py`) **and**
@@ -271,11 +273,14 @@ the change `approved`, dismiss marks it `dismissed` (catalog unchanged); `POST
 (worker-supplied provider credentials). The web side adds `FlaggedChange.change_id` and sends
 `change_ids`. All three tables join the org-deletion purge path.
 
-> **Identities/members slice (sequenced second).** Member/identity drift +
+> **Identities/members slice (implemented by CHAOS-2656).** Member/identity drift +
 > `manual_attribution_fallbacks(scope_type='member')` reconciliation reuses `team_drift_changes` via
-> `entity_type='identity'` (or a parallel `identity_drift_changes` table if the shape diverges) and
-> must gate the `team_memberships` attribution dimension — not just the `teams.members` roster —
-> applying membership changes surgically by facet (never a full recompute). See the CHAOS-2622 plan §4.4.
+> `entity_type='identity'`, `change_type='membership_changed'`, and `field ∈ {'team_memberships',
+> 'manual_attribution_fallbacks.member'}`. Provider auto-import gates the `team_memberships`
+> attribution dimension before write-through — not just the `teams.members` roster — whenever the
+> provider row would replace a manual membership or member fallback. Approving inserts the provider
+> membership, expires the conflicting manual row/fallback, and adds only the incoming member facets to
+> `teams.members`; dismissing leaves both the catalog and attribution dimensions unchanged.
 
 ---
 

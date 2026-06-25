@@ -66,6 +66,7 @@ from dev_health_ops.models import (
     SyncRunUnitStatus,
 )
 from dev_health_ops.sync.budget import estimate_provider_budget
+from dev_health_ops.sync.budget_guard import BudgetGuard
 from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_DISPATCH,
     OUTBOX_KIND_FINALIZE,
@@ -259,6 +260,8 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                     "reason": decision.reason,
                 },
             )
+
+        BudgetGuard.observe_run(session, sync_run_id, capped_unit_ids=capped_ids)
 
         units = _claim_units(session, run_uuid, capped_ids=capped_ids)
         signatures = []

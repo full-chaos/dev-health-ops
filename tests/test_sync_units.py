@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import logging
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -1788,6 +1790,73 @@ def test_dispatch_sync_run_continues_accepted_run_after_child_config_pause(
     assert unit.error is None
     assert parent_config.last_sync_success is None
     assert parent_config.last_sync_error is None
+
+
+def test_dispatch_sync_run_logs_budget_guard_would_allow(
+    db_session, monkeypatch, caplog
+):
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(db_session)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_worker_enqueues(monkeypatch)
+
+    with caplog.at_level(logging.INFO, logger="dev_health_ops.sync.budget_guard"):
+        result = sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(run)
+    db_session.refresh(unit)
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "dispatch_sync_run.budget_guard_dry_run"
+    ]
+    assert result == {"status": "dispatched", "queued_units": 1}
+    assert run.status == SyncRunStatus.DISPATCHING.value
+    assert unit.status == SyncRunUnitStatus.DISPATCHING.value
+    assert records
+    record = records[0]
+    assert record.decision == "would_allow"
+    assert record.bucket["provider"] == "github"
+    assert record.bucket["dimension"] == "rest_core"
+    assert record.confidence == "medium"
+    assert record.suggested_available_at is None
+
+
+def test_dispatch_sync_run_logs_budget_guard_would_defer_without_deferring(
+    db_session, monkeypatch, caplog
+):
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(db_session)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv(
+        "SYNC_BUDGET_DRY_RUN_BUCKET_LIMITS",
+        json.dumps({"github:rest_core": 1}),
+    )
+    monkeypatch.setenv("SYNC_BUDGET_DRY_RUN_DEFERRAL_SECONDS", "120")
+
+    with caplog.at_level(logging.INFO, logger="dev_health_ops.sync.budget_guard"):
+        result = sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(run)
+    db_session.refresh(unit)
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "dispatch_sync_run.budget_guard_dry_run"
+    ]
+    assert result == {"status": "dispatched", "queued_units": 1}
+    assert run.status == SyncRunStatus.DISPATCHING.value
+    assert unit.status == SyncRunUnitStatus.DISPATCHING.value
+    assert unit.available_at is None
+    assert records
+    record = records[0]
+    assert record.decision == "would_defer"
+    assert record.budget_limit == 1
+    assert record.projected_units == 2
+    assert record.suggested_available_at is not None
 
 
 def test_dispatch_sync_run_does_not_terminalize_when_chord_enqueue_fails(

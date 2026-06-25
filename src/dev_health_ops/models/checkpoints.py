@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from enum import IntEnum
+from enum import IntEnum, StrEnum
+from typing import Any
 
 from sqlalchemy import (
+    JSON,
     DateTime,
+    ForeignKey,
     Index,
     Integer,
+    String,
     Text,
     UniqueConstraint,
 )
@@ -29,6 +33,17 @@ class CheckpointStatus(IntEnum):
     RUNNING = 1
     COMPLETED = 2
     FAILED = 3
+
+
+class SyncComputeCheckpointStatus(StrEnum):
+    READY = "ready"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class SyncComputeType(StrEnum):
+    WORK_GRAPH = "work_graph"
 
 
 class MetricCheckpoint(Base):
@@ -104,3 +119,69 @@ class MetricCheckpoint(Base):
             f"type={self.metric_type!r}, day={self.day}, "
             f"status={self.status})>"
         )
+
+
+class SyncComputeCheckpoint(Base):
+    __tablename__ = "sync_compute_checkpoints"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[str] = mapped_column(Text, nullable=False)
+    sync_run_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        ForeignKey("sync_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    sync_run_unit_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        ForeignKey("sync_run_units.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    source_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID,
+        ForeignKey("integration_sources.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    dataset_key: Mapped[str] = mapped_column(String, nullable=False)
+    compute_type: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    window_start: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    window_end: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    checkpointed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    checkpoint_metadata: Mapped[dict[str, Any] | None] = mapped_column(
+        "metadata", JSON, nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "sync_run_id",
+            "sync_run_unit_id",
+            "compute_type",
+            name="uq_sync_compute_checkpoint_unit_type",
+        ),
+        Index("ix_sync_compute_checkpoints_org_status", "org_id", "status"),
+        Index("ix_sync_compute_checkpoints_run", "sync_run_id", "compute_type"),
+    )

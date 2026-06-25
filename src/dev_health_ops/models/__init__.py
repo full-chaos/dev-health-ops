@@ -12,7 +12,13 @@ from .billing import (
     PlanFeatureBundle,
 )
 from .billing_audit import BillingAuditLog
-from .checkpoints import CheckpointStatus, MetricCheckpoint
+from .checkpoints import (
+    CheckpointStatus,
+    MetricCheckpoint,
+    SyncComputeCheckpoint,
+    SyncComputeCheckpointStatus,
+    SyncComputeType,
+)
 from .git import Base, GitBlame, GitBlameMixin, GitCommit, GitCommitStat, GitFile, Repo
 from .impersonation import ImpersonationSession
 from .integrations import (
@@ -147,6 +153,9 @@ __all__ = [
     "SSOProviderStatus",
     "STANDARD_FEATURES",
     "SyncConfiguration",
+    "SyncComputeCheckpoint",
+    "SyncComputeCheckpointStatus",
+    "SyncComputeType",
     "SyncDispatchOutbox",
     "SyncRun",
     "SyncRunMode",

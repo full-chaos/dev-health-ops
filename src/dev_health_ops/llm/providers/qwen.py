@@ -12,7 +12,15 @@ from __future__ import annotations
 import os
 
 from .base import DEFAULT_MODEL_BY_PROVIDER
+from .batch import (
+    BatchCapability,
+    BatchItemRequest,
+    BatchItemResult,
+    BatchJobState,
+    BatchJobSubmission,
+)
 from .local import DEFAULT_ENDPOINTS, LocalProvider
+from .openai import OpenAIGPTLegacyProvider, OpenAIProviderConfig
 
 # Default DashScope (China) OpenAI-compatible endpoint.
 # Users can override with DASHSCOPE_BASE_URL for international regions:
@@ -40,6 +48,7 @@ class QwenProvider(LocalProvider):
         base_url: str | None = None,
         **kwargs,
     ) -> None:
+        self._batch_impl: OpenAIGPTLegacyProvider | None = None
         super().__init__(
             api_key=api_key
             or os.getenv("QWEN_API_KEY")
@@ -49,6 +58,35 @@ class QwenProvider(LocalProvider):
             model=model or os.getenv("QWEN_MODEL", DEFAULT_MODEL_BY_PROVIDER["qwen"]),
             **kwargs,
         )
+
+    def _get_batch_impl(self) -> OpenAIGPTLegacyProvider:
+        if self._batch_impl is None:
+            self._batch_impl = OpenAIGPTLegacyProvider(
+                OpenAIProviderConfig(
+                    api_key=self.api_key or "",
+                    base_url=self.base_url,
+                    model=self.model,
+                    max_output_tokens=self.max_completion_tokens,
+                    temperature=self.temperature,
+                    validation_provider_name="qwen",
+                )
+            )
+        return self._batch_impl
+
+    def batch_capability(self, model: str | None = None) -> BatchCapability:
+        return self._get_batch_impl().batch_capability(model or self.model)
+
+    async def submit_batch(self, items: list[BatchItemRequest]) -> BatchJobSubmission:
+        return await self._get_batch_impl().submit_batch(items)
+
+    async def poll_batch(self, provider_job_id: str) -> BatchJobState:
+        return await self._get_batch_impl().poll_batch(provider_job_id)
+
+    async def fetch_batch_results(self, provider_job_id: str) -> list[BatchItemResult]:
+        return await self._get_batch_impl().fetch_batch_results(provider_job_id)
+
+    async def cancel_batch(self, provider_job_id: str) -> None:
+        await self._get_batch_impl().cancel_batch(provider_job_id)
 
 
 class QwenLocalProvider(LocalProvider):

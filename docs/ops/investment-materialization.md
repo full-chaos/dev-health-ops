@@ -76,10 +76,10 @@ dev-hops investment materialize \
 | `--persist-evidence-snippets` | **on** | Persist extractive evidence quotes to `work_unit_investment_quotes` |
 | `--no-persist-evidence-snippets` | off | Skip quote persistence for storage-constrained backfills |
 | `--force` | off | Force re-materialization |
-| `--llm-batch-mode` | `sync` | LLM execution mode: `sync`, `auto`, or `provider_batch` |
-| `--llm-batch-min-items` | `25` | Minimum eligible items before `auto` chooses provider batch |
-| `--llm-batch-poll-interval-seconds` | `30` | Poll interval for CLI/worker provider batch completion waits |
-| `--llm-batch-timeout-seconds` | `3000` | Timeout for CLI/worker provider batch completion waits |
+| `--llm-batch-mode` | `sync` | LLM execution mode: `sync`, `auto`, or `provider_batch`; env: `INVESTMENT_LLM_BATCH_MODE` |
+| `--llm-batch-min-items` | `25` | Minimum eligible items before `auto` chooses provider batch; env: `INVESTMENT_LLM_BATCH_MIN_ITEMS` |
+| `--llm-batch-poll-interval-seconds` | `30` | Poll interval for CLI/worker provider batch completion waits; env: `INVESTMENT_LLM_BATCH_POLL_INTERVAL_SECONDS` |
+| `--llm-batch-timeout-seconds` | `3000` | Timeout for CLI/worker provider batch completion waits; env: `INVESTMENT_LLM_BATCH_TIMEOUT_SECONDS` |
 
 ### Provider batch mode
 
@@ -88,6 +88,19 @@ The default `sync` mode keeps the existing one-request-per-WorkUnit behavior.
 eligible item count is at least `--llm-batch-min-items`; otherwise it logs the
 reason and uses `sync`. `provider_batch` requires provider batch support and fails
 clearly if the selected provider does not support it.
+
+Queue runners use the same defaults from environment when a task payload omits
+batch kwargs. Set these on Celery workers to enable batch mode for post-sync and
+scheduled materialization without changing dispatch call sites:
+
+```bash
+export INVESTMENT_LLM_BATCH_MODE=auto
+export INVESTMENT_LLM_BATCH_MIN_ITEMS=25
+export INVESTMENT_LLM_BATCH_POLL_INTERVAL_SECONDS=30
+export INVESTMENT_LLM_BATCH_TIMEOUT_SECONDS=3000
+```
+
+Explicit CLI flags or task kwargs override the environment for that run.
 
 Provider support:
 

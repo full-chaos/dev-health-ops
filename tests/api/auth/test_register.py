@@ -12,10 +12,11 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.middleware.rate_limit import limiter as rate_limiter
+from dev_health_ops.api.services.auth import AuthService
 from dev_health_ops.models.audit import AuditLog
 from dev_health_ops.models.email_verification_token import EmailVerificationToken
 from dev_health_ops.models.git import Base
@@ -87,6 +88,18 @@ async def client(monkeypatch: pytest.MonkeyPatch, session_maker):
     monkeypatch.setattr(
         "dev_health_ops.api.services.email_verification.send_verification_email",
         AsyncMock(),
+    )
+
+    async def _noop_refresh(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        auth_router_module,
+        "get_auth_service",
+        lambda: AuthService(secret_key="register-test-secret-key-32-chars"),
+    )
+    monkeypatch.setattr(
+        auth_router_module, "create_refresh_token_record", _noop_refresh
     )
 
     transport = ASGITransport(app=app)
@@ -214,6 +227,88 @@ async def test_register_without_org_name_defaults_to_my_organization(
 
     assert org is not None
     assert org.name == "My Organization"
+
+
+@pytest.mark.asyncio
+async def test_register_flag_off_creates_identity_only(
+    client, session_maker, monkeypatch
+):
+    monkeypatch.setenv("AUTH_AUTO_CREATE_ORG_ON_REGISTER", "false")
+
+    response = await client.post(
+        "/api/v1/auth/register",
+        json={"email": "identity-only@example.com", "password": VALID_PASSWORD},
+    )
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["org_id"] is None
+
+    async with session_maker() as session:
+        user_count = await session.scalar(select(func.count()).select_from(User))
+        org_count = await session.scalar(select(func.count()).select_from(Organization))
+        membership_count = await session.scalar(
+            select(func.count()).select_from(Membership)
+        )
+
+    assert user_count == 1
+    assert org_count == 0
+    assert membership_count == 0
+
+
+@pytest.mark.asyncio
+async def test_verified_orgless_login_sets_needs_onboarding(
+    client, session_maker, monkeypatch
+):
+    monkeypatch.setenv("AUTH_AUTO_CREATE_ORG_ON_REGISTER", "false")
+
+    register_response = await client.post(
+        "/api/v1/auth/register",
+        json={"email": "verified-orgless@example.com", "password": VALID_PASSWORD},
+    )
+    assert register_response.status_code == 201
+
+    async with session_maker() as session:
+        user = await session.scalar(
+            select(User).where(User.email == "verified-orgless@example.com")
+        )
+        assert user is not None
+        user.is_verified = True
+        await session.commit()
+
+    login_response = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "verified-orgless@example.com", "password": VALID_PASSWORD},
+    )
+
+    assert login_response.status_code == 200
+    data = login_response.json()
+    assert data["needs_onboarding"] is True
+    assert data["user"]["org_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_register_flag_on_keeps_auto_org_behavior(
+    client, session_maker, monkeypatch
+):
+    monkeypatch.setenv("AUTH_AUTO_CREATE_ORG_ON_REGISTER", "true")
+
+    response = await client.post(
+        "/api/v1/auth/register",
+        json={"email": "flag-on@example.com", "password": VALID_PASSWORD},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["org_id"] is not None
+
+    async with session_maker() as session:
+        org_count = await session.scalar(select(func.count()).select_from(Organization))
+        membership_count = await session.scalar(
+            select(func.count()).select_from(Membership)
+        )
+
+    assert org_count == 1
+    assert membership_count == 1
 
 
 @pytest.mark.asyncio

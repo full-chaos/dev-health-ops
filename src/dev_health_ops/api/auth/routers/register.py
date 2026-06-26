@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func, select
 
+from dev_health_ops.api.auth.config import auth_auto_create_org_on_register
 from dev_health_ops.api.middleware.rate_limit import (
     AUTH_REGISTER_LIMIT,
     get_forwarded_ip,
@@ -113,39 +114,46 @@ async def register(payload: RegisterRequest, request: Request) -> RegisterRespon
         await db.flush()
         user_id = _require_uuid(user.id, "user.id")
 
-        org_name = payload.org_name or "My Organization"
-        org_slug = org_name.lower().replace(" ", "-")[:50]
-        org_slug = f"{org_slug}-{str(user.id)[:8]}"
+        org_id = None
+        if auth_auto_create_org_on_register():
+            org_name = payload.org_name or "My Organization"
+            org_slug = org_name.lower().replace(" ", "-")[:50]
+            org_slug = f"{org_slug}-{str(user.id)[:8]}"
 
-        org = Organization(
-            slug=org_slug,
-            name=org_name,
-            tier="community",
-            is_active=True,
-        )
-        db.add(org)
-        await db.flush()
-        org_id = _require_uuid(org.id, "org.id")
+            org = Organization(
+                slug=org_slug,
+                name=org_name,
+                tier="community",
+                is_active=True,
+            )
+            db.add(org)
+            await db.flush()
+            org_id = _require_uuid(org.id, "org.id")
 
-        membership = Membership(
-            user_id=user_id,
-            org_id=org_id,
-            role="owner",
-            joined_at=datetime.now(timezone.utc),
-        )
-        db.add(membership)
+            membership = Membership(
+                user_id=user_id,
+                org_id=org_id,
+                role="owner",
+                joined_at=datetime.now(timezone.utc),
+            )
+            db.add(membership)
 
-        emit_audit_log(
-            db,
-            org_id=org_id,
-            action=AuditAction.CREATE,
-            resource_type=AuditResourceType.USER,
-            resource_id=str(user_id),
-            user_id=user_id,
-            description="User registered",
-            changes={"email": email_normalized, "organization_id": str(org_id)},
-            request=request,
-        )
+            emit_audit_log(
+                db,
+                org_id=org_id,
+                action=AuditAction.CREATE,
+                resource_type=AuditResourceType.USER,
+                resource_id=str(user_id),
+                user_id=user_id,
+                description="User registered",
+                changes={"email": email_normalized, "organization_id": str(org_id)},
+                request=request,
+            )
+        else:
+            logger.info(
+                "User registered without organization for first-run onboarding: %s",
+                sanitize_for_log(email_normalized),
+            )
 
         verification_token = await create_verification_token(db, user_id)
 
@@ -169,5 +177,5 @@ async def register(payload: RegisterRequest, request: Request) -> RegisterRespon
         return RegisterResponse(
             message="Registration successful",
             user_id=str(user_id),
-            org_id=str(org_id),
+            org_id=str(org_id) if org_id is not None else None,
         )

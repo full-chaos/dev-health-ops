@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from dev_health_ops.api.graphql.context import GraphQLContext
+from dev_health_ops.api.graphql.models.inputs import WorkGraphEdgeFilterInput
 from dev_health_ops.api.graphql.resolvers.work_graph import resolve_work_graph_edges
 
 
@@ -198,6 +199,90 @@ class TestEdgeThemeAttribution:
         assert "m.computed_at = lnm.legacy_max_computed_at" in annotation_sql
         # Not the old global per-node-max alias.
         assert "max(computed_at) AS max_computed_at" not in annotation_sql
+
+    @pytest.mark.asyncio
+    async def test_repo_filter_defaults_to_org_wide_membership_run(self, mock_context):
+        edge_rows = [make_edge_row(source_id="PROJ-1", repo_id="repo-a")]
+
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [edge_rows, []]
+            filters = WorkGraphEdgeFilterInput(
+                repo_ids=["repo-a"],
+                theme="feature_delivery",
+            )
+            result = await resolve_work_graph_edges(mock_context, filters)
+
+        edge_sql = mock_query.call_args_list[0][0][1]
+        edge_params = mock_query.call_args_list[0][0][2]
+        annotation_sql = mock_query.call_args_list[1][0][1]
+
+        assert result.is_partial is False
+        assert result.partial_scope is None
+        assert result.partial_repo_ids == []
+        assert "work_unit_membership_runs" in edge_sql
+        assert "work_unit_membership_scoped_runs" not in edge_sql
+        assert "work_unit_membership_scoped_runs" not in annotation_sql
+        assert "scoped_repo_ids" not in edge_params
+
+    @pytest.mark.asyncio
+    async def test_explicit_repo_scoped_partial_uses_scoped_marker(self, mock_context):
+        edge_rows = [make_edge_row(source_id="PROJ-1", repo_id="repo-a")]
+
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [
+                edge_rows,
+                make_membership_rows("issue", "PROJ-1"),
+            ]
+            filters = WorkGraphEdgeFilterInput(
+                repo_ids=["repo-b", "repo-a"],
+                theme="feature_delivery",
+                allow_scoped_partial=True,
+            )
+            result = await resolve_work_graph_edges(mock_context, filters)
+
+        edge_sql = mock_query.call_args_list[0][0][1]
+        edge_params = mock_query.call_args_list[0][0][2]
+        annotation_sql = mock_query.call_args_list[1][0][1]
+        annotation_params = mock_query.call_args_list[1][0][2]
+
+        assert result.is_partial is True
+        assert result.partial_scope == "repo"
+        assert result.partial_repo_ids == ["repo-a", "repo-b"]
+        assert "work_unit_membership_scoped_runs" in edge_sql
+        assert "work_unit_membership_scoped_runs" in annotation_sql
+        assert edge_params["scoped_repo_ids"] == ["repo-a", "repo-b"]
+        assert edge_params["scoped_repo_count"] == 2
+        assert annotation_params["scoped_repo_ids"] == ["repo-a", "repo-b"]
+        assert annotation_params["scoped_repo_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_scoped_partial_requires_repo_scope(self, mock_context):
+        edge_rows = [make_edge_row(source_id="PROJ-1")]
+
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [edge_rows, []]
+            filters = WorkGraphEdgeFilterInput(
+                theme="feature_delivery",
+                allow_scoped_partial=True,
+            )
+            result = await resolve_work_graph_edges(mock_context, filters)
+
+        edge_sql = mock_query.call_args_list[0][0][1]
+        edge_params = mock_query.call_args_list[0][0][2]
+
+        assert result.is_partial is False
+        assert "work_unit_membership_runs" in edge_sql
+        assert "work_unit_membership_scoped_runs" not in edge_sql
+        assert "scoped_repo_ids" not in edge_params
 
     @pytest.mark.asyncio
     async def test_issue_endpoint_beats_pr_endpoint(self, mock_context):

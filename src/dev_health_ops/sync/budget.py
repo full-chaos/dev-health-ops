@@ -30,6 +30,10 @@ def estimate_provider_budget(context: SyncTaskContext) -> tuple[BudgetEstimate, 
         from dev_health_ops.providers.gitlab.budget import GitLabBudgetEstimator
 
         return GitLabBudgetEstimator().estimate(context)
+    if context.provider.lower() == "jira":
+        from dev_health_ops.providers.jira.budget import JiraBudgetEstimator
+
+        return JiraBudgetEstimator().estimate(context)
     if context.provider.lower() == "linear":
         from dev_health_ops.providers.linear.budget import LinearBudgetEstimator
 

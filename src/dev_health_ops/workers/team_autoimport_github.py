@@ -258,10 +258,9 @@ async def _membership_rows(
             # facets[0] is the alias-resolved identity (canonical email when the
             # github:<login> is aliased, else github:<login>) — the facet a
             # no-email assignee resolves to. It goes into raw_provider_user_id
-            # (the only member_by_identity slot free; member_id is the PK and
-            # keeps the bare login) AND, with the provider-qualified id, into the
-            # teams.members roster so BOTH attribution paths match aliased and
-            # non-aliased members (CHAOS-2609).
+            # (member_id is the PK and keeps the bare login), identity_facets,
+            # AND the teams.members roster so BOTH attribution paths match
+            # aliased and non-aliased members (CHAOS-2609, CHAOS-2625).
             facets = resolver.membership_facets(
                 provider=PROVIDER,
                 username=raw_identity,
@@ -279,6 +278,7 @@ async def _membership_rows(
                     member_id=member_id,
                     raw_provider_user_id=facets[0],
                     raw_email=getattr(member, "email", None),
+                    identity_facets=facets,
                     source="provider_access",
                     is_primary=0,
                     specificity=BASE_SPECIFICITY,

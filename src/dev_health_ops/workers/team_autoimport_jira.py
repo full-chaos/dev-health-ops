@@ -281,8 +281,9 @@ def populate(
         # facets[0] is the alias-resolved identity (canonical email when the
         # accountId is aliased, else jira:accountid:<id>) — the facet a no-email
         # assignee resolves to. raw_provider_user_id stores it (member_id PK keeps
-        # the jira:<id> form); the roster carries all facets so BOTH attribution
-        # paths match aliased and non-aliased members (CHAOS-2609).
+        # the jira:<id> form); identity_facets and the roster carry all facets so
+        # BOTH attribution paths match aliased and non-aliased members
+        # (CHAOS-2609, CHAOS-2625).
         roster_facets: list[str] = []
         for member in discovered_members:
             member_id = _member_id("jira", member.provider_identity)
@@ -315,6 +316,7 @@ def populate(
                     member_id=member_id,
                     raw_provider_user_id=facets[0],
                     raw_email=member.email,
+                    identity_facets=facets,
                     source="native",
                     is_primary=1 if member.role == "lead" else 0,
                     specificity=100,

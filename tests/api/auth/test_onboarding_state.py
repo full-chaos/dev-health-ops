@@ -241,6 +241,38 @@ async def test_state_connected_integration_routes_to_complete(client, session_ma
 
 
 @pytest.mark.asyncio
+async def test_state_connected_integration_overrides_skip_display(
+    client, session_maker
+):
+    async_client, auth_service = client
+    user = await _seed_user(session_maker)
+    org = await _seed_org_membership(session_maker, user, skipped=True)
+    async with session_maker() as session:
+        session.add(
+            IntegrationCredential(
+                org_id=str(org.id),
+                provider="github",
+                name="default",
+                is_active=True,
+            )
+        )
+        await session.commit()
+    token = _access_token(auth_service, user, org_id=str(org.id), role="owner")
+
+    response = await async_client.get(
+        "/api/v1/auth/onboarding/state",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["needs_onboarding"] is False
+    assert data["first_integration_connected"] is True
+    assert data["integration_skipped"] is False
+    assert data["next_step"] == "complete"
+
+
+@pytest.mark.asyncio
 async def test_state_skipped_integration_routes_to_complete(client, session_maker):
     async_client, auth_service = client
     user = await _seed_user(session_maker)

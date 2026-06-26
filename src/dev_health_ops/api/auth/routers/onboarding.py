@@ -104,7 +104,9 @@ async def _build_onboarding_state(
         )
 
     integration_connected = await _has_connected_integration(db, org)
-    integration_skipped = org.onboarding_integration_skipped_at is not None
+    integration_skipped = (
+        org.onboarding_integration_skipped_at is not None and not integration_connected
+    )
     privileged_dashboard = bool(db_user.is_superuser) or user.role == "admin"
     if privileged_dashboard:
         next_step = "dashboard"

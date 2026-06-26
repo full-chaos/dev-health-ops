@@ -26,6 +26,7 @@ from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.settings import (
     IntegrationCredential,
     JobRun,
+    JobRunStatus,
     JobStatus,
     ScheduledJob,
     Setting,
@@ -2001,3 +2002,90 @@ async def test_batch_create_gitlab_numeric_entry_not_in_listing_used_as_id(
         source = (await session.execute(select(IntegrationSource))).scalar_one()
     assert source.external_id == "12345"
     assert source.full_name == "acme-group/12345"
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-2681: connecting an integration must NOT silently create+start a broad
+# sync. The connect step alone yields no sync config (no enabled, no running);
+# a sync only starts after explicit repository selection (/sync-configs/batch)
+# followed by an explicit start (/sync-configs/{id}/trigger).
+# ---------------------------------------------------------------------------
+
+
+async def _simulate_connect(session_maker, org_id: str) -> None:
+    """Mimic the GitHub App connect step: a credential, nothing else."""
+    async with session_maker() as session:
+        session.add(
+            IntegrationCredential(
+                provider="github",
+                name="github-app",
+                org_id=org_id,
+                credentials_encrypted="enc",
+                is_active=True,
+            )
+        )
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_connect_only_creates_no_enabled_or_running_sync(client, session_maker):
+    ac, seeded_state = client
+    await _simulate_connect(session_maker, seeded_state["org_id"])
+
+    # The connect step alone must not materialize any sync config or job run.
+    list_resp = await ac.get("/api/v1/admin/sync-configs")
+    assert list_resp.status_code == 200
+    assert list_resp.json() == []
+
+    async with session_maker() as session:
+        configs = (await session.execute(select(SyncConfiguration))).scalars().all()
+        jobs = (await session.execute(select(ScheduledJob))).scalars().all()
+        runs = (await session.execute(select(JobRun))).scalars().all()
+
+    assert configs == []
+    assert jobs == []
+    assert runs == []
+
+
+@pytest.mark.asyncio
+async def test_sync_starts_only_after_explicit_select_and_start(client, session_maker):
+    ac, seeded_state = client
+    await _simulate_connect(session_maker, seeded_state["org_id"])
+
+    # Step 1 (explicit select): batch-create with concrete repos. This enables a
+    # planner config but must NOT dispatch a run on its own.
+    select_resp = await ac.post(
+        "/api/v1/admin/sync-configs/batch",
+        json={
+            "name": "explicit-select",
+            "provider": "github",
+            "sync_targets": ["git"],
+            "sync_options": {"owner": "acme"},
+            "repos": ["web"],
+        },
+    )
+    assert select_resp.status_code == 201, select_resp.text
+    config_id = select_resp.json()["parent"]["id"]
+
+    async with session_maker() as session:
+        runs_after_select = (await session.execute(select(JobRun))).scalars().all()
+    # Selecting repositories enables the config but starts no sync run.
+    assert runs_after_select == []
+
+    # Step 2 (explicit start): trigger dispatches a run and persists a PENDING
+    # JobRun. dispatch is mocked so no Celery broker is needed.
+    mock_dispatch = MagicMock()
+    mock_dispatch.apply_async.return_value = MagicMock(id="task-id")
+    with patch(
+        "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
+    ):
+        trigger_resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
+
+    assert trigger_resp.status_code == 202, trigger_resp.text
+    assert trigger_resp.json()["status"] == "triggered"
+    mock_dispatch.apply_async.assert_called_once()
+
+    async with session_maker() as session:
+        runs_after_start = (await session.execute(select(JobRun))).scalars().all()
+    assert len(runs_after_start) == 1
+    assert runs_after_start[0].status == JobRunStatus.PENDING.value

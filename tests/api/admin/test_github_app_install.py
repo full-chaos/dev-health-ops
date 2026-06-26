@@ -206,6 +206,7 @@ async def test_install_callback_writes_credential_and_installation(
         "connected": True,
         "installation_id": 987654,
         "credential_name": "github-app",
+        "return_to": "/org/admin/integrations/github",
     }
     async with session_maker() as session:
         installation = (
@@ -591,3 +592,145 @@ async def test_install_url_omits_redirect_uri_when_not_configured(
     qs = parse_qs(parsed.query)
     assert "redirect_uri" not in qs
     assert "state" in qs
+    assert verify_github_app_install_state(qs["state"][0]).org_id == org_id
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-2676 (C4): return_to is allowlist-validated, signed into the state, and
+# echoed back by the callback so the Next route (not the backend) redirects.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_install_url_signs_allowlisted_return_to(session_maker, monkeypatch):
+    org_id = str(uuid.uuid4())
+    monkeypatch.setenv("GITHUB_APP_SLUG", "dev-health-test")
+    app = _app(session_maker, org_id)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/admin/integrations/github/install-url",
+            json={"return_to": "/auth/onboard/integration"},
+        )
+
+    assert response.status_code == 200, response.text
+    state = parse_qs(urlparse(response.json()["install_url"]).query)["state"][0]
+    verified = verify_github_app_install_state(state)
+    assert verified.org_id == org_id
+    assert verified.return_to == "/auth/onboard/integration"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "unsafe",
+    [
+        "https://evil.example.com/phish",
+        "http://localhost:3000/auth/onboard/integration",
+        "//evil.example.com",
+        "/auth/onboard/integration/../../evil",
+        "/auth/onboard/integration%2f..%2fevil",
+        "/auth/onboard/integration?next=https://evil.example.com",
+        "\\\\evil.example.com",
+        "/org/admin/integrations/github?x=1",
+        "/unknown/path",
+        "javascript:alert(1)",
+        "",
+    ],
+)
+async def test_install_url_rejects_unsafe_return_to(session_maker, monkeypatch, unsafe):
+    org_id = str(uuid.uuid4())
+    monkeypatch.setenv("GITHUB_APP_SLUG", "dev-health-test")
+    app = _app(session_maker, org_id)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/admin/integrations/github/install-url",
+            json={"return_to": unsafe},
+        )
+
+    assert response.status_code == 200, response.text
+    state = parse_qs(urlparse(response.json()["install_url"]).query)["state"][0]
+    verified = verify_github_app_install_state(state)
+    # Every unsafe value collapses to the admin default — never the raw input.
+    assert verified.return_to == "/org/admin/integrations/github"
+
+
+@pytest.mark.asyncio
+async def test_install_url_defaults_return_to_when_absent(session_maker, monkeypatch):
+    org_id = str(uuid.uuid4())
+    monkeypatch.setenv("GITHUB_APP_SLUG", "dev-health-test")
+    app = _app(session_maker, org_id)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post("/admin/integrations/github/install-url")
+
+    assert response.status_code == 200, response.text
+    state = parse_qs(urlparse(response.json()["install_url"]).query)["state"][0]
+    assert (
+        verify_github_app_install_state(state).return_to
+        == "/org/admin/integrations/github"
+    )
+
+
+@pytest.mark.asyncio
+async def test_install_callback_returns_validated_return_to(session_maker, monkeypatch):
+    org_id = str(uuid.uuid4())
+    _configure_github_app(monkeypatch)
+    _patch_cache(monkeypatch)
+    _patch_github_user_installations(monkeypatch, [_installation()])
+    app = _app(session_maker, org_id)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/admin/integrations/github/install-callback",
+            json={
+                "installation_id": 987654,
+                "setup_action": "install",
+                "state": mint_github_app_install_state(
+                    org_id, return_to="/auth/onboard/integration"
+                ),
+                "code": "oauth-code",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["return_to"] == "/auth/onboard/integration"
+
+
+@pytest.mark.asyncio
+async def test_install_callback_recanonicalizes_tampered_state_return_to(
+    session_maker, monkeypatch
+):
+    # Defense-in-depth: even if a signed state somehow carried an unsafe path,
+    # the callback re-validates before echoing it back.
+    org_id = str(uuid.uuid4())
+    _configure_github_app(monkeypatch)
+    _patch_cache(monkeypatch)
+    _patch_github_user_installations(monkeypatch, [_installation()])
+    app = _app(session_maker, org_id)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/admin/integrations/github/install-callback",
+            json={
+                "installation_id": 987654,
+                "setup_action": "install",
+                "state": mint_github_app_install_state(
+                    org_id, return_to="https://evil.example.com"
+                ),
+                "code": "oauth-code",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["return_to"] == "/org/admin/integrations/github"

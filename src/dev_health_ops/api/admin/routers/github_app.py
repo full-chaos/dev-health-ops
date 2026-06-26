@@ -37,6 +37,38 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# CHAOS-2676 (C4): the frontend may ask the backend to remember where the
+# browser should land after the GitHub App install round-trip. The value is
+# signed into the install-state JWT and echoed back by the callback; the Next
+# route performs the actual redirect. Only an exact, in-app path from this
+# allowlist is ever trusted: anything else (absolute URLs, protocol-relative
+# //host, backslashes, encoded traversal, query strings, unknown paths) falls
+# back to the admin default so a tampered value can never become an open
+# redirect.
+RETURN_TO_ADMIN_DEFAULT = "/org/admin/integrations/github"
+RETURN_TO_ONBOARDING = "/auth/onboard/integration"
+_ALLOWED_RETURN_TO = frozenset({RETURN_TO_ONBOARDING, RETURN_TO_ADMIN_DEFAULT})
+
+
+def canonicalize_return_to(raw: str | None) -> str:
+    """Return a safe, exact in-app redirect path for the install round-trip.
+
+    Accepts only the two allowlisted paths verbatim; every other input —
+    including ``None``, absolute URLs, protocol-relative ``//host``, paths with
+    backslashes, percent-encoded traversal, or any query/fragment — collapses
+    to :data:`RETURN_TO_ADMIN_DEFAULT`.
+    """
+    if not isinstance(raw, str):
+        return RETURN_TO_ADMIN_DEFAULT
+    candidate = raw.strip()
+    if candidate in _ALLOWED_RETURN_TO:
+        return candidate
+    return RETURN_TO_ADMIN_DEFAULT
+
+
+class GitHubInstallUrlRequest(BaseModel):
+    return_to: str | None = None
+
 
 class GitHubInstallUrlResponse(BaseModel):
     install_url: str
@@ -53,6 +85,7 @@ class GitHubInstallCallbackResponse(BaseModel):
     connected: bool
     installation_id: int
     credential_name: str
+    return_to: str
 
 
 @router.post(
@@ -60,12 +93,14 @@ class GitHubInstallCallbackResponse(BaseModel):
     response_model=GitHubInstallUrlResponse,
 )
 async def create_github_install_url(
+    body: GitHubInstallUrlRequest | None = None,
     org_id: str = Depends(get_admin_org_id),
 ) -> GitHubInstallUrlResponse:
     slug = github_app_slug()
     if not slug:
         raise HTTPException(status_code=400, detail="GITHUB_APP_SLUG is not configured")
-    state = mint_github_app_install_state(org_id)
+    return_to = canonicalize_return_to(body.return_to if body else None)
+    state = mint_github_app_install_state(org_id, return_to=return_to)
     params: dict[str, str] = {"state": state}
     callback_url = github_app_callback_url()
     if callback_url:
@@ -144,6 +179,7 @@ async def complete_github_install(
         connected=True,
         installation_id=body.installation_id,
         credential_name="github-app",
+        return_to=canonicalize_return_to(verified_state.return_to),
     )
 
 

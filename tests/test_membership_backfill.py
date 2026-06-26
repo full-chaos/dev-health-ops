@@ -25,7 +25,10 @@ from typing import Any
 from unittest.mock import patch
 
 import dev_health_ops.connectors  # noqa: F401  (defuse circular import on collection)
-from dev_health_ops.metrics.schemas import WorkUnitMembershipRunRecord
+from dev_health_ops.metrics.schemas import (
+    WorkUnitMembershipRunRecord,
+    WorkUnitScopedMembershipRunRecord,
+)
 from dev_health_ops.work_graph.investment.backfill import (
     MembershipBackfillConfig,
     backfill_memberships,
@@ -51,6 +54,7 @@ class _FakeSink:
         self._investments = {str(r["work_unit_id"]): r for r in investments}
         self.written: list[Any] = []
         self.run_markers: list[WorkUnitMembershipRunRecord] = []
+        self.scoped_run_markers: list[WorkUnitScopedMembershipRunRecord] = []
         self.query_calls: list[str] = []
         # Track write order to assert marker comes last.
         self._write_order: list[str] = []
@@ -72,6 +76,12 @@ class _FakeSink:
     def write_membership_run(self, record: WorkUnitMembershipRunRecord) -> None:
         self.run_markers.append(record)
         self._write_order.append("run_marker")
+
+    def write_scoped_membership_runs(
+        self, records: list[WorkUnitScopedMembershipRunRecord]
+    ) -> None:
+        self.scoped_run_markers.extend(records)
+        self._write_order.append("scoped_run_markers")
 
     def prune_membership_runs(self, org_id: str, *, keep: int = 2) -> int:
         self.prune_calls.append((org_id, keep))
@@ -584,7 +594,11 @@ def test_backfill_repo_scoped_run_does_not_publish_org_marker() -> None:
         "a repo-scoped backfill must not publish an org-wide completion marker "
         "(CHAOS-2433 finding #2)"
     )
-    assert sink._write_order == ["memberships"]
+    assert len(sink.scoped_run_markers) == 1
+    assert sink.scoped_run_markers[0].scope_kind == "repo"
+    assert sink.scoped_run_markers[0].scope_id == "repo-a"
+    assert sink.scoped_run_markers[0].run_id == sink.written[0].run_id
+    assert sink._write_order == ["memberships", "scoped_run_markers"]
 
 
 def test_backfill_config_is_org_wide_flag() -> None:
@@ -597,6 +611,50 @@ def test_backfill_config_is_org_wide_flag() -> None:
         MembershipBackfillConfig(dsn="x", org_id="o", repo_ids=["r"]).is_org_wide
         is False
     )
+
+
+def test_backfill_repo_scoped_run_publishes_scoped_marker_after_rows() -> None:
+    edges = [_edge("issue", "I-1", "pr", "P-1")]
+    uid = work_unit_id([("issue", "I-1"), ("pr", "P-1")])
+    sink = _FakeSink(
+        edges=edges,
+        investments=[
+            _investment_row(
+                work_unit_id=uid,
+                theme={"feature_delivery": 1.0},
+                subcategory={"feature_delivery.roadmap": 1.0},
+            )
+        ],
+    )
+
+    with (
+        patch(
+            "dev_health_ops.work_graph.investment.backfill.create_sink",
+            return_value=sink,
+        ),
+        patch(
+            "dev_health_ops.work_graph.investment.backfill.fetch_work_graph_edges",
+            side_effect=lambda s, repo_ids=None, org_id="": sink._edges,
+        ),
+    ):
+        stats = backfill_memberships(
+            MembershipBackfillConfig(
+                dsn="clickhouse://x",
+                org_id="org-1",
+                repo_ids=["repo-b", "repo-a", "repo-a"],
+            )
+        )
+
+    assert stats["memberships"] > 0
+    assert sink.run_markers == []
+    assert [marker.scope_id for marker in sink.scoped_run_markers] == [
+        "repo-a",
+        "repo-b",
+    ]
+    assert {marker.run_id for marker in sink.scoped_run_markers} == {
+        sink.written[0].run_id
+    }
+    assert sink._write_order == ["memberships", "scoped_run_markers"]
 
 
 # ---------------------------------------------------------------------------
@@ -678,7 +736,8 @@ def test_backfill_scoped_run_does_not_prune() -> None:
             )
         )
 
-    assert sink.prune_calls == [], "scoped runs must not prune (no marker published)"
+    assert sink.prune_calls == [], "scoped runs must not prune org-wide markers"
+    assert len(sink.scoped_run_markers) == 1
 
 
 def test_backfill_prune_failure_is_non_fatal() -> None:
@@ -873,7 +932,7 @@ def test_dispatch_membership_backfill_chains_build_then_backfill(monkeypatch) ->
             return_value=mock_db_url,
         ),
     ):
-        result = dispatch_membership_backfill.run(db_url=mock_db_url)
+        result = getattr(dispatch_membership_backfill, "run")(db_url=mock_db_url)
 
     assert result["dispatched"] == ["org-a", "org-b"]
     assert len(dispatched_chains) == 2
@@ -910,7 +969,7 @@ def test_dispatch_membership_backfill_strict_org_discovery_raises_on_failure(
         import pytest
 
         with pytest.raises(Exception):
-            dispatch_membership_backfill.run()
+            getattr(dispatch_membership_backfill, "run")()
 
 
 def test_beat_schedule_has_membership_backfill_entry() -> None:

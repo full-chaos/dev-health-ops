@@ -230,6 +230,25 @@ class TestLegacyTargetAliasWarmsPlanner:
             "repo-metadata must not be warmed by the raw legacy git row (WatermarkBehavior.NONE)"
         )
 
+    def test_work_item_legacy_target_warms_derivative_datasets(self, db_session):
+        from dev_health_ops.sync.watermarks import set_legacy_repo_watermark
+
+        ts = datetime(2026, 6, 26, 12, 0, 0, tzinfo=timezone.utc)
+        set_legacy_repo_watermark(db_session, ORG_ID, REPO_ID, "work-items", ts)
+
+        for dataset_key in (
+            "work-items",
+            "work-item-labels",
+            "work-item-projects",
+            "work-item-history",
+            "work-item-comments",
+        ):
+            stored = get_watermark(db_session, ORG_ID, REPO_ID, dataset_key)
+            assert stored is not None, (
+                f"Planner read for {dataset_key!r} must find the raw work-items row"
+            )
+            assert stored.replace(tzinfo=timezone.utc) == ts
+
     def test_legacy_read_after_canonical_write(self, db_session):
         """Write via canonical dataset_key; legacy read via target must find the row.
 

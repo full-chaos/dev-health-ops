@@ -466,15 +466,15 @@ def test_existing_watermark_incremental_unchanged(db_session):
 
 
 def test_none_watermark_behavior_incremental_keeps_since_at_none(db_session):
-    """NONE-behavior datasets (repo-metadata, work-item-labels, etc.) must
-    keep since_at=None on incremental — cold-start depth must NOT be applied.
+    """NONE-behavior datasets (repo-metadata only) must keep since_at=None on
+    incremental — cold-start depth must NOT be applied.
     """
     integration = _create_integration(db_session)
     integration.config = {"initial_sync_depth": 30}
     db_session.flush()
     _create_source(db_session, integration, external_id="full-chaos/dev-health")
-    # work-item-labels has WatermarkBehavior.NONE
-    _create_dataset(db_session, integration, "work-item-labels")
+    # repo-metadata is the only remaining WatermarkBehavior.NONE dataset
+    _create_dataset(db_session, integration, "repo-metadata")
 
     plan = plan_sync_run(
         db_session,
@@ -489,7 +489,7 @@ def test_none_watermark_behavior_incremental_keeps_since_at_none(db_session):
     units = _planned_units(db_session, plan.sync_run_id)
     assert len(units) == 1
     assert units[0].since_at is None, (
-        "NONE-behavior dataset must keep since_at=None on incremental, "
+        "NONE-behavior dataset (repo-metadata) must keep since_at=None on incremental, "
         "not receive a cold-start depth window"
     )
 
@@ -908,3 +908,174 @@ def test_github_work_items_unit_omits_prs_signal_when_prs_disabled(db_session):
     assert work_items_units
     for unit in work_items_units:
         assert (unit.processor_flags or {}).get("sync_prs") is False
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-2707: work-item-labels / work-item-projects are now INCREMENTAL
+# ---------------------------------------------------------------------------
+
+
+def test_work_item_labels_incremental_cold_start_uses_depth(db_session):
+    """work-item-labels has WatermarkBehavior.INCREMENTAL (CHAOS-2707).
+
+    With no saved watermark, since_at must equal now - initial_sync_depth,
+    not None.
+    """
+    from datetime import timedelta
+
+    integration = _create_integration(db_session, provider="github")
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, "work-item-labels")
+
+    now = datetime.now(timezone.utc)
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    assert units[0].since_at is not None, (
+        "work-item-labels must use cold-start depth (INCREMENTAL), not since_at=None"
+    )
+    expected_start = now - timedelta(days=30)
+    since = units[0].since_at.replace(tzinfo=timezone.utc)
+    assert abs((since - expected_start).total_seconds()) < 2
+
+
+def test_work_item_projects_incremental_cold_start_uses_depth(db_session):
+    """work-item-projects has WatermarkBehavior.INCREMENTAL (CHAOS-2707).
+
+    With no saved watermark, since_at must equal now - initial_sync_depth,
+    not None.
+    """
+    from datetime import timedelta
+
+    integration = _create_integration(db_session, provider="jira")
+    integration.config = {"initial_sync_depth": 14}
+    db_session.flush()
+    _create_source(db_session, integration, external_id="jira-project", provider="jira")
+    _create_dataset(db_session, integration, "work-item-projects")
+
+    now = datetime.now(timezone.utc)
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    assert units[0].since_at is not None, (
+        "work-item-projects must use cold-start depth (INCREMENTAL), not since_at=None"
+    )
+    expected_start = now - timedelta(days=14)
+    since = units[0].since_at.replace(tzinfo=timezone.utc)
+    assert abs((since - expected_start).total_seconds()) < 2
+
+
+def test_work_item_labels_incremental_uses_saved_watermark(db_session):
+    """work-item-labels: when a watermark exists, since_at == watermark (CHAOS-2707).
+
+    Proves the saved watermark is honoured, not overridden by cold-start depth.
+    """
+    integration = _create_integration(db_session, provider="github")
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    source = _create_source(
+        db_session, integration, external_id="full-chaos/dev-health"
+    )
+    _create_dataset(db_session, integration, "work-item-labels")
+    watermark = datetime(2026, 6, 15, 8, 0, tzinfo=timezone.utc)
+    set_watermark(db_session, ORG_ID, source.external_id, "work-item-labels", watermark)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+            before=datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc),
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    assert units[0].since_at is not None
+    assert units[0].since_at.replace(tzinfo=timezone.utc) == watermark
+
+
+def test_work_item_projects_incremental_uses_saved_watermark(db_session):
+    """work-item-projects: when a watermark exists, since_at == watermark (CHAOS-2707).
+
+    Proves the saved watermark is honoured, not overridden by cold-start depth.
+    """
+    integration = _create_integration(db_session, provider="jira")
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    source = _create_source(
+        db_session, integration, external_id="jira-project", provider="jira"
+    )
+    _create_dataset(db_session, integration, "work-item-projects")
+    watermark = datetime(2026, 6, 10, 0, 0, tzinfo=timezone.utc)
+    set_watermark(
+        db_session, ORG_ID, source.external_id, "work-item-projects", watermark
+    )
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+            before=datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc),
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    assert units[0].since_at is not None
+    assert units[0].since_at.replace(tzinfo=timezone.utc) == watermark
+
+
+def test_repo_metadata_still_none_watermark_behavior(db_session):
+    """repo-metadata remains WatermarkBehavior.NONE after CHAOS-2707.
+
+    Regression guard: removing work-item-labels/projects from _NO_WATERMARK_DATASETS
+    must not accidentally change repo-metadata.
+    """
+    from dev_health_ops.sync.datasets import WatermarkBehavior, get_dataset_spec
+
+    spec = get_dataset_spec("github", "repo-metadata")
+    assert spec is not None
+    assert spec.watermark_behavior == WatermarkBehavior.NONE
+
+
+def test_work_item_labels_and_projects_are_incremental_behavior(db_session):
+    """Registry-level assertion: both datasets now carry WatermarkBehavior.INCREMENTAL.
+
+    Covers all providers that support these datasets.
+    """
+    from dev_health_ops.sync.datasets import WatermarkBehavior, get_dataset_spec
+
+    for provider in ("github", "gitlab", "jira", "linear"):
+        for dataset_key in ("work-item-labels", "work-item-projects"):
+            spec = get_dataset_spec(provider, dataset_key)
+            assert spec is not None, f"{provider}/{dataset_key} not in registry"
+            assert spec.watermark_behavior == WatermarkBehavior.INCREMENTAL, (
+                f"{provider}/{dataset_key} must be INCREMENTAL after CHAOS-2707, "
+                f"got {spec.watermark_behavior}"
+            )

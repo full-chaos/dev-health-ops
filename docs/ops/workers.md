@@ -16,7 +16,8 @@ In contrast, Celery-triggered jobs run inside the worker process, which is start
 
 Key implementation details:
 - **Broker and Result Backend**: Configured in `workers/config.py:8-64` and initialized in `workers/celery_app.py:66-84`. The default broker and result backend URL is `redis://localhost:6379/0` (controlled by `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND`).
-- **Queue Routing**: Defined in `workers/queues.py:7-62`. The `PROVIDER_SYNC_QUEUES_ENABLED` flag gates whether tasks are routed to provider-specific queues.
+- **Queue Routing**: Defined in `workers/queues.py:7-62`. The `PROVIDER_SYNC_QUEUES_ENABLED` flag gates provider-specific queues; `SYNC_COST_CLASS_QUEUES` further routes eligible units to light/medium/heavy sub-queues.
+- **Sync Budget Guard**: Defined in `sync/budget_guard.py`. `SYNC_BUDGET_BUCKET_LIMITS` enables enforced GitHub budget deferrals; dry-run limits record observations without deferring work.
 
 ### On-Demand Trigger Paths
 
@@ -108,6 +109,35 @@ celery -A dev_health_ops.workers.celery_app beat --loglevel=INFO
 | `webhooks` | Webhook event processing, billing notifications |
 | `ingest` | Stream ingestion consumer |
 | `monitoring` | Telemetry and queue depth monitoring |
+
+### Routing and budget environment
+
+The bundled Docker Compose, Kubernetes, and Helm deployments already declare the provider and cost-class queues in their worker `-Q` lists, so they can enable routing by default. Custom deployments must update worker consumers before enabling producer-side routing; otherwise, routed messages can sit on unconsumed queues.
+
+| Variable | Default in deploy templates | Effect |
+|---|---:|---|
+| `PROVIDER_SYNC_QUEUES_ENABLED` | `true` | Routes known providers from `sync` to `sync.<provider>`. |
+| `SYNC_COST_CLASS_QUEUES` | `true` | Routes eligible GitHub/GitLab/Jira/Linear units to cost-class sub-queues after provider routing is enabled. |
+| `HIDE_MIGRATED_CHILD_CONFIGS` | `true` | Hides migrated child sync configs from operator-facing config lists. |
+| `SYNC_RUN_MAX_UNITS` | `1000` | Caps unit count for one planned sync run. |
+| `SYNC_UNIT_CONCURRENCY_PER_BUCKET` | `8` | Caps concurrently dispatchable units per org/provider/cost-class bucket. |
+| `SYNC_UNIT_DISPATCH_STALE_SECONDS` | `900` | Reclaims stale `DISPATCHING` units after this age. |
+| `SYNC_UNIT_RUNNING_STALE_SECONDS` | `3600` | Treats long-running units as stale for reconciliation/reporting. |
+| `SYNC_DISPATCH_REDISPATCH_COUNTDOWN` | `60` | Delay used when redispatching sync-run work. |
+| `SYNC_OUTBOX_CLAIM_TIMEOUT_SECONDS` | `300` | Dispatch outbox claim lease duration. |
+| `SYNC_WATERMARK_OVERLAP` | `0` | Subtracts this many seconds from incremental watermark reads to intentionally re-read a lookback margin. |
+
+GitHub budget limits are abstract reservation units derived from the estimated shape of a sync unit. They are not GitHub's raw hourly request counters. Leaving `SYNC_BUDGET_BUCKET_LIMITS` unset disables enforcement; setting it enables deferrals when the reservation would exceed a configured bucket.
+
+| Variable | Default in deploy templates | Effect |
+|---|---:|---|
+| `SYNC_BUDGET_BUCKET_LIMITS` | `{"github:rest_core":250,"github:graphql_cost":500,"github:contents_blob":100,"github:secondary_abuse_risk":25}` | Enforced per-bucket reservation limits. |
+| `SYNC_BUDGET_DEFAULT_LIMIT` | `1000000` | Fallback enforced limit for buckets not named in the JSON map. |
+| `SYNC_BUDGET_DEFERRAL_SECONDS` | `60` | Base countdown when enforcement defers a unit. |
+| `SYNC_BUDGET_DEFERRAL_JITTER_SECONDS` | `5` | Random jitter added to enforced deferrals. |
+| `SYNC_BUDGET_DRY_RUN_BUCKET_LIMITS` | unset | Observation-only limits; records estimates without deferring work. |
+| `SYNC_BUDGET_DRY_RUN_DEFAULT_LIMIT` | `1000000` | Fallback dry-run limit. |
+| `SYNC_BUDGET_DRY_RUN_DEFERRAL_SECONDS` | `60` | Observation-only deferral estimate. |
 ---
 
 ## Task Registry

@@ -55,6 +55,7 @@ from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentRecord,
     WorkUnitMembershipRecord,
     WorkUnitMembershipRunRecord,
+    WorkUnitScopedMembershipRunRecord,
 )
 from dev_health_ops.metrics.testops_schemas import (
     BenchmarkAnomalyRecord,
@@ -382,6 +383,11 @@ class BaseMetricsSink(ABC):
         have been written.  A run whose run_id has no completion-marker is
         incomplete and invisible to readers.
         """
+        pass
+
+    def write_scoped_membership_runs(
+        self, records: Sequence[WorkUnitScopedMembershipRunRecord]
+    ) -> None:
         pass
 
     def prune_membership_runs(self, org_id: str, *, keep: int = 2) -> int:

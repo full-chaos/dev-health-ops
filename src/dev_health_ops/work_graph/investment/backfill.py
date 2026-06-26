@@ -69,7 +69,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from dev_health_ops.metrics.schemas import WorkUnitMembershipRunRecord
+from dev_health_ops.metrics.schemas import (
+    WorkUnitMembershipRunRecord,
+    WorkUnitScopedMembershipRunRecord,
+)
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.metrics.sinks.factory import create_sink
 from dev_health_ops.work_graph.investment.membership import (
@@ -333,6 +336,21 @@ def backfill_memberships(config: MembershipBackfillConfig) -> dict[str, int]:
                     exc_info=True,
                 )
         else:
+            sink.write_scoped_membership_runs(
+                [
+                    WorkUnitScopedMembershipRunRecord(
+                        org_id=org_id,
+                        scope_kind="repo",
+                        scope_id=str(repo_id),
+                        run_id=backfill_run_id,
+                        completed_at=marker_completed_at,
+                    )
+                    for repo_id in sorted(
+                        {repo_id for repo_id in config.repo_ids or []}
+                    )
+                    if repo_id
+                ]
+            )
             logger.info(
                 "Membership backfill org=%s is repo-scoped (repos=%s) — wrote "
                 "%d rows but NOT publishing an org-wide completion marker "

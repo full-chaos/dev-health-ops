@@ -148,6 +148,7 @@ def run_backfill_for_config(
 
         backfill_days = (window_before - window_since).days + 1
         jira_project_keys, jira_jql, jira_fetch_all = _jira_query_options(sync_options)
+        github_sync_targets = sync_targets or ["work-items"]
         run_work_items_sync_job(
             db_url=db_url,
             day=window_before,
@@ -165,8 +166,11 @@ def run_backfill_for_config(
             # enabled (None would let the github provider fall back to the
             # GITHUB_INCLUDE_PRS env default, PRs ON). Mirrors the unitized path
             # (processors/dataset_adapters._work_item_kwargs).
+            include_issues=(
+                ("work-items" in github_sync_targets) if provider == "github" else None
+            ),
             include_pull_requests=(
-                ("prs" in sync_targets) if provider == "github" else None
+                ("prs" in github_sync_targets) if provider == "github" else None
             ),
         )
 

@@ -27,8 +27,11 @@ logger = logging.getLogger(__name__)
 # token. Logged verbatim so an operator can attribute a failure to a permission,
 # SSO, or rate-limit cause.
 _DIAGNOSTIC_HEADERS = (
+    "x-ratelimit-limit",
     "x-ratelimit-remaining",
     "x-ratelimit-reset",
+    "x-ratelimit-resource",
+    "x-ratelimit-used",
     "retry-after",
     "x-github-request-id",
     "x-accepted-github-permissions",
@@ -88,6 +91,9 @@ class GitHubGraphQLClient:
         self.token = token
         self.timeout = timeout
         self.token_provider = token_provider
+        self.last_response_headers: dict[str, str] = {}
+        self.last_response_status: int | None = None
+        self.last_rate_limit_data: dict[str, Any] | None = None
         self.headers = {
             "Content-Type": "application/json",
         }
@@ -124,6 +130,10 @@ class GitHubGraphQLClient:
         if variables:
             payload["variables"] = variables
 
+        self.last_response_headers = {}
+        self.last_response_status = None
+        self.last_rate_limit_data = None
+
         try:
             response = requests.post(
                 self.GRAPHQL_ENDPOINT,
@@ -131,6 +141,8 @@ class GitHubGraphQLClient:
                 headers=self._headers(),
                 timeout=self.timeout,
             )
+            self.last_response_status = response.status_code
+            self.last_response_headers = safe_github_headers(response)
 
             # Check for HTTP errors
             if response.status_code == 401:
@@ -193,6 +205,12 @@ class GitHubGraphQLClient:
                 )
 
             data = response.json()
+            response_data = data.get("data") if isinstance(data, dict) else None
+            if isinstance(response_data, dict):
+                rate_limit_data = response_data.get("rateLimit")
+                self.last_rate_limit_data = (
+                    dict(rate_limit_data) if isinstance(rate_limit_data, dict) else None
+                )
 
             # Check for GraphQL errors
             if "errors" in data:

@@ -461,6 +461,12 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                 repo_full_name,
             )
 
+        drain_usage = getattr(client, "drain_usage_observations", None)
+        usage_observations = drain_usage() if callable(drain_usage) else []
+        observations = (
+            {"github_usage": usage_observations} if usage_observations else {}
+        )
+
         return ProviderBatch(
             work_items=work_items,
             status_transitions=transitions,
@@ -469,4 +475,5 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
             sprints=sprints,
             reopen_events=reopen_events,
             ai_attributions=ai_attributions,
+            observations=observations,
         )

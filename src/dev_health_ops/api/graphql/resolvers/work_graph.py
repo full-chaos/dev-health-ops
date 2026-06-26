@@ -54,6 +54,42 @@ _INCIDENT_STATUS_LABELS: dict[str, str] = {
 }
 
 
+def _uses_scoped_partial(filters: WorkGraphEdgeFilterInput | None) -> bool:
+    return bool(_partial_repo_ids(filters))
+
+
+def _partial_repo_ids(filters: WorkGraphEdgeFilterInput | None) -> list[str]:
+    if filters is None or not filters.allow_scoped_partial or not filters.repo_ids:
+        return []
+    return sorted({str(repo_id) for repo_id in filters.repo_ids if repo_id})
+
+
+def _membership_run_subquery(filters: WorkGraphEdgeFilterInput | None) -> str:
+    if not _uses_scoped_partial(filters):
+        return _LATEST_COMPLETE_RUN_SUBQUERY
+    return """
+        SELECT run_id AS latest_run_id
+        FROM work_unit_membership_scoped_runs
+        WHERE org_id = %(org_id)s
+          AND scope_kind = 'repo'
+          AND scope_id IN %(scoped_repo_ids)s
+        GROUP BY run_id
+        HAVING uniqExact(scope_id) = %(scoped_repo_count)s
+        ORDER BY max(completed_at) DESC, run_id DESC
+        LIMIT 1
+    """
+
+
+def _add_membership_scope_params(
+    params: dict[str, Any], filters: WorkGraphEdgeFilterInput | None
+) -> None:
+    scoped_repo_ids = _partial_repo_ids(filters)
+    if not scoped_repo_ids:
+        return
+    params["scoped_repo_ids"] = scoped_repo_ids
+    params["scoped_repo_count"] = len(scoped_repo_ids)
+
+
 def _incident_label(status: str) -> str:
     """Map a raw incident status string to a normalised customer-facing label."""
     return _INCIDENT_STATUS_LABELS.get(status.lower(), "Incident")
@@ -384,6 +420,7 @@ async def _batch_resolve_membership(
     client: Any,
     org_id: str,
     rows: list[dict[str, Any]],
+    filters: WorkGraphEdgeFilterInput | None = None,
 ) -> dict[tuple[str, str], dict[str, str]]:
     """Batch-lookup the dominant theme/subcategory per edge endpoint in ONE query.
 
@@ -412,12 +449,18 @@ async def _batch_resolve_membership(
 
     node_types = sorted({t for t, _ in endpoints})
     node_ids = sorted({i for _, i in endpoints})
+    params: dict[str, Any] = {
+        "org_id": org_id,
+        "node_types": node_types,
+        "node_ids": node_ids,
+    }
+    _add_membership_scope_params(params, filters)
 
     try:
         membership_rows = await query_dicts(
             client,
             f"""
-            WITH latest_run AS ({_LATEST_COMPLETE_RUN_SUBQUERY})
+            WITH latest_run AS ({_membership_run_subquery(filters)})
             SELECT
                 m.node_type AS node_type,
                 m.node_id AS node_id,
@@ -433,11 +476,7 @@ async def _batch_resolve_membership(
               AND latest_run.latest_run_id != ''
               AND ({_RUN_SCOPE_PREDICATE})
             """,
-            {
-                "org_id": org_id,
-                "node_types": node_types,
-                "node_ids": node_ids,
-            },
+            params,
         )
     except Exception as exc:
         # Only the EXPECTED recognized state — work_unit_membership does not
@@ -476,7 +515,7 @@ async def _batch_resolve_membership(
     return result
 
 
-def _theme_membership_exists_clause() -> str:
+def _theme_membership_exists_clause(filters: WorkGraphEdgeFilterInput | None) -> str:
     """SQL EXISTS clause: edge endpoint is a member of ALL requested categories.
 
     A correlated semi-join pushed INTO the edge query so the membership filter,
@@ -492,7 +531,7 @@ def _theme_membership_exists_clause() -> str:
         EXISTS (
             SELECT 1
             FROM work_unit_membership AS m
-            INNER JOIN ({_LATEST_COMPLETE_RUN_SUBQUERY}) AS latest_run
+            INNER JOIN ({_membership_run_subquery(filters)}) AS latest_run
                 ON 1 = 1
             {_LEGACY_NODE_MAX_JOIN}
             WHERE m.org_id = %(org_id)s
@@ -543,6 +582,7 @@ def _theme_subcategory_conflict(theme: str | None, subcategory: str | None) -> b
 def _build_theme_filter(
     theme: str | None,
     subcategory: str | None,
+    filters: WorkGraphEdgeFilterInput | None,
 ) -> tuple[str | None, dict[str, Any]]:
     """Return (exists_clause_sql, params) for the active theme/subcategory filter.
 
@@ -561,7 +601,7 @@ def _build_theme_filter(
         wanted.append(("subcategory", subcategory))
     if not wanted:
         return None, {}
-    return _theme_membership_exists_clause(), {
+    return _theme_membership_exists_clause(filters), {
         "category_tuples": wanted,
         "wanted_count": len(wanted),
     }
@@ -572,7 +612,11 @@ def _build_theme_filter(
 MEMBERSHIP_NOT_MATERIALIZED = "MEMBERSHIP_NOT_MATERIALIZED"
 
 
-async def _detect_membership_degraded_reason(client: Any, org_id: str) -> str | None:
+async def _detect_membership_degraded_reason(
+    client: Any,
+    org_id: str,
+    filters: WorkGraphEdgeFilterInput | None = None,
+) -> str | None:
     """Return MEMBERSHIP_NOT_MATERIALIZED when a theme filter yielded nothing
     because NO complete membership run has been published for an org that HAS
     categorized work units, else None.
@@ -599,23 +643,42 @@ async def _detect_membership_degraded_reason(client: Any, org_id: str) -> str | 
     """
     from dev_health_ops.api.queries.client import query_dicts
 
-    try:
-        rows = await query_dicts(
-            client,
-            """
-            SELECT
-                (
+    scoped_repo_ids = _partial_repo_ids(filters)
+    marker_sql = """
                     SELECT count()
                     FROM work_unit_membership_runs
                     WHERE org_id = %(org_id)s
-                ) AS complete_run_markers,
+                """
+    params: dict[str, Any] = {"org_id": org_id}
+    if scoped_repo_ids:
+        marker_sql = """
+                    SELECT count()
+                    FROM (
+                        SELECT run_id
+                        FROM work_unit_membership_scoped_runs
+                        WHERE org_id = %(org_id)s
+                          AND scope_kind = 'repo'
+                          AND scope_id IN %(scoped_repo_ids)s
+                        GROUP BY run_id
+                        HAVING uniqExact(scope_id) = %(scoped_repo_count)s
+                    )
+                """
+        params["scoped_repo_ids"] = scoped_repo_ids
+        params["scoped_repo_count"] = len(scoped_repo_ids)
+
+    try:
+        rows = await query_dicts(
+            client,
+            f"""
+            SELECT
+                ({marker_sql}) AS complete_run_markers,
                 (
                     SELECT count()
                     FROM work_unit_investments
                     WHERE org_id = %(org_id)s
                 ) AS investment_rows
             """,
-            {"org_id": org_id},
+            params,
         )
     except Exception:
         # Never let the degraded-state probe affect the request.
@@ -640,7 +703,13 @@ async def _detect_membership_degraded_reason(client: Any, org_id: str) -> str | 
     return None
 
 
-_MEMBERSHIP_TABLES = frozenset({"work_unit_membership", "work_unit_membership_runs"})
+_MEMBERSHIP_TABLES = frozenset(
+    {
+        "work_unit_membership",
+        "work_unit_membership_runs",
+        "work_unit_membership_scoped_runs",
+    }
+)
 
 # ClickHouse names the actually-missing table in an "Unknown table ...
 # identifier '<name>'" clause. The full error ALSO echoes the entire failing
@@ -692,7 +761,10 @@ def _is_missing_membership_table_error(exc: BaseException) -> bool:
     return bool(_unknown_table_names(text) & _MEMBERSHIP_TABLES)
 
 
-def _empty_edges_result(degraded_reason: str | None = None) -> WorkGraphEdgesResult:
+def _empty_edges_result(
+    degraded_reason: str | None = None,
+    filters: WorkGraphEdgeFilterInput | None = None,
+) -> WorkGraphEdgesResult:
     """An empty, well-formed result — used for impossible filters and the
     degraded (membership-not-materialized) state."""
     return WorkGraphEdgesResult(
@@ -705,19 +777,38 @@ def _empty_edges_result(degraded_reason: str | None = None) -> WorkGraphEdgesRes
             end_cursor=None,
         ),
         degraded_reason=degraded_reason,
+        is_partial=_uses_scoped_partial(filters),
+        partial_scope="repo" if _uses_scoped_partial(filters) else None,
+        partial_repo_ids=_partial_repo_ids(filters),
     )
 
 
-def _empty_flow_result(degraded_reason: str | None = None) -> WorkGraphFlowResult:
+def _empty_flow_result(
+    degraded_reason: str | None = None,
+    filters: WorkGraphEdgeFilterInput | None = None,
+) -> WorkGraphFlowResult:
     """An empty, well-formed flow aggregate — impossible filters + degraded state."""
-    return WorkGraphFlowResult(rows=[], degraded_reason=degraded_reason)
+    return WorkGraphFlowResult(
+        rows=[],
+        degraded_reason=degraded_reason,
+        is_partial=_uses_scoped_partial(filters),
+        partial_scope="repo" if _uses_scoped_partial(filters) else None,
+        partial_repo_ids=_partial_repo_ids(filters),
+    )
 
 
 def _empty_artifacts_result(
     degraded_reason: str | None = None,
+    filters: WorkGraphEdgeFilterInput | None = None,
 ) -> WorkGraphArtifactsResult:
     """An empty, well-formed artifacts aggregate — impossible filters + degraded."""
-    return WorkGraphArtifactsResult(rows=[], degraded_reason=degraded_reason)
+    return WorkGraphArtifactsResult(
+        rows=[],
+        degraded_reason=degraded_reason,
+        is_partial=_uses_scoped_partial(filters),
+        partial_scope="repo" if _uses_scoped_partial(filters) else None,
+        partial_repo_ids=_partial_repo_ids(filters),
+    )
 
 
 def _build_work_graph_where(
@@ -745,6 +836,7 @@ def _build_work_graph_where(
     """
     params: dict[str, Any] = {"org_id": org_id}
     where_clauses: list[str] = ["org_id = %(org_id)s"]
+    _add_membership_scope_params(params, filters)
 
     theme_filter = filters.theme if filters else None
     subcategory_filter = filters.subcategory if filters else None
@@ -791,7 +883,7 @@ def _build_work_graph_where(
     # enforced inside the subquery.
     if theme_filter or subcategory_filter:
         exists_clause, theme_params = _build_theme_filter(
-            theme_filter, subcategory_filter
+            theme_filter, subcategory_filter, filters
         )
         if exists_clause:
             where_clauses.append(exists_clause)
@@ -830,7 +922,7 @@ async def resolve_work_graph_edges(
             theme_filter,
             subcategory_filter,
         )
-        return _empty_edges_result()
+        return _empty_edges_result(filters=filters)
 
     where_sql, params = _build_work_graph_where(
         filters, org_id, include_edge_filters=True
@@ -901,7 +993,7 @@ async def resolve_work_graph_edges(
                 "filter — returning degraded state (CHAOS-2430).",
                 org_id,
             )
-            return _empty_edges_result(MEMBERSHIP_NOT_MATERIALIZED)
+            return _empty_edges_result(MEMBERSHIP_NOT_MATERIALIZED, filters)
         raise
 
     # Degraded-state signal (CHAOS-2430 rollout): a theme filter that yields zero
@@ -913,14 +1005,16 @@ async def resolve_work_graph_edges(
     # edges stay [] either way.
     degraded_reason: str | None = None
     if theme_filter_active and not rows:
-        degraded_reason = await _detect_membership_degraded_reason(client, org_id)
+        degraded_reason = await _detect_membership_degraded_reason(
+            client, org_id, filters
+        )
 
     resolved = await _batch_resolve_display_names(client, org_id, rows)
 
     # Annotation ALWAYS reports each edge's dominant theme/subcategory (the
     # is_dominant rows), on both the filtered and unfiltered paths — the theme
     # filter only selects which edges are shown, never what is reported.
-    membership = await _batch_resolve_membership(client, org_id, rows)
+    membership = await _batch_resolve_membership(client, org_id, rows, filters)
     edges = [_row_to_edge(row, resolved, membership) for row in rows]
 
     return WorkGraphEdgesResult(
@@ -933,6 +1027,9 @@ async def resolve_work_graph_edges(
             end_cursor=edges[-1].edge_id if edges else None,
         ),
         degraded_reason=degraded_reason,
+        is_partial=_uses_scoped_partial(filters),
+        partial_scope="repo" if _uses_scoped_partial(filters) else None,
+        partial_repo_ids=_partial_repo_ids(filters),
     )
 
 
@@ -968,7 +1065,7 @@ async def resolve_work_graph_flow(
             theme_filter,
             subcategory_filter,
         )
-        return _empty_flow_result()
+        return _empty_flow_result(filters=filters)
 
     where_sql, params = _build_work_graph_where(
         filters, org_id, include_edge_filters=False
@@ -1002,7 +1099,7 @@ async def resolve_work_graph_flow(
                 "(CHAOS-2442).",
                 org_id,
             )
-            return _empty_flow_result(MEMBERSHIP_NOT_MATERIALIZED)
+            return _empty_flow_result(MEMBERSHIP_NOT_MATERIALIZED, filters)
         raise
 
     inflow: dict[WorkGraphNodeType, int] = defaultdict(int)
@@ -1028,9 +1125,17 @@ async def resolve_work_graph_flow(
 
     degraded_reason: str | None = None
     if theme_filter_active and not flow_rows:
-        degraded_reason = await _detect_membership_degraded_reason(client, org_id)
+        degraded_reason = await _detect_membership_degraded_reason(
+            client, org_id, filters
+        )
 
-    return WorkGraphFlowResult(rows=flow_rows, degraded_reason=degraded_reason)
+    return WorkGraphFlowResult(
+        rows=flow_rows,
+        degraded_reason=degraded_reason,
+        is_partial=_uses_scoped_partial(filters),
+        partial_scope="repo" if _uses_scoped_partial(filters) else None,
+        partial_repo_ids=_partial_repo_ids(filters),
+    )
 
 
 async def resolve_work_graph_artifacts(
@@ -1069,7 +1174,7 @@ async def resolve_work_graph_artifacts(
             theme_filter,
             subcategory_filter,
         )
-        return _empty_artifacts_result()
+        return _empty_artifacts_result(filters=filters)
 
     where_sql, params = _build_work_graph_where(
         filters, org_id, include_edge_filters=False
@@ -1114,7 +1219,7 @@ async def resolve_work_graph_artifacts(
                 "(CHAOS-2442).",
                 org_id,
             )
-            return _empty_artifacts_result(MEMBERSHIP_NOT_MATERIALIZED)
+            return _empty_artifacts_result(MEMBERSHIP_NOT_MATERIALIZED, filters)
         raise
 
     # Reuse the edge-list display-name batch resolver by shaping each aggregate
@@ -1144,6 +1249,14 @@ async def resolve_work_graph_artifacts(
 
     degraded_reason: str | None = None
     if theme_filter_active and not artifact_rows:
-        degraded_reason = await _detect_membership_degraded_reason(client, org_id)
+        degraded_reason = await _detect_membership_degraded_reason(
+            client, org_id, filters
+        )
 
-    return WorkGraphArtifactsResult(rows=artifact_rows, degraded_reason=degraded_reason)
+    return WorkGraphArtifactsResult(
+        rows=artifact_rows,
+        degraded_reason=degraded_reason,
+        is_partial=_uses_scoped_partial(filters),
+        partial_scope="repo" if _uses_scoped_partial(filters) else None,
+        partial_repo_ids=_partial_repo_ids(filters),
+    )

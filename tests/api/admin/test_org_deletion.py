@@ -22,7 +22,7 @@ from dev_health_ops.models.audit import AuditLog
 from dev_health_ops.models.backfill import BackfillJob
 from dev_health_ops.models.billing import BillingPlan, BillingPrice
 from dev_health_ops.models.billing_audit import BillingAuditLog
-from dev_health_ops.models.checkpoints import MetricCheckpoint
+from dev_health_ops.models.checkpoints import MetricCheckpoint, SyncComputeCheckpoint
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.impersonation import ImpersonationSession
 from dev_health_ops.models.invoices import Invoice, InvoiceLineItem
@@ -69,6 +69,7 @@ _TABLES = tables_of(
     BackfillJob,
     RefreshToken,
     MetricCheckpoint,
+    SyncComputeCheckpoint,
     ImpersonationSession,
     Subscription,
     SubscriptionEvent,

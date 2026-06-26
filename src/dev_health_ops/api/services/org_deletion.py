@@ -19,7 +19,7 @@ from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.models.audit import AuditLog
 from dev_health_ops.models.backfill import BackfillJob
 from dev_health_ops.models.billing_audit import BillingAuditLog
-from dev_health_ops.models.checkpoints import MetricCheckpoint
+from dev_health_ops.models.checkpoints import MetricCheckpoint, SyncComputeCheckpoint
 from dev_health_ops.models.impersonation import ImpersonationSession
 from dev_health_ops.models.invoices import Invoice, InvoiceLineItem
 from dev_health_ops.models.ip_allowlist import OrgIPAllowlist
@@ -200,6 +200,11 @@ def _postgres_targets() -> list[PostgresDeletionTarget]:
             "metric_checkpoints",
             MetricCheckpoint,
             lambda _org_uuid, org_id: MetricCheckpoint.org_id == org_id,
+        ),
+        PostgresDeletionTarget(
+            "sync_compute_checkpoints",
+            SyncComputeCheckpoint,
+            lambda _org_uuid, org_id: SyncComputeCheckpoint.org_id == org_id,
         ),
         PostgresDeletionTarget(
             "sync_watermarks",

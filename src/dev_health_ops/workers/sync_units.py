@@ -44,18 +44,22 @@ import logging
 import os
 import threading
 import uuid
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any, TypedDict
 
 from celery import chord, group
 from sqlalchemy import select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.models import (
     BackfillJob,
     JobRun,
     JobRunStatus,
+    SyncComputeCheckpoint,
+    SyncComputeCheckpointStatus,
+    SyncComputeType,
     SyncDispatchOutbox,
     SyncRun,
     SyncRunMode,
@@ -64,6 +68,8 @@ from dev_health_ops.models import (
     SyncRunUnit,
     SyncRunUnitStatus,
 )
+from dev_health_ops.sync.budget import estimate_provider_budget
+from dev_health_ops.sync.budget_guard import BudgetGuard
 from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_DISPATCH,
     OUTBOX_KIND_FINALIZE,
@@ -84,7 +90,9 @@ from dev_health_ops.workers.rate_limit_defer import plan_rate_limit_deferral
 from dev_health_ops.workers.sync_bootstrap import (
     ProviderRuntimeCache,
     SyncTaskBootstrap,
+    SyncTaskContext,
 )
+from dev_health_ops.workers.task_utils import _GIT_TARGETS, _WORK_ITEM_TARGETS
 
 logger = logging.getLogger(__name__)
 _runtime_cache = ProviderRuntimeCache()
@@ -140,6 +148,37 @@ def _classify_error(exc: BaseException) -> str:
         if pattern in msg:
             return category
     return "adapter_error"
+
+
+def _budget_estimate_audit(
+    ctx: SyncTaskContext, log_ctx: dict[str, Any]
+) -> list[dict[str, Any]] | None:
+    try:
+        estimates = estimate_provider_budget(ctx)
+    except Exception as exc:
+        logger.warning(
+            "run_sync_unit.budget_estimate_failed",
+            extra={**log_ctx, "error": str(exc)},
+        )
+        return None
+    if not estimates:
+        return None
+    return [estimate.to_dict() for estimate in estimates]
+
+
+def _attach_budget_observation(
+    result: dict[str, Any], budget_audit: list[dict[str, Any]] | None
+) -> dict[str, Any]:
+    if budget_audit is None:
+        return result
+    result_payload = dict(result)
+    raw_observations = result_payload.get("observations")
+    observations = (
+        dict(raw_observations) if isinstance(raw_observations, Mapping) else {}
+    )
+    observations["budget_estimate"] = budget_audit
+    result_payload["observations"] = observations
+    return result_payload
 
 
 @celery_app.task(queue="sync", name="dev_health_ops.workers.tasks.dispatch_sync_run")
@@ -226,6 +265,12 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                 },
             )
 
+        BudgetGuard.observe_run(session, sync_run_id, capped_unit_ids=capped_ids)
+        budget_result = BudgetGuard.enforce_run(
+            session, sync_run_id, capped_unit_ids=capped_ids
+        )
+        capped_ids = frozenset((*capped_ids, *budget_result.deferred_unit_ids))
+
         units = _claim_units(session, run_uuid, capped_ids=capped_ids)
         signatures = []
         for unit in units:
@@ -261,7 +306,11 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         callback.set(queue="sync")
         try:
             chord(group(signatures), callback).apply_async()
-            if capped_ids:
+            if budget_result.next_deferred_at is not None:
+                _schedule_redispatch(
+                    sync_run_id, available_at=budget_result.next_deferred_at
+                )
+            elif capped_ids:
                 _schedule_redispatch(sync_run_id)
         except Exception as exc:
             logger.exception(
@@ -455,10 +504,15 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     "reason": "lease_lost",
                 }
 
-        logger.info("run_sync_unit.started", extra=_log_ctx)
+        budget_audit = _budget_estimate_audit(ctx, _log_ctx)
+        started_extra = dict(_log_ctx)
+        if budget_audit is not None:
+            started_extra["budget_estimate"] = budget_audit
+        logger.info("run_sync_unit.started", extra=started_extra)
 
         runtime = _runtime_cache.get(ctx)
         result = run_dataset_unit(ctx, runtime)
+        result_payload = _attach_budget_observation(dict(result or {}), budget_audit)
 
         completed_at = datetime.now(timezone.utc)
         duration_seconds = max(0, int((completed_at - started_at).total_seconds()))
@@ -477,7 +531,7 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                 .values(
                     status=SyncRunUnitStatus.SUCCESS.value,
                     duration_seconds=duration_seconds,
-                    result=dict(result or {}),
+                    result=result_payload,
                     error=None,
                     lease_owner=None,
                     lease_expires_at=None,
@@ -809,6 +863,15 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
             stats=result_payload,
         )
         sync_observers_for_terminal_sync_run(session, run)
+        try:
+            _checkpoint_successful_compute_inputs(
+                session, units, checkpointed_at=completed_at
+            )
+        except SQLAlchemyError as exc:
+            logger.warning(
+                "finalize_sync_run.compute_checkpoint_failed",
+                extra={"sync_run_id": sync_run_id, "error": str(exc)},
+            )
         session.flush()
 
         nested = session.begin_nested()
@@ -858,6 +921,62 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
         "failed_units": failed_count,
         "post_sync_targets": post_sync_targets,
     }
+
+
+def _checkpoint_successful_compute_inputs(
+    session,
+    units: list[SyncRunUnit],
+    *,
+    checkpointed_at: datetime,
+) -> None:
+    from dev_health_ops.sync.planner import map_datasets_to_legacy_targets
+
+    work_graph_targets = _GIT_TARGETS | _WORK_ITEM_TARGETS
+    for unit in units:
+        if unit.status != SyncRunUnitStatus.SUCCESS.value:
+            continue
+        legacy_targets = map_datasets_to_legacy_targets(
+            str(unit.provider), [str(unit.dataset_key)]
+        )
+        if not legacy_targets.intersection(work_graph_targets):
+            continue
+        checkpoint = SyncComputeCheckpoint(
+            org_id=str(unit.org_id),
+            sync_run_id=unit.sync_run_id,
+            sync_run_unit_id=unit.id,
+            source_id=unit.source_id,
+            provider=str(unit.provider),
+            dataset_key=str(unit.dataset_key),
+            compute_type=SyncComputeType.WORK_GRAPH.value,
+            status=SyncComputeCheckpointStatus.READY.value,
+            window_start=unit.since_at,
+            window_end=unit.before_at,
+            checkpointed_at=checkpointed_at,
+            checkpoint_metadata={
+                "cost_class": str(unit.cost_class),
+                "mode": str(unit.mode),
+                "legacy_targets": sorted(legacy_targets),
+            },
+        )
+        nested = session.begin_nested()
+        try:
+            session.add(checkpoint)
+            session.flush()
+        except IntegrityError:
+            nested.rollback()
+        except SQLAlchemyError as exc:
+            nested.rollback()
+            logger.warning(
+                "finalize_sync_run.compute_checkpoint_unit_failed",
+                extra={
+                    "sync_run_id": str(unit.sync_run_id),
+                    "unit_id": str(unit.id),
+                    "compute_type": SyncComputeType.WORK_GRAPH.value,
+                    "error": str(exc),
+                },
+            )
+        else:
+            nested.commit()
 
 
 def _run_has_dispatching_or_running_units(session, run_uuid: uuid.UUID) -> bool:

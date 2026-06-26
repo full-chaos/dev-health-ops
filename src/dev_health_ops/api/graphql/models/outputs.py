@@ -647,6 +647,9 @@ class WorkGraphEdgesResult:
     total_count: int
     page_info: PageInfo
     degraded_reason: str | None = None
+    is_partial: bool = False
+    partial_scope: str | None = None
+    partial_repo_ids: list[str] = strawberry.field(default_factory=list)
 
 
 @strawberry.type
@@ -675,6 +678,9 @@ class WorkGraphFlowResult:
 
     rows: list[WorkGraphFlowRow]
     degraded_reason: str | None = None
+    is_partial: bool = False
+    partial_scope: str | None = None
+    partial_repo_ids: list[str] = strawberry.field(default_factory=list)
 
 
 @strawberry.type
@@ -704,6 +710,9 @@ class WorkGraphArtifactsResult:
 
     rows: list[WorkGraphArtifactRow]
     degraded_reason: str | None = None
+    is_partial: bool = False
+    partial_scope: str | None = None
+    partial_repo_ids: list[str] = strawberry.field(default_factory=list)
 
 
 @strawberry.type

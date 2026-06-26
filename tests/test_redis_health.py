@@ -1,9 +1,6 @@
-# Mock redis before importing cache backends
 import sys
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
-
-sys.modules["valkey"] = MagicMock()
 
 from dev_health_ops.api.main import health  # noqa: E402
 from dev_health_ops.api.models.schemas import HealthResponse  # noqa: E402
@@ -20,7 +17,9 @@ class TestRedisHealthCheck(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(backend.status(), "ok")
 
     def test_redis_backend_status_ok(self):
-        with patch("valkey.from_url") as mock_redis:
+        fake_valkey = MagicMock()
+        with patch.dict(sys.modules, {"valkey": fake_valkey}):
+            mock_redis = fake_valkey.from_url
             mock_client = mock_redis.return_value
             mock_client.ping.return_value = True
 
@@ -29,7 +28,9 @@ class TestRedisHealthCheck(unittest.IsolatedAsyncioTestCase):
             mock_client.ping.assert_called()
 
     def test_redis_backend_status_down(self):
-        with patch("valkey.from_url") as mock_redis:
+        fake_valkey = MagicMock()
+        with patch.dict(sys.modules, {"valkey": fake_valkey}):
+            mock_redis = fake_valkey.from_url
             mock_client = mock_redis.return_value
             # Initial connect succeeds
             mock_client.ping.return_value = True

@@ -1038,6 +1038,38 @@ def test_github_provider_invalid_repo_format():
         provider.ingest(ctx)
 
 
+@patch.dict(os.environ, {}, clear=True)
+def test_github_provider_emits_client_usage_observations(
+    mock_status_mapping, mock_identity
+):
+    client = _options_client()
+    client.drain_usage_observations.return_value = [
+        {
+            "transport": "rest",
+            "operation": "GET /repos/owner/repo/issues",
+            "request_count": 1,
+            "rate_limit": {"remaining": "4999", "reset": "1234567890"},
+        }
+    ]
+    provider = GitHubProvider(
+        status_mapping=mock_status_mapping, identity=mock_identity, client=client
+    )
+    ctx = IngestionContext(repo="owner/repo", window=IngestionWindow())
+
+    batch = provider.ingest(ctx)
+
+    assert batch.observations == {
+        "github_usage": [
+            {
+                "transport": "rest",
+                "operation": "GET /repos/owner/repo/issues",
+                "request_count": 1,
+                "rate_limit": {"remaining": "4999", "reset": "1234567890"},
+            }
+        ]
+    }
+
+
 # ============================================================================
 # Work-item ingestion options (Sync Target toggles) — CHAOS-646
 # ============================================================================

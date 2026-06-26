@@ -316,6 +316,7 @@ class WorkGraphEdgeFilterInput:
     node_id: str | None = None
     theme: str | None = None
     subcategory: str | None = None
+    allow_scoped_partial: bool = False
     limit: int = 1000
 
 

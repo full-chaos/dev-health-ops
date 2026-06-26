@@ -54,19 +54,64 @@ def test_github_reset_delay_seconds_invalid_or_missing_header():
 
 
 def test_query_success(monkeypatch):
-    response = _FakeResponse(status_code=200, json_data={"data": {"ok": True}})
+    response = _FakeResponse(
+        status_code=200,
+        json_data={
+            "data": {
+                "ok": True,
+                "rateLimit": {
+                    "limit": 5000,
+                    "remaining": 4998,
+                    "used": 2,
+                    "resetAt": "2026-01-01T00:00:00Z",
+                },
+            }
+        },
+        headers={
+            "X-RateLimit-Limit": "5000",
+            "X-RateLimit-Remaining": "4998",
+            "X-RateLimit-Reset": "1234567890",
+            "X-RateLimit-Resource": "graphql",
+            "X-RateLimit-Used": "2",
+            "X-GitHub-Request-Id": "REQ:1",
+            "Authorization": "must-not-leak",
+        },
+    )
     post = MagicMock(return_value=response)
     monkeypatch.setattr("dev_health_ops.connectors.utils.graphql.requests.post", post)
 
     client = GitHubGraphQLClient("token-123", timeout=12)
     result = client.query("query { viewer { login } }", variables={"x": 1})
 
-    assert result == {"ok": True}
+    assert result == {
+        "ok": True,
+        "rateLimit": {
+            "limit": 5000,
+            "remaining": 4998,
+            "used": 2,
+            "resetAt": "2026-01-01T00:00:00Z",
+        },
+    }
     post.assert_called_once()
     _, kwargs = post.call_args
     assert kwargs["timeout"] == 12
     assert kwargs["headers"]["Authorization"] == "Bearer token-123"
     assert kwargs["json"]["variables"] == {"x": 1}
+    assert client.last_response_status == 200
+    assert client.last_response_headers == {
+        "x-ratelimit-limit": "5000",
+        "x-ratelimit-remaining": "4998",
+        "x-ratelimit-reset": "1234567890",
+        "x-ratelimit-resource": "graphql",
+        "x-ratelimit-used": "2",
+        "x-github-request-id": "REQ:1",
+    }
+    assert client.last_rate_limit_data == {
+        "limit": 5000,
+        "remaining": 4998,
+        "used": 2,
+        "resetAt": "2026-01-01T00:00:00Z",
+    }
 
 
 def test_query_unauthorized_raises_authentication_exception(monkeypatch):

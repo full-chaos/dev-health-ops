@@ -239,7 +239,7 @@ def run_work_items_sync_job(
     include_pull_requests: bool | None = None,
     fetch_comments: bool | None = None,
     fetch_milestones: bool | None = None,
-) -> None:
+) -> dict[str, Any] | None:
     """
     Sync work tracking facts from provider APIs and write derived work item tables.
 
@@ -347,6 +347,7 @@ def run_work_items_sync_job(
         # Populated when providers emit attribution signals (GitHub PRs).
         # Written to sink via write_ai_attribution() at end of sync loop.
         ai_attributions: list[Any] = []
+        github_usage_observations: list[dict[str, Any]] = []
 
         if "jira" in provider_set:
             (
@@ -418,6 +419,11 @@ def run_work_items_sync_job(
                     interactions.extend(batch.interactions)
                     sprints.extend(batch.sprints)
                     ai_attributions.extend(batch.ai_attributions)
+                    raw_github_usage = batch.observations.get("github_usage")
+                    if isinstance(raw_github_usage, list):
+                        github_usage_observations.extend(
+                            item for item in raw_github_usage if isinstance(item, dict)
+                        )
 
             projects = parse_github_projects_v2_env()
             if projects:
@@ -904,6 +910,9 @@ def run_work_items_sync_job(
                     s.write_investment_classifications(investment_classifications)
                 if hasattr(s, "write_investment_metrics") and investment_metrics_rows:
                     s.write_investment_metrics(investment_metrics_rows)
+        if github_usage_observations:
+            return {"observations": {"github_usage": github_usage_observations}}
+        return None
     finally:
         for s in sinks:
             try:

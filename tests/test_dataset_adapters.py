@@ -227,6 +227,10 @@ def test_work_item_datasets_route_to_work_item_sync_scoped_to_source(
     assert kwargs["backfill_days"] == 3
     for key, value in expected_extra.items():
         assert kwargs[key] == value
+    if provider == "github":
+        assert kwargs["include_issues"] is True
+    else:
+        assert "include_issues" not in kwargs
     assert result["work_items_synced"] is True
     assert result["source"] == source_external_id
 
@@ -414,7 +418,34 @@ def test_github_work_items_include_prs_when_prs_dataset_enabled() -> None:
         run_dataset_unit(ctx, _runtime())
 
     work_items.assert_called_once()
+    assert work_items.call_args.kwargs["include_issues"] is True
     assert work_items.call_args.kwargs["include_pull_requests"] is True
+
+
+def test_github_work_items_threads_usage_observations_to_result() -> None:
+    ctx = _context(
+        provider="github",
+        dataset_key="work-items",
+        processor_flags=_flags(sync_prs=True),
+    )
+    observations = {
+        "github_usage": [
+            {
+                "transport": "rest",
+                "operation": "GET /repos/full-chaos/dev-health/issues",
+                "request_count": 1,
+                "rate_limit": {"remaining": "4999", "reset": "1234567890"},
+            }
+        ]
+    }
+
+    with patch(
+        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job",
+        return_value={"observations": observations},
+    ):
+        result = run_dataset_unit(ctx, _runtime())
+
+    assert result["observations"] == observations
 
 
 def test_github_work_items_exclude_prs_when_prs_dataset_disabled() -> None:
@@ -433,6 +464,7 @@ def test_github_work_items_exclude_prs_when_prs_dataset_disabled() -> None:
         run_dataset_unit(ctx, _runtime())
 
     work_items.assert_called_once()
+    assert work_items.call_args.kwargs["include_issues"] is True
     assert work_items.call_args.kwargs["include_pull_requests"] is False
 
 
@@ -452,4 +484,5 @@ def test_non_github_work_items_leave_include_pull_requests_unset() -> None:
         run_dataset_unit(ctx, _runtime())
 
     work_items.assert_called_once()
+    assert "include_issues" not in work_items.call_args.kwargs
     assert "include_pull_requests" not in work_items.call_args.kwargs

@@ -27,7 +27,7 @@ def _client() -> tuple[GitHubWorkClient, MagicMock, MagicMock]:
     return client, graphql_cls.return_value, gate
 
 
-def test_work_client_uses_pygithub_token_auth_without_internal_retry() -> None:
+def test_work_client_uses_pygithub_token_auth_with_retry() -> None:
     gate = MagicMock()
     with (
         patch("github.Github") as github_cls,
@@ -37,13 +37,11 @@ def test_work_client_uses_pygithub_token_auth_without_internal_retry() -> None:
 
     _, kwargs = github_cls.call_args
     assert kwargs["auth"].__class__.__name__ == "Token"
-    assert kwargs["retry"] is None
+    assert kwargs["retry"] is not None
     assert "login_or_token" not in kwargs
 
 
-def test_work_client_uses_pygithub_app_installation_auth_without_internal_retry() -> (
-    None
-):
+def test_work_client_uses_pygithub_app_installation_auth_with_retry() -> None:
     gate = MagicMock()
     with (
         patch("github.Github") as github_cls,
@@ -65,7 +63,7 @@ def test_work_client_uses_pygithub_app_installation_auth_without_internal_retry(
     _, kwargs = github_cls.call_args
     assert kwargs["auth"].__class__.__name__ == "AppInstallationAuth"
     assert kwargs["auth"].installation_id == 456
-    assert kwargs["retry"] is None
+    assert kwargs["retry"] is not None
     assert "login_or_token" not in kwargs
 
 

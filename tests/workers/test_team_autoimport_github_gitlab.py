@@ -9,6 +9,7 @@ from dev_health_ops.api.admin.schemas_flat import DiscoveredMember, DiscoveredTe
 from dev_health_ops.api.services.configuration.team_discovery import (
     GitLabDiscoveryResult,
 )
+from dev_health_ops.providers.identity import IdentityResolver
 from dev_health_ops.workers import team_autoimport_github, team_autoimport_gitlab
 
 
@@ -47,6 +48,14 @@ def test_github_org_import_writes_provider_access_repo_grants_and_nested_specifi
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sink = RecordingSink()
+    resolver = IdentityResolver(
+        alias_to_canonical={
+            "github:platform-lead": "canonical-platform-id@example.com",
+            "platform@example.com": "canonical-platform-email@example.com",
+            "github:platform-api-lead": "canonical-platform-api-id@example.com",
+            "platform-api@example.com": "canonical-platform-api-email@example.com",
+        }
+    )
 
     async def discover_github(self, token: str, org_name: str) -> list[DiscoveredTeam]:
         return [
@@ -96,6 +105,9 @@ def test_github_org_import_writes_provider_access_repo_grants_and_nested_specifi
     monkeypatch.setattr(
         team_autoimport_github, "ClickHouseMetricsSink", lambda dsn: sink
     )
+    monkeypatch.setattr(
+        team_autoimport_github, "load_identity_resolver", lambda: resolver
+    )
 
     summary = team_autoimport_github.populate(
         org_id="org-1",
@@ -126,22 +138,50 @@ def test_github_org_import_writes_provider_access_repo_grants_and_nested_specifi
     # resolver-consumed github:<login> (no-email assignee) AND the member's email
     # (email-bearing assignee) — so the secondary TeamResolver matches both.
     rosters = {row["id"]: row["members"] for row in sink.teams}
-    assert rosters["gh:platform"] == ["github:platform-lead", "platform@example.com"]
+    assert rosters["gh:platform"] == [
+        "canonical-platform-id@example.com",
+        "github:platform-lead",
+        "canonical-platform-email@example.com",
+        "platform@example.com",
+    ]
     assert rosters["gh:platform-api"] == [
+        "canonical-platform-api-id@example.com",
         "github:platform-api-lead",
+        "canonical-platform-api-email@example.com",
         "platform-api@example.com",
     ]
     # The single canonical-ladder facet (raw_provider_user_id) carries the
     # no-email identity; raw_email carries the email; member_id (PK) keeps gh:.
     by_member = {row.member_id: row for row in sink.memberships}
-    assert by_member["gh:platform-lead"].raw_provider_user_id == "github:platform-lead"
+    assert (
+        by_member["gh:platform-lead"].raw_provider_user_id
+        == "canonical-platform-id@example.com"
+    )
     assert by_member["gh:platform-lead"].raw_email == "platform@example.com"
+    assert by_member["gh:platform-lead"].identity_facets == [
+        "canonical-platform-id@example.com",
+        "github:platform-lead",
+        "canonical-platform-email@example.com",
+        "platform@example.com",
+    ]
+    assert by_member["gh:platform-api-lead"].identity_facets == [
+        "canonical-platform-api-id@example.com",
+        "github:platform-api-lead",
+        "canonical-platform-api-email@example.com",
+        "platform-api@example.com",
+    ]
 
 
 def test_gitlab_group_import_writes_provider_access_project_ownership(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sink = RecordingSink()
+    resolver = IdentityResolver(
+        alias_to_canonical={
+            "gitlab:full-chaos": "canonical-gitlab-root@example.com",
+            "gitlab:full-chaos-dev-health": "canonical-gitlab-dev-health@example.com",
+        }
+    )
 
     async def discover_gitlab(
         self, token: str, group_path: str, url: str
@@ -193,6 +233,9 @@ def test_gitlab_group_import_writes_provider_access_project_ownership(
     monkeypatch.setattr(
         team_autoimport_gitlab, "ClickHouseMetricsSink", lambda dsn: sink
     )
+    monkeypatch.setattr(
+        team_autoimport_gitlab, "load_identity_resolver", lambda: resolver
+    )
 
     summary = team_autoimport_gitlab.populate(
         org_id="org-1",
@@ -234,10 +277,27 @@ def test_gitlab_group_import_writes_provider_access_project_ownership(
     # entries are the RESOLVER-CONSUMED identity (gitlab:<username>), and the
     # canonical-ladder facet (raw_provider_user_id) carries the same identity.
     rosters = {row["id"]: row["members"] for row in sink.teams}
-    assert rosters["gl:full-chaos"] == ["gitlab:full-chaos"]
-    assert rosters["gl:full-chaos/dev-health"] == ["gitlab:full-chaos-dev-health"]
+    assert rosters["gl:full-chaos"] == [
+        "canonical-gitlab-root@example.com",
+        "gitlab:full-chaos",
+    ]
+    assert rosters["gl:full-chaos/dev-health"] == [
+        "canonical-gitlab-dev-health@example.com",
+        "gitlab:full-chaos-dev-health",
+    ]
     by_member = {row.member_id: row for row in sink.memberships}
-    assert by_member["gl:full-chaos"].raw_provider_user_id == "gitlab:full-chaos"
+    assert (
+        by_member["gl:full-chaos"].raw_provider_user_id
+        == "canonical-gitlab-root@example.com"
+    )
+    assert by_member["gl:full-chaos"].identity_facets == [
+        "canonical-gitlab-root@example.com",
+        "gitlab:full-chaos",
+    ]
+    assert by_member["gl:full-chaos-dev-health"].identity_facets == [
+        "canonical-gitlab-dev-health@example.com",
+        "gitlab:full-chaos-dev-health",
+    ]
     # CHAOS-2609 (CS-COV) item 7: a nested subgroup's ownership is more specific
     # than its parent group's, so it wins on specificity tie-breaks.
     parent_proj = next(

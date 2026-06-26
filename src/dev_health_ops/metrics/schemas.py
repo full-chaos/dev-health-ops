@@ -343,6 +343,7 @@ class TeamMembershipRecord:
     updated_at: datetime
     raw_provider_user_id: str | None = None
     raw_email: str | None = None
+    identity_facets: list[str] = field(default_factory=list)
     valid_to: datetime | None = None
     org_id: str = ""
 

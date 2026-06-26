@@ -119,14 +119,12 @@ def _seed_run(
     mode=SyncRunMode.INCREMENTAL.value,
     provider="github",
     source_type="repo",
-    source_external_id="full-chaos/dev-health",
-    source_name="dev-health",
-    source_full_name="full-chaos/dev-health",
+    external_id="full-chaos/dev-health",
+    name="dev-health",
+    full_name="full-chaos/dev-health",
     dataset_key="commits",
     processor_flags=None,
 ):
-    if processor_flags is None:
-        processor_flags = {"sync_git": True}
     org_id = str(uuid.uuid4())
     integration = Integration(
         org_id=org_id,
@@ -142,9 +140,9 @@ def _seed_run(
         integration_id=integration.id,
         provider=provider,
         source_type=source_type,
-        external_id=source_external_id,
-        name=source_name,
-        full_name=source_full_name,
+        external_id=external_id,
+        name=name,
+        full_name=full_name,
         metadata_={},
         is_enabled=True,
     )
@@ -180,7 +178,7 @@ def _seed_run(
         before_at=datetime.now(timezone.utc),
         status=SyncRunUnitStatus.PLANNED.value,
         attempts=0,
-        processor_flags=processor_flags,
+        processor_flags=processor_flags or {"sync_git": True},
     )
     session.add(unit)
     session.flush()
@@ -347,9 +345,9 @@ def test_run_sync_unit_success_attaches_launchdarkly_budget_estimate(
         db_session,
         provider="launchdarkly",
         source_type="project",
-        source_external_id="project:default",
-        source_name="default",
-        source_full_name="LaunchDarkly/default",
+        external_id="project:default",
+        name="default",
+        full_name="LaunchDarkly/default",
         dataset_key="feature-flags",
         processor_flags={"sync_feature_flags": True},
     )
@@ -382,6 +380,57 @@ def test_run_sync_unit_success_attaches_launchdarkly_budget_estimate(
         "code_refs",
     }
     assert finalize_calls == [((str(run.id),), "sync")]
+
+
+def test_run_sync_unit_success_attaches_linear_budget_estimate(db_session, monkeypatch):
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(
+        db_session,
+        provider="linear",
+        source_type="team",
+        external_id="TEAM",
+        name="TEAM",
+        full_name="TEAM",
+        dataset_key="work-items",
+        processor_flags={},
+    )
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        dataset_adapters,
+        "run_dataset_unit",
+        lambda ctx, runtime: {"ok": True, "observations": {}},
+    )
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    assert result["status"] == "success"
+    db_session.refresh(unit)
+    assert unit.status == SyncRunUnitStatus.SUCCESS.value
+    assert unit.result is not None
+    observations = unit.result["observations"]
+    budget_estimate = observations["budget_estimate"]
+    assert {estimate["bucket"]["provider"] for estimate in budget_estimate} == {
+        "linear"
+    }
+    assert {estimate["bucket"]["dimension"] for estimate in budget_estimate} == {
+        "graphql_cost"
+    }
+    assert {estimate["route_family"] for estimate in budget_estimate} == {
+        "attachments",
+        "comments",
+        "cycles",
+        "history",
+        "issues",
+        "teams",
+    }
 
 
 def test_run_sync_unit_success_survives_finalize_enqueue_failure(
@@ -2039,6 +2088,55 @@ def test_dispatch_sync_run_logs_budget_guard_would_defer_without_deferring(
     assert record.suggested_available_at is not None
 
 
+def test_dispatch_sync_run_logs_linear_budget_guard_route_family_dry_run(
+    db_session, monkeypatch, caplog
+):
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(
+        db_session,
+        provider="linear",
+        source_type="team",
+        external_id="TEAM",
+        name="TEAM",
+        full_name="TEAM",
+        dataset_key="work-items",
+        processor_flags={},
+    )
+    _patch_db_session(monkeypatch, db_session)
+    _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv(
+        "SYNC_BUDGET_DRY_RUN_BUCKET_LIMITS",
+        json.dumps({"linear:graphql_cost:issues": 1, "linear:graphql_cost": 100}),
+    )
+    monkeypatch.setenv("SYNC_BUDGET_DRY_RUN_DEFERRAL_SECONDS", "120")
+
+    with caplog.at_level(logging.INFO, logger="dev_health_ops.sync.budget_guard"):
+        result = sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(run)
+    db_session.refresh(unit)
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "dispatch_sync_run.budget_guard_dry_run"
+    ]
+    issue_record = next(record for record in records if record.route_family == "issues")
+    team_record = next(record for record in records if record.route_family == "teams")
+    assert result == {"status": "dispatched", "queued_units": 1}
+    assert run.status == SyncRunStatus.DISPATCHING.value
+    assert unit.status == SyncRunUnitStatus.DISPATCHING.value
+    assert unit.available_at is None
+    assert issue_record.bucket["provider"] == "linear"
+    assert issue_record.bucket["dimension"] == "graphql_cost"
+    assert issue_record.decision == "would_defer"
+    assert issue_record.budget_limit == 1
+    assert issue_record.projected_units == 5
+    assert issue_record.suggested_available_at is not None
+    assert team_record.decision == "would_allow"
+    assert team_record.budget_limit == 100
+
+
 def test_dispatch_sync_run_enforces_budget_deferral(db_session, monkeypatch):
     from dev_health_ops.workers import sync_units
 
@@ -2077,9 +2175,9 @@ def test_dispatch_sync_run_enforces_launchdarkly_budget_deferral(
         db_session,
         provider="launchdarkly",
         source_type="project",
-        source_external_id="project:default",
-        source_name="default",
-        source_full_name="LaunchDarkly/default",
+        external_id="project:default",
+        name="default",
+        full_name="LaunchDarkly/default",
         dataset_key="feature-flags",
         processor_flags={"sync_feature_flags": True},
     )

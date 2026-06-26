@@ -28,6 +28,7 @@ from dev_health_ops.metrics.schemas import (
     TeamProjectOwnershipRecord,
 )
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+from dev_health_ops.providers.identity import load_identity_resolver
 
 _T = TypeVar("_T")
 _REAL_CLICKHOUSE_SINK_TYPE = ClickHouseMetricsSink
@@ -155,6 +156,7 @@ def populate(
         }
 
     now = datetime.now(timezone.utc)
+    resolver = load_identity_resolver()
     discovery = TeamDiscoveryService(None, org_id)
     membership = TeamMembershipService(cast(AsyncSession, None), org_id)
     teams = _run(discovery.discover_linear(api_key=linear_credentials.api_key))
@@ -224,11 +226,17 @@ def populate(
                 team_key=team_id,
             )
         )
-        team_rows[-1]["members"] = [
-            member.provider_identity for member in discovered_members
-        ]
+        roster_facets: list[str] = []
         for member in discovered_members:
             member_id = _member_id("linear", member.provider_identity)
+            facets = resolver.membership_facets(
+                provider="linear",
+                username=member.provider_identity,
+                email=member.email,
+            ) or [member.provider_identity]
+            for facet in facets:
+                if facet not in roster_facets:
+                    roster_facets.append(facet)
             member_rows.append(
                 MemberRecord(
                     org_id=org_id,
@@ -248,8 +256,9 @@ def populate(
                     provider="linear",
                     team_id=team_id,
                     member_id=member_id,
-                    raw_provider_user_id=member.provider_identity,
+                    raw_provider_user_id=facets[0],
                     raw_email=member.email,
+                    identity_facets=facets,
                     source="native",
                     is_primary=1,
                     specificity=100,
@@ -258,6 +267,7 @@ def populate(
                     updated_at=now,
                 )
             )
+        team_rows[-1]["members"] = roster_facets
 
     sink, should_close = _sink_from_kwargs(scope, kwargs)
     try:

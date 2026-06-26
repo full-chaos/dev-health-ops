@@ -5,7 +5,7 @@ import json
 from collections.abc import Callable, Mapping
 from urllib.parse import urlparse
 
-from dev_health_ops.sync.budget import (
+from dev_health_ops.sync.budget_types import (
     BudgetBucketKey,
     BudgetDimension,
     BudgetEstimate,

@@ -371,6 +371,36 @@ async def test_setup_status_sync_running(client, session_maker, status, expected
 
 
 @pytest.mark.asyncio
+async def test_setup_status_sync_running_on_non_primary_config_blocks_start(
+    client, session_maker
+):
+    ac, seeded_state = client
+    await _add_credential(session_maker, seeded_state["org_id"])
+    older_config_id = await _add_config(
+        session_maker, seeded_state["org_id"], name="older"
+    )
+    newer_config_id = await _add_config(
+        session_maker, seeded_state["org_id"], name="newer"
+    )
+    await _add_job_run(
+        session_maker,
+        seeded_state["org_id"],
+        older_config_id,
+        status=JobRunStatus.RUNNING.value,
+    )
+
+    resp = await ac.get("/api/v1/admin/setup/status")
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["sync_config_id"] == newer_config_id
+    assert data["first_sync_started"] is True
+    assert data["sync_status"] == "running"
+    assert data["can_start_sync"] is False
+    assert data["next_action"] == "complete"
+
+
+@pytest.mark.asyncio
 async def test_setup_status_sync_complete(client, session_maker):
     ac, seeded_state = client
     await _add_credential(session_maker, seeded_state["org_id"])

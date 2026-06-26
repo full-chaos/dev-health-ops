@@ -71,6 +71,16 @@ def _select_primary_config(
     return sorted(parents, key=_key, reverse=True)[0]
 
 
+def _active_parent_configs(
+    configs: list[SyncConfiguration],
+) -> list[SyncConfiguration]:
+    return [
+        c
+        for c in configs
+        if getattr(c, "parent_id") is None and bool(getattr(c, "is_active"))
+    ]
+
+
 async def _selected_repository_count(
     session: AsyncSession, org_id: str, integration_id: object
 ) -> int:
@@ -101,6 +111,64 @@ async def _latest_job_run(
     )
     result = await session.execute(stmt)
     return result.scalars().first()
+
+
+async def _latest_active_parent_run(
+    session: AsyncSession, org_id: str, configs: list[SyncConfiguration]
+) -> tuple[JobRun, SyncConfiguration] | None:
+    active_parents = _active_parent_configs(configs)
+    config_by_id = {getattr(config, "id"): config for config in active_parents}
+    if not config_by_id:
+        return None
+    stmt = (
+        select(JobRun, ScheduledJob.sync_config_id)
+        .join(ScheduledJob, JobRun.job_id == ScheduledJob.id)
+        .where(
+            ScheduledJob.org_id == org_id,
+            ScheduledJob.sync_config_id.in_(config_by_id),
+        )
+        .order_by(JobRun.created_at.desc())
+    )
+    result = await session.execute(stmt)
+    latest_by_config: dict[object, JobRun] = {}
+    for run, config_id in result.all():
+        if config_id not in latest_by_config:
+            latest_by_config[config_id] = run
+
+    status_priority = (
+        JobRunStatus.RUNNING.value,
+        JobRunStatus.PENDING.value,
+        JobRunStatus.FAILED.value,
+        JobRunStatus.CANCELLED.value,
+    )
+    for status in status_priority:
+        for config_id, run in latest_by_config.items():
+            if int(getattr(run, "status")) == status:
+                return run, config_by_id[config_id]
+    return None
+
+
+def _sync_status_from_job_run(run: JobRun) -> SyncStatus:
+    status_int = int(getattr(run, "status"))
+    run_result = getattr(run, "result")
+    run_result = run_result if isinstance(run_result, dict) else {}
+    sync_run_status = str(run_result.get("sync_run_status") or "")
+    if status_int == JobRunStatus.PENDING.value:
+        sync_status: SyncStatus = "pending"
+    elif status_int == JobRunStatus.RUNNING.value:
+        sync_status = "running"
+    elif status_int == JobRunStatus.SUCCESS.value:
+        sync_status = "complete"
+    elif status_int in (
+        JobRunStatus.FAILED.value,
+        JobRunStatus.CANCELLED.value,
+    ):
+        sync_status = "failed"
+    else:
+        sync_status = "running"
+    if sync_run_status in ("partial_failed", "partial"):
+        sync_status = "partial"
+    return sync_status
 
 
 @router.get("/setup/status", response_model=SetupStatusResponse)
@@ -140,31 +208,19 @@ async def get_setup_status(
         else:
             has_repo_selection = True
 
-        latest = await _latest_job_run(session, org_id, getattr(primary, "id"))
+        latest_active = await _latest_active_parent_run(session, org_id, configs)
+        latest = (
+            latest_active[0]
+            if latest_active is not None
+            else await _latest_job_run(session, org_id, getattr(primary, "id"))
+        )
+        latest_config = latest_active[1] if latest_active is not None else primary
         if latest is not None:
             first_sync_started = True
-            status_int = int(getattr(latest, "status"))
-            run_result = getattr(latest, "result")
-            run_result = run_result if isinstance(run_result, dict) else {}
-            sync_run_status = str(run_result.get("sync_run_status") or "")
-            if status_int == JobRunStatus.PENDING.value:
-                sync_status = "pending"
-            elif status_int == JobRunStatus.RUNNING.value:
-                sync_status = "running"
-            elif status_int == JobRunStatus.SUCCESS.value:
-                sync_status = "complete"
-            elif status_int in (
-                JobRunStatus.FAILED.value,
-                JobRunStatus.CANCELLED.value,
-            ):
-                sync_status = "failed"
-            else:
-                sync_status = "running"
-            if sync_run_status in ("partial_failed", "partial"):
-                sync_status = "partial"
+            sync_status = _sync_status_from_job_run(latest)
             if sync_status == "failed":
                 last_sync_error = getattr(latest, "error") or getattr(
-                    primary, "last_sync_error"
+                    latest_config, "last_sync_error"
                 )
         else:
             # No planner run yet — fall back to the config-level last-sync facts

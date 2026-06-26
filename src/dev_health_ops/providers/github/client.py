@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, NoReturn, Protocol, TypedDict, TypeVar, cast
 from urllib.parse import urlparse
+
+from urllib3.util.retry import Retry
 
 from dev_health_ops.connectors.exceptions import (
     APIException,
@@ -30,6 +33,78 @@ from dev_health_ops.credentials.types import GitHubCredentials
 from dev_health_ops.providers._ratelimit import gate_call
 
 logger = logging.getLogger(__name__)
+
+
+def _github_http_backoff_max() -> float:
+    """Return the maximum backoff cap in seconds for GitHub REST retries.
+
+    Reads ``GITHUB_HTTP_BACKOFF_MAX`` from the environment (default 30).
+    Always returns at least 1.0 second.
+    """
+    try:
+        return max(1.0, float(os.getenv("GITHUB_HTTP_BACKOFF_MAX", "30")))
+    except ValueError:
+        return 30.0
+
+
+def _github_http_retry() -> Retry | int:
+    """Return a bounded urllib3 Retry for idempotent GitHub REST reads.
+
+    Only 502/503/504 (transient infrastructure errors) are retried, and only
+    for safe methods (GET/HEAD/OPTIONS).  4xx responses — including 403
+    rate-limit — are intentionally excluded so RateLimitGate and
+    _raise_github_exception keep full ownership of rate-limit semantics.
+    Mutations (POST/PATCH/PUT/DELETE) are never retried to avoid double-writes.
+    ``raise_on_status=False`` lets PyGithub surface the final 5xx as its
+    normal GithubException rather than a urllib3 MaxRetryError.
+
+    ``respect_retry_after_header=False`` is intentional: urllib3 v2's
+    ``is_retry()`` retries 413/429/503 when they carry a ``Retry-After``
+    header and ``respect_retry_after_header=True``, even if those codes are
+    not in ``status_forcelist``.  That would silently transport-retry GitHub
+    secondary-rate-limit 429s instead of letting them surface as
+    ``RateLimitException`` for the worker deferral path, and would sleep for
+    an unbounded ``Retry-After`` (urllib3 default ``retry_after_max`` ~6 h)
+    inside a single ``RateLimitGate`` call, outside the socket timeout.
+    With ``respect_retry_after_header=False`` only the codes in
+    ``status_forcelist`` are retried, using bounded exponential backoff
+    (capped at ``backoff_max``) — never a ``Retry-After`` sleep.
+    """
+    try:
+        total = int(os.getenv("GITHUB_HTTP_MAX_RETRIES", "3"))
+    except ValueError:
+        total = 3
+    if total <= 0:
+        return 0
+    try:
+        backoff = float(os.getenv("GITHUB_HTTP_BACKOFF_FACTOR", "1.0"))
+    except ValueError:
+        backoff = 1.0
+    return Retry(
+        total=total,
+        connect=total,
+        read=total,
+        status=total,
+        status_forcelist=(502, 503, 504),
+        allowed_methods=frozenset({"GET", "HEAD", "OPTIONS"}),
+        backoff_factor=backoff,
+        backoff_max=_github_http_backoff_max(),
+        respect_retry_after_header=False,
+        raise_on_status=False,
+    )
+
+
+def _github_http_timeout() -> int:
+    """Return the HTTP timeout in seconds for PyGithub REST calls.
+
+    Reads ``GITHUB_HTTP_TIMEOUT_SECONDS`` from the environment (default 30).
+    Always returns at least 1 second.
+    """
+    try:
+        return max(1, int(os.getenv("GITHUB_HTTP_TIMEOUT_SECONDS", "30")))
+    except ValueError:
+        return 30
+
 
 _DIAGNOSTIC_HEADER_NAMES = (
     "x-ratelimit-limit",
@@ -318,13 +393,15 @@ class GitHubWorkClient:
                 base_url=auth.base_url,
                 auth=pygithub_auth,
                 per_page=self.per_page,
-                retry=None,
+                retry=_github_http_retry(),
+                timeout=_github_http_timeout(),
             )
         else:
             self.github = Github(
                 auth=pygithub_auth,
                 per_page=self.per_page,
-                retry=None,
+                retry=_github_http_retry(),
+                timeout=_github_http_timeout(),
             )
 
         # GraphQL client (api.github.com only for now).

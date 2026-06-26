@@ -8,13 +8,24 @@ from typing import Any
 import jwt
 import requests
 
+from dev_health_ops.connectors.utils.retry import retry_with_backoff
+
 GITHUB_API_BASE_URL = "https://api.github.com"
 JWT_TTL_SECONDS = 600
 INSTALLATION_TOKEN_REFRESH_WINDOW_SECONDS = 300
+TOKEN_EXCHANGE_MAX_RETRIES = (
+    3  # total attempts (initial + retries), per retry_with_backoff
+)
+TOKEN_EXCHANGE_INITIAL_DELAY_SECONDS = 1.0
+TOKEN_EXCHANGE_MAX_DELAY_SECONDS = 10.0
 
 
 class GitHubAppAuthError(RuntimeError):
     """Raised when GitHub App authentication cannot produce an access token."""
+
+
+class GitHubAppTransientError(GitHubAppAuthError):
+    """Transient GitHub App auth failure (5xx / network) that is safe to retry."""
 
 
 @dataclass(frozen=True)
@@ -82,6 +93,12 @@ class GitHubAppTokenProvider:
         now = datetime.now(timezone.utc)
         return (expires_at - now).total_seconds() <= self.refresh_window_seconds
 
+    @retry_with_backoff(
+        max_retries=TOKEN_EXCHANGE_MAX_RETRIES,
+        initial_delay=TOKEN_EXCHANGE_INITIAL_DELAY_SECONDS,
+        max_delay=TOKEN_EXCHANGE_MAX_DELAY_SECONDS,
+        exceptions=(GitHubAppTransientError,),
+    )
     def _exchange_installation_token(self) -> InstallationToken:
         app_jwt = create_github_app_jwt(
             app_id=self.app_id,
@@ -91,16 +108,25 @@ class GitHubAppTokenProvider:
             f"{self.api_base_url}/app/installations/"
             f"{self.installation_id}/access_tokens"
         )
-        response = requests.post(
-            url,
-            headers={
-                "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {app_jwt}",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
-            timeout=self.timeout,
-        )
+        try:
+            response = requests.post(
+                url,
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "Authorization": f"Bearer {app_jwt}",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+                timeout=self.timeout,
+            )
+        except requests.RequestException as exc:
+            raise GitHubAppTransientError(
+                f"GitHub App installation token exchange request failed: {exc}"
+            ) from exc
         if response.status_code >= 400:
+            if 500 <= response.status_code < 600:
+                raise GitHubAppTransientError(
+                    f"GitHub App installation token exchange failed: HTTP {response.status_code}"
+                )
             raise GitHubAppAuthError(
                 f"GitHub App installation token exchange failed: HTTP {response.status_code}"
             )

@@ -199,6 +199,13 @@ class Organization(Base):
         nullable=False,
     )
 
+    # First-run onboarding (CHAOS-2670 / contract C6): when set, the org
+    # explicitly skipped the first-integration onboarding step. Null = not
+    # skipped. Connecting an integration later overrides this for display.
+    onboarding_integration_skipped_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # Relationships
     memberships: Mapped[list[Membership]] = relationship(
         "Membership",

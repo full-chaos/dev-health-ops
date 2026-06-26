@@ -316,6 +316,12 @@ When `PROVIDER_SYNC_QUEUES_ENABLED=false`, provider sync tasks stay on the
 shared `sync` queue. When the flag is enabled, known providers route to their
 `sync.<provider>` queues.
 
+Manual Sync Now dispatch and finalization tasks are still published to the
+shared `sync` queue. Any deployment that splits provider units into a dedicated
+worker pool must keep that provider pool on `sync` too, or Linear/Jira/
+LaunchDarkly unit queues can sit idle while dispatch waits behind saturated
+generic sync work.
+
 ### Clear queued messages
 
 Use Celery to purge one queue or everything on the broker. Run the

@@ -1179,14 +1179,14 @@ def _claim_units(
     writes).  Stale ``dispatching`` units (a worker died before the unit started
     running) are reclaimed by age.
 
-    F2 fix: RUNNING units are NEVER reclaimed here.  ``run_sync_unit`` does not
-    heartbeat during the provider call, so a legitimately long-running unit past
-    SYNC_UNIT_RUNNING_STALE_SECONDS would be re-dispatched and run a second time
-    concurrently, causing duplicate provider writes.  Durable dead-worker
-    recovery (heartbeat + lease) is a separate follow-up (CHAOS-2577).
-
-    INTERIM: a capped run whose only blocker is a DEAD RUNNING unit may stall
-    — acceptable, preserves at-most-once provider execution.
+    F2: RUNNING units are NEVER reclaimed by the dispatch path — re-dispatching a
+    RUNNING unit would run it a second time concurrently and cause duplicate
+    provider writes.  Durable dead-worker recovery is handled instead by
+    ``reconcile_sync_dispatch``, which fails a RUNNING unit once its
+    ``lease_expires_at`` lapses and re-arms dispatch/finalize.  ``run_sync_unit``
+    renews that lease via a heartbeat bounded by an absolute deadline
+    (``SYNC_UNIT_MAX_LIFETIME_SECONDS``), so even a wedged-but-alive worker's lease
+    eventually lapses and the unit is reclaimed (CHAOS-2705).
 
     ``capped_ids`` is the set of unit IDs that the concurrency guard deferred.
     Those units are left in PLANNED status so a later redispatch can claim them

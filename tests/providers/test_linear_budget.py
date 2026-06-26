@@ -273,7 +273,7 @@ def test_estimate_provider_budget_delegates_to_linear_estimator() -> None:
 
 def test_estimate_provider_budget_returns_empty_for_different_provider() -> None:
     estimates = estimate_provider_budget(
-        _context(provider="jira", dataset_key="work-items")
+        _context(provider="bitbucket", dataset_key="work-items")
     )
 
     assert estimates == ()

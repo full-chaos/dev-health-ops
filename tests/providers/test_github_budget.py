@@ -227,7 +227,7 @@ def test_estimate_provider_budget_delegates_to_github_estimator() -> None:
 
 def test_estimate_provider_budget_returns_empty_for_unimplemented_provider() -> None:
     estimates = estimate_provider_budget(
-        _context(provider="gitlab", dataset_key="commits")
+        _context(provider="bitbucket", dataset_key="feature-flags")
     )
 
     assert estimates == ()

@@ -60,9 +60,8 @@ def canonicalize_return_to(raw: str | None) -> str:
     """
     if not isinstance(raw, str):
         return RETURN_TO_ADMIN_DEFAULT
-    candidate = raw.strip()
-    if candidate in _ALLOWED_RETURN_TO:
-        return candidate
+    if raw in _ALLOWED_RETURN_TO:
+        return raw
     return RETURN_TO_ADMIN_DEFAULT
 
 

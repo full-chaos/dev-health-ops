@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -507,7 +508,7 @@ def test_work_item_derivative_preserves_non_null_window_start_not_midnight(
     # WINDOW_START is 2026-01-10T00:00:00+00:00 — but the key invariant is
     # that a non-midnight context.window_start (e.g. mid-day) is preserved.
     mid_day_start = WINDOW_START.replace(hour=14, minute=30, second=0)
-    ctx = ctx.__replace__(window_start=mid_day_start)
+    ctx = replace(ctx, window_start=mid_day_start)
 
     with patch(
         "dev_health_ops.metrics.job_work_items.run_work_items_sync_job"

@@ -12,6 +12,7 @@ from dev_health_ops.metrics.schemas import (
     TeamMembershipRecord,
     TeamProjectOwnershipRecord,
 )
+from dev_health_ops.providers.identity import IdentityResolver
 from dev_health_ops.workers import team_autoimport, team_autoimport_linear
 
 
@@ -82,6 +83,13 @@ class CapturingClickHouseSink(FakeDimensionSink):
 def test_linear_populate_writes_projects_memberships_and_project_ownership(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    resolver = IdentityResolver(
+        alias_to_canonical={
+            "linear:dev@example.com": "canonical-linear-id@example.com",
+            "dev@example.com": "canonical-linear-email@example.com",
+        }
+    )
+
     async def discover_linear(self: object, api_key: str) -> list[DiscoveredTeam]:
         return [
             DiscoveredTeam(
@@ -114,6 +122,12 @@ def test_linear_populate_writes_projects_memberships_and_project_ownership(
         "discover_members_linear",
         discover_members_linear,
     )
+    monkeypatch.setattr(
+        team_autoimport_linear,
+        "load_identity_resolver",
+        lambda: resolver,
+        raising=False,
+    )
     sink = _fake_sink()
 
     summary = team_autoimport_linear.populate(
@@ -136,6 +150,17 @@ def test_linear_populate_writes_projects_memberships_and_project_ownership(
         "linear:dev@example.com",
         "native",
     ) in sink.memberships
+    membership = sink.memberships[
+        ("org-1", "linear", "ENG", "linear:dev@example.com", "native")
+    ]
+    assert membership.raw_provider_user_id == "canonical-linear-id@example.com"
+    assert membership.raw_email == "dev@example.com"
+    assert membership.identity_facets == [
+        "canonical-linear-id@example.com",
+        "linear:dev@example.com",
+        "canonical-linear-email@example.com",
+        "dev@example.com",
+    ]
     assert (
         "org-1",
         "linear",
@@ -144,6 +169,12 @@ def test_linear_populate_writes_projects_memberships_and_project_ownership(
         "native",
     ) in sink.ownership
     assert sink.teams[("org-1", "ENG")]["native_team_key"] == "ENG"
+    assert sink.teams[("org-1", "ENG")]["members"] == [
+        "canonical-linear-id@example.com",
+        "linear:dev@example.com",
+        "canonical-linear-email@example.com",
+        "dev@example.com",
+    ]
     # CHAOS-2609 (CS-COV) item 5: linear native projects ARE ingested via
     # team.associations.project_keys — assert the emitted ProjectRecord fields.
     project = sink.projects[("org-1", "linear", "org-1:linear:ENG")]

@@ -175,13 +175,17 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 > **aliased** member resolves to the **same canonical identity** an aliased assignee does (e.g.
 > `github:lead` → `lead@example.com`), and a non-aliased member stays `github:<login>` /
 > `gitlab:<username>` / `jira:accountid:<account_id>`. Deriving the identity directly (bypassing the
-> alias map) is the bug that broke aliased orgs. The alias-resolved identity lands in **both**
-> `team_memberships.raw_provider_user_id` (the one facet the ladder's `member_by_identity` indexes that
-> is free) **and** the `teams.members` roster (read by `TeamResolver`). `membership_facets` returns
-> *every* identity an assignee for this member could resolve to — the no-email identity, the
-> provider-qualified id, AND (when the member has an email) the resolver-mapped + normalized **email** —
-> so the roster matches an email-bearing assignee too (the ladder already matched it via `raw_email`,
-> but the roster used to miss). The `member_id` **primary** keeps its `gh:`/`gl:`/`jira:<id>`
+> alias map) is the bug that broke aliased orgs. `membership_facets` returns *every* identity an
+> assignee for this member could resolve to — the no-email identity, the provider-qualified id, AND
+> (when the member has an email) the resolver-mapped canonical + normalized **email**. ALL of them are
+> persisted to the `team_memberships.identity_facets` `Array(String)` column (migration **060**); the
+> loader `argMax`-reads it and fans **every** facet into the ladder's `member_by_identity` (alongside
+> the legacy `raw_provider_user_id` = `facets[0]` + `raw_email` slots), **and** writes them to the
+> `teams.members` roster (read by `TeamResolver`). This closes the deferred
+> **email-alias-distinct-canonical** edge (**CHAOS-2625**): when an org maps a member's provider id and
+> email to *different* canonicals (`github:lead` → canonicalA, `personal@…` → canonicalB), an assignee
+> resolving to canonicalB now hits the canonical ladder directly with `assignee_membership` provenance
+> instead of the weaker roster fallback. The `member_id` **primary** keeps its `gh:`/`gl:`/`jira:<id>`
 > form (untouched — it is the ReplacingMergeTree dedup key). A `members` cell is `yes` only when this
 > end-to-end resolution is **proven** (a no-email assignee — aliased AND non-aliased — resolves to the
 > auto-imported team via *both* paths —
@@ -212,6 +216,14 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   resolves to its team via both the canonical ladder and the roster — previously the roster stored a
   bare login the resolver never matched, so member attribution silently missed for no-email
   github/gitlab/jira assignees. The matrix above is the source of truth for what is/ isn't proven.
+- **Email-alias-distinct-canonical edge → CLOSED by CHAOS-2625:** the canonical ladder now indexes
+  *every* facet a member resolves to via the `team_memberships.identity_facets` `Array(String)` column
+  (migration 060) + loader fan-out, so a member mapped to *two different* canonicals (provider id →
+  canonicalA, email → canonicalB) attributes via the ladder on **either** canonical — previously only
+  `facets[0]` + `raw_email` were indexed, so an assignee resolving to canonicalB missed the ladder and
+  fell back to the weaker roster path. Proven in `tests/test_team_autoimport_executor.py` (canonicalB
+  ladder hit) + the provider×entity writer assertions in
+  `tests/workers/test_team_autoimport_{github_gitlab,jira,linear}.py`.
 
 ### 0.5 Drift-review reconciliation (CHAOS-2622) — rebuilt on ClickHouse
 

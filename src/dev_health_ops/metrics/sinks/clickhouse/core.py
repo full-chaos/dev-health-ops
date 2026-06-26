@@ -228,6 +228,7 @@ class ClickHouseCore(BaseMetricsSink):
                 "member_id",
                 "raw_provider_user_id",
                 "raw_email",
+                "identity_facets",
                 "source",
                 "is_primary",
                 "specificity",

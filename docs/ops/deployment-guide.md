@@ -86,11 +86,11 @@ All deployment methods use the same environment variables:
 | `SYNC_DISPATCH_REDISPATCH_COUNTDOWN` | Delay before redispatching sync-run work. | 60 |
 | `SYNC_OUTBOX_CLAIM_TIMEOUT_SECONDS` | Dispatch outbox claim lease duration. | 300 |
 | `SYNC_WATERMARK_OVERLAP` | Seconds subtracted from incremental watermark reads to intentionally re-read a lookback margin. | 0 |
-| `SYNC_BUDGET_BUCKET_LIMITS` | JSON map that enables enforced GitHub budget deferrals. Values are reservation units, not raw GitHub request counts. | `{"github:rest_core":250,"github:graphql_cost":500,"github:contents_blob":100,"github:secondary_abuse_risk":25}` |
+| `SYNC_BUDGET_BUCKET_LIMITS` | JSON map that enables enforced provider budget deferrals. Values are reservation units, not raw request or GraphQL cost counters. | `{"github:rest_core":250,"github:graphql_cost":500,"github:contents_blob":100,"github:secondary_abuse_risk":25,"linear:graphql_cost":500}` |
 | `SYNC_BUDGET_DEFAULT_LIMIT` | Fallback enforced budget limit for unnamed buckets. | 1000000 |
 | `SYNC_BUDGET_DEFERRAL_SECONDS` | Base countdown when budget enforcement defers a unit. | 60 |
 | `SYNC_BUDGET_DEFERRAL_JITTER_SECONDS` | Jitter added to budget deferrals. | 5 |
-| `SYNC_BUDGET_DRY_RUN_BUCKET_LIMITS` | Optional observation-only GitHub budget limits. | unset |
+| `SYNC_BUDGET_DRY_RUN_BUCKET_LIMITS` | Optional observation-only provider budget limits. | unset |
 | `SYNC_BUDGET_DRY_RUN_DEFAULT_LIMIT` | Fallback dry-run budget limit. | 1000000 |
 | `SYNC_BUDGET_DRY_RUN_DEFERRAL_SECONDS` | Observation-only deferral estimate. | 60 |
 

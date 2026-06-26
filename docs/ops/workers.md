@@ -17,7 +17,7 @@ In contrast, Celery-triggered jobs run inside the worker process, which is start
 Key implementation details:
 - **Broker and Result Backend**: Configured in `workers/config.py:8-64` and initialized in `workers/celery_app.py:66-84`. The default broker and result backend URL is `redis://localhost:6379/0` (controlled by `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND`).
 - **Queue Routing**: Defined in `workers/queues.py:7-62`. The `PROVIDER_SYNC_QUEUES_ENABLED` flag gates provider-specific queues; `SYNC_COST_CLASS_QUEUES` further routes eligible units to light/medium/heavy sub-queues.
-- **Sync Budget Guard**: Defined in `sync/budget_guard.py`. `SYNC_BUDGET_BUCKET_LIMITS` enables enforced GitHub budget deferrals; dry-run limits record observations without deferring work.
+- **Sync Budget Guard**: Defined in `sync/budget_guard.py`. `SYNC_BUDGET_BUCKET_LIMITS` enables enforced provider budget deferrals; dry-run limits record observations without deferring work.
 
 ### On-Demand Trigger Paths
 
@@ -127,11 +127,11 @@ The bundled Docker Compose, Kubernetes, and Helm deployments already declare the
 | `SYNC_OUTBOX_CLAIM_TIMEOUT_SECONDS` | `300` | Dispatch outbox claim lease duration. |
 | `SYNC_WATERMARK_OVERLAP` | `0` | Subtracts this many seconds from incremental watermark reads to intentionally re-read a lookback margin. |
 
-GitHub budget limits are abstract reservation units derived from the estimated shape of a sync unit. They are not GitHub's raw hourly request counters. Leaving `SYNC_BUDGET_BUCKET_LIMITS` unset disables enforcement; setting it enables deferrals when the reservation would exceed a configured bucket.
+Provider budget limits are abstract reservation units derived from the estimated shape of a sync unit. They are not the provider's raw request or GraphQL cost counters. Leaving `SYNC_BUDGET_BUCKET_LIMITS` unset disables enforcement; setting it enables deferrals when the reservation would exceed a configured bucket.
 
 | Variable | Default in deploy templates | Effect |
 |---|---:|---|
-| `SYNC_BUDGET_BUCKET_LIMITS` | `{"github:rest_core":250,"github:graphql_cost":500,"github:contents_blob":100,"github:secondary_abuse_risk":25}` | Enforced per-bucket reservation limits. |
+| `SYNC_BUDGET_BUCKET_LIMITS` | `{"github:rest_core":250,"github:graphql_cost":500,"github:contents_blob":100,"github:secondary_abuse_risk":25,"linear:graphql_cost":500}` | Enforced per-bucket reservation limits. |
 | `SYNC_BUDGET_DEFAULT_LIMIT` | `1000000` | Fallback enforced limit for buckets not named in the JSON map. |
 | `SYNC_BUDGET_DEFERRAL_SECONDS` | `60` | Base countdown when enforcement defers a unit. |
 | `SYNC_BUDGET_DEFERRAL_JITTER_SECONDS` | `5` | Random jitter added to enforced deferrals. |

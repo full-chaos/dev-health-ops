@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -486,3 +487,38 @@ def test_non_github_work_items_leave_include_pull_requests_unset() -> None:
     work_items.assert_called_once()
     assert "include_issues" not in work_items.call_args.kwargs
     assert "include_pull_requests" not in work_items.call_args.kwargs
+
+
+@pytest.mark.parametrize(
+    "dataset_key",
+    ["work-item-labels", "work-item-projects"],
+)
+def test_work_item_derivative_preserves_non_null_window_start_not_midnight(
+    dataset_key: str,
+) -> None:
+    """CHAOS-2707: work-item-labels and work-item-projects must echo the
+    context's window_start in result["window_start"] verbatim, not fall back
+    to midnight of the window day.
+    """
+    ctx = _context(
+        provider="jira",
+        dataset_key=dataset_key,
+        source_external_id="ENG",
+    )
+    # WINDOW_START is 2026-01-10T00:00:00+00:00 — but the key invariant is
+    # that a non-midnight context.window_start (e.g. mid-day) is preserved.
+    mid_day_start = WINDOW_START.replace(hour=14, minute=30, second=0)
+    ctx = replace(ctx, window_start=mid_day_start)
+
+    with patch(
+        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job"
+    ) as work_items:
+        result = run_dataset_unit(ctx, _runtime())
+
+    work_items.assert_called_once()
+    # The adapter must NOT fall back to midnight; it must preserve the exact
+    # window_start from context.
+    assert result["window_start"] == mid_day_start.isoformat(), (
+        f"Expected window_start={mid_day_start.isoformat()!r} but got {result['window_start']!r}; "
+        "adapter fell back to midnight instead of preserving context.window_start"
+    )

@@ -120,8 +120,6 @@ _LEGACY_TARGETS_BY_DATASET: dict[str, frozenset[str]] = {
 _NO_WATERMARK_DATASETS = frozenset(
     {
         DatasetKey.REPO_METADATA.value,
-        DatasetKey.WORK_ITEM_LABELS.value,
-        DatasetKey.WORK_ITEM_PROJECTS.value,
     }
 )
 

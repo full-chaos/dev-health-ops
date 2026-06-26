@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.org_guard import organization_exists_sync
+from dev_health_ops.workers.task_utils import _as_str, cron_next_run
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,6 @@ def _datetime_value(value: object) -> datetime:
     bind=True, name="dev_health_ops.workers.tasks.dispatch_scheduled_reports"
 )
 def dispatch_scheduled_reports(self) -> dict:
-    from croniter import croniter
 
     from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.models.reports import ReportRun, ReportRunStatus, SavedReport
@@ -72,8 +72,9 @@ def dispatch_scheduled_reports(self) -> dict:
                     if isinstance(report.last_run_at, datetime)
                     else _datetime_value(report.created_at)
                 )
-                cron = croniter(str(job.schedule_cron), last_run)
-                next_run = cron.get_next(datetime)
+                next_run = cron_next_run(
+                    str(job.schedule_cron), last_run, _as_str(job.timezone)
+                )
 
                 if next_run <= now:
                     run = ReportRun(

@@ -395,6 +395,35 @@ async def test_create_sync_config_folds_top_level_schedule_fields(
 
 
 @pytest.mark.asyncio
+async def test_create_sync_config_rejects_invalid_timezone(client):
+    """Invalid selected timezone is rejected at write time (CHAOS-2689) instead
+    of silently falling back to UTC at dispatch time."""
+    ac, _ = client
+
+    with (
+        patch(
+            "dev_health_ops.licensing.gating._check_org_feature_async",
+            return_value=True,
+        ),
+        patch.object(sync_router_module, "Croniter", _CroniterStub),
+    ):
+        resp = await ac.post(
+            "/api/v1/admin/sync-configs",
+            json={
+                "name": "bad-tz",
+                "provider": "linear",
+                "sync_targets": ["work-items"],
+                "sync_options": {"backfill_days": 1},
+                "schedule_cron": "30 2 * * *",
+                "timezone": "Not/AZone",
+            },
+        )
+
+    assert resp.status_code == 422, resp.text
+    assert "timezone" in resp.text.lower()
+
+
+@pytest.mark.asyncio
 async def test_batch_create_linear_without_repos_creates_active_config_and_job(
     client, session_maker
 ):

@@ -284,8 +284,9 @@ def test_scheduler_routes_migrated_config_through_planner(db_session, monkeypatc
     )
     _patch_db_session(monkeypatch, db_session)
 
-    # Pass a naive now to match croniter's naive output.
-    now = datetime.utcnow()
+    # Production passes an aware UTC now (dispatch_scheduled_syncs uses
+    # datetime.now(timezone.utc)); the scheduler now compares against aware UTC.
+    now = datetime.now(timezone.utc)
     result = _maybe_dispatch_config(db_session, config, now)
 
     assert result is True, (

@@ -36,11 +36,11 @@ async def _load_membership(
     token_org_id: str,
 ) -> Membership | None:
     stmt = select(Membership).where(Membership.user_id == db_user.id)
-    try:
-        org_uuid = uuid_mod.UUID(token_org_id) if token_org_id else None
-    except ValueError:
-        org_uuid = None
-    if org_uuid is not None:
+    if token_org_id:
+        try:
+            org_uuid = uuid_mod.UUID(token_org_id)
+        except ValueError:
+            return None
         stmt = stmt.where(Membership.org_id == org_uuid)
     stmt = stmt.order_by(Membership.joined_at.asc(), Membership.created_at.asc()).limit(
         1
@@ -151,6 +151,16 @@ async def skip_integration(
         raise HTTPException(status_code=400, detail="organization_required") from exc
 
     async with get_postgres_session() as db:
+        membership = await db.scalar(
+            select(Membership).where(
+                Membership.org_id == org_uuid,
+                Membership.user_id == _parse_user_id(user.user_id),
+            )
+        )
+        if membership is None:
+            raise HTTPException(
+                status_code=403, detail="organization_membership_required"
+            )
         org = await db.scalar(select(Organization).where(Organization.id == org_uuid))
         if org is None:
             raise HTTPException(status_code=404, detail="organization_not_found")

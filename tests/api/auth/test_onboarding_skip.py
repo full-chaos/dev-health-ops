@@ -157,3 +157,40 @@ async def test_skip_integration_is_idempotent(client, session_maker, seeded_org_
     assert first_timestamp is not None
     assert second_timestamp == first_timestamp
     assert second.json()["integration_skipped"] is True
+
+
+@pytest.mark.asyncio
+async def test_skip_integration_requires_membership(client, session_maker):
+    async_client, auth_service = client
+    user = User(
+        id=uuid.uuid4(),
+        email="outsider@example.com",
+        is_active=True,
+        is_verified=True,
+    )
+    org = Organization(id=uuid.uuid4(), slug="other", name="Other Workspace")
+    async with session_maker() as session:
+        session.add_all([user, org])
+        await session.commit()
+    token = auth_service.create_access_token(
+        user_id=str(user.id),
+        email=str(user.email),
+        org_id=str(org.id),
+        role="owner",
+        token_version=int(user.token_version or 0),
+    )
+
+    response = await async_client.post(
+        "/api/v1/auth/onboarding/skip-integration",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "organization_membership_required"}
+    async with session_maker() as session:
+        skipped_at = await session.scalar(
+            select(Organization.onboarding_integration_skipped_at).where(
+                Organization.id == org.id
+            )
+        )
+    assert skipped_at is None

@@ -174,6 +174,43 @@ async def test_state_membership_without_integration_routes_to_integration(
 
 
 @pytest.mark.asyncio
+async def test_state_uses_selected_org_claim_for_multi_membership(
+    client, session_maker
+):
+    async_client, auth_service = client
+    user = await _seed_user(session_maker)
+    first_org = await _seed_org_membership(session_maker, user)
+    second_org = Organization(
+        id=uuid.uuid4(),
+        slug="second-workspace",
+        name="Second Workspace",
+        onboarding_integration_skipped_at=datetime.now(timezone.utc),
+    )
+    async with session_maker() as session:
+        session.add_all(
+            [
+                second_org,
+                Membership(org_id=second_org.id, user_id=user.id, role="owner"),
+            ]
+        )
+        await session.commit()
+    token = _access_token(auth_service, user, org_id=str(second_org.id), role="owner")
+
+    response = await async_client.get(
+        "/api/v1/auth/onboarding/state",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["org_id"] == str(second_org.id)
+    assert data["org_id"] != str(first_org.id)
+    assert data["org_name"] == "Second Workspace"
+    assert data["integration_skipped"] is True
+    assert data["next_step"] == "complete"
+
+
+@pytest.mark.asyncio
 async def test_state_connected_integration_routes_to_complete(client, session_maker):
     async_client, auth_service = client
     user = await _seed_user(session_maker)

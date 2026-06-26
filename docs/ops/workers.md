@@ -127,7 +127,7 @@ The bundled Docker Compose, Kubernetes, and Helm deployments already declare the
 | `SYNC_OUTBOX_CLAIM_TIMEOUT_SECONDS` | `300` | Dispatch outbox claim lease duration. |
 | `SYNC_WATERMARK_OVERLAP` | `0` | Subtracts this many seconds from incremental watermark reads to intentionally re-read a lookback margin. |
 
-GitHub budget limits are abstract reservation units derived from the estimated shape of a sync unit. They are not GitHub's raw hourly request counters. Leaving `SYNC_BUDGET_BUCKET_LIMITS` unset disables enforcement; setting it enables deferrals when the reservation would exceed a configured bucket.
+GitHub budget limits are abstract reservation units derived from the estimated shape of a sync unit. They are not GitHub's raw hourly request counters. Leaving `SYNC_BUDGET_BUCKET_LIMITS` unset disables enforcement; setting it enables deferrals when the reservation would exceed a configured bucket. LaunchDarkly provider budgeting is planned in [LaunchDarkly sync budgeting](../architecture/launchdarkly-sync-budgeting.md); when that provider's raw sync path ships, it must use the same JSON maps with `launchdarkly:*` bucket keys before fetch code is accepted.
 
 | Variable | Default in deploy templates | Effect |
 |---|---:|---|
@@ -138,6 +138,8 @@ GitHub budget limits are abstract reservation units derived from the estimated s
 | `SYNC_BUDGET_DRY_RUN_BUCKET_LIMITS` | unset | Observation-only limits; records estimates without deferring work. |
 | `SYNC_BUDGET_DRY_RUN_DEFAULT_LIMIT` | `1000000` | Fallback dry-run limit. |
 | `SYNC_BUDGET_DRY_RUN_DEFERRAL_SECONDS` | `60` | Observation-only deferral estimate. |
+
+Planned LaunchDarkly bucket examples for dry-run rollout: `launchdarkly:rest_core`, `launchdarkly:rest_core:flags`, `launchdarkly:rest_core:projects`, `launchdarkly:secondary_abuse_risk:audit_log`, and `launchdarkly:secondary_abuse_risk:code_refs`.
 ---
 
 ## Task Registry

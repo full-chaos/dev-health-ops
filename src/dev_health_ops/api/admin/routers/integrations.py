@@ -128,6 +128,9 @@ def _sync_run_to_response(run: object) -> SyncRunResponse:
 
 
 def _unit_to_response(unit: object) -> SyncRunUnitResponse:
+    source = getattr(unit, "source", None)
+    result = getattr(unit, "result", None)
+    error_category = result.get("error_category") if isinstance(result, dict) else None
     return SyncRunUnitResponse.model_validate(
         {
             "id": str(getattr(unit, "id")),
@@ -135,6 +138,8 @@ def _unit_to_response(unit: object) -> SyncRunUnitResponse:
             "sync_run_id": str(getattr(unit, "sync_run_id")),
             "integration_id": str(getattr(unit, "integration_id")),
             "source_id": str(getattr(unit, "source_id")),
+            "source_name": source.name if source else None,
+            "source_full_name": source.full_name if source else None,
             "provider": str(getattr(unit, "provider")),
             "dataset_key": str(getattr(unit, "dataset_key")),
             "cost_class": str(getattr(unit, "cost_class")),
@@ -143,9 +148,13 @@ def _unit_to_response(unit: object) -> SyncRunUnitResponse:
             "before_at": getattr(unit, "before_at"),
             "status": str(getattr(unit, "status")),
             "attempts": int(getattr(unit, "attempts")),
+            "available_at": getattr(unit, "available_at"),
+            "rate_limit_deferrals": int(getattr(unit, "rate_limit_deferrals")),
             "duration_seconds": getattr(unit, "duration_seconds"),
             "error": getattr(unit, "error"),
-            "result": getattr(unit, "result"),
+            "error_category": error_category,
+            "last_heartbeat_at": getattr(unit, "last_heartbeat_at"),
+            "result": result,
             "created_at": getattr(unit, "created_at"),
             "updated_at": getattr(unit, "updated_at"),
         }
@@ -535,6 +544,11 @@ async def get_sync_run_units(
     units = await svc.list_units(run_id)
     rollups = SyncRunService.build_unit_rollups(units)
     total_units = len(units)
+    retry_times = [
+        unit.available_at
+        for unit in units
+        if unit.status == "retrying" and unit.available_at is not None
+    ]
 
     return SyncRunUnitSummary(
         by_status=rollups["by_status"],
@@ -546,5 +560,6 @@ async def get_sync_run_units(
         partial_failure_summary=rollups["partial_failure_summary"],
         failed_unit_count=rollups["failed_unit_count"],
         unit_count=total_units,
+        next_retry_at=min(retry_times) if retry_times else None,
         units=[_unit_to_response(u) for u in units[:limit]],
     )

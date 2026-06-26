@@ -209,7 +209,11 @@ def test_linear_budget_estimator_scopes_bucket_to_host_and_safe_credential_field
         _context(dataset_key="work-items", credentials=base_credentials)
     )[0]
     rotated = LinearBudgetEstimator().estimate(
-        _context(dataset_key="work-items", credentials=rotated_key_credentials)
+        _context(
+            dataset_key="work-items",
+            credentials=rotated_key_credentials,
+            credential_id="credential-2",
+        )
     )[0]
     workspace = LinearBudgetEstimator().estimate(
         _context(dataset_key="work-items", credentials=workspace_credentials)

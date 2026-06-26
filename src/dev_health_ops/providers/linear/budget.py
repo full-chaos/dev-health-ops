@@ -15,7 +15,6 @@ from dev_health_ops.workers.sync_bootstrap import SyncTaskContext
 
 _DEFAULT_HOST = "api.linear.app"
 _DEFAULT_BASE_URL = "https://api.linear.app/graphql"
-_CONFIDENCE_HIGH = "high"
 _CONFIDENCE_MEDIUM = "medium"
 _CONFIDENCE_LOW = "low"
 
@@ -186,7 +185,10 @@ def _safe_credential_scope(
             credential_id=credential_id,
             integration_id=integration_id,
         )
-    scope: dict[str, object] = {}
+    scope: dict[str, object] = {
+        "credential_id": credential_id or "env",
+        "integration_id": integration_id,
+    }
     for key in ("organization_id", "workspace_id", "team_id"):
         value = credentials.get(key)
         if value is not None:
@@ -194,14 +196,6 @@ def _safe_credential_scope(
     base_url = credentials.get("base_url") or credentials.get("baseUrl")
     if base_url is not None:
         scope["base_url"] = base_url
-    token = credentials.get("api_key") or credentials.get("token")
-    if token:
-        scope["token_sha256"] = hashlib.sha256(str(token).encode("utf-8")).hexdigest()
-    if not scope:
-        return _fallback_credential_scope(
-            credential_id=credential_id,
-            integration_id=integration_id,
-        )
     return scope
 
 

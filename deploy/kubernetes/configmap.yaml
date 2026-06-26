@@ -35,7 +35,7 @@ data:
   SYNC_OUTBOX_CLAIM_TIMEOUT_SECONDS: "300"
   SYNC_WATERMARK_OVERLAP: "0"
 
-  SYNC_BUDGET_BUCKET_LIMITS: '{"github:rest_core":250,"github:graphql_cost":500,"github:contents_blob":100,"github:secondary_abuse_risk":25}'
+  SYNC_BUDGET_BUCKET_LIMITS: '{"github:rest_core":250,"github:graphql_cost":500,"github:contents_blob":100,"github:secondary_abuse_risk":25,"linear:graphql_cost":500}'
   SYNC_BUDGET_DEFAULT_LIMIT: "1000000"
   SYNC_BUDGET_DEFERRAL_SECONDS: "60"
   SYNC_BUDGET_DEFERRAL_JITTER_SECONDS: "5"

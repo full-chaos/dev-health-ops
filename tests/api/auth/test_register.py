@@ -20,6 +20,7 @@ from dev_health_ops.api.services.auth import AuthService
 from dev_health_ops.models.audit import AuditLog
 from dev_health_ops.models.email_verification_token import EmailVerificationToken
 from dev_health_ops.models.git import Base
+from dev_health_ops.models.refresh_token import RefreshToken
 from dev_health_ops.models.users import LoginAttempt, Membership, Organization, User
 from tests._helpers import tables_of
 
@@ -45,6 +46,7 @@ async def session_maker(tmp_path: Path):
                     AuditLog,
                     LoginAttempt,
                     EmailVerificationToken,
+                    RefreshToken,
                 ),
             )
         )
@@ -82,6 +84,7 @@ async def client(monkeypatch: pytest.MonkeyPatch, session_maker):
     async def _session_override():
         async with session_maker() as session:
             yield session
+            await session.commit()
 
     monkeypatch.setattr(auth_router_module, "get_postgres_session", _session_override)
     monkeypatch.setattr(rate_limiter, "enabled", False)
@@ -90,16 +93,10 @@ async def client(monkeypatch: pytest.MonkeyPatch, session_maker):
         AsyncMock(),
     )
 
-    async def _noop_refresh(*args, **kwargs):
-        return None
-
     monkeypatch.setattr(
         auth_router_module,
         "get_auth_service",
         lambda: AuthService(secret_key="register-test-secret-key-32-chars"),
-    )
-    monkeypatch.setattr(
-        auth_router_module, "create_refresh_token_record", _noop_refresh
     )
 
     transport = ASGITransport(app=app)
@@ -285,6 +282,45 @@ async def test_verified_orgless_login_sets_needs_onboarding(
     data = login_response.json()
     assert data["needs_onboarding"] is True
     assert data["user"]["org_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_verified_orgless_login_refresh_token_rotates(
+    client, session_maker, monkeypatch
+):
+    monkeypatch.setenv("AUTH_AUTO_CREATE_ORG_ON_REGISTER", "false")
+
+    register_response = await client.post(
+        "/api/v1/auth/register",
+        json={"email": "refresh-orgless@example.com", "password": VALID_PASSWORD},
+    )
+    assert register_response.status_code == 201
+
+    async with session_maker() as session:
+        user = await session.scalar(
+            select(User).where(User.email == "refresh-orgless@example.com")
+        )
+        assert user is not None
+        user.is_verified = True
+        await session.commit()
+
+    login_response = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "refresh-orgless@example.com", "password": VALID_PASSWORD},
+    )
+    assert login_response.status_code == 200
+    refresh_token = login_response.json()["refresh_token"]
+
+    refresh_response = await client.post(
+        "/api/v1/auth/refresh",
+        json={"refresh_token": refresh_token},
+    )
+
+    assert refresh_response.status_code == 200
+    data = refresh_response.json()
+    assert data["access_token"]
+    assert data["refresh_token"]
+    assert data["user"]["org_id"] == ""
 
 
 @pytest.mark.asyncio

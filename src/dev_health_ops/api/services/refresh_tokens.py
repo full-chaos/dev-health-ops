@@ -17,7 +17,7 @@ def _hash_token(token: str) -> str:
 async def create_refresh_token(
     db: AsyncSession,
     user_id: str,
-    org_id: str,
+    org_id: str | None,
     token_hash: str,
     family_id: str,
     expires_at: datetime,
@@ -26,7 +26,7 @@ async def create_refresh_token(
 ) -> RefreshToken:
     record = RefreshToken(
         user_id=uuid.UUID(user_id),
-        org_id=uuid.UUID(org_id),
+        org_id=uuid.UUID(org_id) if org_id else None,
         token_hash=_hash_token(token_hash),
         family_id=uuid.UUID(family_id),
         expires_at=expires_at,

@@ -26,4 +26,8 @@ def estimate_provider_budget(context: SyncTaskContext) -> tuple[BudgetEstimate, 
         from dev_health_ops.providers.github.budget import GitHubBudgetEstimator
 
         return GitHubBudgetEstimator().estimate(context)
+    if context.provider.lower() == "gitlab":
+        from dev_health_ops.providers.gitlab.budget import GitLabBudgetEstimator
+
+        return GitLabBudgetEstimator().estimate(context)
     return ()

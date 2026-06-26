@@ -26,4 +26,10 @@ def estimate_provider_budget(context: SyncTaskContext) -> tuple[BudgetEstimate, 
         from dev_health_ops.providers.github.budget import GitHubBudgetEstimator
 
         return GitHubBudgetEstimator().estimate(context)
+    if context.provider.lower() == "launchdarkly":
+        from dev_health_ops.providers.launchdarkly.budget import (
+            LaunchDarklyBudgetEstimator,
+        )
+
+        return LaunchDarklyBudgetEstimator().estimate(context)
     return ()

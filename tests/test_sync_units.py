@@ -335,6 +335,53 @@ def test_run_sync_unit_success_persists_status_and_incremental_watermark(
     assert finalize_calls == [((str(run.id),), "sync")]
 
 
+def test_run_sync_unit_success_attaches_launchdarkly_budget_estimate(
+    db_session, monkeypatch
+):
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(
+        db_session,
+        provider="launchdarkly",
+        source_type="project",
+        external_id="project:default",
+        name="default",
+        full_name="LaunchDarkly/default",
+        dataset_key="feature-flags",
+        processor_flags={"sync_feature_flags": True},
+    )
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    finalize_calls = _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        dataset_adapters,
+        "run_dataset_unit",
+        lambda ctx, runtime: {"ok": True, "observations": {}},
+    )
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    assert result["status"] == "success"
+    db_session.refresh(unit)
+    assert unit.status == SyncRunUnitStatus.SUCCESS.value
+    assert unit.result is not None
+    budget_estimate = unit.result["observations"]["budget_estimate"]
+    assert {entry["bucket"]["provider"] for entry in budget_estimate} == {
+        "launchdarkly"
+    }
+    assert {entry["route_family"] for entry in budget_estimate} == {
+        "flags",
+        "audit_log",
+        "code_refs",
+    }
+    assert finalize_calls == [((str(run.id),), "sync")]
+
+
 def test_run_sync_unit_success_attaches_linear_budget_estimate(db_session, monkeypatch):
     from dev_health_ops.processors import dataset_adapters
     from dev_health_ops.workers.sync_units import run_sync_unit
@@ -2114,6 +2161,52 @@ def test_dispatch_sync_run_enforces_budget_deferral(db_session, monkeypatch):
     assert unit.result is not None
     assert unit.result["error_category"] == "budget_deferred"
     assert unit.result["budget_guard"][0]["decision"] == "deferred"
+    assert dispatch_calls == []
+    assert finalize_calls == []
+    assert chord_calls == []
+
+
+def test_dispatch_sync_run_enforces_launchdarkly_budget_deferral(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(
+        db_session,
+        provider="launchdarkly",
+        source_type="project",
+        external_id="project:default",
+        name="default",
+        full_name="LaunchDarkly/default",
+        dataset_key="feature-flags",
+        processor_flags={"sync_feature_flags": True},
+    )
+    _patch_db_session(monkeypatch, db_session)
+    dispatch_calls, finalize_calls, chord_calls = _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv(
+        "SYNC_BUDGET_BUCKET_LIMITS",
+        json.dumps(
+            {"launchdarkly:rest_core": 999, "launchdarkly:rest_core:audit_log": 1}
+        ),
+    )
+    monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_SECONDS", "120")
+    monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
+
+    result = sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(run)
+    db_session.refresh(unit)
+    assert result["status"] == "deferred"
+    assert result["queued_units"] == 0
+    assert run.status == SyncRunStatus.PLANNED.value
+    assert unit.status == SyncRunUnitStatus.RETRYING.value
+    assert unit.available_at is not None
+    assert unit.result is not None
+    assert unit.result["error_category"] == "budget_deferred"
+    assert any(
+        entry["decision"] == "deferred" and entry["route_family"] == "audit_log"
+        for entry in unit.result["budget_guard"]
+    )
     assert dispatch_calls == []
     assert finalize_calls == []
     assert chord_calls == []

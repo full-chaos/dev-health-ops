@@ -127,7 +127,7 @@ The bundled Docker Compose, Kubernetes, and Helm deployments already declare the
 | `SYNC_OUTBOX_CLAIM_TIMEOUT_SECONDS` | `300` | Dispatch outbox claim lease duration. |
 | `SYNC_WATERMARK_OVERLAP` | `0` | Subtracts this many seconds from incremental watermark reads to intentionally re-read a lookback margin. |
 
-Provider budget limits are abstract reservation units derived from the estimated shape of a sync unit. They are not the provider's raw request or GraphQL cost counters. Jira emits separate route-family buckets for REST/JQL listing (`jira:search:jira_jql`), REST issue enrichment (`jira:rest_core:jira_issue_enrichment`), optional worklog fetching (`jira:rest_core:jira_worklogs` when `JIRA_FETCH_WORKLOGS=true`), and Atlassian GraphQL enrichment (`jira:graphql_cost:jira_gql_enrichment` when `ATLASSIAN_GQL_ENABLED=true`). Leaving `SYNC_BUDGET_BUCKET_LIMITS` unset disables enforcement; setting it enables deferrals when the reservation would exceed a configured bucket.
+Provider budget limits are abstract reservation units derived from the estimated shape of a sync unit. They are not the provider's raw request or GraphQL cost counters. Jira emits separate route-family buckets for REST/JQL listing (`jira:search:jira_jql`), REST issue enrichment (`jira:rest_core:jira_issue_enrichment`), optional worklog fetching (`jira:rest_core:jira_worklogs` when `JIRA_FETCH_WORKLOGS=true`), and Atlassian GraphQL enrichment (`jira:graphql_cost:jira_gql_enrichment` when `ATLASSIAN_GQL_ENABLED=true`). LaunchDarkly feature-flag sync emits `launchdarkly:*` buckets for the `flags`, `audit_log`, and `code_refs` route families (see [LaunchDarkly sync budgeting](../architecture/launchdarkly-sync-budgeting.md)). Leaving `SYNC_BUDGET_BUCKET_LIMITS` unset disables enforcement; setting it enables deferrals when the reservation would exceed a configured bucket.
 
 | Variable | Default in deploy templates | Effect |
 |---|---:|---|
@@ -138,6 +138,8 @@ Provider budget limits are abstract reservation units derived from the estimated
 | `SYNC_BUDGET_DRY_RUN_BUCKET_LIMITS` | unset | Observation-only limits; records estimates without deferring work. |
 | `SYNC_BUDGET_DRY_RUN_DEFAULT_LIMIT` | `1000000` | Fallback dry-run limit. |
 | `SYNC_BUDGET_DRY_RUN_DEFERRAL_SECONDS` | `60` | Observation-only deferral estimate. |
+
+Planned LaunchDarkly bucket examples for dry-run rollout: `launchdarkly:rest_core`, `launchdarkly:rest_core:flags`, `launchdarkly:rest_core:projects`, `launchdarkly:secondary_abuse_risk:audit_log`, and `launchdarkly:secondary_abuse_risk:code_refs`.
 ---
 
 ## Task Registry

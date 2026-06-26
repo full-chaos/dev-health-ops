@@ -234,7 +234,7 @@ def test_estimate_provider_budget_delegates_to_gitlab_estimator() -> None:
 
 def test_estimate_provider_budget_returns_empty_for_non_gitlab_provider() -> None:
     estimates = estimate_provider_budget(
-        _context(provider="launchdarkly", dataset_key="feature-flags")
+        _context(provider="bitbucket", dataset_key="feature-flags")
     )
 
     assert estimates == ()

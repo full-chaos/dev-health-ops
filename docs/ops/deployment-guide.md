@@ -86,11 +86,11 @@ All deployment methods use the same environment variables:
 | `SYNC_DISPATCH_REDISPATCH_COUNTDOWN` | Delay before redispatching sync-run work. | 60 |
 | `SYNC_OUTBOX_CLAIM_TIMEOUT_SECONDS` | Dispatch outbox claim lease duration. | 300 |
 | `SYNC_WATERMARK_OVERLAP` | Seconds subtracted from incremental watermark reads to intentionally re-read a lookback margin. | 0 |
-| `SYNC_BUDGET_BUCKET_LIMITS` | JSON map that enables enforced GitHub/Jira budget deferrals. Values are reservation units, not raw provider request counts. Jira supports route-family keys such as `jira:search:jira_jql`, `jira:rest_core:jira_issue_enrichment`, `jira:rest_core:jira_worklogs`, and `jira:graphql_cost:jira_gql_enrichment`. | `{"github:rest_core":250,"github:graphql_cost":500,"github:contents_blob":100,"github:secondary_abuse_risk":25,"jira:search:jira_jql":250,"jira:rest_core:jira_issue_enrichment":250,"jira:rest_core:jira_worklogs":100,"jira:graphql_cost:jira_gql_enrichment":250}` |
+| `SYNC_BUDGET_BUCKET_LIMITS` | JSON map that enables enforced provider budget deferrals. Values are reservation units, not raw request or GraphQL cost counters. Jira supports route-family keys such as `jira:search:jira_jql`, `jira:rest_core:jira_issue_enrichment`, `jira:rest_core:jira_worklogs`, and `jira:graphql_cost:jira_gql_enrichment`. | `{"github:rest_core":250,"github:graphql_cost":500,"github:contents_blob":100,"github:secondary_abuse_risk":25,"jira:search:jira_jql":250,"jira:rest_core:jira_issue_enrichment":250,"jira:rest_core:jira_worklogs":100,"jira:graphql_cost:jira_gql_enrichment":250,"linear:graphql_cost":500}` |
 | `SYNC_BUDGET_DEFAULT_LIMIT` | Fallback enforced budget limit for unnamed buckets. | 1000000 |
 | `SYNC_BUDGET_DEFERRAL_SECONDS` | Base countdown when budget enforcement defers a unit. | 60 |
 | `SYNC_BUDGET_DEFERRAL_JITTER_SECONDS` | Jitter added to budget deferrals. | 5 |
-| `SYNC_BUDGET_DRY_RUN_BUCKET_LIMITS` | Optional observation-only GitHub/Jira budget limits. | unset |
+| `SYNC_BUDGET_DRY_RUN_BUCKET_LIMITS` | Optional observation-only provider budget limits. | unset |
 | `SYNC_BUDGET_DRY_RUN_DEFAULT_LIMIT` | Fallback dry-run budget limit. | 1000000 |
 | `SYNC_BUDGET_DRY_RUN_DEFERRAL_SECONDS` | Observation-only deferral estimate. | 60 |
 

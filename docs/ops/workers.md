@@ -127,11 +127,11 @@ The bundled Docker Compose, Kubernetes, and Helm deployments already declare the
 | `SYNC_OUTBOX_CLAIM_TIMEOUT_SECONDS` | `300` | Dispatch outbox claim lease duration. |
 | `SYNC_WATERMARK_OVERLAP` | `0` | Subtracts this many seconds from incremental watermark reads to intentionally re-read a lookback margin. |
 
-GitHub budget limits are abstract reservation units derived from the estimated shape of a sync unit. They are not GitHub's raw hourly request counters. Leaving `SYNC_BUDGET_BUCKET_LIMITS` unset disables enforcement; setting it enables deferrals when the reservation would exceed a configured bucket.
+GitHub and Jira budget limits are abstract reservation units derived from the estimated shape of a sync unit. They are not provider raw hourly request counters. Jira emits separate route-family buckets for REST/JQL listing (`jira:search:jira_jql`), REST issue enrichment (`jira:rest_core:jira_issue_enrichment`), optional worklog fetching (`jira:rest_core:jira_worklogs` when `JIRA_FETCH_WORKLOGS=true`), and Atlassian GraphQL enrichment (`jira:graphql_cost:jira_gql_enrichment` when `ATLASSIAN_GQL_ENABLED=true`). Leaving `SYNC_BUDGET_BUCKET_LIMITS` unset disables enforcement; setting it enables deferrals when the reservation would exceed a configured bucket.
 
 | Variable | Default in deploy templates | Effect |
 |---|---:|---|
-| `SYNC_BUDGET_BUCKET_LIMITS` | `{"github:rest_core":250,"github:graphql_cost":500,"github:contents_blob":100,"github:secondary_abuse_risk":25}` | Enforced per-bucket reservation limits. |
+| `SYNC_BUDGET_BUCKET_LIMITS` | `{"github:rest_core":250,"github:graphql_cost":500,"github:contents_blob":100,"github:secondary_abuse_risk":25,"jira:search:jira_jql":250,"jira:rest_core:jira_issue_enrichment":250,"jira:rest_core:jira_worklogs":100,"jira:graphql_cost:jira_gql_enrichment":250}` | Enforced per-bucket reservation limits. |
 | `SYNC_BUDGET_DEFAULT_LIMIT` | `1000000` | Fallback enforced limit for buckets not named in the JSON map. |
 | `SYNC_BUDGET_DEFERRAL_SECONDS` | `60` | Base countdown when enforcement defers a unit. |
 | `SYNC_BUDGET_DEFERRAL_JITTER_SECONDS` | `5` | Random jitter added to enforced deferrals. |

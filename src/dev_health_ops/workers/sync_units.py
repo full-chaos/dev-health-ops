@@ -414,6 +414,7 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
     should_finalize = False
     started_at = datetime.now(timezone.utc)
     lease_owner: str | None = None
+    deadline: datetime = started_at + timedelta(seconds=_max_unit_lifetime_seconds())
     terminal_txn_started = False
     heartbeat_stop: threading.Event | None = None
     heartbeat_thread: threading.Thread | None = None
@@ -439,7 +440,10 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     "reason": "terminal",
                 }
             lease_owner = str(uuid.uuid4())
-            lease_expires_at = started_at + timedelta(seconds=_running_lease_seconds())
+            deadline = started_at + timedelta(seconds=_max_unit_lifetime_seconds())
+            lease_expires_at = min(
+                started_at + timedelta(seconds=_running_lease_seconds()), deadline
+            )
             claim_result: Any = session.execute(
                 update(SyncRunUnit)
                 .where(
@@ -466,7 +470,9 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                 }
             session.flush()
 
-        heartbeat_stop, heartbeat_thread = _start_unit_heartbeat(unit_id, lease_owner)
+        heartbeat_stop, heartbeat_thread = _start_unit_heartbeat(
+            unit_id, lease_owner, deadline
+        )
 
         with get_postgres_session_sync() as session:
             ctx = SyncTaskBootstrap.load(session, unit_id)
@@ -492,7 +498,9 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     SyncRunUnit.sync_run_id.in_(_nonterminal_run_ids_select()),
                 )
                 .values(
-                    lease_expires_at=now + timedelta(seconds=_running_lease_seconds()),
+                    lease_expires_at=min(
+                        now + timedelta(seconds=_running_lease_seconds()), deadline
+                    ),
                     last_heartbeat_at=now,
                 )
                 .execution_options(synchronize_session=False)
@@ -541,6 +549,10 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                 .execution_options(synchronize_session=False)
             )
             if int(terminal_result.rowcount or 0) == 0:
+                logger.warning(
+                    "run_sync_unit.success_stamp_noop",
+                    extra={**_log_ctx},
+                )
                 return {
                     "status": "skipped",
                     "unit_id": unit_id,
@@ -1304,16 +1316,6 @@ def _stale_dispatch_seconds() -> int:
         return 900
 
 
-def _stale_running_seconds() -> int:
-    try:
-        return max(
-            1,
-            int(os.getenv("SYNC_UNIT_RUNNING_STALE_SECONDS", "3600")),
-        )
-    except ValueError:
-        return 3600
-
-
 def _as_aware(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
@@ -1321,11 +1323,27 @@ def _as_aware(value: datetime) -> datetime:
 
 
 def _running_lease_seconds() -> int:
-    return _stale_running_seconds()
+    try:
+        return max(1, int(os.getenv("SYNC_UNIT_RUNNING_LEASE_SECONDS", "300")))
+    except ValueError:
+        return 300
 
 
 def _heartbeat_interval_seconds() -> int:
     return max(1, min(60, _running_lease_seconds() // 4))
+
+
+def _max_unit_lifetime_seconds() -> int:
+    """Absolute cap on how long a heartbeat may renew a unit's lease.
+
+    Floored at 3600 (the Celery hard task_time_limit) so a misconfigured value
+    cannot prematurely expire a still-progressing unit.  The heartbeat will stop
+    renewing once this deadline is reached, allowing the reconciler to reclaim.
+    """
+    try:
+        return max(3600, int(os.getenv("SYNC_UNIT_MAX_LIFETIME_SECONDS", "3720")))
+    except ValueError:
+        return 3720
 
 
 def _unit_lease_is_owned_and_live(
@@ -1343,13 +1361,14 @@ def _unit_lease_is_owned_and_live(
 def _start_unit_heartbeat(
     unit_id: str,
     lease_owner: str | None,
+    deadline: datetime,
 ) -> tuple[threading.Event, threading.Thread] | tuple[None, None]:
     if lease_owner is None:
         return None, None
     stop_event = threading.Event()
     thread = threading.Thread(
         target=_heartbeat_unit_lease,
-        args=(unit_id, lease_owner, stop_event),
+        args=(unit_id, lease_owner, stop_event, deadline),
         name=f"sync-unit-heartbeat-{unit_id}",
         daemon=True,
     )
@@ -1361,6 +1380,7 @@ def _heartbeat_unit_lease(
     unit_id: str,
     lease_owner: str,
     stop_event: threading.Event,
+    deadline: datetime,
 ) -> None:
     from dev_health_ops.db import get_postgres_session_sync
 
@@ -1368,7 +1388,14 @@ def _heartbeat_unit_lease(
     lease_seconds = _running_lease_seconds()
     while not stop_event.wait(interval):
         now = datetime.now(timezone.utc)
-        lease_expires_at = now + timedelta(seconds=lease_seconds)
+        if now >= deadline:
+            logger.warning(
+                "run_sync_unit.heartbeat_deadline_exceeded",
+                extra={"unit_id": unit_id},
+            )
+            stop_event.set()
+            break
+        lease_expires_at = min(now + timedelta(seconds=lease_seconds), deadline)
         try:
             with get_postgres_session_sync() as session:
                 heartbeat_result: Any = session.execute(

@@ -912,6 +912,15 @@ class WorkUnitMembershipRunRecord:
 
 
 @dataclass(frozen=True)
+class WorkUnitScopedMembershipRunRecord:
+    org_id: str
+    scope_kind: str
+    scope_id: str
+    run_id: str
+    completed_at: datetime
+
+
+@dataclass(frozen=True)
 class WorkUnitInvestmentEvidenceQuoteRecord:
     work_unit_id: str
     quote: str

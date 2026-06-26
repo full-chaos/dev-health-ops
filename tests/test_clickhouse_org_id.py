@@ -41,6 +41,7 @@ from dev_health_ops.metrics.schemas import (
     WorkItemUserMetricsDailyRecord,
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
+    WorkUnitScopedMembershipRunRecord,
 )
 from dev_health_ops.models.work_items import (
     Sprint,
@@ -236,6 +237,32 @@ def test_clickhouse_sink_write_work_graph_edges_includes_org_id():
         matrix = call_args[0][1]
         org_id_idx = list(column_names).index("org_id")
         assert matrix[0][org_id_idx] == "edge-org"
+
+
+def test_clickhouse_sink_write_scoped_membership_runs_includes_org_id():
+    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+
+    with patch.object(
+        ClickHouseMetricsSink, "__init__", lambda self, dsn, client=None: None
+    ):
+        sink = ClickHouseMetricsSink("clickhouse://dummy")
+        insert_rows = MagicMock()
+
+        row = WorkUnitScopedMembershipRunRecord(
+            org_id="scoped-org",
+            scope_kind="repo",
+            scope_id="repo-1",
+            run_id="run-1",
+            completed_at=datetime(2025, 1, 2, tzinfo=timezone.utc),
+        )
+        with patch.object(sink, "_insert_rows", insert_rows):
+            sink.write_scoped_membership_runs([row])
+
+        insert_rows.assert_called_once_with(
+            "work_unit_membership_scoped_runs",
+            ["org_id", "scope_kind", "scope_id", "run_id", "completed_at"],
+            [row],
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -803,3 +803,52 @@ class PlatformStatsResponse(BaseModel):
     active_sync_configs: int
     recent_syncs_success: int
     recent_syncs_failed: int
+
+
+class OnboardingStateResponse(BaseModel):
+    """CHAOS-2670 contract C1: GET /api/v1/auth/onboarding/state.
+
+    Single source of truth for first-run routing. ``next_step`` is computed
+    server-side from membership + connected-integration + persisted skip state
+    (organizations.onboarding_integration_skipped_at). Callable with a verified
+    orgless token; superuser/admin resolves to ``dashboard``.
+    """
+
+    needs_onboarding: bool
+    org_created: bool
+    org_id: str | None = None
+    org_name: str | None = None
+    first_integration_connected: bool
+    integration_skipped: bool
+    recommended_provider: str = "github"
+    next_step: Literal["workspace", "integration", "complete", "dashboard"]
+    blocker: str | None = None
+
+
+class SetupStatusResponse(BaseModel):
+    """CHAOS-2670 contract C2: GET /api/v1/admin/setup/status.
+
+    Powers the dashboard "value-or-precise-blocker" surface: distinguishes
+    not-connected, connected-no-config, config-failed, and sync-running states.
+    Org-scoped admin auth.
+    """
+
+    has_integration: bool
+    providers: list[str] = Field(default_factory=list)
+    has_sync_config: bool
+    sync_config_id: str | None = None
+    first_sync_started: bool
+    sync_status: Literal[
+        "none", "pending", "running", "partial", "complete", "failed"
+    ] = "none"
+    selected_repositories_count: int = 0
+    last_sync_error: str | None = None
+    can_start_sync: bool = False
+    next_action: Literal[
+        "connect_integration",
+        "select_repositories",
+        "create_sync_config",
+        "start_sync",
+        "complete",
+    ]
+    blocker: str | None = None

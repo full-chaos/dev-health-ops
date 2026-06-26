@@ -38,7 +38,7 @@ class RegisterRequest(BaseModel):
 class RegisterResponse(BaseModel):
     message: str
     user_id: str
-    org_id: str
+    org_id: str | None = None
 
 
 @router.post("/register", response_model=RegisterResponse, status_code=201)

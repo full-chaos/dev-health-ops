@@ -13,6 +13,7 @@ from dev_health_ops.workers.task_utils import (
     _as_dict,
     _as_str,
     _as_uuid,
+    cron_next_run,
 )
 
 if TYPE_CHECKING:
@@ -153,7 +154,6 @@ def _maybe_dispatch_config(
     queue purge), the config becomes dispatchable again at the next cron
     occurrence -- at most one cron interval of delay, no manual cleanup.
     """
-    from croniter import croniter
 
     from dev_health_ops.models.settings import JobStatus, ScheduledJob
 
@@ -205,12 +205,17 @@ def _maybe_dispatch_config(
             return False
 
     cron_expr = _as_str(job.schedule_cron) if job is not None else config_cron
+    tz_name = (
+        _as_str(job.timezone)
+        if job is not None
+        else _as_str(_as_dict(config.sync_options).get("timezone"))
+    ) or "UTC"
     last_sync = (
         config.last_sync_at
         if isinstance(config.last_sync_at, datetime)
         else _as_datetime(config.created_at)
     )
-    next_run = croniter(cron_expr, last_sync).get_next(datetime)
+    next_run = cron_next_run(cron_expr, last_sync, tz_name)
 
     if not next_run <= now:
         return False
@@ -238,7 +243,7 @@ def _maybe_dispatch_config(
                 STALE_RUNNING_TTL_SECONDS,
             )
 
-    marker = croniter(cron_expr, now).get_next(datetime)
+    marker = cron_next_run(cron_expr, now, tz_name)
     if isinstance(marker, datetime):
         job.next_run_at = marker
     session.flush()

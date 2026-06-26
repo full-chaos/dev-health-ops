@@ -51,6 +51,7 @@ from dev_health_ops.sync.trigger_routing import (
     mark_sync_run_failed,
     planner_request_for_config_if_routed,
 )
+from dev_health_ops.utils.datetime import validate_timezone_name
 from dev_health_ops.workers.sync_units import dispatch_sync_run
 
 from .common import get_session
@@ -1388,6 +1389,11 @@ async def create_sync_config(
                 status_code=422, detail=f"Invalid cron expression: {exc}"
             )
 
+        try:
+            validate_timezone_name(sync_options.get("timezone"))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+
         def _get_min_interval(sync_session) -> float | None:
             tier_svc = TierLimitService(sync_session)
             val = tier_svc.get_limit(uuid.UUID(org_id), "min_sync_interval_hours")
@@ -1563,6 +1569,11 @@ async def update_sync_config(
             raise HTTPException(
                 status_code=422, detail=f"Invalid cron expression: {exc}"
             )
+
+        try:
+            validate_timezone_name(sync_options.get("timezone"))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
 
         def _get_min_interval(sync_session) -> float | None:
             tier_svc = TierLimitService(sync_session)

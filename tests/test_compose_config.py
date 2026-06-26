@@ -141,6 +141,18 @@ _K8S_DIR = _REPO_ROOT / "deploy" / "kubernetes"
 _HELM_DIR = _REPO_ROOT / "deploy" / "helm" / "dev-health"
 
 
+def _platform_compose_path() -> Path | None:
+    for parent in _REPO_ROOT.parents:
+        candidate = parent / "compose.yml"
+        if not candidate.exists():
+            continue
+        services = _load_yaml(candidate).get("services") or {}
+        api_volumes = services.get("api", {}).get("volumes") or []
+        if "api" in services and "worker" in services and "./ops:/app" in api_volumes:
+            return candidate
+    return None
+
+
 def _load_yaml(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
@@ -473,16 +485,34 @@ def test_local_compose_workers_import_mounted_source() -> None:
 
 
 def test_platform_compose_workers_and_beat_import_mounted_source() -> None:
-    compose_path = _REPO_ROOT.parent / "compose.yml"
-    if not compose_path.exists():
+    compose_path = _platform_compose_path()
+    if compose_path is None:
         pytest.skip("platform compose.yml is only present in the monorepo checkout")
 
     services = _load_yaml(compose_path).get("services") or {}
 
-    for service_name in ("worker", "worker-ingest", "worker-heavy", "beat"):
+    service_names = ["worker", "worker-ingest", "worker-heavy", "beat"]
+    if "worker-wi" in services:
+        service_names.append("worker-wi")
+
+    for service_name in service_names:
         service = services[service_name]
         assert service["environment"]["PYTHONPATH"] == "/app/src"
         assert "./ops:/app" in service["volumes"]
+
+
+def test_platform_compose_provider_worker_consumes_sync_dispatch_queue() -> None:
+    compose_path = _platform_compose_path()
+    if compose_path is None:
+        pytest.skip("platform compose.yml is only present in the monorepo checkout")
+
+    services = _load_yaml(compose_path).get("services") or {}
+    provider_worker = services.get("worker-wi")
+    if provider_worker is None:
+        pytest.skip("platform compose.yml has no split provider worker")
+
+    queues = _parse_queues(_container_command_string(provider_worker))
+    assert "sync" in queues
 
 
 def test_compose_workers_override_runner_entrypoint() -> None:

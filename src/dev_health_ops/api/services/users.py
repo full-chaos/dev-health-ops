@@ -45,6 +45,15 @@ def _slugify(name: str) -> str:
     return slug[:50]
 
 
+def validate_organization_name(name: str | None) -> str:
+    normalized = (name or "").strip()
+    if not normalized:
+        raise ValueError("Workspace name is required")
+    if len(normalized) > 100:
+        raise ValueError("Workspace name must be 100 characters or fewer")
+    return normalized
+
+
 class UserService:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -290,6 +299,7 @@ class OrganizationService:
         tier: str = "community",
         owner_user_id: str | None = None,
     ) -> Organization:
+        name = validate_organization_name(name)
         slug = slug or _slugify(name)
         if await self.get_by_slug(slug):
             slug = f"{slug}-{secrets.token_hex(4)}"

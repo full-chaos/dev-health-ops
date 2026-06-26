@@ -16,6 +16,7 @@ from dev_health_ops.api.services.invites import (
 from dev_health_ops.api.services.invites import (
     validate_invite as validate_org_invite,
 )
+from dev_health_ops.api.services.users import validate_organization_name
 from dev_health_ops.api.utils.audit import emit_audit_log
 from dev_health_ops.api.utils.errors import error_detail
 from dev_health_ops.models.audit import AuditAction, AuditResourceType
@@ -250,7 +251,13 @@ async def onboard(
                 detail=error_detail("Invalid action. Use 'create_org' or 'join_org'"),
             )
 
-        org_name = payload.org_name or "My Organization"
+        try:
+            org_name = validate_organization_name(payload.org_name)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=error_detail(str(exc), errors=[str(exc)]),
+            ) from exc
         org_slug = f"{_slugify_org_name(org_name)}-{str(db_user.id)[:8]}"
 
         org = Organization(

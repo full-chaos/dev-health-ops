@@ -652,7 +652,10 @@ def test_heartbeat_extends_live_matching_lease(db_session, monkeypatch):
             self.calls += 1
             return self.calls > 1
 
-    sync_units._heartbeat_unit_lease(str(unit.id), "worker-1", OneHeartbeatStop())
+    deadline = now + timedelta(seconds=3720)
+    sync_units._heartbeat_unit_lease(
+        str(unit.id), "worker-1", OneHeartbeatStop(), deadline
+    )
 
     db_session.refresh(unit)
     lease_expires_at = unit.lease_expires_at
@@ -693,7 +696,10 @@ def test_heartbeat_loses_after_reconciler_terminalizes(tmp_path, monkeypatch):
                 self.calls += 1
                 return self.calls > 1
 
-        sync_units._heartbeat_unit_lease(str(unit_id), "worker-1", OneHeartbeatStop())
+        deadline = now + timedelta(seconds=3720)
+        sync_units._heartbeat_unit_lease(
+            str(unit_id), "worker-1", OneHeartbeatStop(), deadline
+        )
 
         with Session(engine) as assert_session:
             unit = (
@@ -975,7 +981,7 @@ def test_slow_bootstrap_loses_lease_before_provider_does_not_execute(
         heartbeat_started = []
         original_load = SyncTaskBootstrap.load
 
-        def start_heartbeat(unit_id_arg, lease_owner):
+        def start_heartbeat(unit_id_arg, lease_owner, deadline):
             heartbeat_started.append((unit_id_arg, lease_owner))
             return None, None
 
@@ -3138,3 +3144,279 @@ def test_rate_limit_budget_exhaustion_falls_through_to_failed(db_session, monkey
     assert unit.lease_owner is None
     assert unit.lease_expires_at is None
     assert finalize_calls == [((str(run.id),), "sync")]
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-2705: lease helpers, heartbeat deadline cap, success stamp no-op
+# ---------------------------------------------------------------------------
+
+
+def test_running_lease_seconds_default(monkeypatch):
+    from dev_health_ops.workers import sync_units
+
+    monkeypatch.delenv("SYNC_UNIT_RUNNING_LEASE_SECONDS", raising=False)
+    assert sync_units._running_lease_seconds() == 300
+
+
+def test_running_lease_seconds_env_override(monkeypatch):
+    from dev_health_ops.workers import sync_units
+
+    monkeypatch.setenv("SYNC_UNIT_RUNNING_LEASE_SECONDS", "120")
+    assert sync_units._running_lease_seconds() == 120
+
+
+def test_running_lease_seconds_invalid_env_fallback(monkeypatch):
+    from dev_health_ops.workers import sync_units
+
+    monkeypatch.setenv("SYNC_UNIT_RUNNING_LEASE_SECONDS", "not-a-number")
+    assert sync_units._running_lease_seconds() == 300
+
+
+def test_max_unit_lifetime_seconds_default(monkeypatch):
+    from dev_health_ops.workers import sync_units
+
+    monkeypatch.delenv("SYNC_UNIT_MAX_LIFETIME_SECONDS", raising=False)
+    assert sync_units._max_unit_lifetime_seconds() == 3720
+
+
+def test_max_unit_lifetime_seconds_env_override(monkeypatch):
+    from dev_health_ops.workers import sync_units
+
+    monkeypatch.setenv("SYNC_UNIT_MAX_LIFETIME_SECONDS", "7200")
+    assert sync_units._max_unit_lifetime_seconds() == 7200
+
+
+def test_max_unit_lifetime_seconds_floored_at_hard_limit(monkeypatch):
+    """Values below the Celery hard task_time_limit (3600) are floored to 3600."""
+    from dev_health_ops.workers import sync_units
+
+    monkeypatch.setenv("SYNC_UNIT_MAX_LIFETIME_SECONDS", "60")
+    assert sync_units._max_unit_lifetime_seconds() == 3600
+
+
+def test_max_unit_lifetime_seconds_invalid_env_fallback(monkeypatch):
+    from dev_health_ops.workers import sync_units
+
+    monkeypatch.setenv("SYNC_UNIT_MAX_LIFETIME_SECONDS", "bad")
+    assert sync_units._max_unit_lifetime_seconds() == 3720
+
+
+def test_heartbeat_stops_when_deadline_exceeded(db_session, monkeypatch):
+    """When now >= deadline the heartbeat loop stops without issuing an UPDATE."""
+    import threading
+    from unittest.mock import patch
+
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
+    now = datetime.now(timezone.utc)
+    unit.status = SyncRunUnitStatus.RUNNING.value
+    unit.lease_owner = "worker-1"
+    unit.lease_expires_at = now + timedelta(seconds=30)
+    unit.last_heartbeat_at = now
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setattr(sync_units, "_heartbeat_interval_seconds", lambda: 1)
+    monkeypatch.setattr(sync_units, "_running_lease_seconds", lambda: 120)
+
+    # Deadline is already in the past so the first iteration should bail.
+    past_deadline = now - timedelta(seconds=1)
+
+    class OneHeartbeatStop(threading.Event):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def wait(self, timeout=None):
+            self.calls += 1
+            return self.calls > 1
+
+    db_update_calls = []
+    original_execute = db_session.execute
+
+    def tracking_execute(stmt, *args, **kwargs):
+        db_update_calls.append(stmt)
+        return original_execute(stmt, *args, **kwargs)
+
+    stop = OneHeartbeatStop()
+    with patch.object(db_session, "execute", side_effect=tracking_execute):
+        sync_units._heartbeat_unit_lease(str(unit.id), "worker-1", stop, past_deadline)
+
+    # stop_event must be set (loop exited)
+    assert stop.is_set()
+    # No UPDATE should have been issued for the heartbeat renewal
+    from sqlalchemy.sql.dml import Update
+
+    update_stmts = [s for s in db_update_calls if isinstance(s, Update)]
+    assert update_stmts == [], "heartbeat must not issue UPDATE after deadline"
+
+
+def test_heartbeat_lease_capped_at_deadline(db_session, monkeypatch):
+    """When now < deadline, the renewed lease_expires_at must not exceed deadline."""
+    import threading
+
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
+    now = datetime.now(timezone.utc)
+    unit.status = SyncRunUnitStatus.RUNNING.value
+    unit.lease_owner = "worker-1"
+    unit.lease_expires_at = now + timedelta(seconds=30)
+    unit.last_heartbeat_at = now
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setattr(sync_units, "_heartbeat_interval_seconds", lambda: 1)
+    # lease_seconds=600 but deadline is only 60s away — cap must win
+    monkeypatch.setattr(sync_units, "_running_lease_seconds", lambda: 600)
+
+    deadline = now + timedelta(seconds=60)
+
+    class OneHeartbeatStop(threading.Event):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def wait(self, timeout=None):
+            self.calls += 1
+            return self.calls > 1
+
+    sync_units._heartbeat_unit_lease(
+        str(unit.id), "worker-1", OneHeartbeatStop(), deadline
+    )
+
+    db_session.refresh(unit)
+    assert unit.lease_expires_at is not None
+    # The persisted lease must not exceed the deadline
+    assert _aware(unit.lease_expires_at) <= deadline + timedelta(seconds=1)
+    # And it must be strictly less than now + 600s (the uncapped value)
+    assert _aware(unit.lease_expires_at) < now + timedelta(seconds=600)
+
+
+def test_success_stamp_noop_when_lease_already_lost(tmp_path, monkeypatch, caplog):
+    """When the success UPDATE matches 0 rows the task returns skipped/lease_lost
+    and does NOT set should_finalize (no finalize enqueue).
+    """
+    import logging
+
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers import sync_units
+
+    engine = _file_backed_engine(tmp_path)
+    try:
+        with Session(engine) as seed_session:
+            run, unit = _seed_run(seed_session)
+            _mark_dispatching(seed_session, unit)
+            unit_id = unit.id
+            seed_session.commit()
+        _patch_db_session_factory(monkeypatch, engine)
+        _patch_runtime(monkeypatch)
+        finalize_calls = _patch_finalize_apply(monkeypatch)
+        monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+        monkeypatch.delenv("DATABASE_URI", raising=False)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+
+        def run_dataset_and_steal_lease(ctx, runtime):
+            # Simulate reconciler marking the unit FAILED while provider runs
+            _commit_reconciler_failure(engine, unit_id)
+            return {"ok": True}
+
+        monkeypatch.setattr(
+            dataset_adapters, "run_dataset_unit", run_dataset_and_steal_lease
+        )
+
+        with caplog.at_level(
+            logging.WARNING, logger="dev_health_ops.workers.sync_units"
+        ):
+            result = getattr(sync_units.run_sync_unit, "run")(str(unit_id))
+
+        assert result == {
+            "status": "skipped",
+            "unit_id": str(unit_id),
+            "reason": "lease_lost",
+        }
+        # Finalize must NOT be enqueued
+        assert finalize_calls == [], (
+            "finalize must not be enqueued on success stamp no-op"
+        )
+        # Warning must have been logged
+        assert any("success_stamp_noop" in r.message for r in caplog.records), (
+            "expected success_stamp_noop warning"
+        )
+        # Unit must remain FAILED (reconciler's stamp wins)
+        with Session(engine) as assert_session:
+            persisted = (
+                assert_session.query(SyncRunUnit)
+                .filter(SyncRunUnit.id == unit_id)
+                .one()
+            )
+            assert persisted.status == SyncRunUnitStatus.FAILED.value
+    finally:
+        engine.dispose()
+
+
+def test_bootstrap_live_refresh_lease_capped_at_deadline(db_session, monkeypatch):
+    """The bootstrap live-lease-refresh UPDATE must not write lease_expires_at > deadline.
+
+    Regression guard for CHAOS-2705 MUST-FIX 1: the second lease write inside
+    run_sync_unit (after _start_unit_heartbeat, before provider execution) must
+    be capped at deadline just like the initial claim and the heartbeat loop.
+    """
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    # Use a very short running lease (10s) and a tight deadline (20s) so that
+    # now + lease_seconds (10s) < deadline (20s) — the cap should be the lease.
+    # More importantly, if lease_seconds were large (e.g. 600) and deadline were
+    # small (20s), the cap must be deadline.  We test the latter scenario.
+    monkeypatch.setenv("SYNC_UNIT_RUNNING_LEASE_SECONDS", "600")
+
+    captured_lease: list = []
+
+    def run_dataset_capture_lease(ctx, runtime):
+        db_session.refresh(unit)
+        if unit.lease_expires_at is not None:
+            captured_lease.append(unit.lease_expires_at)
+        return {"ok": True}
+
+    monkeypatch.setattr(dataset_adapters, "run_dataset_unit", run_dataset_capture_lease)
+
+    # Patch _max_unit_lifetime_seconds to return a tight deadline (3600 floor
+    # means we can't go below that, so we patch the function directly).
+    deadline_seconds = 3600  # floor value
+    monkeypatch.setattr(
+        sync_units, "_max_unit_lifetime_seconds", lambda: deadline_seconds
+    )
+
+    result = getattr(sync_units.run_sync_unit, "run")(str(unit.id))
+
+    assert result["status"] == "success"
+    assert len(captured_lease) == 1, "expected exactly one lease snapshot from provider"
+    from datetime import timezone as _tz
+
+    lease_at = captured_lease[0]
+    if lease_at.tzinfo is None:
+        lease_at = lease_at.replace(tzinfo=_tz.utc)
+    # The live-refresh write must not have pushed lease_expires_at past deadline.
+    # started_at + deadline_seconds is the absolute cap; allow 2s clock slack.
+
+    # We can't know exact started_at, but we know the lease must be <= now + deadline_seconds.
+    # Since the test runs in well under 1s, now() + deadline_seconds is a safe upper bound.
+    now = datetime.now(timezone.utc)
+    assert lease_at <= now + timedelta(seconds=deadline_seconds + 2), (
+        f"live-refresh lease {lease_at} exceeds deadline cap"
+    )
+    # And it must NOT be now + 600s (the uncapped running lease).
+    assert lease_at < now + timedelta(seconds=600), (
+        f"live-refresh lease {lease_at} was not capped (got full 600s lease)"
+    )

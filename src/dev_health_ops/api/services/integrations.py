@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from dev_health_ops.models.integrations import (
     Integration,
@@ -253,6 +254,7 @@ class SyncRunService:
             return []
         result = await self._session.execute(
             select(SyncRunUnit)
+            .options(selectinload(SyncRunUnit.source))
             .where(
                 SyncRunUnit.sync_run_id == uid,
                 SyncRunUnit.org_id == self._org_id,
@@ -312,8 +314,12 @@ class SyncRunService:
                 failed_sources.add(source)
                 failed_datasets.add(dataset)
                 # Extract error_category from result JSON if present
-                result_data = unit.result or {}
-                cat = result_data.get("error_category", "unknown")
+                result_data = unit.result
+                cat = (
+                    result_data.get("error_category", "unknown")
+                    if isinstance(result_data, dict)
+                    else "unknown"
+                )
                 error_categories[str(cat)] += 1
 
             if unit.duration_seconds is not None:

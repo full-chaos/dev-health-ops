@@ -173,6 +173,7 @@ class SyncRunUnitSummary(BaseModel):
     failed_unit_count: int = 0
     unit_count: int = 0
     partial_failure_summary: dict[str, Any] | None = None
+    next_retry_at: datetime | None = None
     units: list[SyncRunUnitResponse]
 
 
@@ -182,6 +183,8 @@ class SyncRunUnitResponse(BaseModel):
     sync_run_id: str
     integration_id: str
     source_id: str
+    source_name: str | None
+    source_full_name: str | None
     provider: str
     dataset_key: str
     cost_class: str
@@ -190,9 +193,13 @@ class SyncRunUnitResponse(BaseModel):
     before_at: datetime | None
     status: str
     attempts: int
+    available_at: datetime | None
+    rate_limit_deferrals: int
     duration_seconds: int | None
     error: str | None
-    result: dict[str, Any] | None
+    error_category: str | None
+    last_heartbeat_at: datetime | None
+    result: Any | None
     created_at: datetime
     updated_at: datetime
 

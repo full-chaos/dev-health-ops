@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid as uuid_mod
+from datetime import datetime, timezone
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -133,4 +134,27 @@ async def onboarding_state(
     from dev_health_ops.api.auth.router import get_postgres_session
 
     async with get_postgres_session() as db:
+        return await _build_onboarding_state(db, user)
+
+
+@router.post("/skip-integration")
+async def skip_integration(
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+) -> Any:
+    from dev_health_ops.api.auth.router import get_postgres_session
+
+    if not user.org_id:
+        raise HTTPException(status_code=400, detail="organization_required")
+    try:
+        org_uuid = uuid_mod.UUID(user.org_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="organization_required") from exc
+
+    async with get_postgres_session() as db:
+        org = await db.scalar(select(Organization).where(Organization.id == org_uuid))
+        if org is None:
+            raise HTTPException(status_code=404, detail="organization_not_found")
+        if org.onboarding_integration_skipped_at is None:
+            org.onboarding_integration_skipped_at = datetime.now(timezone.utc)
+        await db.commit()
         return await _build_onboarding_state(db, user)

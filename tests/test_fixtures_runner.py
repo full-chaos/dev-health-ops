@@ -4,6 +4,10 @@ import uuid
 import pytest
 
 from dev_health_ops.fixtures import runner
+from dev_health_ops.fixtures.demo_identity import (
+    ONBOARDED_ADMIN_USER_EMAIL,
+    ONBOARDING_ORGLESS_USER_EMAIL,
+)
 from dev_health_ops.fixtures.generator import SyntheticDataGenerator
 from dev_health_ops.fixtures.runner import (
     _build_repo_team_assignments,
@@ -626,8 +630,11 @@ class TestGenerateUsersRespectsOrgId:
         assert org.slug != "default-org"
         assert org.slug == f"fixture-{uuid.UUID(self._UUID_ORG).hex[:8]}"
 
-        # Every membership (admin + first 5 authors) must target the supplied org.
-        assert len(data["memberships"]) >= 2, "expected admin + at least 1 author"
+        assert {user.email for user in data["users"]} == {
+            ONBOARDING_ORGLESS_USER_EMAIL,
+            ONBOARDED_ADMIN_USER_EMAIL,
+        }
+        assert len(data["memberships"]) == 1
         for m in data["memberships"]:
             assert m.org_id == uuid.UUID(self._UUID_ORG), (
                 f"membership {m.id} for user {m.user_id} bound to wrong org "
@@ -664,6 +671,11 @@ class TestGenerateUsersRespectsOrgId:
         assert data["organizations"][0].id == expected
         assert data["organizations"][0].slug == "default-org"
         assert data["organizations"][0].name == "Meridian"
+        assert {user.email for user in data["users"]} == {
+            ONBOARDING_ORGLESS_USER_EMAIL,
+            ONBOARDED_ADMIN_USER_EMAIL,
+        }
+        assert len(data["memberships"]) == 1
         for m in data["memberships"]:
             assert m.org_id == expected
 

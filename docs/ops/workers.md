@@ -25,11 +25,11 @@ Operators can trigger background operations on-demand through three primary API 
 
 1. **Data Sync Trigger**
    * **Endpoint**: `POST /api/v1/admin/sync-configs/{config_id}/trigger` (defined in `api/admin/routers/sync.py:997-1164`)
-   * **Flow**: Builds a `SyncPlanRequest` from the config's migrated integration, plans a `SyncRun` (one `SyncRunUnit` per source/dataset/window), and enqueues `dispatch_sync_run` onto the `sync` queue. The integration planner is the only routing path — the legacy `run_sync_config` / `dispatch_batch_sync` in-process workers were removed in CHAOS-2647.
+   * **Flow**: Creates a canonical `JobRun` activity row, builds a `SyncPlanRequest` from the config's migrated integration, plans a `SyncRun` (one `SyncRunUnit` per source/dataset/window), stores `sync_run_id` in `JobRun.result`, and enqueues `dispatch_sync_run` onto the `sync` queue. The integration planner is the only routing path — the legacy `run_sync_config` / `dispatch_batch_sync` in-process workers were removed in CHAOS-2647.
 
 2. **Historical Backfill Trigger**
    * **Endpoint**: `POST /api/v1/admin/sync-configs/{config_id}/backfill` (defined in `api/admin/routers/sync.py:1167-1233`)
-   * **Flow**: Creates a `BackfillJob` record, plans a backfill-mode `SyncRun`, and enqueues `dispatch_sync_run` onto the `sync` queue (fan-out). The `BackfillJob` is linked to its run via a `sync_run:<id>` marker on `celery_task_id`, so `finalize_sync_run` updates its status and chunk counts.
+   * **Flow**: Creates a `BackfillJob` domain record plus the same canonical `JobRun` activity row used by manual and scheduled sync, plans a backfill-mode `SyncRun`, stores `sync_run_id` in `JobRun.result`, and enqueues `dispatch_sync_run` onto the `sync` queue (fan-out). The `BackfillJob` is linked to its run via a `sync_run:<id>` marker on `celery_task_id`, so `finalize_sync_run` updates its status and chunk counts.
 
 3. **Report Execution Trigger**
    * **Trigger**: GraphQL `triggerReport` mutation or the "Run Now" button in the Report Center UI.
@@ -53,7 +53,7 @@ Triggering `run_investment_materialize` via the worker ensures the worker-side L
 
 ### Observability Caveat
 
-Tasks like `run_work_graph_build` and `run_investment_materialize` don't persist a `JobRun` row in the database. Their execution status and progress can only be tracked through worker logs and distributed traces. For more details on sync observability, see the [Platform Sync Observability](../architecture/platform-sync-observability.md) documentation.
+Manual sync, scheduled sync, and sync-config backfill all persist a `JobRun` row as the admin-visible activity index and link it to the execution-truth `SyncRun` via `JobRun.result.sync_run_id`. The only difference between manual and scheduled sync is timing: the manual endpoint enqueues immediately, while `dispatch_scheduled_syncs` enqueues when the cron marker is due. Tasks like `run_work_graph_build` and `run_investment_materialize` don't persist a `JobRun` row in the database. Their execution status and progress can only be tracked through worker logs and distributed traces. For more details on sync observability, see the [Platform Sync Observability](../architecture/platform-sync-observability.md) documentation.
 
 ---
 

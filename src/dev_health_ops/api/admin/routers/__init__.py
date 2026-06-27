@@ -16,6 +16,7 @@ from .integrations import router as integrations_router
 from .orgs import router as orgs_router
 from .platform import router as platform_router
 from .settings import router as settings_router
+from .setup import router as setup_router
 from .sync import router as sync_router
 from .teams import router as teams_router
 from .users import router as users_router
@@ -33,6 +34,7 @@ __all__ = [
     "orgs_router",
     "platform_router",
     "settings_router",
+    "setup_router",
     "sync_router",
     "teams_router",
     "users_router",

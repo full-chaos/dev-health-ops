@@ -9,7 +9,7 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.integrations.github_app_state import (
@@ -18,7 +18,13 @@ from dev_health_ops.api.integrations.github_app_state import (
 )
 from dev_health_ops.api.services.configuration import IntegrationCredentialsService
 from dev_health_ops.models.git import Base
-from dev_health_ops.models.settings import GithubAppInstallation, IntegrationCredential
+from dev_health_ops.models.settings import (
+    GithubAppInstallation,
+    IntegrationCredential,
+    JobRun,
+    ScheduledJob,
+    SyncConfiguration,
+)
 from tests._helpers import tables_of
 
 github_app_router_module = importlib.import_module(
@@ -36,7 +42,13 @@ async def session_maker(tmp_path: Path, monkeypatch):
         await conn.run_sync(
             lambda sync_conn: Base.metadata.create_all(
                 sync_conn,
-                tables=tables_of(GithubAppInstallation, IntegrationCredential),
+                tables=tables_of(
+                    GithubAppInstallation,
+                    IntegrationCredential,
+                    SyncConfiguration,
+                    ScheduledJob,
+                    JobRun,
+                ),
             )
         )
     maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -206,6 +218,7 @@ async def test_install_callback_writes_credential_and_installation(
         "connected": True,
         "installation_id": 987654,
         "credential_name": "github-app",
+        "return_to": "/org/admin/integrations/github",
     }
     async with session_maker() as session:
         installation = (
@@ -226,6 +239,41 @@ async def test_install_callback_writes_credential_and_installation(
     }
     assert credential is not None
     assert credential.is_active is True
+
+
+@pytest.mark.asyncio
+async def test_install_callback_does_not_create_sync_work(
+    session_maker,
+    monkeypatch,
+):
+    org_id = str(uuid.uuid4())
+    _configure_github_app(monkeypatch)
+    _patch_cache(monkeypatch)
+    _patch_github_user_installations(monkeypatch, [_installation()])
+    app = _app(session_maker, org_id)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/admin/integrations/github/install-callback",
+            json={
+                "installation_id": 987654,
+                "setup_action": "install",
+                "state": mint_github_app_install_state(org_id),
+                "code": "oauth-code",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    async with session_maker() as session:
+        sync_configs = await session.scalar(select(func.count(SyncConfiguration.id)))
+        scheduled_jobs = await session.scalar(select(func.count(ScheduledJob.id)))
+        job_runs = await session.scalar(select(func.count(JobRun.id)))
+
+    assert sync_configs == 0
+    assert scheduled_jobs == 0
+    assert job_runs == 0
 
 
 @pytest.mark.asyncio
@@ -511,10 +559,11 @@ async def test_install_callback_rejects_replayed_state(session_maker, monkeypatc
         [_installation()],
         token_responses=[
             FakeGitHubResponse(200, {"access_token": "user-token"}),
-            FakeGitHubResponse(400, {"error": "bad_verification_code"}),
+            FakeGitHubResponse(200, {"access_token": "user-token"}),
         ],
     )
     app = _app(session_maker, org_id)
+    state = mint_github_app_install_state(org_id)
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -524,7 +573,7 @@ async def test_install_callback_rejects_replayed_state(session_maker, monkeypatc
             json={
                 "installation_id": 987654,
                 "setup_action": None,
-                "state": mint_github_app_install_state(org_id),
+                "state": state,
                 "code": "oauth-code",
             },
         )
@@ -533,14 +582,14 @@ async def test_install_callback_rejects_replayed_state(session_maker, monkeypatc
             json={
                 "installation_id": 987654,
                 "setup_action": None,
-                "state": mint_github_app_install_state(org_id),
+                "state": state,
                 "code": "oauth-code",
             },
         )
 
     assert first.status_code == 200, first.text
     assert second.status_code == 400, second.text
-    assert second.json()["detail"] == "GitHub user authorization could not be verified"
+    assert second.json()["detail"] == "GitHub App installation state already used"
 
 
 @pytest.mark.asyncio
@@ -591,3 +640,154 @@ async def test_install_url_omits_redirect_uri_when_not_configured(
     qs = parse_qs(parsed.query)
     assert "redirect_uri" not in qs
     assert "state" in qs
+    assert verify_github_app_install_state(qs["state"][0]).org_id == org_id
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-2676 (C4): return_to is allowlist-validated, signed into the state, and
+# echoed back by the callback so the Next route (not the backend) redirects.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_install_url_signs_allowlisted_return_to(session_maker, monkeypatch):
+    org_id = str(uuid.uuid4())
+    monkeypatch.setenv("GITHUB_APP_SLUG", "dev-health-test")
+    app = _app(session_maker, org_id)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/admin/integrations/github/install-url",
+            json={"return_to": "/auth/onboard/integration"},
+        )
+
+    assert response.status_code == 200, response.text
+    state = parse_qs(urlparse(response.json()["install_url"]).query)["state"][0]
+    verified = verify_github_app_install_state(state)
+    assert verified.org_id == org_id
+    assert verified.return_to == "/auth/onboard/integration"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "unsafe",
+    [
+        "https://evil.example.com/phish",
+        "http://localhost:3000/auth/onboard/integration",
+        "//evil.example.com",
+        " /auth/onboard/integration ",
+        "\n/auth/onboard/integration\r",
+        "/auth/onboard/\nintegration",
+        "/auth/onboard/integration#next",
+        "/auth/onboard/integration%3Fnext%3D%2Fadmin",
+        "/auth/onboard/integration%23next",
+        "/Auth/Onboard/Integration",
+        "／auth／onboard／integration",
+        "/auth/onboard/integration%252f..%252fevil",
+        "/auth/onboard/integration/../../evil",
+        "/auth/onboard/integration%2f..%2fevil",
+        "/auth/onboard/integration?next=https://evil.example.com",
+        "\\\\evil.example.com",
+        "/org/admin/integrations/github?x=1",
+        "/unknown/path",
+        "javascript:alert(1)",
+        "",
+    ],
+)
+async def test_install_url_rejects_unsafe_return_to(session_maker, monkeypatch, unsafe):
+    org_id = str(uuid.uuid4())
+    monkeypatch.setenv("GITHUB_APP_SLUG", "dev-health-test")
+    app = _app(session_maker, org_id)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/admin/integrations/github/install-url",
+            json={"return_to": unsafe},
+        )
+
+    assert response.status_code == 200, response.text
+    state = parse_qs(urlparse(response.json()["install_url"]).query)["state"][0]
+    verified = verify_github_app_install_state(state)
+    # Every unsafe value collapses to the admin default — never the raw input.
+    assert verified.return_to == "/org/admin/integrations/github"
+
+
+@pytest.mark.asyncio
+async def test_install_url_defaults_return_to_when_absent(session_maker, monkeypatch):
+    org_id = str(uuid.uuid4())
+    monkeypatch.setenv("GITHUB_APP_SLUG", "dev-health-test")
+    app = _app(session_maker, org_id)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post("/admin/integrations/github/install-url")
+
+    assert response.status_code == 200, response.text
+    state = parse_qs(urlparse(response.json()["install_url"]).query)["state"][0]
+    assert (
+        verify_github_app_install_state(state).return_to
+        == "/org/admin/integrations/github"
+    )
+
+
+@pytest.mark.asyncio
+async def test_install_callback_returns_validated_return_to(session_maker, monkeypatch):
+    org_id = str(uuid.uuid4())
+    _configure_github_app(monkeypatch)
+    _patch_cache(monkeypatch)
+    _patch_github_user_installations(monkeypatch, [_installation()])
+    app = _app(session_maker, org_id)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/admin/integrations/github/install-callback",
+            json={
+                "installation_id": 987654,
+                "setup_action": "install",
+                "state": mint_github_app_install_state(
+                    org_id, return_to="/auth/onboard/integration"
+                ),
+                "code": "oauth-code",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["return_to"] == "/auth/onboard/integration"
+
+
+@pytest.mark.asyncio
+async def test_install_callback_recanonicalizes_tampered_state_return_to(
+    session_maker, monkeypatch
+):
+    # Defense-in-depth: even if a signed state somehow carried an unsafe path,
+    # the callback re-validates before echoing it back.
+    org_id = str(uuid.uuid4())
+    _configure_github_app(monkeypatch)
+    _patch_cache(monkeypatch)
+    _patch_github_user_installations(monkeypatch, [_installation()])
+    app = _app(session_maker, org_id)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/admin/integrations/github/install-callback",
+            json={
+                "installation_id": 987654,
+                "setup_action": "install",
+                "state": mint_github_app_install_state(
+                    org_id, return_to="https://evil.example.com"
+                ),
+                "code": "oauth-code",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["return_to"] == "/org/admin/integrations/github"

@@ -17,6 +17,7 @@ from .routers import (
     orgs_router,
     platform_router,
     settings_router,
+    setup_router,
     sync_router,
     teams_router,
     users_router,
@@ -36,6 +37,7 @@ router = APIRouter(
 )
 
 router.include_router(settings_router)
+router.include_router(setup_router)
 router.include_router(credentials_router)
 router.include_router(sync_router)
 router.include_router(identities_router)

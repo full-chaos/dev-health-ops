@@ -93,6 +93,7 @@ task_queues: dict[str, dict[str, Any]] = {
     "webhooks": {},
     "ingest": {},
     "reports": {},
+    "scheduler": {},
     # Dedicated telemetry queue: monitor_queue_depths must not share a queue
     # with floodable work — if `default` backs up, queue-depth telemetry would
     # die exactly when it is needed. Consumed by BOTH `worker` and
@@ -105,7 +106,7 @@ beat_schedule = {
     "dispatch-scheduled-syncs": {
         "task": "dev_health_ops.workers.tasks.dispatch_scheduled_syncs",
         "schedule": 300.0,
-        "options": {"queue": "default"},
+        "options": {"queue": "scheduler"},
     },
     "dispatch-scheduled-metrics": {
         "task": "dev_health_ops.workers.tasks.dispatch_scheduled_metrics",

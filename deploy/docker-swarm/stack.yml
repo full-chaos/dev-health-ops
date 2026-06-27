@@ -195,7 +195,7 @@ services:
       - --loglevel=info
       - --disable-prefetch
       - -Q
-      - default,sync,sync.github,sync.gitlab,sync.linear,sync.jira,sync.launchdarkly,sync.github.light,sync.github.medium,sync.gitlab.light,sync.gitlab.medium,sync.jira.medium,sync.linear.medium,webhooks,reports,monitoring
+      - default,sync,sync.github,sync.gitlab,sync.linear,sync.jira,sync.launchdarkly,sync.github.light,sync.github.medium,sync.gitlab.light,sync.gitlab.medium,sync.jira.medium,sync.linear.medium,webhooks,reports,scheduler,monitoring
       - --concurrency=4
     environment:
       POSTGRES_URI: postgresql+asyncpg://devhealth:${POSTGRES_PASSWORD}@postgres:5432/devhealth
@@ -253,8 +253,35 @@ services:
       - --loglevel=info
       - --disable-prefetch
       - -Q
-      - metrics,backfill,monitoring,sync.github.heavy,sync.gitlab.heavy
+      - metrics,backfill,scheduler,monitoring,sync.github.heavy,sync.gitlab.heavy
       - --concurrency=2
+
+  beat:
+    <<: *worker-base
+    command:
+      - -A
+      - dev_health_ops.workers.celery_app
+      - beat
+      - --loglevel=info
+      - --schedule=/tmp/celerybeat-schedule
+    deploy:
+      mode: replicated
+      replicas: 1
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.25"
+        reservations:
+          memory: 128M
+          cpus: "0.05"
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
 
 volumes:
   clickhouse_data:

@@ -83,6 +83,7 @@ CLI flags override environment variables.
 | `GITHUB_TOKEN`, `GITLAB_TOKEN`, `JIRA_*`, `ATLASSIAN_*`, `LINEAR_API_KEY` | Optional | Provider auth for sync commands |
 | `EMAIL_PROVIDER`, `EMAIL_API_KEY`, `EMAIL_FROM_ADDRESS` | Optional (`console` default) | Email delivery via [Resend](./email-setup.md) |
 | `APP_BASE_URL`, `JWT_SECRET_KEY`, `SETTINGS_ENCRYPTION_KEY` | Optional in dev, required in production | API callback/auth/encryption settings |
+| `AUTH_AUTO_CREATE_ORG_ON_REGISTER` | Temporary compatibility flag (default `true`) | Set `false` for the first-run onboarding model where registration creates an identity only and workspace creation happens through `/api/v1/auth/onboard` |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Required for billing | Stripe API and webhook verification |
 | `STRIPE_PRICE_ID_TEAM`, `STRIPE_PRICE_ID_ENTERPRISE` | Required for billing | Stripe Price IDs for checkout |
 | `TRIAL_DAYS` | Optional (default: 14) | Free trial duration for Team tier |

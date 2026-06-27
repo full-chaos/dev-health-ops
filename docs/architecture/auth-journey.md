@@ -8,7 +8,7 @@ Source-of-truth tests for the first-run path: `tests/test_onboarding.py`, `tests
 
 ## Journey 1: Registration
 
-A new user registers with email and password. In the first-run onboarding model, identity creation is separate from workspace creation. By default for Phase 2, registration creates only the user identity and email-verification token, then sends a verification email asynchronously. Organization/workspace creation happens later through the explicit onboarding workspace step.
+A new user registers with email and password. In the first-run onboarding model, identity creation is separate from workspace creation. The rollout is gated by `AUTH_AUTO_CREATE_ORG_ON_REGISTER`, which **defaults to `true`** (production-preserving): registration creates the user identity **and** a community organization + owner membership. When the flag is set to `false` (guided-onboarding mode), registration creates **only** the user identity and email-verification token, and organization/workspace creation happens later through the explicit onboarding workspace step. A verification email is sent asynchronously in both modes.
 
 ```mermaid
 sequenceDiagram
@@ -29,10 +29,17 @@ sequenceDiagram
         R-->>C: 400 "Email already registered"
     end
     R->>DB: INSERT User (is_verified=false, auth_provider="local")
+    alt AUTH_AUTO_CREATE_ORG_ON_REGISTER=true (default, legacy)
+        R->>DB: INSERT Organization + owner Membership
+    end
     R->>DB: create_email_verification_token
     R->>DB: COMMIT
     R->>E: send_verification_email (async, non-blocking)
-    R-->>C: 201 RegisterResponse {message, user_id, org_id: null}
+    alt AUTH_AUTO_CREATE_ORG_ON_REGISTER=true (default)
+        R-->>C: 201 RegisterResponse {message, user_id, org_id}
+    else flag=false (guided onboarding)
+        R-->>C: 201 RegisterResponse {message, user_id, org_id: null}
+    end
 ```
 
 **Rate limit:** `AUTH_REGISTER_LIMIT` (3/hour per IP).

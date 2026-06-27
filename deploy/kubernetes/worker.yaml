@@ -70,7 +70,7 @@ spec:
             - --loglevel=info
             - --disable-prefetch
             - -Q
-            - default,sync,sync.github,sync.gitlab,sync.linear,sync.jira,sync.launchdarkly,sync.github.light,sync.github.medium,sync.gitlab.light,sync.gitlab.medium,sync.jira.medium,sync.linear.medium,webhooks,reports,monitoring
+            - default,sync,sync.github,sync.gitlab,sync.linear,sync.jira,sync.launchdarkly,sync.github.light,sync.github.medium,sync.gitlab.light,sync.gitlab.medium,sync.jira.medium,sync.linear.medium,webhooks,reports,scheduler,monitoring
           envFrom:
             - configMapRef:
                 name: dev-health-config
@@ -272,7 +272,7 @@ spec:
             - --loglevel=info
             - --disable-prefetch
             - -Q
-            - metrics,backfill,monitoring,sync.github.heavy,sync.gitlab.heavy
+            - metrics,backfill,scheduler,monitoring,sync.github.heavy,sync.gitlab.heavy
           envFrom:
             - configMapRef:
                 name: dev-health-config

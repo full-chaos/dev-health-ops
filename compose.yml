@@ -254,7 +254,7 @@ services:
         SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
     container_name: worker
     entrypoint: ["celery"]
-    command: -A dev_health_ops.workers.celery_app worker --loglevel=info --disable-prefetch -Q default,sync,sync.github,sync.gitlab,sync.linear,sync.jira,sync.launchdarkly,sync.github.light,sync.github.medium,sync.gitlab.light,sync.gitlab.medium,sync.jira.medium,sync.linear.medium,webhooks,reports,monitoring --concurrency=${WORKER_CONCURRENCY:-4}
+    command: -A dev_health_ops.workers.celery_app worker --loglevel=info --disable-prefetch -Q default,sync,sync.github,sync.gitlab,sync.linear,sync.jira,sync.launchdarkly,sync.github.light,sync.github.medium,sync.gitlab.light,sync.gitlab.medium,sync.jira.medium,sync.linear.medium,webhooks,reports,scheduler,monitoring --concurrency=${WORKER_CONCURRENCY:-4}
     environment:
       <<: *env
       CELERY_BROKER_URL: redis://valkey:6379/0
@@ -287,7 +287,12 @@ services:
     container_name: worker-heavy
     # `monitoring` is consumed here AND by `worker` above: queue telemetry
     # survives either pool being saturated or down.
-    command: -A dev_health_ops.workers.celery_app worker --loglevel=info --disable-prefetch -Q metrics,backfill,monitoring,sync.github.heavy,sync.gitlab.heavy --concurrency=${WORKER_HEAVY_CONCURRENCY:-2}
+    command: -A dev_health_ops.workers.celery_app worker --loglevel=info --disable-prefetch -Q metrics,backfill,scheduler,monitoring,sync.github.heavy,sync.gitlab.heavy --concurrency=${WORKER_HEAVY_CONCURRENCY:-2}
+
+  beat:
+    <<: *worker-base
+    container_name: beat
+    command: -A dev_health_ops.workers.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
 
   # ---------------------------------------------------------------------------
   # Observability — SigNoz (distributed tracing + metrics)

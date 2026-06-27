@@ -101,6 +101,40 @@ def test_queue_monitor_beat_entry() -> None:
     assert entry["options"] == {"queue": "monitoring"}
 
 
+def test_scheduled_sync_dispatcher_uses_scheduler_queue() -> None:
+    from dev_health_ops.workers.config import beat_schedule
+
+    entry = beat_schedule["dispatch-scheduled-syncs"]
+    assert entry["task"] == "dev_health_ops.workers.tasks.dispatch_scheduled_syncs"
+    assert entry["schedule"] == 300.0
+    assert entry["options"] == {"queue": "scheduler"}
+
+
+def test_scheduler_queue_declared_and_consumed_redundantly() -> None:
+    assert "scheduler" in task_queues
+
+    compose_path = Path(__file__).resolve().parents[1] / "compose.yml"
+    compose_data = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+
+    consumers: list[str] = []
+    for name, service in compose_data["services"].items():
+        command = service.get("command")
+        if command is None:
+            continue
+        command_str = _container_command_string(service)
+        tokens = command_str.split()
+        if "celery" not in tokens or "worker" not in tokens:
+            continue
+        if "scheduler" in _parse_queues(command_str):
+            consumers.append(name)
+
+    assert "worker-heavy" in consumers
+    assert len(consumers) >= 2, (
+        f"`scheduler` must be consumed by >=2 worker services for redundancy, "
+        f"found: {sorted(consumers)}"
+    )
+
+
 def test_monitoring_queue_declared_and_consumed_redundantly() -> None:
     """The `monitoring` queue must exist in task_queues and be consumed by at
     least two compose worker services so queue telemetry survives one pool
@@ -168,9 +202,13 @@ def _is_beat_service(name: str, service: dict) -> bool:
 
 def _assert_compose_beat_singleton(path: Path) -> None:
     services = _load_yaml(path).get("services") or {}
-    for name, service in services.items():
-        if not _is_beat_service(name, service):
-            continue
+    beat_services = [
+        (name, service)
+        for name, service in services.items()
+        if _is_beat_service(name, service)
+    ]
+    assert len(beat_services) == 1, f"{path.name} must define exactly one beat service"
+    for name, service in beat_services:
         replicas = (service.get("deploy") or {}).get("replicas")
         assert replicas in (None, 1), f"{path.name}:{name} must not exceed 1 replica"
 
@@ -187,7 +225,7 @@ def test_production_compose_has_one_shot_migrate_service() -> None:
 
 def test_production_compose_app_services_gate_on_migrate() -> None:
     services = _load_yaml(_PROD_COMPOSE)["services"]
-    for name in ("api", "billing-edge", "worker"):
+    for name in ("api", "billing-edge", "worker", "beat"):
         deps = services[name].get("depends_on") or {}
         assert (
             deps.get("migrate", {}).get("condition") == "service_completed_successfully"
@@ -196,7 +234,7 @@ def test_production_compose_app_services_gate_on_migrate() -> None:
 
 def test_production_compose_disables_ambient_migrations() -> None:
     services = _load_yaml(_PROD_COMPOSE)["services"]
-    for name in ("api", "worker"):
+    for name in ("api", "worker", "beat"):
         env = services[name].get("environment") or {}
         assert env.get("AUTO_RUN_MIGRATIONS") == "false", (
             f"{name} must set AUTO_RUN_MIGRATIONS=false — schema is applied by "
@@ -393,6 +431,22 @@ def test_deploy_stacks_keep_celery_beat_singleton() -> None:
     for stack in (_REPO_ROOT / "compose.yml", _PROD_COMPOSE, _SWARM_STACK):
         _assert_compose_beat_singleton(stack)
 
+    k8s_beats = []
+    for doc in yaml.safe_load_all((_K8S_DIR / "beat.yaml").read_text()):
+        if not doc or doc.get("kind") != "Deployment":
+            continue
+        containers = doc["spec"]["template"]["spec"].get("containers") or []
+        for container in containers:
+            command = container.get("command") or []
+            if "celery" in command and "beat" in command:
+                k8s_beats.append(doc)
+
+    assert len(k8s_beats) == 1
+    assert k8s_beats[0]["spec"].get("replicas") == 1
+
+    kustomization = _load_yaml(_K8S_DIR / "kustomization.yaml")
+    assert "beat.yaml" in kustomization["resources"]
+
     beat_template = (_HELM_DIR / "templates" / "beat-deployment.yaml").read_text(
         encoding="utf-8"
     )
@@ -518,7 +572,7 @@ def test_platform_compose_provider_worker_consumes_sync_dispatch_queue() -> None
 def test_compose_workers_override_runner_entrypoint() -> None:
     for path in (_LEGACY_COMPOSE, _PROD_COMPOSE, _SWARM_STACK):
         services = _load_yaml(path).get("services") or {}
-        for service_name in ("worker", "worker-ingest", "worker-heavy"):
+        for service_name in ("worker", "worker-ingest", "worker-heavy", "beat"):
             service = services[service_name]
             assert service["entrypoint"] == ["celery"]
             command = _stringify_command(service["command"])

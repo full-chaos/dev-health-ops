@@ -263,16 +263,16 @@ def test_scheduler_routes_migrated_config_through_planner(db_session, monkeypatc
     plan_calls: list[object] = []
     dispatch_calls: list[object] = []
 
-    from dev_health_ops.sync import planner as planner_mod
+    from dev_health_ops.sync import execution_trigger as execution_trigger_mod
     from dev_health_ops.workers import sync_units as sync_units_mod
 
-    original_plan = planner_mod.plan_sync_run
+    original_plan = execution_trigger_mod.plan_sync_run
 
     def fake_plan(session, request):
         plan_calls.append(request)
         return original_plan(session, request)
 
-    monkeypatch.setattr(planner_mod, "plan_sync_run", fake_plan)
+    monkeypatch.setattr(execution_trigger_mod, "plan_sync_run", fake_plan)
     monkeypatch.setattr(
         sync_units_mod.dispatch_sync_run,
         "apply_async",

@@ -4,7 +4,6 @@ import logging
 import os
 import uuid
 from collections.abc import Callable, Sequence
-from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Protocol, cast
 
@@ -46,10 +45,14 @@ from dev_health_ops.models.settings import (
     SyncConfiguration,
 )
 from dev_health_ops.sync.datasets import supported_datasets, supported_legacy_targets
-from dev_health_ops.sync.planner import plan_sync_run
+from dev_health_ops.sync.execution_trigger import (
+    create_sync_execution_trigger,
+    ensure_pending_sync_job_run,
+    mark_job_run_failed,
+    merge_job_run_result,
+)
 from dev_health_ops.sync.trigger_routing import (
     mark_sync_run_failed,
-    planner_request_for_config_if_routed,
 )
 from dev_health_ops.utils.datetime import validate_timezone_name
 from dev_health_ops.workers.sync_units import dispatch_sync_run
@@ -62,40 +65,13 @@ logger = logging.getLogger(__name__)
 
 
 def _mark_job_run_failed(sync_session, run_id: str, error: str) -> None:
-    completed_at = datetime.now(timezone.utc)
-    run = (
-        sync_session.query(JobRun)
-        .filter(JobRun.id == uuid.UUID(str(run_id)))
-        .one_or_none()
-    )
-    if run is None:
-        return
-    run.status = JobRunStatus.FAILED.value
-    run.completed_at = completed_at
-    run.error = error
-    started_at = getattr(run, "started_at", None)
-    if started_at is not None:
-        if started_at.tzinfo is None:
-            started_at = started_at.replace(tzinfo=timezone.utc)
-        run.duration_seconds = max(0, int((completed_at - started_at).total_seconds()))
-    sync_session.flush()
+    mark_job_run_failed(sync_session, run_id, error)
 
 
 def _merge_job_run_result(
     sync_session, run_id: str, result: dict[str, Any] | None = None
 ) -> None:
-    if result is None:
-        return
-    run = (
-        sync_session.query(JobRun)
-        .filter(JobRun.id == uuid.UUID(str(run_id)))
-        .one_or_none()
-    )
-    if run is None:
-        return
-    current = run.result if isinstance(run.result, dict) else {}
-    run.result = {**current, **result}
-    sync_session.flush()
+    merge_job_run_result(sync_session, run_id, result)
 
 
 def _mark_backfill_job_failed(
@@ -149,59 +125,9 @@ def _ensure_pending_sync_job_run(
     triggered_by: str,
     result: dict[str, Any] | None = None,
 ) -> str:
-    """Find-or-create the ScheduledJob anchor and create a PENDING JobRun.
-
-    Returns the new JobRun id as a string.  Used by both the regular
-    /trigger handler and the legacy backfill path so the sync-activity list
-    shows the run immediately.
-    """
-    import uuid as _uuid
-
-    config_uuid = _uuid.UUID(str(config.id))
-    job = (
-        sync_session.query(ScheduledJob)
-        .filter(
-            ScheduledJob.org_id == org_id,
-            ScheduledJob.sync_config_id == config_uuid,
-            ScheduledJob.job_type == "sync",
-        )
-        .one_or_none()
+    return ensure_pending_sync_job_run(
+        sync_session, config, org_id, triggered_by, result
     )
-    if job is None:
-        _sync_options = dict(config.sync_options or {})
-        _provider = str(config.provider or "")
-        _explicit_cron = _sync_options.get("schedule_cron")
-        job = ScheduledJob(
-            name=f"sync-config-{config_uuid}",
-            job_type="sync",
-            schedule_cron=str(_explicit_cron or "0 * * * *"),
-            org_id=org_id,
-            provider=_provider,
-            job_config={
-                "provider": _provider,
-                "sync_config_id": str(config_uuid),
-            },
-            sync_config_id=config_uuid,
-            tz=str(_sync_options.get("timezone") or "UTC"),
-            # Manual-only configs keep the job row for JobRun anchoring
-            # but must not be picked up by the scheduler (CHAOS-2297).
-            status=(
-                JobStatus.ACTIVE.value
-                if bool(config.is_active) and _explicit_cron
-                else JobStatus.PAUSED.value
-            ),
-        )
-        sync_session.add(job)
-        sync_session.flush()
-    run = JobRun(
-        job_id=_uuid.UUID(str(job.id)),
-        triggered_by=triggered_by,
-        status=JobRunStatus.PENDING.value,
-    )
-    run.result = result
-    sync_session.add(run)
-    sync_session.flush()
-    return str(run.id)
 
 
 async def _active_repo_usage_count_for_limit(session: AsyncSession, org_id: str) -> int:
@@ -1717,48 +1643,40 @@ async def trigger_sync_config(
                 # ClickHouse unavailable — allow the sync to proceed rather than block it.
                 pass
 
-    plan_request = await session.run_sync(
-        lambda sync_session: planner_request_for_config_if_routed(
-            sync_session, config, triggered_by="manual", mode="incremental"
-        )
-    )
-    if plan_request is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Sync configuration has no linked integration",
-        )
     await session.run_sync(
         lambda sync_session: _preflight_planner_credential(sync_session, config)
     )
     try:
-        plan = await session.run_sync(
-            lambda sync_session: plan_sync_run(sync_session, plan_request)
+        trigger = await session.run_sync(
+            lambda sync_session: create_sync_execution_trigger(
+                sync_session,
+                config,
+                org_id,
+                triggered_by="manual",
+                mode="incremental",
+            )
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    planner_pending_run_id = await session.run_sync(
-        lambda sync_session: _ensure_pending_sync_job_run(
-            sync_session,
-            config,
-            org_id,
-            "manual",
-            {"sync_run_id": plan.sync_run_id},
+    if trigger is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Sync configuration has no linked integration",
         )
-    )
     await session.commit()
     try:
         dispatch_result = getattr(dispatch_sync_run, "apply_async")(
-            args=(plan.sync_run_id,), queue="sync"
+            args=(trigger.sync_run_id,), queue="sync"
         )
     except Exception as exc:
         error_message = f"dispatch enqueue failed: {exc}"
         await session.run_sync(
             lambda s: mark_sync_run_failed(
-                s, plan.sync_run_id, "dispatch enqueue failed"
+                s, trigger.sync_run_id, "dispatch enqueue failed"
             )
         )
         await session.run_sync(
-            lambda s: _mark_job_run_failed(s, planner_pending_run_id, error_message)
+            lambda s: _mark_job_run_failed(s, trigger.job_run_id, error_message)
         )
         await session.commit()
         raise HTTPException(status_code=503, detail=f"Task queue unavailable: {exc}")
@@ -1766,7 +1684,7 @@ async def trigger_sync_config(
     await session.run_sync(
         lambda s: _merge_job_run_result(
             s,
-            planner_pending_run_id,
+            trigger.job_run_id,
             {"dispatch_task_id": dispatch_task_id} if dispatch_task_id else None,
         )
     )
@@ -1774,9 +1692,9 @@ async def trigger_sync_config(
     return {
         "status": "triggered",
         "config_id": str(config.id),
-        "sync_run_id": plan.sync_run_id,
-        "run_id": planner_pending_run_id,
-        "total_units": plan.total_units,
+        "sync_run_id": trigger.sync_run_id,
+        "run_id": trigger.job_run_id,
+        "total_units": trigger.total_units,
     }
 
 
@@ -1809,68 +1727,50 @@ async def trigger_sync_config_backfill(
 
     from dev_health_ops.models.backfill import BackfillJob as BackfillJobModel
 
-    planner_backfill_request = await session.run_sync(
-        lambda sync_session: planner_request_for_config_if_routed(
-            sync_session, config, triggered_by="backfill", mode="backfill"
-        )
-    )
-    if planner_backfill_request is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Sync configuration has no linked integration",
-        )
-    planner_backfill_request = replace(
-        planner_backfill_request,
-        since=datetime.combine(payload.since, datetime.min.time(), tzinfo=timezone.utc),
-        before=datetime.combine(
-            payload.before, datetime.max.time(), tzinfo=timezone.utc
-        ),
-    )
     await session.run_sync(
         lambda sync_session: _preflight_planner_credential(sync_session, config)
     )
-    backfill_job = BackfillJobModel(
-        org_id=org_id,
-        sync_config_id=uuid.UUID(config_id),
-        status="pending",
-        since_date=payload.since,
-        before_date=payload.before,
-        total_chunks=0,
-    )
-    session.add(backfill_job)
-    await session.flush()
-    backfill_job_id = str(backfill_job.id)
-
     try:
-        pending_run_id = await session.run_sync(
-            lambda sync_session: _ensure_pending_sync_job_run(
+        trigger = await session.run_sync(
+            lambda sync_session: create_sync_execution_trigger(
                 sync_session,
                 config,
                 org_id,
-                "backfill",
-                {"planner_managed": True},
+                triggered_by="backfill",
+                mode="backfill",
+                since=datetime.combine(
+                    payload.since, datetime.min.time(), tzinfo=timezone.utc
+                ),
+                before=datetime.combine(
+                    payload.before, datetime.max.time(), tzinfo=timezone.utc
+                ),
+                initial_job_result={"planner_managed": True},
             )
         )
-        plan = await session.run_sync(
-            lambda sync_session: plan_sync_run(sync_session, planner_backfill_request)
-        )
-        await session.run_sync(
-            lambda s: _merge_job_run_result(
-                s, pending_run_id, {"sync_run_id": plan.sync_run_id}
+        if trigger is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Sync configuration has no linked integration",
             )
-        )
 
-        # Persist the sync_run marker BEFORE dispatch so a crash between enqueue
-        # and the post-dispatch commit still lets finalize_sync_run link this
-        # BackfillJob (matched via celery_task_id.contains("sync_run:<id>")). On
-        # enqueue failure the marker is cleared in _mark_backfill_job_failed.
-        backfill_job.celery_task_id = f"sync_run:{plan.sync_run_id}"
+        backfill_job = BackfillJobModel(
+            org_id=org_id,
+            sync_config_id=uuid.UUID(config_id),
+            status="pending",
+            since_date=payload.since,
+            before_date=payload.before,
+            total_chunks=0,
+        )
+        session.add(backfill_job)
+        await session.flush()
+        backfill_job_id = str(backfill_job.id)
+        backfill_job.celery_task_id = f"sync_run:{trigger.sync_run_id}"
 
         await session.commit()
 
         try:
             result = getattr(dispatch_sync_run, "apply_async")(
-                args=(plan.sync_run_id,), queue="sync"
+                args=(trigger.sync_run_id,), queue="sync"
             )
         except Exception as e:
             error_message = f"enqueue failed: {e}"
@@ -1880,27 +1780,26 @@ async def trigger_sync_config_backfill(
                     sync_session, backfill_job_id, error_message, completed_at
                 )
             )
-            if pending_run_id is not None:
-                await session.run_sync(
-                    lambda sync_session: _mark_job_run_failed(
-                        sync_session, pending_run_id, error_message
-                    )
+            await session.run_sync(
+                lambda sync_session: _mark_job_run_failed(
+                    sync_session, trigger.job_run_id, error_message
                 )
+            )
             await session.run_sync(
                 lambda sync_session: mark_sync_run_failed(
-                    sync_session, plan.sync_run_id, "dispatch enqueue failed"
+                    sync_session, trigger.sync_run_id, "dispatch enqueue failed"
                 )
             )
             await session.commit()
             raise HTTPException(status_code=503, detail=f"Task queue unavailable: {e}")
-        backfill_job.celery_task_id = f"{result.id}|sync_run:{plan.sync_run_id}"
+        backfill_job.celery_task_id = f"{result.id}|sync_run:{trigger.sync_run_id}"
         await session.commit()
         return {
             "status": "accepted",
             "config_id": str(config.id),
             "task_id": result.id,
             "backfill_job_id": backfill_job_id,
-            "sync_run_id": plan.sync_run_id,
+            "sync_run_id": trigger.sync_run_id,
             "mode": "fanout",
             "since": payload.since.isoformat(),
             "before": payload.before.isoformat(),

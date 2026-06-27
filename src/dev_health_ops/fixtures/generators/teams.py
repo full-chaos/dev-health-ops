@@ -8,7 +8,15 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from dev_health_ops.fixtures.demo_identity import DEMO_ORG_NAME
+from dev_health_ops.fixtures.demo_identity import (
+    DEMO_ORG_NAME,
+    ONBOARDED_ADMIN_USER_EMAIL,
+    ONBOARDED_ADMIN_USER_FULL_NAME,
+    ONBOARDED_ADMIN_USER_USERNAME,
+    ONBOARDING_ORGLESS_USER_EMAIL,
+    ONBOARDING_ORGLESS_USER_FULL_NAME,
+    ONBOARDING_ORGLESS_USER_USERNAME,
+)
 from dev_health_ops.fixtures.generators.base import BaseGeneratorMixin
 from dev_health_ops.metrics.schemas import RepoMetricsDailyRecord
 from dev_health_ops.models.git import Repo
@@ -90,6 +98,18 @@ class TeamsGeneratorMixin(BaseGeneratorMixin):
         include_admin: bool = True,
         org_id: str | None = None,
     ) -> dict[str, Any]:
+        """Generate auth fixtures for the two supported first-run states.
+
+        The seeded identities are deliberately minimal and purpose-specific:
+
+        * one verified orgless user for onboarding/workspace tests;
+        * one verified onboarded admin user with the demo workspace, owner
+          membership, and enterprise license for admin/integration tests.
+
+        End-to-end fixture users are not reused across these incompatible states.
+        Synthetic authors remain analytics-only identities and are not created as
+        login users here.
+        """
         import bcrypt
 
         from dev_health_ops.licensing.types import LicenseTier
@@ -106,6 +126,23 @@ class TeamsGeneratorMixin(BaseGeneratorMixin):
         ).decode("utf-8")
 
         _DEFAULT_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+
+        onboarding_user = User(
+            id=uuid.uuid5(
+                _DEFAULT_NS,
+                ONBOARDING_ORGLESS_USER_EMAIL,
+            ),
+            email=ONBOARDING_ORGLESS_USER_EMAIL,
+            username=ONBOARDING_ORGLESS_USER_USERNAME,
+            password_hash=password_hash,
+            full_name=ONBOARDING_ORGLESS_USER_FULL_NAME,
+            auth_provider="local",
+            is_active=True,
+            is_verified=True,
+            is_superuser=False,
+        )
+        users.append(onboarding_user)
+
         # Resolve the target Postgres Organization identity from the supplied
         # CLI/sink-level org_id, so that seeded users/memberships/licenses live
         # in the SAME tenant as the analytics rows. Without this, the fixture
@@ -130,12 +167,12 @@ class TeamsGeneratorMixin(BaseGeneratorMixin):
             admin_user = User(
                 id=uuid.uuid5(
                     _DEFAULT_NS,
-                    "admin@devhealth.example",
+                    ONBOARDED_ADMIN_USER_EMAIL,
                 ),
-                email="admin@devhealth.example",
-                username="admin",
+                email=ONBOARDED_ADMIN_USER_EMAIL,
+                username=ONBOARDED_ADMIN_USER_USERNAME,
                 password_hash=password_hash,
-                full_name="Admin User",
+                full_name=ONBOARDED_ADMIN_USER_FULL_NAME,
                 auth_provider="local",
                 is_active=True,
                 is_verified=True,
@@ -173,36 +210,6 @@ class TeamsGeneratorMixin(BaseGeneratorMixin):
             )
             admin_license.id = uuid.uuid5(admin_org.id, "org-license")
             licenses.append(admin_license)
-
-        default_org_id = None
-        if orgs:
-            default_org_id = orgs[0].id
-
-        for name, email in self.authors[:5]:
-            user_id = uuid.uuid5(_DEFAULT_NS, email)
-            user = User(
-                id=user_id,
-                email=email,
-                username=email.split("@")[0],
-                password_hash=password_hash,
-                full_name=name,
-                auth_provider="local",
-                is_active=True,
-                is_verified=True,
-                is_superuser=False,
-            )
-            users.append(user)
-
-            if default_org_id:
-                memberships.append(
-                    Membership(
-                        id=uuid.uuid5(user_id, str(default_org_id)),
-                        user_id=user_id,
-                        org_id=default_org_id,
-                        role="member",
-                        joined_at=datetime.now(timezone.utc),
-                    )
-                )
 
         return {
             "users": users,

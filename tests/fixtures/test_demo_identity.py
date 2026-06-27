@@ -21,6 +21,8 @@ from dev_health_ops.fixtures.demo_identity import (
     DEMO_ORG_NAME,
     DEMO_REPO_NAMES,
     DEMO_TEAMS,
+    ONBOARDED_ADMIN_USER_EMAIL,
+    ONBOARDING_ORGLESS_USER_EMAIL,
     demo_repo_name,
     demo_team_identity,
 )
@@ -81,6 +83,26 @@ def test_generated_org_name_is_curated_without_org_id():
     data = SyntheticDataGenerator(seed=1).generate_users(org_id=None)
     for org in data["organizations"]:
         assert org.name == DEMO_ORG_NAME
+
+
+def test_generated_auth_users_are_purpose_specific_journey_fixtures():
+    data = SyntheticDataGenerator(seed=1).generate_users(org_id=str(uuid.uuid4()))
+
+    users_by_email = {user.email: user for user in data["users"]}
+    assert set(users_by_email) == {
+        ONBOARDING_ORGLESS_USER_EMAIL,
+        ONBOARDED_ADMIN_USER_EMAIL,
+    }
+
+    orgless_user = users_by_email[ONBOARDING_ORGLESS_USER_EMAIL]
+    admin_user = users_by_email[ONBOARDED_ADMIN_USER_EMAIL]
+    assert orgless_user.is_verified is True
+    assert admin_user.is_superuser is True
+
+    memberships_by_user_id = {membership.user_id for membership in data["memberships"]}
+    assert orgless_user.id not in memberships_by_user_id
+    assert admin_user.id in memberships_by_user_id
+    assert len(data["memberships"]) == 1
 
 
 def test_demo_team_identity_is_curated_and_distinct():

@@ -462,12 +462,14 @@ async def _seed_auth_data(
             safe_org_ids.add(org.id)
     await session.commit()
 
-    # Gate fixture-user insertion on safe-org insertion (CHAOS-2458): on the
-    # default path, never introduce a fixture account (e.g. the known-password
-    # admin@devhealth.example superuser) for a tenant that already exists. A
-    # fixture user is eligible only if it belongs to at least one org that was
-    # freshly inserted this run; users tied only to pre-existing (skipped) orgs
-    # are left out entirely. overwrite_real_users=True keeps the full pass.
+    # Gate fixture-user insertion on safe-org insertion (CHAOS-2458) while
+    # preserving the CHAOS-2670 first-run fixture contract: the seed contains
+    # one verified orgless identity for workspace-onboarding tests and one
+    # onboarded admin identity for admin/integration tests. On the default path,
+    # the empty-graph guard above means orgless fixture users can only be added
+    # into an empty auth DB; users tied to orgs are eligible only when at least
+    # one of their orgs was freshly inserted this run. overwrite_real_users=True
+    # keeps the full pass for isolated demo/CI refreshes.
     all_memberships = user_data.get("memberships") or []
     user_org_map: dict[Any, set[Any]] = {}
     for membership in all_memberships:
@@ -475,8 +477,10 @@ async def _seed_auth_data(
 
     safe_user_ids: set[Any] = set()
     for user in user_data["users"]:
+        user_org_ids = user_org_map.get(user.id, set())
+        is_orgless_fixture_user = not user_org_ids
         if not overwrite_real_users and not (
-            user_org_map.get(user.id, set()) & safe_org_ids
+            is_orgless_fixture_user or (user_org_ids & safe_org_ids)
         ):
             logging.warning(
                 "FIXTURES-GUARD: skipping fixture user %s (%s) because it is not "

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
@@ -319,6 +319,100 @@ def _pr(number: int) -> MagicMock:
         "REST review comments should not be used"
     )
     return pr
+
+
+def _issue(number: int) -> MagicMock:
+    issue = MagicMock()
+    issue.number = number
+    issue.pull_request = None
+    return issue
+
+
+def test_work_client_iter_issues_filters_until_before_counting_limit() -> None:
+    client, _graphql, _gate = _client()
+    until = datetime(2026, 1, 10, tzinfo=timezone.utc)
+    future = _issue(1)
+    future.updated_at = until + timedelta(days=1)
+    in_window = _issue(2)
+    in_window.updated_at = until
+    repo = MagicMock()
+    repo.get_issues.return_value = [future, in_window]
+    cast(Any, client.github).get_repo.return_value = repo
+
+    result = list(
+        client.iter_issues(
+            owner="full-chaos",
+            repo="dev-health",
+            until=until,
+            limit=1,
+            scan_limit=2,
+        )
+    )
+
+    assert [issue.number for issue in result] == [2]
+
+
+def test_work_client_iter_pull_requests_warns_when_stopping_at_scan_limit(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, _graphql, _gate = _client()
+    until = datetime(2026, 1, 10, tzinfo=timezone.utc)
+    future = _pr(1)
+    future.updated_at = until + timedelta(days=1)
+    in_window = _pr(2)
+    in_window.updated_at = until
+    repo = MagicMock()
+
+    def pulls() -> Iterable[MagicMock]:
+        yield future
+        yield in_window
+        raise AssertionError("scan should stop before this item")
+
+    repo.get_pulls.return_value = pulls()
+    cast(Any, client.github).get_repo.return_value = repo
+
+    result = list(
+        client.iter_pull_requests(
+            owner="full-chaos",
+            repo="dev-health",
+            until=until,
+            limit=1,
+            scan_limit=1,
+        )
+    )
+
+    assert result == []
+    assert (
+        "stopped GET /repos/full-chaos/dev-health/pulls after scanning 1 items"
+        in caplog.text
+    )
+
+
+def test_work_client_iter_pull_requests_stops_at_since_cutoff() -> None:
+    client, _graphql, _gate = _client()
+    since = datetime(2026, 1, 10, tzinfo=timezone.utc)
+    newer = _pr(1)
+    newer.updated_at = since + timedelta(seconds=1)
+    equal = _pr(2)
+    equal.updated_at = since
+    older = _pr(3)
+    older.updated_at = since - timedelta(seconds=1)
+    repo = MagicMock()
+
+    def pulls() -> Iterable[MagicMock]:
+        yield newer
+        yield equal
+        yield older
+        raise AssertionError("pagination should stop after the first older PR")
+
+    repo.get_pulls.return_value = pulls()
+    cast(Any, client.github).get_repo.return_value = repo
+
+    result = list(
+        client.iter_pull_requests(owner="full-chaos", repo="dev-health", since=since)
+    )
+
+    assert [pr.number for pr in result] == [1, 2]
 
 
 def _comment_node(comment_id: int, body: str = "comment") -> dict[str, object]:

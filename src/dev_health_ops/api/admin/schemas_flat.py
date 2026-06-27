@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class SettingResponse(BaseModel):
@@ -507,12 +507,20 @@ class DeletionResultResponse(BaseModel):
 
 
 class OrganizationCreate(BaseModel):
-    name: str = Field(..., min_length=1)
+    name: str = Field(..., min_length=1, max_length=100)
     slug: str | None = None
     description: str | None = None
     tier: str = "community"
     settings: dict[str, Any] = Field(default_factory=dict)
     owner_user_id: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Workspace name is required")
+        return normalized
 
 
 class OrganizationUpdate(BaseModel):

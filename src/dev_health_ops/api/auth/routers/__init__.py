@@ -16,6 +16,7 @@ from .dependencies import get_current_user, get_current_user_optional
 from .invites import router as invites_router
 from .login import router as login_router
 from .oauth import router as oauth_router
+from .onboarding import router as onboarding_router
 from .password_reset import router as password_reset_router
 from .refresh import router as refresh_router
 from .register import router as register_router
@@ -40,6 +41,7 @@ __all__ = [
     "invites_router",
     "login_router",
     "oauth_router",
+    "onboarding_router",
     "password_reset_router",
     "refresh_router",
     "register_router",

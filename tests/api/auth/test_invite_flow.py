@@ -293,3 +293,64 @@ async def test_accepting_as_already_member_returns_error(
         response.json()["detail"]["message"]
         == "User is already a member of this organization"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("org_name", [None, "", "   ", "x" * 101])
+async def test_onboard_create_org_requires_workspace_name(
+    client, seeded_state, org_name
+):
+    async_client, current_user = client
+    current_user["value"] = AuthenticatedUser(
+        user_id=seeded_state["invitee_id"],
+        email=seeded_state["invitee_email"],
+        org_id="",
+        role="member",
+        is_superuser=False,
+    )
+    payload = {"action": "create_org"}
+    if org_name is not None:
+        payload["org_name"] = org_name
+
+    response = await async_client.post("/api/v1/auth/onboard", json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["message"] in {
+        "Workspace name is required",
+        "Workspace name must be 100 characters or fewer",
+    }
+    assert response.json()["detail"]["errors"]
+
+
+@pytest.mark.asyncio
+async def test_onboard_create_org_trims_workspace_name_and_returns_tokens(
+    client, session_maker, seeded_state
+):
+    async_client, current_user = client
+    current_user["value"] = AuthenticatedUser(
+        user_id=seeded_state["invitee_id"],
+        email=seeded_state["invitee_email"],
+        org_id="",
+        role="member",
+        is_superuser=False,
+    )
+
+    response = await async_client.post(
+        "/api/v1/auth/onboard",
+        json={"action": "create_org", "org_name": "  First Workspace  "},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["org_name"] == "First Workspace"
+    assert data["role"] == "owner"
+    assert data["access_token"]
+    assert data["refresh_token"]
+
+    async with session_maker() as session:
+        org = await session.scalar(
+            select(Organization).where(Organization.id == uuid.UUID(data["org_id"]))
+        )
+
+    assert org is not None
+    assert org.name == "First Workspace"

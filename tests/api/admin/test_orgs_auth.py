@@ -10,6 +10,7 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.services.auth import AuthenticatedUser
@@ -114,3 +115,25 @@ async def test_get_org_by_id_accepts_superuser(session_maker):
         resp = await ac.get(f"/admin/orgs/{org_id}")
     assert resp.status_code == 200, resp.text
     assert resp.json()["id"] == org_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["   ", "x" * 101])
+async def test_create_org_rejects_invalid_name(session_maker, name):
+    su = AuthenticatedUser(
+        user_id=str(uuid.uuid4()),
+        email="su@example.com",
+        org_id=str(uuid.uuid4()),
+        role="owner",
+        is_superuser=True,
+    )
+    app = _app(session_maker, current_user=su)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        resp = await ac.post("/admin/orgs", json={"name": name})
+
+    assert resp.status_code == 422, resp.text
+    async with session_maker() as session:
+        org_count = await session.scalar(select(func.count()).select_from(Organization))
+    assert org_count == 0

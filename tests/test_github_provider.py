@@ -22,7 +22,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from dev_health_ops.connectors.exceptions import NotFoundException
+from dev_health_ops.connectors.exceptions import NotFoundException, RateLimitException
 from dev_health_ops.models.work_items import WorkItem
 from dev_health_ops.providers.base import (
     IngestionContext,
@@ -969,6 +969,67 @@ def test_github_provider_pr_social_404_does_not_drop_fetched_prs(
 
 
 @patch.dict(os.environ, {}, clear=True)
+def test_github_provider_pr_fetch_rate_limit_propagates(
+    mock_status_mapping, mock_identity
+):
+    client = _options_client()
+    client.iter_pull_requests.side_effect = RateLimitException(
+        "limited", retry_after_seconds=42.0
+    )
+    provider = GitHubProvider(
+        status_mapping=mock_status_mapping, identity=mock_identity, client=client
+    )
+    ctx = IngestionContext(repo="owner/repo", window=IngestionWindow())
+
+    with pytest.raises(RateLimitException) as exc_info:
+        provider.ingest(ctx)
+
+    assert exc_info.value.retry_after_seconds == 42.0
+    client.iter_pr_social_data_batch.assert_not_called()
+
+
+@patch.dict(os.environ, {}, clear=True)
+def test_github_provider_issue_comment_rate_limit_propagates(
+    mock_status_mapping, mock_identity
+):
+    client = _options_client()
+    client.iter_issues.return_value = [_mock_issue(number=1)]
+    client.iter_issue_comments.side_effect = RateLimitException(
+        "limited", retry_after_seconds=41.0
+    )
+    provider = GitHubProvider(
+        status_mapping=mock_status_mapping, identity=mock_identity, client=client
+    )
+    ctx = IngestionContext(repo="owner/repo", window=IngestionWindow())
+
+    with pytest.raises(RateLimitException) as exc_info:
+        provider.ingest(ctx)
+
+    assert exc_info.value.retry_after_seconds == 41.0
+    client.iter_pull_requests.assert_not_called()
+
+
+@patch.dict(os.environ, {}, clear=True)
+def test_github_provider_pr_social_rate_limit_propagates(
+    mock_status_mapping, mock_identity
+):
+    client = _options_client()
+    client.iter_pull_requests.return_value = [_mock_pr(number=100, title="Test PR")]
+    client.iter_pr_social_data_batch.side_effect = RateLimitException(
+        "limited", retry_after_seconds=43.0
+    )
+    provider = GitHubProvider(
+        status_mapping=mock_status_mapping, identity=mock_identity, client=client
+    )
+    ctx = IngestionContext(repo="owner/repo", window=IngestionWindow())
+
+    with pytest.raises(RateLimitException) as exc_info:
+        provider.ingest(ctx)
+
+    assert exc_info.value.retry_after_seconds == 43.0
+
+
+@patch.dict(os.environ, {}, clear=True)
 def test_github_provider_pr_processing_404_is_not_logged_as_fetch_failure(
     caplog, mock_status_mapping, mock_identity
 ):
@@ -998,6 +1059,61 @@ def test_github_provider_pr_processing_404_is_not_logged_as_fetch_failure(
     assert [item.work_item_id for item in batch.work_items] == ["ghpr:owner/repo#100"]
     assert "GitHub: failed to fetch PRs from owner/repo" not in caplog.text
     assert "GitHub: failed to process PRs from owner/repo" in caplog.text
+
+
+@patch.dict(os.environ, {}, clear=True)
+def test_github_provider_threads_window_since_to_pull_requests(
+    mock_status_mapping, mock_identity
+):
+    from dev_health_ops.providers.base import WorkItemIngestionOptions
+
+    since = datetime(2026, 1, 10, tzinfo=timezone.utc)
+    client = _options_client()
+    provider = GitHubProvider(
+        status_mapping=mock_status_mapping, identity=mock_identity, client=client
+    )
+    ctx = IngestionContext(
+        repo="owner/repo",
+        window=IngestionWindow(updated_since=since),
+        work_item_options=WorkItemIngestionOptions(
+            include_issues=False,
+            include_pull_requests=True,
+        ),
+    )
+
+    provider.ingest(ctx)
+
+    client.iter_pull_requests.assert_called_once_with(
+        owner="owner",
+        repo="repo",
+        state="all",
+        since=since,
+        until=None,
+        limit=None,
+        scan_limit=None,
+    )
+
+
+@patch.dict(os.environ, {}, clear=True)
+def test_github_provider_skips_pr_fetch_when_limit_consumed_by_issues(
+    mock_status_mapping, mock_identity
+):
+    client = _options_client()
+    client.iter_issues.return_value = [_mock_issue(number=1)]
+    provider = GitHubProvider(
+        status_mapping=mock_status_mapping, identity=mock_identity, client=client
+    )
+    ctx = IngestionContext(
+        repo="owner/repo",
+        window=IngestionWindow(),
+        limit=1,
+    )
+
+    batch = provider.ingest(ctx)
+
+    assert [item.work_item_id for item in batch.work_items] == ["gh:owner/repo#1"]
+    client.iter_pull_requests.assert_not_called()
+    client.iter_pr_social_data_batch.assert_not_called()
 
 
 @patch.dict(os.environ, {}, clear=True)
@@ -1081,6 +1197,7 @@ def _options_client() -> MagicMock:
     client.iter_repo_milestones.return_value = []
     client.iter_issues.return_value = []
     client.iter_issue_events.return_value = []
+    client.iter_issue_comments.return_value = []
     client.iter_pull_requests.return_value = []
     client.iter_pr_comments_batch.return_value = []
     return client
@@ -1171,3 +1288,177 @@ def test_work_item_options_ctx_overrides_env(mock_status_mapping, mock_identity)
     )
     provider.ingest(ctx)
     client.iter_pull_requests.assert_called_once()
+
+
+# ============================================================================
+# active_until windowing — CHAOS-2573 (post-fetch enforcement, no limit drain)
+# ============================================================================
+
+
+@patch.dict(os.environ, {}, clear=True)
+def test_github_provider_active_until_excludes_future_issues_without_consuming_limit(
+    mock_status_mapping, mock_identity
+):
+    """active_until is enforced post-fetch: issues updated after the bound are
+    skipped and must not consume ctx.limit, so an in-window issue sitting past a
+    future one is still captured."""
+    until = datetime(2026, 1, 12, tzinfo=timezone.utc)
+    in_window_a = _mock_issue(
+        number=1, updated_at=datetime(2026, 1, 10, tzinfo=timezone.utc)
+    )
+    future = _mock_issue(number=2, updated_at=datetime(2026, 2, 1, tzinfo=timezone.utc))
+    in_window_b = _mock_issue(
+        number=3, updated_at=datetime(2026, 1, 11, tzinfo=timezone.utc)
+    )
+    client = _options_client()
+    client.iter_issues.return_value = [in_window_a, future, in_window_b]
+    provider = GitHubProvider(
+        status_mapping=mock_status_mapping, identity=mock_identity, client=client
+    )
+    ctx = IngestionContext(
+        repo="owner/repo",
+        window=IngestionWindow(active_until=until),
+        limit=2,
+    )
+
+    batch = provider.ingest(ctx)
+
+    assert [item.work_item_id for item in batch.work_items] == [
+        "gh:owner/repo#1",
+        "gh:owner/repo#3",
+    ]
+    client.iter_issues.assert_called_once_with(
+        owner="owner",
+        repo="repo",
+        state="all",
+        since=None,
+        until=until,
+        limit=2,
+        scan_limit=100,
+    )
+
+
+@patch.dict(os.environ, {}, clear=True)
+def test_github_provider_active_until_filters_prs_before_social_batch(
+    mock_status_mapping, mock_identity
+):
+    """active_until is enforced post-fetch for PRs: future PRs are excluded, do
+    not consume ctx.limit, and the PR social batch only receives in-window PRs."""
+    from dev_health_ops.providers.base import WorkItemIngestionOptions
+
+    until = datetime(2026, 1, 12, tzinfo=timezone.utc)
+    in_window_a = _mock_pr(
+        number=1, updated_at=datetime(2026, 1, 10, tzinfo=timezone.utc)
+    )
+    future = _mock_pr(number=2, updated_at=datetime(2026, 2, 1, tzinfo=timezone.utc))
+    in_window_b = _mock_pr(
+        number=3, updated_at=datetime(2026, 1, 11, tzinfo=timezone.utc)
+    )
+    client = _options_client()
+    client.iter_pull_requests.return_value = [in_window_a, future, in_window_b]
+    client.iter_pr_social_data_batch.return_value = []
+    provider = GitHubProvider(
+        status_mapping=mock_status_mapping, identity=mock_identity, client=client
+    )
+    ctx = IngestionContext(
+        repo="owner/repo",
+        window=IngestionWindow(active_until=until),
+        limit=2,
+        work_item_options=WorkItemIngestionOptions(include_issues=False),
+    )
+
+    batch = provider.ingest(ctx)
+
+    assert [item.work_item_id for item in batch.work_items] == [
+        "ghpr:owner/repo#1",
+        "ghpr:owner/repo#3",
+    ]
+    client.iter_pull_requests.assert_called_once_with(
+        owner="owner",
+        repo="repo",
+        state="all",
+        since=None,
+        until=until,
+        limit=2,
+        scan_limit=100,
+    )
+    social_prs = client.iter_pr_social_data_batch.call_args.kwargs["prs"]
+    assert [pr.number for pr in social_prs] == [1, 3]
+
+
+@patch.dict(os.environ, {}, clear=True)
+def test_github_provider_active_until_without_limit_does_not_default_scan_cap(
+    mock_status_mapping, mock_identity
+):
+    until = datetime(2026, 1, 12, tzinfo=timezone.utc)
+    client = _options_client()
+    provider = GitHubProvider(
+        status_mapping=mock_status_mapping, identity=mock_identity, client=client
+    )
+    ctx = IngestionContext(
+        repo="owner/repo",
+        window=IngestionWindow(active_until=until),
+    )
+
+    provider.ingest(ctx)
+
+    client.iter_issues.assert_called_once_with(
+        owner="owner",
+        repo="repo",
+        state="all",
+        since=None,
+        until=until,
+        limit=None,
+        scan_limit=None,
+    )
+    client.iter_pull_requests.assert_called_once_with(
+        owner="owner",
+        repo="repo",
+        state="all",
+        since=None,
+        until=until,
+        limit=None,
+        scan_limit=None,
+    )
+
+
+@patch.dict(os.environ, {"GITHUB_ACTIVE_WINDOW_SCAN_LIMIT": "25"}, clear=True)
+def test_github_provider_active_until_without_limit_uses_explicit_scan_cap(
+    mock_status_mapping, mock_identity
+):
+    until = datetime(2026, 1, 12, tzinfo=timezone.utc)
+    client = _options_client()
+    provider = GitHubProvider(
+        status_mapping=mock_status_mapping, identity=mock_identity, client=client
+    )
+    ctx = IngestionContext(
+        repo="owner/repo",
+        window=IngestionWindow(active_until=until),
+    )
+
+    provider.ingest(ctx)
+
+    assert client.iter_issues.call_args.kwargs["scan_limit"] == 25
+    assert client.iter_pull_requests.call_args.kwargs["scan_limit"] == 25
+
+
+@patch.dict(os.environ, {}, clear=True)
+def test_github_provider_milestone_rate_limit_propagates(
+    mock_status_mapping, mock_identity
+):
+    """A RateLimitException raised while fetching milestones must propagate
+    instead of being swallowed by the milestone best-effort handler."""
+    client = _options_client()
+    client.iter_repo_milestones.side_effect = RateLimitException(
+        "limited", retry_after_seconds=44.0
+    )
+    provider = GitHubProvider(
+        status_mapping=mock_status_mapping, identity=mock_identity, client=client
+    )
+    ctx = IngestionContext(repo="owner/repo", window=IngestionWindow())
+
+    with pytest.raises(RateLimitException) as exc_info:
+        provider.ingest(ctx)
+
+    assert exc_info.value.retry_after_seconds == 44.0
+    client.iter_issues.assert_not_called()

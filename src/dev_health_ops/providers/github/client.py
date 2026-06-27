@@ -144,6 +144,20 @@ def _parse_github_datetime(value: object) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _item_updated_before(item: object, cutoff: datetime | None) -> bool:
+    if cutoff is None:
+        return False
+    updated_at = _parse_github_datetime(getattr(item, "updated_at", None))
+    return updated_at is not None and updated_at < cutoff
+
+
+def _item_updated_after(item: object, cutoff: datetime | None) -> bool:
+    if cutoff is None:
+        return False
+    updated_at = _parse_github_datetime(getattr(item, "updated_at", None))
+    return updated_at is not None and updated_at > cutoff
+
+
 def _diagnostic_headers(headers: object) -> dict[str, str]:
     if not isinstance(headers, dict):
         return {}
@@ -639,16 +653,35 @@ class GitHubWorkClient:
         *,
         limit: int | None,
         skip: Callable[[_TItem], bool] | None = None,
+        stop: Callable[[_TItem], bool] | None = None,
+        scan_limit: int | None = None,
+        operation: str | None = None,
     ) -> Iterable[_TItem]:
-        """Yield items from ``source`` respecting ``limit`` and optional skip filter.
+        """Yield items from ``source`` respecting ``limit`` and optional filters.
 
         ``skip`` receives each item and returns ``True`` when the item should be
         excluded (used for PR-vs-issue filtering on the issues feed).
+        ``stop`` receives each item and returns ``True`` when pagination can stop.
         """
         if limit is not None and int(limit) <= 0:
             return
+        if scan_limit is not None and int(scan_limit) <= 0:
+            return
         count = 0
+        scanned = 0
         for item in source:
+            if scan_limit is not None and scanned >= int(scan_limit):
+                if operation is not None:
+                    logger.warning(
+                        "GitHub: stopped %s after scanning %s items before reaching result limit %s",
+                        operation,
+                        scan_limit,
+                        limit,
+                    )
+                return
+            scanned += 1
+            if stop is not None and stop(item):
+                return
             if skip is not None and skip(item):
                 continue
             yield item
@@ -663,10 +696,19 @@ class GitHubWorkClient:
         operation: str,
         limit: int | None,
         skip: Callable[[_TItem], bool] | None = None,
+        stop: Callable[[_TItem], bool] | None = None,
+        scan_limit: int | None = None,
     ) -> Iterable[_TItem]:
         with gate_call(self.gate):
             try:
-                yield from self._iter_with_limit(source, limit=limit, skip=skip)
+                yield from self._iter_with_limit(
+                    source,
+                    limit=limit,
+                    skip=skip,
+                    stop=stop,
+                    scan_limit=scan_limit,
+                    operation=operation,
+                )
                 self._record_rest_usage(operation)
             except Exception as exc:
                 self._raise_github_exception(exc, operation=operation)
@@ -678,18 +720,28 @@ class GitHubWorkClient:
         repo: str,
         state: str = "all",
         since: datetime | None = None,
+        until: datetime | None = None,
         limit: int | None = None,
+        scan_limit: int | None = None,
     ) -> Iterable[_GitHubIssueLike]:
         gh_repo = self.get_repo(owner=owner, repo=repo)
         operation = f"GET /repos/{owner}/{repo}/issues"
         issues = self._call_github(
             operation, lambda: gh_repo.get_issues(state=state, since=since)
         )
+        cutoff = _parse_github_datetime(until) if until is not None else None
+
+        def skip_issue(issue: _GitHubIssueLike) -> bool:
+            return getattr(
+                issue, "pull_request", None
+            ) is not None or _item_updated_after(issue, cutoff)
+
         yield from self._iter_github_items(
             issues,
             operation=operation,
             limit=limit,
-            skip=lambda issue: getattr(issue, "pull_request", None) is not None,
+            skip=skip_issue,
+            scan_limit=scan_limit,
         )
 
     def iter_issue_events(
@@ -726,7 +778,10 @@ class GitHubWorkClient:
         state: str = "all",
         sort: str = "updated",
         direction: str = "desc",
+        since: datetime | None = None,
+        until: datetime | None = None,
         limit: int | None = None,
+        scan_limit: int | None = None,
     ) -> Iterable[_GitHubPullRequestLike]:
         """
         Iterate pull requests in a repository via REST.
@@ -737,7 +792,30 @@ class GitHubWorkClient:
             operation,
             lambda: gh_repo.get_pulls(state=state, sort=sort, direction=direction),
         )
-        yield from self._iter_github_items(pulls, operation=operation, limit=limit)
+        cutoff = _parse_github_datetime(since) if since is not None else None
+        until_cutoff = _parse_github_datetime(until) if until is not None else None
+        stop: Callable[[_GitHubPullRequestLike], bool] | None = None
+        if sort == "updated" and direction == "desc" and cutoff is not None:
+
+            def stop_at_cutoff(pr: _GitHubPullRequestLike) -> bool:
+                return _item_updated_before(pr, cutoff)
+
+            stop = stop_at_cutoff
+        skip: Callable[[_GitHubPullRequestLike], bool] | None = None
+        if until_cutoff is not None:
+
+            def skip_after_until(pr: _GitHubPullRequestLike) -> bool:
+                return _item_updated_after(pr, until_cutoff)
+
+            skip = skip_after_until
+        yield from self._iter_github_items(
+            pulls,
+            operation=operation,
+            limit=limit,
+            skip=skip,
+            stop=stop,
+            scan_limit=scan_limit,
+        )
 
     def iter_issue_comments(
         self, issue: _GitHubIssueBaseLike, *, limit: int | None = None

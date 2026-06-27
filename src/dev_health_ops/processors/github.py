@@ -9,6 +9,7 @@ from dev_health_ops.analytics.complexity import (
     ComplexityScanner,
 )
 from dev_health_ops.credentials.types import GitHubCredentials
+from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.models import git as git_models
 from dev_health_ops.models.git import (
@@ -112,8 +113,15 @@ def _fetch_github_commits_sync(
     since: datetime | None = None,
     until: datetime | None = None,
 ):
-    """Sync helper to fetch and parse GitHub commits."""
-    raw_commits = []
+    """Sync helper to fetch and parse GitHub commits.
+
+    Returns ``(raw_commits, commit_objects, window_truncated)``. ``window_truncated``
+    is True only when ``max_commits`` was hit AND at least one more commit existed
+    beyond it (peeked but not kept) — i.e. the window genuinely held more commits
+    than we fetched. A complete window of exactly ``max_commits`` returns False, so
+    callers can cover it instead of skipping stats as a false-truncation.
+    """
+    raw_commits: list[Any] = []
     commits_kwargs: dict[str, Any] = {}
     if since is not None:
         commits_kwargs["since"] = since
@@ -121,10 +129,14 @@ def _fetch_github_commits_sync(
         commits_kwargs["until"] = until
     commits_iter = gh_repo.get_commits(**commits_kwargs)
 
+    window_truncated = False
     for commit in commits_iter:
-        raw_commits.append(commit)
         if max_commits is not None and len(raw_commits) >= max_commits:
+            # We already have ``max_commits`` and the iterator yielded one more:
+            # proof the window was truncated. Don't keep this extra commit.
+            window_truncated = True
             break
+        raw_commits.append(commit)
 
     commit_objects = []
     for commit in raw_commits:
@@ -201,7 +213,7 @@ def _fetch_github_commits_sync(
             parents=len(commit.parents),
         )
         commit_objects.append(git_commit)
-    return raw_commits, commit_objects
+    return raw_commits, commit_objects, window_truncated
 
 
 def _fetch_github_commit_stats_sync(
@@ -256,6 +268,8 @@ def _fetch_github_commit_stats_sync(
                     new_file_mode="unknown",
                 )
                 stats_objects.append(stat)
+        except (RateLimitException, RateLimitExceededException):
+            raise
         except Exception as e:
             logging.warning(
                 "Failed to get stats for commit %s: %s",
@@ -919,6 +933,8 @@ async def _backfill_github_missing_data(
     include_files: bool = True,
     include_blame: bool = True,
     include_commit_stats: bool = True,
+    since: datetime | None = None,
+    until: datetime | None = None,
 ) -> None:
     # Logic matches the CLI sync orchestration.
     logging.info(
@@ -1006,18 +1022,35 @@ async def _backfill_github_missing_data(
                 "Backfilling commit stats for %s...",
                 repo_full_name,
             )
-            commits_iter = gh_repo.get_commits()
-            async with AsyncBatchCollector(
-                ingestion_sink.insert_git_commit_stats
-            ) as stats_collector:
-                for commit in commits_iter:
-                    if max_commits and commit_count >= max_commits:
-                        break
+            commits_kwargs: dict[str, Any] = {}
+            if since is not None:
+                commits_kwargs["since"] = since
+            if until is not None:
+                commits_kwargs["until"] = until
+            commits_iter = gh_repo.get_commits(**commits_kwargs)
+            commit_count_for_limit = (
+                max_commits if max_commits is not None else 1_000_000_000
+            )
+            stats_limit = resolve_commit_stats_limit(
+                commit_count_for_limit,
+                max_commits,
+                since,
+            )
+            candidate_commits: list[Any] = []
+            truncated = False
+            for commit in commits_iter:
+                if len(candidate_commits) >= stats_limit:
+                    truncated = True
+                    break
+                candidate_commits.append(commit)
+            stats_rows: list[GitCommitStat] = []
+            if not (truncated and since is not None):
+                for commit in candidate_commits:
                     commit_count += 1
                     try:
                         detailed = gh_repo.get_commit(commit.sha)
                         for file in getattr(detailed, "files", []) or []:
-                            stats_collector.add(
+                            stats_rows.append(
                                 GitCommitStat(
                                     repo_id=db_repo.id,
                                     commit_hash=commit.sha,
@@ -1030,7 +1063,8 @@ async def _backfill_github_missing_data(
                                     new_file_mode="unknown",
                                 )
                             )
-                            await stats_collector.maybe_flush()
+                    except (RateLimitException, RateLimitExceededException):
+                        raise
                     except Exception as e:
                         logging.debug(
                             "Failed commit stat fetch for %s@%s: %s",
@@ -1038,11 +1072,27 @@ async def _backfill_github_missing_data(
                             commit.sha,
                             e,
                         )
-            logging.info(
-                "Backfilled commit stats for %d commits in %s",
-                commit_count,
-                repo_full_name,
-            )
+            if truncated and since is not None:
+                logging.warning(
+                    "Skipped GitHub commit-stat backfill for %s after hitting cap %d; "
+                    "narrow the sync window or raise the commit-stat cap",
+                    repo_full_name,
+                    stats_limit,
+                )
+            else:
+                async with AsyncBatchCollector(
+                    ingestion_sink.insert_git_commit_stats
+                ) as stats_collector:
+                    for stat in stats_rows:
+                        stats_collector.add(stat)
+                        await stats_collector.maybe_flush()
+                logging.info(
+                    "Backfilled commit stats for %d commits in %s",
+                    commit_count,
+                    repo_full_name,
+                )
+        except (RateLimitException, RateLimitExceededException):
+            raise
         except Exception as e:
             logging.warning(
                 "Failed to backfill GitHub commit stats for %s: %s",
@@ -1126,12 +1176,12 @@ async def _sync_github_commits(
     max_commits: int | None,
     since: datetime | None,
     until: datetime | None = None,
-) -> tuple[list[Any], int]:
+) -> tuple[list[Any], int, bool]:
     if max_commits is None:
         logging.info("Fetching all commits from GitHub...")
     else:
         logging.info("Fetching up to %d commits from GitHub...", max_commits)
-    raw_commits, commit_objects = await loop.run_in_executor(
+    raw_commits, commit_objects, *rest = await loop.run_in_executor(
         None,
         _fetch_github_commits_sync,
         gh_repo,
@@ -1140,10 +1190,40 @@ async def _sync_github_commits(
         since,
         until,
     )
+    window_truncated = bool(rest[0]) if rest else False
     if commit_objects:
         await ingestion_sink.insert_git_commit_data(commit_objects)
         logging.info("Stored %d commits from GitHub", len(commit_objects))
-    return raw_commits, len(commit_objects)
+    return raw_commits, len(commit_objects), window_truncated
+
+
+def _windowed_commit_stats_truncated(
+    raw_commit_count: int,
+    window_truncated: bool,
+    max_commits: int | None,
+    since: datetime | None,
+) -> bool:
+    """Whether a since-bounded commit window is too large to cover fully.
+
+    Per-file commit stats cost one extra API call each, so the window is capped
+    (by ``max_commits`` and by ``resolve_commit_stats_limit``'s hard cap). When
+    the window exceeds a cap we skip stats entirely rather than persist a partial
+    day, which would corrupt churn/hotspot/bus-factor daily metrics. Full-history
+    syncs (``since is None``) intentionally use a capped sample and are never
+    treated as truncated.
+
+    ``window_truncated`` comes from the fetch (``_fetch_github_commits_sync`` peeks
+    one commit past ``max_commits``); it is the ONLY reliable signal for the
+    ``max_commits`` cap, because a complete window of exactly ``max_commits``
+    commits is otherwise indistinguishable from a truncated one — counting alone
+    (``raw_commit_count >= max_commits``) would false-positive on the exact-size
+    complete case and silently drop its stats. ``raw_commit_count > stats_limit``
+    independently catches the hard-cap case for uncapped fetches.
+    """
+    if since is None:
+        return False
+    stats_limit = resolve_commit_stats_limit(raw_commit_count, max_commits, since)
+    return window_truncated or raw_commit_count > stats_limit
 
 
 async def _sync_github_commit_stats(
@@ -1156,9 +1236,10 @@ async def _sync_github_commit_stats(
     since: datetime | None,
     until: datetime | None = None,
     raw_commits: list[Any] | None = None,
+    window_truncated: bool = False,
 ) -> int:
     if raw_commits is None:
-        raw_commits, _ = await loop.run_in_executor(
+        raw_commits, _, *rest = await loop.run_in_executor(
             None,
             _fetch_github_commits_sync,
             gh_repo,
@@ -1167,8 +1248,19 @@ async def _sync_github_commit_stats(
             since,
             until,
         )
+        window_truncated = bool(rest[0]) if rest else False
     logging.info("Fetching commit stats from GitHub...")
     stats_limit = resolve_commit_stats_limit(len(raw_commits), max_commits, since)
+    if _windowed_commit_stats_truncated(
+        len(raw_commits), window_truncated, max_commits, since
+    ):
+        logging.warning(
+            "Skipped GitHub commit-stat sync for repo %s after hitting cap %d; "
+            "narrow the sync window or raise the commit-stat cap",
+            db_repo.id,
+            stats_limit,
+        )
+        return 0
     stats_objects = await loop.run_in_executor(
         None,
         _fetch_github_commit_stats_sync,
@@ -1508,6 +1600,8 @@ async def process_github_repo(
                     default_branch=repo_info.default_branch,
                     max_commits=max_commits,
                     blame_only=True,
+                    since=since,
+                    until=until,
                 )
                 logging.info(
                     "Completed blame-only sync for GitHub repository: %s/%s",
@@ -1517,8 +1611,9 @@ async def process_github_repo(
                 return
 
             raw_commits: list[Any] | None = None
+            window_truncated = False
             if run_commits:
-                raw_commits, _ = await _sync_github_commits(
+                raw_commits, _, window_truncated = await _sync_github_commits(
                     gh_repo=gh_repo,
                     db_repo=db_repo,
                     ingestion_sink=ingestion_sink,
@@ -1538,6 +1633,7 @@ async def process_github_repo(
                     since=since,
                     until=until,
                     raw_commits=raw_commits,
+                    window_truncated=window_truncated,
                 )
 
             if sync_prs:
@@ -1671,6 +1767,8 @@ async def process_github_repo(
                         include_files=run_files,
                         include_blame=run_blame,
                         include_commit_stats=False,
+                        since=since,
+                        until=until,
                     )
                 except Exception as e:
                     logging.warning(
@@ -1788,6 +1886,7 @@ async def process_github_repos_batch(
                     default_branch=repo_info.default_branch,
                     max_commits=max_commits_per_repo,
                     blame_only=True,
+                    since=since,
                 )
             except Exception as e:
                 logging.debug(
@@ -1798,6 +1897,8 @@ async def process_github_repos_batch(
             return
 
         gh_repo = None
+        skipped_windowed_commit_stats = False
+        commit_stats_available = True
         if sync_git:
             # Fetch commits and stats to populate git_commits/git_commit_stats.
             commit_limit: int | None
@@ -1808,7 +1909,7 @@ async def process_github_repos_batch(
             try:
                 if gh_repo is None:
                     gh_repo = connector.github.get_repo(repo_info.full_name)
-                raw_commits, commit_objects = await loop.run_in_executor(
+                raw_commits, commit_objects, *rest = await loop.run_in_executor(
                     None,
                     _fetch_github_commits_sync,
                     gh_repo,
@@ -1816,20 +1917,38 @@ async def process_github_repos_batch(
                     db_repo.id,
                     since,
                 )
+                window_truncated = bool(rest[0]) if rest else False
                 if commit_objects:
                     await ingestion_sink.insert_git_commit_data(commit_objects)
 
-                stats_objects = await loop.run_in_executor(
-                    None,
-                    _fetch_github_commit_stats_sync,
-                    raw_commits,
-                    db_repo.id,
-                    50 if commit_limit is None else min(commit_limit, 50),
-                    since,
+                stats_limit = resolve_commit_stats_limit(
+                    len(raw_commits), max_commits_per_repo, since
                 )
-                if stats_objects:
-                    await ingestion_sink.insert_git_commit_stats(stats_objects)
+                skipped_windowed_commit_stats = _windowed_commit_stats_truncated(
+                    len(raw_commits), window_truncated, max_commits_per_repo, since
+                )
+                if skipped_windowed_commit_stats:
+                    logging.warning(
+                        "Skipped GitHub commit stats for %s after hitting cap %d; "
+                        "narrow the sync window or raise the commit-stat cap",
+                        repo_info.full_name,
+                        stats_limit,
+                    )
+                else:
+                    await _sync_github_commit_stats(
+                        gh_repo=gh_repo,
+                        db_repo=db_repo,
+                        ingestion_sink=ingestion_sink,
+                        loop=loop,
+                        max_commits=max_commits_per_repo,
+                        since=since,
+                        raw_commits=raw_commits,
+                        window_truncated=window_truncated,
+                    )
+            except (RateLimitException, RateLimitExceededException):
+                raise
             except Exception as e:
+                commit_stats_available = False
                 logging.warning(
                     "Failed to fetch commits for GitHub repo %s: %s",
                     repo_info.full_name,
@@ -1978,7 +2097,12 @@ async def process_github_repos_batch(
                     e,
                 )
 
-        if result.stats and sync_git:
+        if (
+            result.stats
+            and sync_git
+            and commit_stats_available
+            and not skipped_windowed_commit_stats
+        ):
             stat = GitCommitStat(
                 repo_id=db_repo.id,
                 commit_hash=AGGREGATE_STATS_MARKER,
@@ -2007,6 +2131,7 @@ async def process_github_repos_batch(
                     max_commits=max_commits_per_repo,
                     include_blame=True,
                     include_commit_stats=False,
+                    since=since,
                 )
             except Exception as e:
                 logging.debug(
@@ -2095,7 +2220,21 @@ async def process_github_repos_batch(
                         ),
                     )
 
-                await results_queue.join()
+                # Wait for the queue to drain, but bail out if the consumer dies
+                # first: store_result may propagate a RateLimitException, leaving
+                # un-task_done()'d items so results_queue.join() would hang forever.
+                # FIRST_COMPLETED lets us detect that and re-raise instead.
+                join_task = asyncio.create_task(results_queue.join())
+                done, _pending = await asyncio.wait(
+                    {join_task, consumer_task}, return_when=asyncio.FIRST_COMPLETED
+                )
+                if consumer_task in done:
+                    join_task.cancel()
+                    try:
+                        await join_task
+                    except asyncio.CancelledError:
+                        pass
+                    await consumer_task  # re-raises the consumer's exception
                 await results_queue.put(_queue_sentinel)
                 await consumer_task
             else:

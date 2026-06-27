@@ -170,6 +170,12 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
             updated_at = _to_utc(getattr(item, "updated_at", None))
             return updated_at is None or updated_at <= until
 
+        # Cap how many items we page through to find the active window. With no
+        # caller limit we leave it unbounded (None) UNLESS the env var is set.
+        # env_int falls back to its default only for a missing/empty/invalid
+        # value, so a present-but-empty/invalid var here resolves to 0, which
+        # _iter_with_limit treats as "scan nothing". Set a positive integer to
+        # cap, or leave the var unset to keep historical scans unbounded.
         active_window_scan_limit: int | None = None
         if until is not None:
             if ctx.limit is not None:
@@ -222,6 +228,10 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                 else ()
             )
             for issue in issues_iter:
+                # The client already bounds the window (server `since` + `skip`/
+                # scan_limit pagination); re-checking here keeps correctness
+                # independent of client internals and is the enforcement point
+                # for clients/mocks that don't filter. Intentional, not redundant.
                 if not within_active_window(issue):
                     continue
                 if ctx.limit is not None and fetched_count >= ctx.limit:
@@ -314,6 +324,10 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                         scan_limit=active_window_scan_limit,
                     )
                 )
+                # Belt-and-suspenders: iter_pull_requests already applies the
+                # `until` skip + `limit`, so in production these are no-ops. We
+                # re-apply so the window holds regardless of the client impl and
+                # so tests with non-paginating mock clients stay correct.
                 if until is not None:
                     prs = [pr for pr in prs if within_active_window(pr)]
                     if ctx.limit is not None:

@@ -46,6 +46,68 @@ def test_hard_cap_default_is_300():
     assert resolve_commit_stats_limit(5000, None, SINCE) == 300
 
 
+def test_windowed_truncation_predicate():
+    # Truncation for the max_commits cap is decided by ``window_truncated`` (the
+    # fetch peeked one commit past the cap), NOT by counting: a complete window of
+    # exactly ``max_commits`` commits is indistinguishable from a truncated one by
+    # count alone, so counting (``>= max_commits``) would false-skip the exact-size
+    # complete case. ``raw_commit_count > stats_limit`` still catches the hard-cap
+    # (300) case for uncapped fetches.
+    # signature: (raw_commit_count, window_truncated, max_commits, since)
+    trunc = github._windowed_commit_stats_truncated
+    assert trunc(2, False, 10, SINCE) is False  # undersized + complete -> write
+    assert trunc(2, True, 2, SINCE) is True  # cap hit AND more beyond -> truncated
+    assert trunc(2, False, 2, SINCE) is False  # exact-size COMPLETE window -> write
+    assert trunc(10, True, 10, SINCE) is True  # cap hit AND more beyond
+    assert trunc(2, False, None, SINCE) is False
+    assert trunc(301, False, None, SINCE) is True  # over hard cap (300)
+    assert trunc(50, False, 100, None) is False  # full-history is never truncated
+
+
+def test_fetch_commits_reports_window_truncation():
+    # The look-ahead: _fetch_github_commits_sync peeks ONE commit past max_commits
+    # so callers can distinguish a complete exact-size window (truncated=False)
+    # from a genuinely truncated one (truncated=True). Counting alone cannot.
+    def _fake_commit(sha: str):
+        person = SimpleNamespace(
+            name="Dev", email=None, date=datetime(2026, 5, 20, tzinfo=timezone.utc)
+        )
+        inner = SimpleNamespace(author=person, committer=person, message="msg")
+        return SimpleNamespace(
+            sha=sha, author=None, committer=None, commit=inner, parents=[]
+        )
+
+    class _FakeRepo:
+        def __init__(self, n: int) -> None:
+            self._commits = [_fake_commit(f"sha-{i}") for i in range(n)]
+
+        def get_commits(self, **kwargs):
+            return iter(self._commits)
+
+    fetch = github._fetch_github_commits_sync
+
+    # window 5, cap 3 -> truncated (a 4th commit existed past the cap, not kept)
+    raw, objs, truncated = fetch(_FakeRepo(5), 3, "repo-1")
+    assert [c.sha for c in raw] == ["sha-0", "sha-1", "sha-2"]
+    assert len(objs) == 3
+    assert truncated is True
+
+    # window EXACTLY 3, cap 3 -> complete (iterator ended at the cap)
+    raw, _objs, truncated = fetch(_FakeRepo(3), 3, "repo-1")
+    assert len(raw) == 3
+    assert truncated is False
+
+    # window 2, under cap 3 -> complete
+    raw, _objs, truncated = fetch(_FakeRepo(2), 3, "repo-1")
+    assert len(raw) == 2
+    assert truncated is False
+
+    # no cap -> never truncated
+    raw, _objs, truncated = fetch(_FakeRepo(10), None, "repo-1")
+    assert len(raw) == 10
+    assert truncated is False
+
+
 class _RecordingSink:
     def __init__(self) -> None:
         self.stats: list[Any] = []

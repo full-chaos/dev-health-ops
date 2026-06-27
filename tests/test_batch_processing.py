@@ -561,7 +561,11 @@ async def test_process_github_repos_batch_over_cap_window_skips_stats(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_process_github_repos_batch_exact_cap_window_skips_stats(monkeypatch):
+async def test_process_github_repos_batch_truncated_window_skips_stats(monkeypatch):
+    """A since-bounded window that hits ``max_commits_per_repo`` AND has more
+    commits beyond it (the fetch reports ``window_truncated=True``) must skip
+    per-file stats rather than persist a partial day.
+    """
     _enable_connector_stubs(monkeypatch)
 
     since = datetime(2026, 5, 13, tzinfo=timezone.utc)
@@ -598,7 +602,9 @@ async def test_process_github_repos_batch_exact_cap_window_skips_stats(monkeypat
 
     def fake_fetch_commits(gh_repo, max_commits, repo_id, since=None):
         assert max_commits == 2
-        return raw_commits, []
+        # window_truncated=True: cap hit and at least one more commit existed in
+        # the window beyond it, so the fetched stats would be a partial day.
+        return raw_commits, [], True
 
     def fake_fetch_commit_stats(*args, **kwargs):
         stats_fetch_calls.append(args)
@@ -664,6 +670,259 @@ async def test_process_github_repos_batch_exact_cap_window_skips_stats(monkeypat
 
     assert stats_fetch_calls == []
     assert recorded_stats == []
+
+
+@pytest.mark.asyncio
+async def test_process_github_repos_batch_undersized_window_writes_stats(monkeypatch):
+    """Regression: a windowed sync that sets ``max_commits_per_repo`` but whose
+    window is *fully covered* (fewer commits than the cap) MUST still write
+    commit stats. The old skip used ``len(raw_commits) >= stats_limit`` — always
+    true once a cap was set — so it silently dropped stats for small windows.
+    """
+    _enable_connector_stubs(monkeypatch)
+
+    since = datetime(2026, 5, 13, tzinfo=timezone.utc)
+    recorded_stats = []
+    stats_fetch_calls = []
+
+    class DummyStore:
+        async def insert_repo(self, repo):
+            return
+
+        async def insert_git_commit_data(self, commit_data):
+            return
+
+        async def insert_git_commit_stats(self, commit_stats):
+            recorded_stats.extend(commit_stats)
+
+        async def insert_git_pull_requests(self, pr_data):
+            return
+
+    repo = Mock()
+    repo.id = 1001
+    repo.full_name = "org/undersized"
+    repo.url = "https://example.com/org/undersized"
+    repo.default_branch = "main"
+    repo.language = "Python"
+
+    stats = Mock()
+    stats.total_commits = 2
+    stats.additions = 999
+    stats.deletions = 111
+    result = BatchResult(repository=repo, stats=stats, success=True)
+
+    # 2 commits in the window, well under the max_commits_per_repo=10 cap.
+    raw_commits = [SimpleNamespace(sha="sha-0"), SimpleNamespace(sha="sha-1")]
+
+    def fake_fetch_commits(gh_repo, max_commits, repo_id, since=None):
+        assert max_commits == 10
+        return raw_commits, []
+
+    def fake_fetch_commit_stats(*args, **kwargs):
+        stats_fetch_calls.append(args)
+        repo_id = args[1]
+        return [
+            GitCommitStat(
+                repo_id=repo_id,
+                commit_hash="sha-0",
+                file_path="file.txt",
+                additions=1,
+                deletions=0,
+                old_file_mode="unknown",
+                new_file_mode="unknown",
+            )
+        ]
+
+    class DummyRepo:
+        def get_pulls(self, state="all"):
+            return iter([])
+
+    class DummyGithub:
+        def get_repo(self, full_name: str):
+            return DummyRepo()
+
+    class DummyConnector:
+        def __init__(self, token: str):
+            self.github = DummyGithub()
+
+        async def get_repos_with_stats_async(self, **kwargs):
+            on_repo_complete = kwargs.get("on_repo_complete")
+            if on_repo_complete:
+                on_repo_complete(result)
+            return [result]
+
+        def get_rate_limit(self):
+            return {"remaining": 0, "limit": 0}
+
+        def close(self):
+            return
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.close()
+
+    monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
+    monkeypatch.setattr(
+        processors.github, "_fetch_github_commits_sync", fake_fetch_commits
+    )
+    monkeypatch.setattr(
+        processors.github, "_fetch_github_commit_stats_sync", fake_fetch_commit_stats
+    )
+
+    await processors.github.process_github_repos_batch(
+        store=DummyStore(),
+        token="test_token",
+        org_name="org",
+        pattern="org/*",
+        batch_size=1,
+        max_concurrent=1,
+        rate_limit_delay=0,
+        use_async=True,
+        since=since,
+        max_commits_per_repo=10,
+        sync_prs=False,
+        sync_cicd=False,
+        sync_deployments=False,
+        sync_incidents=False,
+        sync_security=False,
+        sync_tests=False,
+        backfill_missing=False,
+    )
+
+    # Detail fetch was invoked and the real per-file stat was persisted.
+    assert stats_fetch_calls != []
+    assert "sha-0" in {s.commit_hash for s in recorded_stats}
+
+
+@pytest.mark.asyncio
+async def test_process_github_repos_batch_exact_complete_window_writes_stats(
+    monkeypatch,
+):
+    """Codex adversarial-review regression: a since-bounded window whose commit
+    count lands *exactly* on ``max_commits_per_repo`` but is COMPLETE (the fetch
+    reports ``window_truncated=False`` — no commit existed beyond the cap) MUST
+    write stats. Counting alone (``>= max_commits``) cannot tell this apart from a
+    truncated window, so it would silently drop a complete day's stats.
+    """
+    _enable_connector_stubs(monkeypatch)
+
+    since = datetime(2026, 5, 13, tzinfo=timezone.utc)
+    recorded_stats = []
+    stats_fetch_calls = []
+
+    class DummyStore:
+        async def insert_repo(self, repo):
+            return
+
+        async def insert_git_commit_data(self, commit_data):
+            return
+
+        async def insert_git_commit_stats(self, commit_stats):
+            recorded_stats.extend(commit_stats)
+
+        async def insert_git_pull_requests(self, pr_data):
+            return
+
+    repo = Mock()
+    repo.id = 1002
+    repo.full_name = "org/exact-complete"
+    repo.url = "https://example.com/org/exact-complete"
+    repo.default_branch = "main"
+    repo.language = "Python"
+
+    stats = Mock()
+    stats.total_commits = 2
+    stats.additions = 999
+    stats.deletions = 111
+    result = BatchResult(repository=repo, stats=stats, success=True)
+
+    # Exactly max_commits_per_repo=2 commits in the window, and nothing beyond it.
+    raw_commits = [SimpleNamespace(sha="sha-0"), SimpleNamespace(sha="sha-1")]
+
+    def fake_fetch_commits(gh_repo, max_commits, repo_id, since=None):
+        assert max_commits == 2
+        # window_truncated=False: the iterator ended at the cap, proving the
+        # window held exactly max_commits commits (complete, not truncated).
+        return raw_commits, [], False
+
+    def fake_fetch_commit_stats(*args, **kwargs):
+        stats_fetch_calls.append(args)
+        repo_id = args[1]
+        return [
+            GitCommitStat(
+                repo_id=repo_id,
+                commit_hash="sha-0",
+                file_path="file.txt",
+                additions=1,
+                deletions=0,
+                old_file_mode="unknown",
+                new_file_mode="unknown",
+            )
+        ]
+
+    class DummyRepo:
+        def get_pulls(self, state="all"):
+            return iter([])
+
+    class DummyGithub:
+        def get_repo(self, full_name: str):
+            return DummyRepo()
+
+    class DummyConnector:
+        def __init__(self, token: str):
+            self.github = DummyGithub()
+
+        async def get_repos_with_stats_async(self, **kwargs):
+            on_repo_complete = kwargs.get("on_repo_complete")
+            if on_repo_complete:
+                on_repo_complete(result)
+            return [result]
+
+        def get_rate_limit(self):
+            return {"remaining": 0, "limit": 0}
+
+        def close(self):
+            return
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.close()
+
+    monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
+    monkeypatch.setattr(
+        processors.github, "_fetch_github_commits_sync", fake_fetch_commits
+    )
+    monkeypatch.setattr(
+        processors.github, "_fetch_github_commit_stats_sync", fake_fetch_commit_stats
+    )
+
+    await processors.github.process_github_repos_batch(
+        store=DummyStore(),
+        token="test_token",
+        org_name="org",
+        pattern="org/*",
+        batch_size=1,
+        max_concurrent=1,
+        rate_limit_delay=0,
+        use_async=True,
+        since=since,
+        max_commits_per_repo=2,
+        sync_prs=False,
+        sync_cicd=False,
+        sync_deployments=False,
+        sync_incidents=False,
+        sync_security=False,
+        sync_tests=False,
+        backfill_missing=False,
+    )
+
+    # Exact-but-complete window: stats ARE fetched and persisted.
+    assert stats_fetch_calls != []
+    assert "sha-0" in {s.commit_hash for s in recorded_stats}
 
 
 @pytest.mark.asyncio

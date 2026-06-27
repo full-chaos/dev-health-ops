@@ -17,6 +17,7 @@ from dev_health_ops.connectors import (
     GitLabConnector,
     match_repo_pattern,
 )
+from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.models.git import GitCommit, GitCommitStat, get_repo_uuid_from_repo
 from dev_health_ops.processors import github as _github_processor
 from dev_health_ops.processors import gitlab as _gitlab_processor
@@ -375,7 +376,7 @@ async def test_process_github_repos_batch_stores_commits_and_stats(monkeypatch):
         )
         return ["raw"], [commit]
 
-    def fake_fetch_commit_stats(raw_commits, repo_id, max_stats, since=None):
+    def fake_fetch_commit_stats(raw_commits, repo_id, max_stats, since=None, gate=None):
         return [
             GitCommitStat(
                 repo_id=repo_id,
@@ -443,6 +444,531 @@ async def test_process_github_repos_batch_stores_commits_and_stats(monkeypatch):
     expected_repo_id = get_repo_uuid_from_repo(repo.full_name)
     assert all(c.repo_id == expected_repo_id for c in recorded_commits)
     assert "abc123" in {s.commit_hash for s in recorded_stats}
+
+
+@pytest.mark.asyncio
+async def test_process_github_repos_batch_over_cap_window_skips_stats(monkeypatch):
+    """Windowed (since-bound) batch sync over the hard cap must skip per-commit
+    detail fetch and persist zero commit stats rather than a partial day.
+
+    Regression: the batch path bypassed ``_sync_github_commit_stats`` and wrote
+    partial commit stats for since-bound over-cap windows.
+    """
+    _enable_connector_stubs(monkeypatch)
+
+    monkeypatch.setenv("COMMIT_STATS_MAX_COMMITS", "300")
+    since = datetime(2026, 5, 13, tzinfo=timezone.utc)
+
+    recorded_stats = []
+    stats_fetch_calls = []
+
+    class DummyStore:
+        async def insert_repo(self, repo):
+            return
+
+        async def insert_git_commit_data(self, commit_data):
+            return
+
+        async def insert_git_commit_stats(self, commit_stats):
+            recorded_stats.extend(commit_stats)
+
+        async def insert_git_pull_requests(self, pr_data):
+            return
+
+    repo = Mock()
+    repo.id = 999
+    repo.full_name = "org/over-cap"
+    repo.url = "https://example.com/org/over-cap"
+    repo.default_branch = "main"
+    repo.language = "Python"
+
+    stats = Mock()
+    stats.total_commits = 301
+    stats.additions = 999
+    stats.deletions = 111
+    result = BatchResult(repository=repo, stats=stats, success=True)
+
+    raw_commits = [SimpleNamespace(sha=f"sha-{i}") for i in range(301)]
+
+    def fake_fetch_commits(gh_repo, max_commits, repo_id, since=None):
+        return raw_commits, []
+
+    def fake_fetch_commit_stats(*args, **kwargs):
+        stats_fetch_calls.append(args)
+        return []
+
+    class DummyRepo:
+        def get_pulls(self, state="all"):
+            return iter([])
+
+    class DummyGithub:
+        def get_repo(self, full_name: str):
+            return DummyRepo()
+
+    class DummyConnector:
+        def __init__(self, token: str):
+            self.github = DummyGithub()
+
+        async def get_repos_with_stats_async(self, **kwargs):
+            on_repo_complete = kwargs.get("on_repo_complete")
+            if on_repo_complete:
+                on_repo_complete(result)
+            return [result]
+
+        def get_rate_limit(self):
+            return {"remaining": 0, "limit": 0}
+
+        def close(self):
+            return
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.close()
+
+    monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
+    monkeypatch.setattr(
+        processors.github, "_fetch_github_commits_sync", fake_fetch_commits
+    )
+    monkeypatch.setattr(
+        processors.github, "_fetch_github_commit_stats_sync", fake_fetch_commit_stats
+    )
+
+    store = DummyStore()
+
+    await processors.github.process_github_repos_batch(
+        store=store,
+        token="test_token",
+        org_name="org",
+        pattern="org/*",
+        batch_size=1,
+        max_concurrent=1,
+        rate_limit_delay=0,
+        use_async=True,
+        since=since,
+        sync_prs=False,
+        sync_cicd=False,
+        sync_deployments=False,
+        sync_incidents=False,
+        sync_security=False,
+        sync_tests=False,
+        backfill_missing=False,
+    )
+
+    assert stats_fetch_calls == []
+    assert recorded_stats == []
+
+
+@pytest.mark.asyncio
+async def test_process_github_repos_batch_exact_cap_window_skips_stats(monkeypatch):
+    _enable_connector_stubs(monkeypatch)
+
+    since = datetime(2026, 5, 13, tzinfo=timezone.utc)
+    recorded_stats = []
+    stats_fetch_calls = []
+
+    class DummyStore:
+        async def insert_repo(self, repo):
+            return
+
+        async def insert_git_commit_data(self, commit_data):
+            return
+
+        async def insert_git_commit_stats(self, commit_stats):
+            recorded_stats.extend(commit_stats)
+
+        async def insert_git_pull_requests(self, pr_data):
+            return
+
+    repo = Mock()
+    repo.id = 1000
+    repo.full_name = "org/exact-cap"
+    repo.url = "https://example.com/org/exact-cap"
+    repo.default_branch = "main"
+    repo.language = "Python"
+
+    stats = Mock()
+    stats.total_commits = 2
+    stats.additions = 999
+    stats.deletions = 111
+    result = BatchResult(repository=repo, stats=stats, success=True)
+
+    raw_commits = [SimpleNamespace(sha="sha-0"), SimpleNamespace(sha="sha-1")]
+
+    def fake_fetch_commits(gh_repo, max_commits, repo_id, since=None):
+        assert max_commits == 2
+        return raw_commits, []
+
+    def fake_fetch_commit_stats(*args, **kwargs):
+        stats_fetch_calls.append(args)
+        return []
+
+    class DummyRepo:
+        def get_pulls(self, state="all"):
+            return iter([])
+
+    class DummyGithub:
+        def get_repo(self, full_name: str):
+            return DummyRepo()
+
+    class DummyConnector:
+        def __init__(self, token: str):
+            self.github = DummyGithub()
+
+        async def get_repos_with_stats_async(self, **kwargs):
+            on_repo_complete = kwargs.get("on_repo_complete")
+            if on_repo_complete:
+                on_repo_complete(result)
+            return [result]
+
+        def get_rate_limit(self):
+            return {"remaining": 0, "limit": 0}
+
+        def close(self):
+            return
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.close()
+
+    monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
+    monkeypatch.setattr(
+        processors.github, "_fetch_github_commits_sync", fake_fetch_commits
+    )
+    monkeypatch.setattr(
+        processors.github, "_fetch_github_commit_stats_sync", fake_fetch_commit_stats
+    )
+
+    await processors.github.process_github_repos_batch(
+        store=DummyStore(),
+        token="test_token",
+        org_name="org",
+        pattern="org/*",
+        batch_size=1,
+        max_concurrent=1,
+        rate_limit_delay=0,
+        use_async=True,
+        since=since,
+        max_commits_per_repo=2,
+        sync_prs=False,
+        sync_cicd=False,
+        sync_deployments=False,
+        sync_incidents=False,
+        sync_security=False,
+        sync_tests=False,
+        backfill_missing=False,
+    )
+
+    assert stats_fetch_calls == []
+    assert recorded_stats == []
+
+
+@pytest.mark.asyncio
+async def test_process_github_repos_batch_commit_stats_rate_limit_propagates(
+    monkeypatch,
+):
+    _enable_connector_stubs(monkeypatch)
+
+    since = datetime(2026, 5, 13, tzinfo=timezone.utc)
+    recorded_stats = []
+
+    class DummyStore:
+        async def insert_repo(self, repo):
+            return
+
+        async def insert_git_commit_data(self, commit_data):
+            return
+
+        async def insert_git_commit_stats(self, commit_stats):
+            recorded_stats.extend(commit_stats)
+
+        async def insert_git_pull_requests(self, pr_data):
+            return
+
+    repo = Mock()
+    repo.id = 1001
+    repo.full_name = "org/rate-limited"
+    repo.url = "https://example.com/org/rate-limited"
+    repo.default_branch = "main"
+    repo.language = "Python"
+
+    stats = Mock()
+    stats.total_commits = 1
+    stats.additions = 999
+    stats.deletions = 111
+    result = BatchResult(repository=repo, stats=stats, success=True)
+
+    def fake_fetch_commits(gh_repo, max_commits, repo_id, since=None):
+        raise RateLimitException("limited", retry_after_seconds=42.0)
+
+    class DummyRepo:
+        def get_pulls(self, state="all"):
+            return iter([])
+
+    class DummyGithub:
+        def get_repo(self, full_name: str):
+            return DummyRepo()
+
+    class DummyConnector:
+        def __init__(self, token: str):
+            self.github = DummyGithub()
+
+        async def get_repos_with_stats_async(self, **kwargs):
+            on_repo_complete = kwargs.get("on_repo_complete")
+            if on_repo_complete:
+                on_repo_complete(result)
+            return [result]
+
+        def get_rate_limit(self):
+            return {"remaining": 0, "limit": 0}
+
+        def close(self):
+            return
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.close()
+
+    monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
+    monkeypatch.setattr(
+        processors.github, "_fetch_github_commits_sync", fake_fetch_commits
+    )
+
+    with pytest.raises(RateLimitException) as exc_info:
+        await processors.github.process_github_repos_batch(
+            store=DummyStore(),
+            token="test_token",
+            org_name="org",
+            pattern="org/*",
+            batch_size=1,
+            max_concurrent=1,
+            rate_limit_delay=0,
+            use_async=True,
+            since=since,
+            sync_prs=False,
+            sync_cicd=False,
+            sync_deployments=False,
+            sync_incidents=False,
+            sync_security=False,
+            sync_tests=False,
+            backfill_missing=False,
+        )
+
+    assert exc_info.value.retry_after_seconds == 42.0
+    assert recorded_stats == []
+
+
+@pytest.mark.asyncio
+async def test_process_github_repos_batch_multi_repo_rate_limit_does_not_hang(
+    monkeypatch,
+):
+    _enable_connector_stubs(monkeypatch)
+
+    since = datetime(2026, 5, 13, tzinfo=timezone.utc)
+    recorded_stats = []
+
+    class DummyStore:
+        async def insert_repo(self, repo):
+            return
+
+        async def insert_git_commit_data(self, commit_data):
+            return
+
+        async def insert_git_commit_stats(self, commit_stats):
+            recorded_stats.extend(commit_stats)
+
+        async def insert_git_pull_requests(self, pr_data):
+            return
+
+    def make_result(index: int):
+        repo = Mock()
+        repo.id = index
+        repo.full_name = f"org/rate-limited-{index}"
+        repo.url = f"https://example.com/org/rate-limited-{index}"
+        repo.default_branch = "main"
+        repo.language = "Python"
+        stats = Mock()
+        stats.total_commits = 1
+        stats.additions = 999
+        stats.deletions = 111
+        return BatchResult(repository=repo, stats=stats, success=True)
+
+    results = [make_result(index) for index in range(3)]
+
+    def fake_fetch_commits(gh_repo, max_commits, repo_id, since=None):
+        raise RateLimitException("limited", retry_after_seconds=42.0)
+
+    class DummyRepo:
+        def get_pulls(self, state="all"):
+            return iter([])
+
+    class DummyGithub:
+        def get_repo(self, full_name: str):
+            return DummyRepo()
+
+    class DummyConnector:
+        def __init__(self, token: str):
+            self.github = DummyGithub()
+
+        async def get_repos_with_stats_async(self, **kwargs):
+            on_repo_complete = kwargs.get("on_repo_complete")
+            if on_repo_complete:
+                for result in results:
+                    on_repo_complete(result)
+            return results
+
+        def get_rate_limit(self):
+            return {"remaining": 0, "limit": 0}
+
+        def close(self):
+            return
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.close()
+
+    monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
+    monkeypatch.setattr(
+        processors.github, "_fetch_github_commits_sync", fake_fetch_commits
+    )
+
+    with pytest.raises(RateLimitException) as exc_info:
+        await asyncio.wait_for(
+            processors.github.process_github_repos_batch(
+                store=DummyStore(),
+                token="test_token",
+                org_name="org",
+                pattern="org/*",
+                batch_size=1,
+                max_concurrent=1,
+                rate_limit_delay=0,
+                use_async=True,
+                since=since,
+                sync_prs=False,
+                sync_cicd=False,
+                sync_deployments=False,
+                sync_incidents=False,
+                sync_security=False,
+                sync_tests=False,
+                backfill_missing=False,
+            ),
+            timeout=2,
+        )
+
+    assert exc_info.value.retry_after_seconds == 42.0
+    assert recorded_stats == []
+
+
+@pytest.mark.asyncio
+async def test_process_github_repos_batch_commit_detail_rate_limit_propagates(
+    monkeypatch,
+):
+    _enable_connector_stubs(monkeypatch)
+
+    since = datetime(2026, 5, 13, tzinfo=timezone.utc)
+    recorded_stats = []
+
+    class DummyStore:
+        async def insert_repo(self, repo):
+            return
+
+        async def insert_git_commit_data(self, commit_data):
+            return
+
+        async def insert_git_commit_stats(self, commit_stats):
+            recorded_stats.extend(commit_stats)
+
+        async def insert_git_pull_requests(self, pr_data):
+            return
+
+    repo = Mock()
+    repo.id = 1002
+    repo.full_name = "org/detail-rate-limited"
+    repo.url = "https://example.com/org/detail-rate-limited"
+    repo.default_branch = "main"
+    repo.language = "Python"
+
+    stats = Mock()
+    stats.total_commits = 1
+    stats.additions = 999
+    stats.deletions = 111
+    result = BatchResult(repository=repo, stats=stats, success=True)
+
+    class RateLimitedCommit:
+        sha = "sha-rate-limited"
+        commit = None
+
+        @property
+        def files(self):
+            raise RateLimitException("limited", retry_after_seconds=43.0)
+
+    def fake_fetch_commits(gh_repo, max_commits, repo_id, since=None):
+        return [RateLimitedCommit()], []
+
+    class DummyRepo:
+        def get_pulls(self, state="all"):
+            return iter([])
+
+    class DummyGithub:
+        def get_repo(self, full_name: str):
+            return DummyRepo()
+
+    class DummyConnector:
+        def __init__(self, token: str):
+            self.github = DummyGithub()
+
+        async def get_repos_with_stats_async(self, **kwargs):
+            on_repo_complete = kwargs.get("on_repo_complete")
+            if on_repo_complete:
+                on_repo_complete(result)
+            return [result]
+
+        def get_rate_limit(self):
+            return {"remaining": 0, "limit": 0}
+
+        def close(self):
+            return
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.close()
+
+    monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
+    monkeypatch.setattr(
+        processors.github, "_fetch_github_commits_sync", fake_fetch_commits
+    )
+
+    with pytest.raises(RateLimitException) as exc_info:
+        await processors.github.process_github_repos_batch(
+            store=DummyStore(),
+            token="test_token",
+            org_name="org",
+            pattern="org/*",
+            batch_size=1,
+            max_concurrent=1,
+            rate_limit_delay=0,
+            use_async=True,
+            since=since,
+            sync_prs=False,
+            sync_cicd=False,
+            sync_deployments=False,
+            sync_incidents=False,
+            sync_security=False,
+            sync_tests=False,
+            backfill_missing=False,
+        )
+
+    assert exc_info.value.retry_after_seconds == 43.0
+    assert recorded_stats == []
 
 
 @pytest.mark.asyncio

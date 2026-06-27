@@ -9,7 +9,8 @@ loud-failure exit when an org has no scannable contents at all.
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -19,6 +20,7 @@ import pytest
 # is collected in isolation.
 import dev_health_ops.connectors  # noqa: F401
 import dev_health_ops.metrics.job_complexity_db as job
+from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.processors.base_git import backfill_file_records
 from dev_health_ops.processors.github import (
     CONTENT_FETCH_MAX_BYTES,
@@ -252,3 +254,345 @@ class TestPathsOnlyUpgrade:
 
         connector.github.get_repo.assert_not_called()
         sink.insert_git_file_data.assert_not_called()
+
+
+class TestCommitStatsBackfill:
+    @pytest.mark.asyncio
+    async def test_backfill_commit_stats_uses_window_and_persists_when_cap_not_hit(
+        self, monkeypatch
+    ):
+        from dev_health_ops.processors.github import _backfill_github_missing_data
+
+        monkeypatch.setenv("COMMIT_STATS_MAX_COMMITS", "2")
+        since = datetime(2026, 1, 10, tzinfo=timezone.utc)
+        until = datetime(2026, 1, 12, tzinfo=timezone.utc)
+
+        store = Mock()
+        store.has_any_git_files = AsyncMock(return_value=True)
+        store.has_any_git_file_contents = AsyncMock(return_value=True)
+        store.has_any_git_commit_stats = AsyncMock(return_value=False)
+        store.has_any_git_blame = AsyncMock(return_value=True)
+
+        written = []
+
+        async def insert(batch):
+            written.extend(batch)
+
+        sink = Mock()
+        sink.insert_git_commit_stats = AsyncMock(side_effect=insert)
+
+        commits = [SimpleNamespace(sha=f"sha-{idx}") for idx in range(2)]
+        details_by_sha = {
+            commit.sha: SimpleNamespace(
+                files=[
+                    SimpleNamespace(
+                        filename=f"{commit.sha}.py",
+                        additions=1,
+                        deletions=0,
+                    )
+                ]
+            )
+            for commit in commits
+        }
+
+        gh_repo = Mock()
+        gh_repo.get_commits.return_value = commits
+        gh_repo.get_commit.side_effect = lambda sha: details_by_sha[sha]
+
+        connector = Mock()
+        connector.github.get_repo.return_value = gh_repo
+
+        db_repo = Mock()
+        db_repo.id = uuid.uuid4()
+
+        await _backfill_github_missing_data(
+            store=store,
+            ingestion_sink=sink,
+            connector=connector,
+            db_repo=db_repo,
+            repo_full_name="octo/repo",
+            default_branch="main",
+            max_commits=None,
+            include_files=False,
+            include_blame=False,
+            since=since,
+            until=until,
+        )
+
+        gh_repo.get_commits.assert_called_once_with(since=since, until=until)
+        assert [call.args[0] for call in gh_repo.get_commit.call_args_list] == [
+            "sha-0",
+            "sha-1",
+        ]
+        assert [row.commit_hash for row in written] == ["sha-0", "sha-1"]
+
+    @pytest.mark.asyncio
+    async def test_backfill_commit_stats_over_cap_writes_nothing(self, monkeypatch):
+        from dev_health_ops.processors.github import _backfill_github_missing_data
+
+        monkeypatch.setenv("COMMIT_STATS_MAX_COMMITS", "2")
+        since = datetime(2026, 1, 10, tzinfo=timezone.utc)
+        until = datetime(2026, 1, 12, tzinfo=timezone.utc)
+
+        store = Mock()
+        store.has_any_git_files = AsyncMock(return_value=True)
+        store.has_any_git_file_contents = AsyncMock(return_value=True)
+        store.has_any_git_commit_stats = AsyncMock(return_value=False)
+        store.has_any_git_blame = AsyncMock(return_value=True)
+
+        sink = Mock()
+        sink.insert_git_commit_stats = AsyncMock()
+
+        commits = [SimpleNamespace(sha=f"sha-{idx}") for idx in range(3)]
+        details_by_sha = {
+            commit.sha: SimpleNamespace(
+                files=[
+                    SimpleNamespace(
+                        filename=f"{commit.sha}.py",
+                        additions=1,
+                        deletions=0,
+                    )
+                ]
+            )
+            for commit in commits
+        }
+
+        gh_repo = Mock()
+        gh_repo.get_commits.return_value = commits
+        gh_repo.get_commit.side_effect = lambda sha: details_by_sha[sha]
+
+        connector = Mock()
+        connector.github.get_repo.return_value = gh_repo
+
+        db_repo = Mock()
+        db_repo.id = uuid.uuid4()
+
+        await _backfill_github_missing_data(
+            store=store,
+            ingestion_sink=sink,
+            connector=connector,
+            db_repo=db_repo,
+            repo_full_name="octo/repo",
+            default_branch="main",
+            max_commits=None,
+            include_files=False,
+            include_blame=False,
+            since=since,
+            until=until,
+        )
+
+        gh_repo.get_commits.assert_called_once_with(since=since, until=until)
+        gh_repo.get_commit.assert_not_called()
+        sink.insert_git_commit_stats.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_backfill_commit_stats_rate_limit_propagates_without_partial_write(
+        self, monkeypatch
+    ):
+        from dev_health_ops.processors.github import _backfill_github_missing_data
+
+        monkeypatch.setenv("COMMIT_STATS_MAX_COMMITS", "3")
+        since = datetime(2026, 1, 10, tzinfo=timezone.utc)
+        until = datetime(2026, 1, 12, tzinfo=timezone.utc)
+
+        store = Mock()
+        store.has_any_git_files = AsyncMock(return_value=True)
+        store.has_any_git_file_contents = AsyncMock(return_value=True)
+        store.has_any_git_commit_stats = AsyncMock(return_value=False)
+        store.has_any_git_blame = AsyncMock(return_value=True)
+
+        sink = Mock()
+        sink.insert_git_commit_stats = AsyncMock()
+
+        commits = [SimpleNamespace(sha="sha-0"), SimpleNamespace(sha="sha-1")]
+        gh_repo = Mock()
+        gh_repo.get_commits.return_value = commits
+        gh_repo.get_commit.side_effect = [
+            SimpleNamespace(
+                files=[
+                    SimpleNamespace(
+                        filename="sha-0.py",
+                        additions=1,
+                        deletions=0,
+                    )
+                ]
+            ),
+            RateLimitException("limited", retry_after_seconds=42.0),
+        ]
+
+        connector = Mock()
+        connector.github.get_repo.return_value = gh_repo
+
+        db_repo = Mock()
+        db_repo.id = uuid.uuid4()
+
+        with pytest.raises(RateLimitException) as exc_info:
+            await _backfill_github_missing_data(
+                store=store,
+                ingestion_sink=sink,
+                connector=connector,
+                db_repo=db_repo,
+                repo_full_name="octo/repo",
+                default_branch="main",
+                max_commits=None,
+                include_files=False,
+                include_blame=False,
+                since=since,
+                until=until,
+            )
+
+        assert exc_info.value.retry_after_seconds == 42.0
+        sink.insert_git_commit_stats.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_backfill_commit_stats_over_cap_still_runs_blame(self, monkeypatch):
+        from dev_health_ops.connectors.models import BlameRange, FileBlame
+        from dev_health_ops.processors.github import _backfill_github_missing_data
+
+        monkeypatch.setenv("COMMIT_STATS_MAX_COMMITS", "2")
+        since = datetime(2026, 1, 10, tzinfo=timezone.utc)
+        until = datetime(2026, 1, 12, tzinfo=timezone.utc)
+
+        store = Mock()
+        store.has_any_git_files = AsyncMock(return_value=True)
+        store.has_any_git_file_contents = AsyncMock(return_value=True)
+        store.has_any_git_commit_stats = AsyncMock(return_value=False)
+        store.has_any_git_blame = AsyncMock(return_value=False)
+        store.get_blamed_paths = AsyncMock(return_value=set())
+
+        blame_rows = []
+
+        async def insert_blame(batch):
+            blame_rows.extend(batch)
+
+        sink = Mock()
+        sink.insert_git_commit_stats = AsyncMock()
+        sink.insert_blame_data = AsyncMock(side_effect=insert_blame)
+
+        commits = [SimpleNamespace(sha=f"sha-{idx}") for idx in range(3)]
+        details_by_sha = {
+            commit.sha: SimpleNamespace(
+                files=[
+                    SimpleNamespace(
+                        filename=f"{commit.sha}.py",
+                        additions=1,
+                        deletions=0,
+                    )
+                ]
+            )
+            for commit in commits
+        }
+
+        gh_repo = Mock()
+        gh_repo.get_branch.return_value = Mock(commit=Mock(sha="tree-sha"))
+        gh_repo.get_git_tree.return_value = Mock(tree=[_FakeTreeEntry("src/app.py")])
+        gh_repo.get_commits.return_value = commits
+        gh_repo.get_commit.side_effect = lambda sha: details_by_sha[sha]
+
+        connector = Mock()
+        connector.github.get_repo.return_value = gh_repo
+        connector.get_file_blame.return_value = FileBlame(
+            file_path="src/app.py",
+            ranges=[
+                BlameRange(
+                    starting_line=1,
+                    ending_line=1,
+                    commit_sha="sha-0",
+                    author="A",
+                    author_email="a@example.com",
+                    age_seconds=0,
+                )
+            ],
+        )
+
+        db_repo = Mock()
+        db_repo.id = uuid.uuid4()
+
+        await _backfill_github_missing_data(
+            store=store,
+            ingestion_sink=sink,
+            connector=connector,
+            db_repo=db_repo,
+            repo_full_name="octo/repo",
+            default_branch="main",
+            max_commits=None,
+            include_files=False,
+            include_blame=True,
+            since=since,
+            until=until,
+        )
+
+        sink.insert_git_commit_stats.assert_not_called()
+        gh_repo.get_commit.assert_not_called()
+        connector.get_file_blame.assert_called_once_with(
+            owner="octo",
+            repo="repo",
+            path="src/app.py",
+            ref="main",
+        )
+        assert [row.path for row in blame_rows] == ["src/app.py"]
+
+    @pytest.mark.asyncio
+    async def test_backfill_commit_stats_full_history_writes_capped_sample(
+        self, monkeypatch
+    ):
+        from dev_health_ops.processors.github import _backfill_github_missing_data
+
+        monkeypatch.setenv("COMMIT_STATS_MAX_COMMITS", "2")
+
+        store = Mock()
+        store.has_any_git_files = AsyncMock(return_value=True)
+        store.has_any_git_file_contents = AsyncMock(return_value=True)
+        store.has_any_git_commit_stats = AsyncMock(return_value=False)
+        store.has_any_git_blame = AsyncMock(return_value=True)
+
+        written = []
+
+        async def insert(batch):
+            written.extend(batch)
+
+        sink = Mock()
+        sink.insert_git_commit_stats = AsyncMock(side_effect=insert)
+
+        commits = [SimpleNamespace(sha=f"sha-{idx}") for idx in range(3)]
+        details_by_sha = {
+            commit.sha: SimpleNamespace(
+                files=[
+                    SimpleNamespace(
+                        filename=f"{commit.sha}.py",
+                        additions=1,
+                        deletions=0,
+                    )
+                ]
+            )
+            for commit in commits
+        }
+
+        gh_repo = Mock()
+        gh_repo.get_commits.return_value = commits
+        gh_repo.get_commit.side_effect = lambda sha: details_by_sha[sha]
+
+        connector = Mock()
+        connector.github.get_repo.return_value = gh_repo
+
+        db_repo = Mock()
+        db_repo.id = uuid.uuid4()
+
+        await _backfill_github_missing_data(
+            store=store,
+            ingestion_sink=sink,
+            connector=connector,
+            db_repo=db_repo,
+            repo_full_name="octo/repo",
+            default_branch="main",
+            max_commits=None,
+            include_files=False,
+            include_blame=False,
+        )
+
+        gh_repo.get_commits.assert_called_once_with()
+        assert [call.args[0] for call in gh_repo.get_commit.call_args_list] == [
+            "sha-0",
+            "sha-1",
+        ]
+        assert [row.commit_hash for row in written] == ["sha-0", "sha-1"]

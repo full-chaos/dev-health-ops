@@ -250,25 +250,24 @@ def _maybe_dispatch_config(
 
     session.commit()
 
-    from dev_health_ops.sync.planner import plan_sync_run
-    from dev_health_ops.sync.trigger_routing import (
-        planner_request_for_config_if_routed,
-    )
+    from dev_health_ops.sync.execution_trigger import create_sync_execution_trigger
     from dev_health_ops.workers.sync_units import dispatch_sync_run
-
-    request = planner_request_for_config_if_routed(
-        session, config, triggered_by="schedule", mode="incremental"
-    )
-    if request is None:
-        logger.warning(
-            "Skipping sync config %s because it has no linked integration",
-            config.id,
-        )
-        return False
 
     logger.info("Routing config %s through fan-out planner", config.id)
     try:
-        plan = plan_sync_run(session, request)
+        trigger = create_sync_execution_trigger(
+            session,
+            config,
+            org_id,
+            triggered_by="schedule",
+            mode="incremental",
+        )
+        if trigger is None:
+            logger.warning(
+                "Skipping sync config %s because it has no linked integration",
+                config.id,
+            )
+            return False
         session.commit()
     except Exception:
         logger.exception("Fan-out planner failed for config %s", config.id)
@@ -277,12 +276,12 @@ def _maybe_dispatch_config(
 
     try:
         getattr(dispatch_sync_run, "apply_async")(
-            args=(plan.sync_run_id,), queue="sync"
+            args=(trigger.sync_run_id,), queue="sync"
         )
     except Exception:
         logger.warning(
             "sync_scheduler.dispatch_fastpath_failed",
-            extra={"config_id": str(config.id), "sync_run_id": plan.sync_run_id},
+            extra={"config_id": str(config.id), "sync_run_id": trigger.sync_run_id},
             exc_info=True,
         )
     return True

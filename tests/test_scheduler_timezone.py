@@ -298,9 +298,9 @@ class TestSyncDispatchDstFold:
         engine.dispose()
 
     def test_fall_back_slot_dispatches_once(self, monkeypatch, db_session):
-        from types import SimpleNamespace
         from unittest.mock import MagicMock
 
+        from dev_health_ops.sync.execution_trigger import SyncExecutionTriggerResult
         from dev_health_ops.workers import sync_scheduler
 
         # 2026-11-01 America/Los_Angeles fall-back: 01:30 occurs at 08:30Z (PDT)
@@ -336,12 +336,10 @@ class TestSyncDispatchDstFold:
             sync_scheduler, "organization_exists_sync", lambda *_a: True
         )
         monkeypatch.setattr(
-            "dev_health_ops.sync.trigger_routing.planner_request_for_config_if_routed",
-            lambda *a, **k: object(),
-        )
-        monkeypatch.setattr(
-            "dev_health_ops.sync.planner.plan_sync_run",
-            lambda *a, **k: SimpleNamespace(sync_run_id="run-1"),
+            "dev_health_ops.sync.execution_trigger.create_sync_execution_trigger",
+            lambda *a, **k: SyncExecutionTriggerResult(
+                sync_run_id="run-1", job_run_id="job-run-1", total_units=1
+            ),
         )
         monkeypatch.setattr(
             "dev_health_ops.workers.sync_units.dispatch_sync_run", dispatch_mock

@@ -45,6 +45,7 @@ def init_sentry() -> bool:
         from sentry_sdk.integrations.fastapi import FastApiIntegration
         from sentry_sdk.integrations.logging import LoggingIntegration
         from sentry_sdk.integrations.starlette import StarletteIntegration
+        from sentry_sdk.integrations.strawberry import StrawberryIntegration
 
         environment = os.getenv("SENTRY_ENVIRONMENT", "production")
         traces_rate = float(os.getenv("SENTRY_TRACES_RATE", "0.0"))
@@ -59,6 +60,7 @@ def init_sentry() -> bool:
             integrations=[
                 StarletteIntegration(transaction_style="endpoint"),
                 FastApiIntegration(transaction_style="endpoint"),
+                StrawberryIntegration(async_execution=True),
                 CeleryIntegration(monitor_beat_tasks=True),
                 LoggingIntegration(
                     level=logging.INFO,

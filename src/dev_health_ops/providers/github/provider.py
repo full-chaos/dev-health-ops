@@ -8,9 +8,11 @@ the underlying ingestion behavior.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any
 
+from dev_health_ops.connectors.exceptions import RateLimitException
 from dev_health_ops.models.ai_attribution import AIAttributionRecord
 from dev_health_ops.models.work_items import (
     Sprint,
@@ -158,11 +160,30 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
         since: datetime | None = None
         if ctx.window.updated_since:
             since = _to_utc(ctx.window.updated_since)
+        until: datetime | None = None
+        if ctx.window.active_until:
+            until = _to_utc(ctx.window.active_until)
+
+        def within_active_window(item: Any) -> bool:
+            if until is None:
+                return True
+            updated_at = _to_utc(getattr(item, "updated_at", None))
+            return updated_at is None or updated_at <= until
+
+        active_window_scan_limit: int | None = None
+        if until is not None:
+            if ctx.limit is not None:
+                active_window_scan_limit = env_int(
+                    "GITHUB_ACTIVE_WINDOW_SCAN_LIMIT", max(ctx.limit * 10, 100)
+                )
+            elif "GITHUB_ACTIVE_WINDOW_SCAN_LIMIT" in os.environ:
+                active_window_scan_limit = env_int("GITHUB_ACTIVE_WINDOW_SCAN_LIMIT", 0)
 
         logger.info(
-            "GitHub: fetching work items from %s (since=%s)",
+            "GitHub: fetching work items from %s (since=%s, until=%s)",
             repo_full_name,
             since,
+            until,
         )
 
         fetched_count = 0
@@ -178,6 +199,8 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                     )
                     sprint_cache[sprint.sprint_id] = sprint
                     sprints.append(sprint)
+            except RateLimitException:
+                raise
             except Exception as exc:
                 logger.warning(
                     "GitHub: failed to fetch milestones for %s: %s", repo_full_name, exc
@@ -191,12 +214,16 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                     repo=repo,
                     state="all",
                     since=since,
+                    until=until,
                     limit=ctx.limit,
+                    scan_limit=active_window_scan_limit,
                 )
                 if include_issues
                 else ()
             )
             for issue in issues_iter:
+                if not within_active_window(issue):
+                    continue
                 if ctx.limit is not None and fetched_count >= ctx.limit:
                     break
 
@@ -249,6 +276,8 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                             )
                             if event:
                                 interactions.append(event)
+                    except RateLimitException:
+                        raise
                     except Exception as exc:
                         logger.debug(
                             "GitHub: failed to fetch comments for issue %s: %s",
@@ -264,13 +293,14 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
             )
             raise
 
+        if ctx.limit is not None and fetched_count >= ctx.limit:
+            include_prs = False
+
         # Fetch pull requests
         if include_prs:
             remaining_limit = None
             if ctx.limit is not None:
                 remaining_limit = ctx.limit - fetched_count
-                if remaining_limit <= 0:
-                    remaining_limit = None
 
             try:
                 prs = list(
@@ -278,9 +308,18 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                         owner=owner,
                         repo=repo,
                         state="all",
+                        since=since,
+                        until=until,
                         limit=remaining_limit,
+                        scan_limit=active_window_scan_limit,
                     )
                 )
+                if until is not None:
+                    prs = [pr for pr in prs if within_active_window(pr)]
+                    if ctx.limit is not None:
+                        prs = prs[: ctx.limit - fetched_count]
+            except RateLimitException:
+                raise
             except Exception as exc:
                 logger.warning(
                     "GitHub: failed to fetch PRs from %s: %s", repo_full_name, exc
@@ -309,6 +348,8 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                             pr_comments_by_number[payload.number] = (
                                 payload.issue_comments
                             )
+                except RateLimitException:
+                    raise
                 except Exception as exc:
                     logger.warning(
                         "GitHub: failed to fetch PR social data from %s: %s",

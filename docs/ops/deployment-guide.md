@@ -89,6 +89,9 @@ All deployment methods use the same environment variables:
 | `SYNC_UNIT_CONCURRENCY_PER_BUCKET` | Concurrent dispatch cap per org/provider/cost-class bucket. | 8 |
 | `SYNC_UNIT_DISPATCH_STALE_SECONDS` | Age after which `DISPATCHING` units can be reclaimed. | 900 |
 | `SYNC_UNIT_RUNNING_STALE_SECONDS` | Age after which running units are treated as stale for reconciliation/reporting. | 3600 |
+| `LINEAR_BACKFILL_MAX_WINDOW_DAYS` | Max window size (days) for a Linear work-item-family backfill chunk; smaller windows keep a chunk inside the lease/heartbeat budget. Non-Linear backfills use the 7-day default. | 3 |
+| `SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES` | Max times an eligible Linear work-item backfill unit may be retried after an expired lease (or soft-timeout) before it is marked terminal `FAILED` (`worker_lost_retry_exhausted`). Retry is DISABLED on every other surface. | 1 |
+| `SYNC_UNIT_EXPIRED_LEASE_RETRY_BACKOFF_SECONDS` | Backoff added to `available_at` when an eligible expired-lease unit is flipped to `RETRYING`, before it is redispatched. | 60 |
 | `SYNC_DISPATCH_REDISPATCH_COUNTDOWN` | Delay before redispatching sync-run work. | 60 |
 | `SYNC_OUTBOX_CLAIM_TIMEOUT_SECONDS` | Dispatch outbox claim lease duration. | 300 |
 | `SYNC_WATERMARK_OVERLAP` | Seconds subtracted from incremental watermark reads to intentionally re-read a lookback margin. | 0 |

@@ -45,6 +45,34 @@ if TYPE_CHECKING:
 DEFAULT_TIMEOUT = 30
 
 
+# CHAOS-2710: investment_metrics_daily is a plain MergeTree (migration 007), so
+# duplicate (re)writes of the same natural key with a newer computed_at do NOT
+# self-merge. A Linear-backfill retry (or the scheduled daily recompute) can leave
+# multiple rows per (org, day, repo, team, area, stream); a flat SUM() over them
+# double-counts. Every other reader (home.py, metrics.py, operating_review.py)
+# already collapses with argMax(col, computed_at) over the natural key -- the generic
+# analytics templates were the last raw reader, so dedup at the source here. Org-scoped
+# only (catalog/value paths bind org_id but not a date range); the template's own
+# date_filter still applies to the already-collapsed rows.
+_INVESTMENT_METRICS_DAILY_DEDUP = """(
+    SELECT
+        org_id,
+        day,
+        repo_id,
+        team_id,
+        investment_area,
+        project_stream,
+        argMax(delivery_units, computed_at) AS delivery_units,
+        argMax(work_items_completed, computed_at) AS work_items_completed,
+        argMax(prs_merged, computed_at) AS prs_merged,
+        argMax(churn_loc, computed_at) AS churn_loc,
+        argMax(cycle_p50_hours, computed_at) AS cycle_p50_hours
+    FROM investment_metrics_daily
+    WHERE org_id = %(org_id)s
+    GROUP BY org_id, day, repo_id, team_id, investment_area, project_stream
+) AS investment_metrics_daily"""
+
+
 @dataclass
 class TimeseriesRequest:
     """Request for a timeseries query."""
@@ -174,7 +202,7 @@ def _get_context_params(
         }
 
     return {
-        "source_table": "investment_metrics_daily",
+        "source_table": _INVESTMENT_METRICS_DAILY_DEDUP,
         "date_filter": "day >= %(start_date)s AND day <= %(end_date)s",
         "extra_clauses": "",
         "with_clause": "",

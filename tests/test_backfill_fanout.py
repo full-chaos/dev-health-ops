@@ -118,11 +118,20 @@ def _planned_units(session: Session, sync_run_id: str) -> list[SyncRunUnit]:
 
 
 def _seed_single_unit_run(
-    session: Session, *, mode: str
+    session: Session,
+    *,
+    mode: str,
+    provider: str = "github",
+    dataset_key: str = "commits",
+    source_external_id: str = "full-chaos/dev-health",
+    source_type: str = "repo",
 ) -> tuple[SyncRun, SyncRunUnit]:
-    integration = _create_integration(session)
-    source = _create_source(session, integration, "full-chaos/dev-health")
-    _create_dataset(session, integration, "commits")
+    integration = _create_integration(session, provider=provider)
+    source = _create_source(session, integration, source_external_id)
+    source.source_type = source_type
+    source.name = source_external_id
+    source.full_name = source_external_id
+    _create_dataset(session, integration, dataset_key)
     run = SyncRun(
         org_id=ORG_ID,
         integration_id=integration.id,
@@ -140,8 +149,8 @@ def _seed_single_unit_run(
         sync_run_id=run.id,
         integration_id=integration.id,
         source_id=source.id,
-        provider="github",
-        dataset_key="commits",
+        provider=provider,
+        dataset_key=dataset_key,
         cost_class="medium",
         mode=mode,
         since_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
@@ -281,6 +290,97 @@ def test_finalize_sync_run_terminalizes_backfill_job_and_job_run(
     assert job_run.completed_at is not None
     job_run_result: dict[str, object] = dict(job_run.result or {})
     assert job_run_result.get("sync_run_status") == SyncRunStatus.FAILED.value
+
+
+def test_reconciler_retry_exhaustion_terminalizes_backfill_job_and_job_run(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler, sync_units
+
+    run, unit = _seed_single_unit_run(
+        db_session,
+        mode=SyncRunMode.BACKFILL.value,
+        provider="linear",
+        dataset_key="work-items",
+        source_external_id="ENG",
+        source_type="team",
+    )
+    now = datetime.now(timezone.utc)
+    unit.status = SyncRunUnitStatus.RUNNING.value
+    unit.lease_owner = "worker-dead"
+    unit.lease_expires_at = now.replace(microsecond=0)
+    unit.expired_lease_retry_count = 1
+    backfill_job = BackfillJob(
+        org_id=ORG_ID,
+        sync_config_id=uuid.uuid4(),
+        celery_task_id=f"worker|sync_run:{run.id}",
+        status="running",
+        since_date=date(2026, 6, 1),
+        before_date=date(2026, 6, 7),
+        total_chunks=1,
+        completed_chunks=0,
+        failed_chunks=0,
+    )
+    scheduled = ScheduledJob(
+        org_id=ORG_ID,
+        name=f"sync-config-{uuid.uuid4()}",
+        job_type="sync",
+        provider="linear",
+        schedule_cron="0 * * * *",
+        job_config={},
+        sync_config_id=backfill_job.sync_config_id,
+        tz="UTC",
+        status=1,
+    )
+    db_session.add(scheduled)
+    db_session.flush()
+    job_run = JobRun(
+        job_id=scheduled.id,
+        triggered_by="backfill",
+        status=JobRunStatus.RUNNING.value,
+    )
+    job_run.result = {"sync_run_id": str(run.id)}
+    db_session.add_all([backfill_job, job_run])
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setenv("SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES", "1")
+    monkeypatch.setattr(
+        sync_units,
+        "_CLICKHOUSE_RETRY_PROVEN_SAFE_SURFACES",
+        sync_units._LINEAR_BACKFILL_WORK_ITEM_IN_BAND_WRITE_SURFACES,
+    )
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: None,
+    )
+
+    def finalize_inline(args=None, queue=None):
+        assert args is not None
+        sync_units.finalize_sync_run(str(args[0]))
+
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run,
+        "apply_async",
+        finalize_inline,
+    )
+
+    result = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    db_session.refresh(unit)
+    db_session.refresh(run)
+    db_session.refresh(backfill_job)
+    db_session.refresh(job_run)
+    assert result["expired_retry_exhausted_units"] == 1
+    assert unit.status == SyncRunUnitStatus.FAILED.value
+    assert unit.result is not None
+    assert unit.result["error_category"] == "worker_lost_retry_exhausted"
+    assert run.status == SyncRunStatus.FAILED.value
+    assert backfill_job.status == "failed"
+    assert backfill_job.failed_chunks == 1
+    assert backfill_job.completed_at is not None
+    assert job_run.status == JobRunStatus.FAILED.value
+    assert job_run.completed_at is not None
 
 
 def test_backfill_unit_does_not_write_watermark(db_session, monkeypatch):

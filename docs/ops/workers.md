@@ -123,6 +123,9 @@ The bundled Docker Compose, Kubernetes, and Helm deployments already declare the
 | `SYNC_UNIT_CONCURRENCY_PER_BUCKET` | `8` | Caps concurrently dispatchable units per org/provider/cost-class bucket. |
 | `SYNC_UNIT_DISPATCH_STALE_SECONDS` | `900` | Reclaims stale `DISPATCHING` units after this age. |
 | `SYNC_UNIT_RUNNING_STALE_SECONDS` | `3600` | Treats long-running units as stale for reconciliation/reporting. |
+| `LINEAR_BACKFILL_MAX_WINDOW_DAYS` | `3` | Caps the window size (days) of a Linear work-item-family backfill chunk so it stays inside the lease/heartbeat budget. Non-Linear backfills use the 7-day default. |
+| `SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES` | `1` | Max expired-lease (or soft-timeout) retries for an eligible Linear work-item backfill unit before terminal `FAILED` (`worker_lost_retry_exhausted`). Retry is DISABLED on all other surfaces. |
+| `SYNC_UNIT_EXPIRED_LEASE_RETRY_BACKOFF_SECONDS` | `60` | Backoff added to `available_at` when an eligible expired-lease unit is flipped to `RETRYING` before redispatch. |
 | `SYNC_DISPATCH_REDISPATCH_COUNTDOWN` | `60` | Delay used when redispatching sync-run work. |
 | `SYNC_OUTBOX_CLAIM_TIMEOUT_SECONDS` | `300` | Dispatch outbox claim lease duration. |
 | `SYNC_WATERMARK_OVERLAP` | `0` | Subtracts this many seconds from incremental watermark reads to intentionally re-read a lookback margin. |
@@ -224,6 +227,28 @@ The system registers Celery tasks under the `workers/` directory. The primary re
 | Result expiry | 86400s (24 hours) |
 
 ---
+
+## Linear Backfill Timeout & Lease Retry
+
+Linear work-item backfills run long, provider-paced chunks. To keep one chunk inside the lease/heartbeat budget, the planner caps Linear work-item-family backfill windows at `LINEAR_BACKFILL_MAX_WINDOW_DAYS` (default `3`); non-Linear backfills keep the default 7-day window. When a worker still loses its lease mid-chunk (crash, `SIGKILL`, or a soft-timeout), the `reconcile_sync_dispatch` relay can **retry** the unit instead of failing it. The retry knobs (`SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES`, `SYNC_UNIT_EXPIRED_LEASE_RETRY_BACKOFF_SECONDS`) are listed under [Routing and budget environment](#routing-and-budget-environment); the full lifecycle is in [Dispatch Outbox](../architecture/dispatch-outbox.md) and [Data Pipeline → Retry Lifecycle](../architecture/data-pipeline.md#retry-lifecycle-expired-lease-recovery).
+
+These unit-level expired-lease retries are **distinct** from Celery's generic per-task `Max retries (default) 3` autoretry in the table above.
+
+Retry is **eligible only** when ALL hold: `provider == linear`, `mode == backfill`, a work-item-family dataset, the parent run is non-terminal, the unit's `expired_lease_retry_count` is below `SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES`, and **every** ClickHouse surface the chunk writes is in the proven retry-SAFE set (see the [ClickHouse retry idempotency matrix](../architecture/data-pipeline.md#clickhouse-retry-idempotency-matrix) — currently every Linear work-item backfill surface is SAFE, so no surface disables retry). Retry stays **DISABLED** for everything outside this eligibility gate — a non-eligible expired lease is terminal `FAILED` (`worker_lost`), exactly as before.
+
+### Interpreting `retrying` vs `failed`
+
+Operator states surface in the admin sync-run unit projection (`SyncRunUnitResponse`, `SyncRunUnitSummary`) and the backfill/job-run views:
+
+| State / signal | Where | Meaning | Operator action |
+|---|---|---|---|
+| `retrying` | unit `status` | An eligible Linear backfill unit lost its lease (or hit a soft-timeout) and is waiting on its `available_at` / `next_retry_at` backoff to be redispatched. | None — recovery is automatic. Watch `retry_count` / `next_retry_at`. |
+| `soft_timeout` | unit `error_category` | The unit hit the Celery soft time limit. If eligible it is now `retrying`; otherwise terminal `FAILED`. | None if `retrying`; otherwise treat like `worker_lost`. |
+| `worker_lost` | unit `error_category` (terminal `FAILED`) | The lease expired and the unit was NOT retry-eligible (wrong provider/mode/dataset, or a surface without proven dedupe). | Investigate; backfill never advances watermarks, so re-triggering the window is safe. |
+| `worker_lost_retry_exhausted` | unit `error_category` (terminal `FAILED`) | An eligible unit exhausted `SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES`. | Investigate the persistent cause (provider throttling, oversized window) before re-triggering. |
+| `partial_failed` | run `SyncRunStatus` (`PARTIAL_FAILED`) | The run finished with a mix of `SUCCESS` and `FAILED` units. | Inspect the failed units; re-trigger the affected window if needed. |
+
+A `retrying` unit is **not** a failure — it is in-flight recovery. Only `FAILED` units with a terminal `error_category` (`worker_lost`, `worker_lost_retry_exhausted`, or a provider/processor error) represent work that did not complete.
 
 ## Monitoring
 

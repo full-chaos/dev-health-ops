@@ -20,10 +20,13 @@ from __future__ import annotations
 
 import importlib
 import sqlite3
+import types
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -33,6 +36,8 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from dev_health_ops.api.admin.routers.integrations import _unit_to_response
+from dev_health_ops.api.admin.routers.sync import _job_run_response
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.backfill import BackfillJob
 from dev_health_ops.models.git import Base
@@ -530,3 +535,161 @@ async def test_backfill_paused_config_returns_409_without_dispatch(
         backfill_jobs = (await session.execute(select(BackfillJob))).scalars().all()
     assert job_runs == []
     assert backfill_jobs == []
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-2710: operator-visible retry/timeout projection (Phase 6)
+# ---------------------------------------------------------------------------
+
+_T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+def _fake_unit(**overrides):
+    base = dict(
+        id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        sync_run_id=uuid.uuid4(),
+        integration_id=uuid.uuid4(),
+        source_id=uuid.uuid4(),
+        source=None,
+        provider="linear",
+        dataset_key="work_items",
+        cost_class="graphql_cost",
+        mode="backfill",
+        since_at=None,
+        before_at=None,
+        status="running",
+        attempts=1,
+        available_at=None,
+        rate_limit_deferrals=0,
+        duration_seconds=None,
+        error=None,
+        result=None,
+        last_heartbeat_at=None,
+        created_at=_T0,
+        updated_at=_T0,
+    )
+    base.update(overrides)
+    return types.SimpleNamespace(**base)
+
+
+def test_unit_to_response_projects_all_retry_result_keys():
+    """All 8 worker-emitted retry/timeout result keys project onto the response."""
+    resp = _unit_to_response(
+        _fake_unit(
+            status="retrying",
+            result={
+                "retry_count": 1,
+                "retry_reason": "lease_expired",
+                "last_lease_expired_at": "2026-01-01T00:05:00+00:00",
+                "next_retry_at": "2026-01-01T00:06:00+00:00",
+                "retry_exhausted": False,
+                "retry_surfaces": ["work_items", "transitions"],
+                "linear_page_count": 12,
+                "linear_batch_count": 3,
+                "error_category": "soft_timeout",
+            },
+        )
+    )
+    assert resp.retry_count == 1
+    assert resp.retry_reason == "lease_expired"
+    assert resp.last_lease_expired_at == datetime(2026, 1, 1, 0, 5, tzinfo=timezone.utc)
+    assert resp.next_retry_at == datetime(2026, 1, 1, 0, 6, tzinfo=timezone.utc)
+    assert resp.retry_exhausted is False
+    assert resp.retry_surfaces == ["work_items", "transitions"]
+    assert resp.linear_page_count == 12
+    assert resp.linear_batch_count == 3
+    assert resp.error_category == "soft_timeout"
+
+
+def test_unit_to_response_next_retry_at_derived_from_available_at_when_absent():
+    """With no result next_retry_at, a retrying unit derives it from available_at."""
+    avail = datetime(2026, 1, 1, 0, 10, tzinfo=timezone.utc)
+    resp = _unit_to_response(
+        _fake_unit(status="retrying", available_at=avail, result={"retry_count": 1})
+    )
+    assert resp.next_retry_at == avail
+
+
+def test_unit_to_response_next_retry_at_result_value_is_authoritative():
+    """A result next_retry_at overrides the available_at derivation."""
+    avail = datetime(2026, 1, 1, 0, 10, tzinfo=timezone.utc)
+    resp = _unit_to_response(
+        _fake_unit(
+            status="retrying",
+            available_at=avail,
+            result={"next_retry_at": "2026-01-01T00:06:00+00:00"},
+        )
+    )
+    assert resp.next_retry_at == datetime(2026, 1, 1, 0, 6, tzinfo=timezone.utc)
+
+
+def test_unit_to_response_no_retry_projection_for_non_retrying_unit():
+    """A non-retrying unit with no result projects null retry fields (no derivation)."""
+    avail = datetime(2026, 1, 1, 0, 10, tzinfo=timezone.utc)
+    resp = _unit_to_response(
+        _fake_unit(status="running", available_at=avail, result=None)
+    )
+    assert resp.next_retry_at is None
+    assert resp.retry_count is None
+    assert resp.retry_reason is None
+    assert resp.retry_exhausted is None
+    assert resp.retry_surfaces is None
+    assert resp.linear_page_count is None
+    assert resp.linear_batch_count is None
+
+
+@pytest.mark.parametrize(
+    "category",
+    ["worker_lost", "worker_lost_retry_exhausted"],
+)
+def test_unit_to_response_terminal_worker_lost_categories(category):
+    """Terminal expired-lease/exhausted categories are surfaced via error_category."""
+    resp = _unit_to_response(
+        _fake_unit(
+            status="failed",
+            result={
+                "error_category": category,
+                "retry_exhausted": category == "worker_lost_retry_exhausted",
+            },
+        )
+    )
+    assert resp.status == "failed"
+    assert resp.error_category == category
+    assert resp.retry_exhausted is (category == "worker_lost_retry_exhausted")
+
+
+def test_job_run_response_distinguishes_partial_failed_and_forwards_retry_aggregates():
+    """PARTIAL_FAILED is distinguishable via result.sync_run_status (enum unchanged),
+    and worker-emitted retry aggregates in the SyncRun result flow through."""
+    run = types.SimpleNamespace(
+        id=uuid.uuid4(),
+        job_id=uuid.uuid4(),
+        status=JobRunStatus.RUNNING.value,
+        started_at=None,
+        completed_at=None,
+        duration_seconds=None,
+        error=None,
+        result={"sync_run_id": str(uuid.uuid4()), "planner_managed": True},
+        triggered_by="backfill",
+        created_at=_T0,
+    )
+    planner = types.SimpleNamespace(
+        status=SyncRunStatus.PARTIAL_FAILED.value,
+        result={"retry_exhausted_units": 1, "retrying_units": 0},
+        total_units=3,
+        completed_units=2,
+        failed_units=1,
+        started_at=_T0,
+        completed_at=datetime(2026, 1, 1, 0, 30, tzinfo=timezone.utc),
+        error=None,
+    )
+    resp = _job_run_response(run, cast(SyncRun, planner))
+    # JobRunStatus enum/labels are unchanged: PARTIAL_FAILED collapses to the
+    # 'failed' label, but the literal run state stays distinguishable in result.
+    assert resp.status == "failed"
+    assert resp.result is not None
+    assert resp.result["sync_run_status"] == "partial_failed"
+    assert resp.result["retry_exhausted_units"] == 1
+    assert resp.result["retrying_units"] == 0
+    assert resp.result["failed_units"] == 1

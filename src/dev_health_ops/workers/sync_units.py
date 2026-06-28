@@ -48,6 +48,7 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any, TypedDict
 
+from billiard.exceptions import SoftTimeLimitExceeded
 from celery import chord, group
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -70,6 +71,7 @@ from dev_health_ops.models import (
 )
 from dev_health_ops.sync.budget import estimate_provider_budget
 from dev_health_ops.sync.budget_guard import BudgetGuard
+from dev_health_ops.sync.datasets import DatasetKey
 from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_DISPATCH,
     OUTBOX_KIND_FINALIZE,
@@ -101,6 +103,80 @@ _TERMINAL_RUN_STATUSES = {
     SyncRunStatus.PARTIAL_FAILED.value,
     SyncRunStatus.FAILED.value,
 }
+_WORK_ITEM_RESULT_OBSERVATION_FIELDS = (
+    "linear_page_count",
+    "linear_batch_count",
+)
+_LINEAR_BACKFILL_WORK_ITEM_DATASETS = frozenset(
+    {
+        DatasetKey.WORK_ITEMS.value,
+        DatasetKey.WORK_ITEM_LABELS.value,
+        DatasetKey.WORK_ITEM_PROJECTS.value,
+        DatasetKey.WORK_ITEM_HISTORY.value,
+        DatasetKey.WORK_ITEM_COMMENTS.value,
+    }
+)
+_LINEAR_BACKFILL_WORK_ITEM_IN_BAND_WRITE_SURFACES = frozenset(
+    {
+        "work_items",
+        "work_item_transitions",
+        "work_item_dependencies",
+        "work_item_reopen_events",
+        "work_item_interactions",
+        "sprints",
+        "ai_attribution",
+        "work_item_metrics_daily",
+        "work_item_user_metrics_daily",
+        "work_item_cycle_times",
+        "work_item_state_durations_daily",
+        "work_item_team_attributions",
+        "issue_type_metrics_daily",
+        "investment_metrics_daily",
+        "investment_classifications_daily",
+    }
+)
+# CHAOS-2710 retry idempotency matrix. A Linear backfill unit's retry re-writes the
+# COMPLETE window for every surface below; each is provably idempotent under a
+# same-natural-key rewrite with a newer version (computed_at/last_synced):
+#   work_items / transitions / reopen_events / interactions / sprints
+#                                 -> RMT + reader-side FINAL or semantic-row dedupe (Phase 2)
+#   work_item_dependencies        -> RMT(last_synced); loader reads FINAL, and the work-graph
+#                                 builder's raw read only feeds work_graph_edges, itself an RMT
+#                                 keyed on a deterministic edge_id hash so duplicate dependency
+#                                 rows collapse to one persisted edge (no global FINAL needed)
+#   ai_attribution                -> RMT(computed_at) + FINAL+ROW_NUMBER resolved view
+#   work_item_metrics_daily       -> RMT(computed_at) (migration 055) + FINAL/argMax readers
+#   work_item_user_metrics_daily  -> RMT(computed_at) (migration 055) + FINAL readers
+#   work_item_cycle_times         -> RMT(computed_at) + argMax/FINAL readers
+#   work_item_state_durations_daily -> argMax(duration, computed_at) readers over the key
+#   work_item_team_attributions   -> latest-snapshot (max computed_at) + FINAL resolver
+#   issue_type_metrics_daily      -> only read via SELECT DISTINCT (no aggregation)
+#   investment_metrics_daily      -> argMax(col, computed_at) over the natural key in every
+#                                 reader, incl. the analytics templates (compiler dedup CTE)
+#   investment_classifications_daily -> no production reader (deterministic rule-based rows)
+#   manual_attribution_fallbacks  -> RMT(updated_at) + FINAL reader (registry entry; this
+#                                 job does not write it, but it is a proven-safe surface)
+# Retry stays disabled for any unit whose write set is NOT a subset of this set.
+_CLICKHOUSE_RETRY_PROVEN_SAFE_SURFACES = frozenset(
+    {
+        "work_items",
+        "work_item_transitions",
+        "work_item_dependencies",
+        "work_item_reopen_events",
+        "work_item_interactions",
+        "sprints",
+        "ai_attribution",
+        "work_item_metrics_daily",
+        "work_item_user_metrics_daily",
+        "work_item_cycle_times",
+        "work_item_state_durations_daily",
+        "work_item_team_attributions",
+        "issue_type_metrics_daily",
+        "investment_metrics_daily",
+        "investment_classifications_daily",
+        "manual_attribution_fallbacks",
+    }
+)
 
 
 class _PendingUnitCounts(TypedDict):
@@ -179,6 +255,16 @@ def _attach_budget_observation(
     observations["budget_estimate"] = budget_audit
     result_payload["observations"] = observations
     return result_payload
+
+
+def _promote_result_observation_fields(result: dict[str, Any]) -> dict[str, Any]:
+    observations = result.get("observations")
+    if not isinstance(observations, Mapping):
+        return result
+    for field_name in _WORK_ITEM_RESULT_OBSERVATION_FIELDS:
+        if field_name in observations:
+            result[field_name] = observations[field_name]
+    return result
 
 
 @celery_app.task(queue="sync", name="dev_health_ops.workers.tasks.dispatch_sync_run")
@@ -519,8 +605,42 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
         logger.info("run_sync_unit.started", extra=started_extra)
 
         runtime = _runtime_cache.get(ctx)
-        result = run_dataset_unit(ctx, runtime)
-        result_payload = _attach_budget_observation(dict(result or {}), budget_audit)
+        if not _sync_unit_lease_is_owned_and_live(unit_id, lease_owner):
+            logger.info(
+                "run_sync_unit.lease_lost_before_dataset",
+                extra={**_log_ctx},
+            )
+            return {
+                "status": "skipped",
+                "unit_id": unit_id,
+                "reason": "lease_lost",
+            }
+        from dev_health_ops.metrics.job_work_items import (
+            WorkItemsSyncLeaseLost,
+            work_items_sync_lease_check,
+        )
+
+        try:
+            with work_items_sync_lease_check(
+                lambda _surface: _sync_unit_lease_is_owned_and_live(
+                    unit_id, lease_owner
+                )
+            ):
+                result = run_dataset_unit(ctx, runtime)
+        except WorkItemsSyncLeaseLost as exc:
+            logger.warning(
+                "run_sync_unit.lease_lost_before_sink_write",
+                extra={**_log_ctx, "surface": exc.surface},
+            )
+            return {
+                "status": "skipped",
+                "unit_id": unit_id,
+                "reason": "lease_lost",
+                "surface": exc.surface,
+            }
+        result_payload = _promote_result_observation_fields(
+            _attach_budget_observation(dict(result or {}), budget_audit)
+        )
 
         completed_at = datetime.now(timezone.utc)
         duration_seconds = max(0, int((completed_at - started_at).total_seconds()))
@@ -694,6 +814,17 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
             "not_before": deferral.not_before,
             "rate_limit_deferrals": deferral.attempts,
         }
+    except SoftTimeLimitExceeded as exc:
+        if terminal_txn_started:
+            raise
+        timeout_result, should_finalize = _stamp_sync_unit_soft_timeout(
+            unit_id=unit_id,
+            lease_owner=lease_owner,
+            started_at=started_at,
+            exc=exc,
+            log_ctx=_log_ctx,
+        )
+        return timeout_result
     except Exception as exc:
         if terminal_txn_started:
             raise
@@ -722,6 +853,265 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     "run_sync_unit.finalize_enqueue_failed",
                     extra={"sync_run_id": sync_run_id, "unit_id": unit_id},
                 )
+
+
+def _sync_unit_lease_is_owned_and_live(
+    unit_id: str,
+    lease_owner: str | None,
+) -> bool:
+    from dev_health_ops.db import get_postgres_session_sync
+
+    if lease_owner is None:
+        return False
+    now = datetime.now(timezone.utc)
+    with get_postgres_session_sync() as session:
+        unit = _load_unit(session, unit_id)
+        if unit.status != SyncRunUnitStatus.RUNNING.value:
+            return False
+        run_status = (
+            session.query(SyncRun.status)
+            .filter(SyncRun.id == unit.sync_run_id)
+            .scalar()
+        )
+        if run_status in _TERMINAL_RUN_STATUSES:
+            return False
+        return _unit_lease_is_owned_and_live(unit, lease_owner, now)
+
+
+def _expired_lease_max_retries() -> int:
+    try:
+        return max(0, int(os.getenv("SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES", "1")))
+    except ValueError:
+        return 1
+
+
+def _expired_lease_retry_backoff_seconds() -> int:
+    try:
+        return max(
+            0,
+            int(os.getenv("SYNC_UNIT_EXPIRED_LEASE_RETRY_BACKOFF_SECONDS", "60")),
+        )
+    except ValueError:
+        return 60
+
+
+def _retry_surfaces_for_unit(unit: SyncRunUnit) -> frozenset[str]:
+    if (
+        str(unit.provider) == "linear"
+        and str(unit.mode) == SyncRunMode.BACKFILL.value
+        and str(unit.dataset_key) in _LINEAR_BACKFILL_WORK_ITEM_DATASETS
+    ):
+        return _LINEAR_BACKFILL_WORK_ITEM_IN_BAND_WRITE_SURFACES
+    return frozenset()
+
+
+def _sync_unit_expired_lease_retry_decision(unit: SyncRunUnit) -> dict[str, Any]:
+    retry_count = int(unit.expired_lease_retry_count or 0)
+    retry_surfaces = _retry_surfaces_for_unit(unit)
+    base_eligible = (
+        str(unit.provider) == "linear"
+        and str(unit.mode) == SyncRunMode.BACKFILL.value
+        and str(unit.dataset_key) in _LINEAR_BACKFILL_WORK_ITEM_DATASETS
+        and bool(retry_surfaces)
+        and retry_surfaces.issubset(_CLICKHOUSE_RETRY_PROVEN_SAFE_SURFACES)
+    )
+    max_retries = _expired_lease_max_retries()
+    exhausted = base_eligible and retry_count >= max_retries
+    return {
+        "should_retry": base_eligible and not exhausted,
+        "retry_exhausted": exhausted,
+        "retry_count": retry_count,
+        "next_retry_count": retry_count + 1,
+        "retry_surfaces": tuple(sorted(retry_surfaces)),
+        "max_retries": max_retries,
+    }
+
+
+def _retry_result_payload(
+    *,
+    error_category: str,
+    retry_reason: str,
+    decision: dict[str, Any],
+    next_retry_at: datetime | None,
+    last_lease_expired_at: datetime | None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "error_category": error_category,
+        "retry_count": decision["next_retry_count"],
+        "retry_reason": retry_reason,
+        "next_retry_at": next_retry_at.isoformat() if next_retry_at else None,
+        "retry_exhausted": False,
+        "retry_surfaces": list(decision["retry_surfaces"]),
+    }
+    if last_lease_expired_at is not None:
+        payload["last_lease_expired_at"] = last_lease_expired_at.isoformat()
+    return payload
+
+
+def _failed_retry_result_payload(
+    *,
+    error_category: str,
+    retry_reason: str,
+    decision: dict[str, Any],
+    last_lease_expired_at: datetime | None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "error_category": error_category,
+        "retry_count": decision["retry_count"],
+        "retry_reason": retry_reason,
+        "next_retry_at": None,
+        "retry_exhausted": bool(decision["retry_exhausted"]),
+        "retry_surfaces": list(decision["retry_surfaces"]),
+    }
+    if last_lease_expired_at is not None:
+        payload["last_lease_expired_at"] = last_lease_expired_at.isoformat()
+    return payload
+
+
+def _stamp_sync_unit_soft_timeout(
+    *,
+    unit_id: str,
+    lease_owner: str | None,
+    started_at: datetime,
+    exc: SoftTimeLimitExceeded,
+    log_ctx: dict[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    from dev_health_ops.db import get_postgres_session_sync
+
+    completed_at = datetime.now(timezone.utc)
+    duration_seconds = max(0, int((completed_at - started_at).total_seconds()))
+    with get_postgres_session_sync() as session:
+        unit = _load_unit(session, unit_id)
+        decision = _sync_unit_expired_lease_retry_decision(unit)
+        if decision["should_retry"]:
+            available_at = completed_at + timedelta(
+                seconds=_expired_lease_retry_backoff_seconds()
+            )
+            result_payload = _retry_result_payload(
+                error_category="soft_timeout",
+                retry_reason="soft_timeout",
+                decision=decision,
+                next_retry_at=available_at,
+                last_lease_expired_at=None,
+            )
+            retry_result: Any = session.execute(
+                update(SyncRunUnit)
+                .where(
+                    SyncRunUnit.id == uuid.UUID(str(unit_id)),
+                    SyncRunUnit.status == SyncRunUnitStatus.RUNNING.value,
+                    SyncRunUnit.lease_owner == lease_owner,
+                    SyncRunUnit.lease_owner.is_not(None),
+                    SyncRunUnit.sync_run_id.in_(_nonterminal_run_ids_select()),
+                )
+                .values(
+                    status=SyncRunUnitStatus.RETRYING.value,
+                    available_at=available_at,
+                    duration_seconds=duration_seconds,
+                    error=str(exc),
+                    result=result_payload,
+                    expired_lease_retry_count=(
+                        SyncRunUnit.expired_lease_retry_count + 1
+                    ),
+                    last_retry_reason="soft_timeout",
+                    retry_exhausted_at=None,
+                    lease_owner=None,
+                    lease_expires_at=None,
+                    last_heartbeat_at=completed_at,
+                    updated_at=completed_at,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if int(retry_result.rowcount or 0) == 0:
+                return (
+                    {
+                        "status": "skipped",
+                        "unit_id": unit_id,
+                        "reason": "lease_lost",
+                    },
+                    False,
+                )
+            session.flush()
+            logger.warning(
+                "run_sync_unit.soft_timeout_deferred",
+                extra={
+                    **log_ctx,
+                    "duration_seconds": duration_seconds,
+                    "retry_count": decision["next_retry_count"],
+                    "next_retry_at": available_at.isoformat(),
+                },
+            )
+            return (
+                {
+                    "status": "soft_timeout_deferred",
+                    "unit_id": unit_id,
+                    "error_category": "soft_timeout",
+                    "retry_count": decision["next_retry_count"],
+                    "next_retry_at": available_at.isoformat(),
+                },
+                False,
+            )
+
+        failed_payload = _failed_retry_result_payload(
+            error_category="soft_timeout",
+            retry_reason="soft_timeout",
+            decision=decision,
+            last_lease_expired_at=None,
+        )
+        failed_result: Any = session.execute(
+            update(SyncRunUnit)
+            .where(
+                SyncRunUnit.id == uuid.UUID(str(unit_id)),
+                SyncRunUnit.status == SyncRunUnitStatus.RUNNING.value,
+                SyncRunUnit.lease_owner == lease_owner,
+                SyncRunUnit.lease_owner.is_not(None),
+                SyncRunUnit.sync_run_id.in_(_nonterminal_run_ids_select()),
+            )
+            .values(
+                status=SyncRunUnitStatus.FAILED.value,
+                available_at=None,
+                duration_seconds=duration_seconds,
+                error=str(exc),
+                result=failed_payload,
+                last_retry_reason="soft_timeout",
+                retry_exhausted_at=completed_at
+                if failed_payload["retry_exhausted"]
+                else None,
+                lease_owner=None,
+                lease_expires_at=None,
+                last_heartbeat_at=completed_at,
+                updated_at=completed_at,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if int(failed_result.rowcount or 0) == 0:
+            return (
+                {
+                    "status": "skipped",
+                    "unit_id": unit_id,
+                    "reason": "lease_lost",
+                },
+                False,
+            )
+        session.flush()
+    logger.warning(
+        "run_sync_unit.soft_timeout_failed",
+        extra={
+            **log_ctx,
+            "duration_seconds": duration_seconds,
+            "error_category": "soft_timeout",
+            "retry_exhausted": failed_payload["retry_exhausted"],
+        },
+    )
+    return (
+        {
+            "status": "failed",
+            "unit_id": unit_id,
+            "error": str(exc),
+            "error_category": "soft_timeout",
+            "retry_exhausted": failed_payload["retry_exhausted"],
+        },
+        False,
+    )
 
 
 def _stamp_sync_unit_failed(

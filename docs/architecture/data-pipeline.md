@@ -227,7 +227,7 @@ Historical backfill reuses the same data pipeline (Connectors -> Processors -> S
 
 ### How It Works
 
-1. **Date range splitting** -- The `BackfillChunker` divides the requested date range into 7-day windows
+1. **Date range splitting** -- The `BackfillChunker` divides the requested date range into bounded windows. Non-Linear providers use the default 7-day window. Linear work-item-family backfills use a tighter `LINEAR_BACKFILL_MAX_WINDOW_DAYS` (default `3`) window so a single chunk stays inside the lease/heartbeat budget and avoids soft-timeouts on large ranges.
 2. **Sequential processing** -- Each chunk runs through the standard sync pipeline independently
 3. **Progress tracking** -- A `BackfillJob` record in PostgreSQL tracks chunk completion and overall progress
 
@@ -238,9 +238,37 @@ Historical backfill reuses the same data pipeline (Connectors -> Processors -> S
 | Trigger | Scheduled / manual | Manual or API-triggered |
 | Date range | From watermark to now | Explicit `--since` / `--before` |
 | Watermarks | Updates SyncWatermarks | **Never** updates watermarks |
-| Chunking | Single pass | 7-day windows |
+| Chunking | Single pass | Bounded windows (7d default; Linear work-item families use `LINEAR_BACKFILL_MAX_WINDOW_DAYS`, default `3`) |
 | Progress | Job run status only | Per-chunk progress via BackfillJob |
-| Queue | `sync` | `backfill` (dedicated) |
+| Queue | `sync` | `sync` fan-out (`dispatch_sync_run` → `run_sync_unit` → `finalize_sync_run`; the dedicated `backfill` queue was retired in CHAOS-2647) |
+
+### ClickHouse retry idempotency matrix
+
+If a Linear work-item backfill commits ClickHouse writes and the worker dies
+before terminal status, bounded retry can replay the same completed window with
+identical natural keys and newer version-column values. Readers are the safety
+boundary: retry eligibility requires every production reader to collapse the
+table as listed below.
+
+| Surface | Engine/version | Reader collapse/fence | Retry verdict |
+| --- | --- | --- | --- |
+| `work_items` | `ReplacingMergeTree(last_synced)` | `FINAL` on `(org_id, repo_id, work_item_id)` in loaders, work-graph, investment, capacity, GraphQL, data-health, and API work-unit readers | SAFE |
+| `work_item_transitions` | `ReplacingMergeTree(last_synced)` | Semantic-row dedupe: group by every semantic event column (`org_id`, `repo_id`, `work_item_id`, `occurred_at`, `provider`, statuses/raw statuses, `actor`) and keep `max(last_synced)` | SAFE |
+| `work_item_dependencies` | `ReplacingMergeTree(last_synced)` | Existing loader reads with `FINAL`; dependency rows key on the semantic relationship tuple | SAFE |
+| `work_item_interactions` | `ReplacingMergeTree(last_synced)` | Semantic-row dedupe: group by `org_id`, `work_item_id`, `provider`, `interaction_type`, `occurred_at`, `actor`, `body_length`; no production reader currently bypasses this helper | SAFE |
+| `work_item_reopen_events` | `ReplacingMergeTree(last_synced)` | Semantic-row dedupe: group by `org_id`, `work_item_id`, `occurred_at`, statuses/raw statuses, `actor`; no production reader currently bypasses this helper | SAFE |
+| `sprints` | `ReplacingMergeTree(last_synced)` | `FINAL` on `(org_id, provider, sprint_id)` | SAFE |
+| `work_item_cycle_times` | `ReplacingMergeTree(computed_at)` | Readers use `argMax(..., computed_at)` by work-item natural key | SAFE |
+| `work_item_state_durations_daily` | `MergeTree` | Readers use `argMax(..., computed_at)` by rollup key | SAFE |
+| `work_item_team_attributions` | `ReplacingMergeTree(computed_at)` | Latest snapshot fence `(work_item_id, max(computed_at))` plus `FINAL` for exact-key duplicates, matching `api/graphql/resolvers/team_attribution.py` | SAFE |
+| `manual_attribution_fallbacks` | `ReplacingMergeTree(updated_at)` | Readers use latest active fallback by key/version | SAFE |
+| `ai_attribution` | `ReplacingMergeTree(computed_at)` | Readers use resolved latest attribution rows | SAFE |
+
+Do not make replay idempotency depend on delete-by-window, sync-unit attempt
+columns, or plain `FINAL` for event-style surfaces whose sorting keys are
+coarser than the event semantics.
+
+**Retry-DISABLED policy.** Retry is DISABLED for any surface not proven retry-SAFE above. The collapse mechanism is per-surface: `FINAL` for `work_items` / `work_item_dependencies` / `sprints`; semantic-row dedupe for the event surfaces `work_item_transitions` / `work_item_interactions` / `work_item_reopen_events`; `argMax(..., computed_at)` for `work_item_cycle_times` / `work_item_state_durations_daily`; and a latest-snapshot fence + `FINAL` for `work_item_team_attributions` (`manual_attribution_fallbacks` / `ai_attribution` resolve to their latest rows). Because every Linear work-item backfill surface above is currently SAFE, **no surface is presently retry-disabled**. If a future surface lacks proven reader-collapse it must be marked retry-DISABLED here and excluded from the worker-core eligibility gate before any chunk that writes it can become retry-eligible.
 
 ### Tier Limits
 
@@ -289,6 +317,43 @@ residual below would require such a marker and is deliberately deferred
    far in the past does **not** trigger a giant `[before, now]` first
    incremental; the user chose a historical window, and auto-filling to now
    would be surprising and expensive. This is **intended**, not a gap to close.
+
+### Retry Lifecycle (Expired-Lease Recovery)
+
+Linear work-item backfill chunks are long and provider-paced, so a worker can lose its lease (crash, `SIGKILL`, or a soft-timeout) mid-chunk before the unit reaches a terminal state. The periodic `reconcile_sync_dispatch` relay owns recovery:
+
+- **Eligible expired leases retry.** A unit is retry-eligible only when ALL of the following hold: `provider == linear`, `mode == backfill`, the dataset is a work-item family, the parent run is still non-terminal, every ClickHouse surface the chunk writes is in the proven retry-SAFE set, and `expired_lease_retry_count < SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES`. The relay flips `RUNNING -> RETRYING` (atomic CAS), increments `expired_lease_retry_count`, clears the lease, and sets `available_at = now + SYNC_UNIT_EXPIRED_LEASE_RETRY_BACKOFF_SECONDS`. When `available_at` is reached the unit is redispatched through the normal `dispatch_sync_run` path.
+- **Ineligible expired leases fail.** Any unit that is not retry-eligible (wrong provider/mode/dataset, parent run already terminal, or any touched surface is NOT proven idempotent) is marked terminal `FAILED` with `error_category = worker_lost` — the pre-existing behavior. Retry is **DISABLED by default**; only the narrowly-eligible Linear backfill path opts in.
+- **Exhausted retries fail.** When `expired_lease_retry_count` reaches `SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES`, the unit is marked terminal `FAILED` with `error_category = worker_lost_retry_exhausted`.
+- **Soft-timeout** is classified the same way (`error_category = soft_timeout`) and follows the same retry-eligibility policy, handled minimally before the hard time limit hits (no ClickHouse mutation, no finalization in the timeout handler).
+
+**Watermark non-update invariant (CHAOS-2514) holds across retries.** A retried chunk re-reads its original explicit `[since, before]` window; backfill never advances `SyncWatermarks`, so re-running a chunk cannot skip or double-advance incremental coverage. Combined with idempotent ClickHouse writes on the retry-SAFE surfaces, a redispatched chunk re-writes the same rows and downstream reads collapse them (no double-counting).
+
+```mermaid
+graph TD
+    Plan[plan_sync_run<br/>bounded Linear chunks] --> Dispatch[dispatch_sync_run]
+    Dispatch --> Run[run_sync_unit<br/>atomic claim + lease]
+    Run -->|heartbeat keeps lease alive| Run
+    Run -->|all writes committed| Success[unit SUCCESS]
+    Run -->|provider / processor error| Failure[unit FAILED]
+    Run -. worker dies / lease lost / soft-timeout .-> Expired[lease expires<br/>reconcile_sync_dispatch expired loop]
+
+    Expired -->|eligible: provider=linear, mode=backfill,<br/>work-item family, retry-SAFE surfaces,<br/>count &lt; SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES| Retrying[unit RETRYING<br/>+ available_at backoff<br/>+ expired_lease_retry_count++]
+    Retrying -->|available_at reached| Dispatch
+    Expired -->|not eligible| WorkerLost[unit FAILED<br/>error_category=worker_lost]
+    Retrying -->|count == max| Exhausted[unit FAILED<br/>error_category=worker_lost_retry_exhausted]
+
+    Success --> Finalize[finalize_sync_run]
+    Failure --> Finalize
+    WorkerLost --> Finalize
+    Exhausted --> Finalize
+    Finalize -->|never advances watermarks| PostSync[post_sync fanout]
+
+    style Retrying fill:#ffd,stroke:#333,stroke-width:2px
+    style Exhausted fill:#fdd,stroke:#333,stroke-width:2px
+    style WorkerLost fill:#fdd,stroke:#333,stroke-width:2px
+    style Success fill:#dfd,stroke:#333,stroke-width:2px
+```
 
 ## Durable Dispatch & Reconciliation
 

@@ -7,6 +7,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, TypedDict
 
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+from dev_health_ops.metrics.sinks.clickhouse.idempotency import (
+    WORK_ITEM_TRANSITIONS_DEDUPED,
+    WORK_ITEMS_DEDUPED,
+)
 
 REQUIRED_PROVIDERS = ("jira", "github", "gitlab")
 AUDIT_PROVIDERS = ("jira", "github", "gitlab", "synthetic")
@@ -31,23 +35,23 @@ def build_window(days: int, now: datetime | None = None) -> tuple[datetime, date
 
 
 def build_work_items_query() -> str:
-    return """
+    return f"""
     SELECT
       provider,
-      countIf(updated_at >= {start:DateTime} AND updated_at < {end:DateTime}) AS count,
+      countIf(updated_at >= {{start:DateTime}} AND updated_at < {{end:DateTime}}) AS count,
       max(last_synced) AS last_synced
-    FROM work_items
+    FROM {WORK_ITEMS_DEDUPED}
     GROUP BY provider
     """
 
 
 def build_transitions_query() -> str:
-    return """
+    return f"""
     SELECT
       provider,
-      countIf(occurred_at >= {start:DateTime} AND occurred_at < {end:DateTime}) AS count,
+      countIf(occurred_at >= {{start:DateTime}} AND occurred_at < {{end:DateTime}}) AS count,
       max(last_synced) AS last_synced
-    FROM work_item_transitions
+    FROM {WORK_ITEM_TRANSITIONS_DEDUPED}
     GROUP BY provider
     """
 

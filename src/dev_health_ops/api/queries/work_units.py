@@ -66,7 +66,7 @@ async def fetch_work_items(
             created_at,
             updated_at,
             completed_at
-        FROM work_items
+        FROM work_items FINAL
         WHERE work_item_id IN %(work_item_ids)s
           AND org_id = %(org_id)s
     """

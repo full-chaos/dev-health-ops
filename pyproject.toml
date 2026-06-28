@@ -197,6 +197,8 @@ disallow_incomplete_defs = false
 module = [
   "celery",
   "celery.*",
+  "billiard",
+  "billiard.*",
   "atlassian",
   "atlassian.*",
   "radon",

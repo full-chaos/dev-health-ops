@@ -4,6 +4,9 @@ import argparse
 import asyncio
 import logging
 import uuid
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
@@ -58,6 +61,33 @@ from dev_health_ops.utils.cli import (
 )
 
 logger = logging.getLogger(__name__)
+
+_LeaseCheck = Callable[[str], bool]
+_WORK_ITEMS_SYNC_LEASE_CHECK: ContextVar[_LeaseCheck | None] = ContextVar(
+    "work_items_sync_lease_check",
+    default=None,
+)
+
+
+class WorkItemsSyncLeaseLost(RuntimeError):
+    def __init__(self, surface: str) -> None:
+        self.surface = surface
+        super().__init__(f"sync unit lease lost before {surface} write")
+
+
+@contextmanager
+def work_items_sync_lease_check(check: _LeaseCheck) -> Iterator[None]:
+    token = _WORK_ITEMS_SYNC_LEASE_CHECK.set(check)
+    try:
+        yield
+    finally:
+        _WORK_ITEMS_SYNC_LEASE_CHECK.reset(token)
+
+
+def _ensure_unit_lease_for_write(surface: str) -> None:
+    check = _WORK_ITEMS_SYNC_LEASE_CHECK.get()
+    if check is not None and not check(surface):
+        raise WorkItemsSyncLeaseLost(surface)
 
 
 def _date_range(end_day: date, backfill_days: int) -> list[date]:
@@ -348,6 +378,8 @@ def run_work_items_sync_job(
         # Written to sink via write_ai_attribution() at end of sync loop.
         ai_attributions: list[Any] = []
         github_usage_observations: list[dict[str, Any]] = []
+        linear_page_count = 0
+        linear_batch_count = 0
 
         if "jira" in provider_set:
             (
@@ -501,6 +533,15 @@ def run_work_items_sync_job(
             fetched_transitions = 0
             fetched_sprints = 0
             for batch in linear_provider.iter_ingest(ctx):
+                linear_batch_count += 1
+                if (
+                    batch.work_items
+                    or batch.status_transitions
+                    or batch.reopen_events
+                    or batch.interactions
+                    or batch.dependencies
+                ):
+                    linear_page_count += 1
                 work_items.extend(batch.work_items)
                 transitions.extend(batch.status_transitions)
                 reopen_events.extend(batch.reopen_events)
@@ -569,11 +610,13 @@ def run_work_items_sync_job(
         # Write raw work items and transitions to sinks
         for s in sinks:
             if hasattr(s, "write_work_items") and work_items:
+                _ensure_unit_lease_for_write("work_items")
                 logger.info(
                     "Writing %d work items to %s", len(work_items), type(s).__name__
                 )
                 s.write_work_items(work_items)
             if hasattr(s, "write_work_item_transitions") and transitions:
+                _ensure_unit_lease_for_write("work_item_transitions")
                 logger.info(
                     "Writing %d transitions to %s", len(transitions), type(s).__name__
                 )
@@ -581,16 +624,21 @@ def run_work_items_sync_job(
 
         for s in sinks:
             if dependencies and hasattr(s, "write_work_item_dependencies"):
+                _ensure_unit_lease_for_write("work_item_dependencies")
                 s.write_work_item_dependencies(dependencies)
             if reopen_events and hasattr(s, "write_work_item_reopen_events"):
+                _ensure_unit_lease_for_write("work_item_reopen_events")
                 s.write_work_item_reopen_events(reopen_events)
             if interactions and hasattr(s, "write_work_item_interactions"):
+                _ensure_unit_lease_for_write("work_item_interactions")
                 s.write_work_item_interactions(interactions)
             if sprints and hasattr(s, "write_sprints"):
+                _ensure_unit_lease_for_write("sprints")
                 s.write_sprints(sprints)
             # AI attribution records — gated with hasattr so this is a no-op
             # until CHAOS-1579 (storage-worker) lands write_ai_attribution.
             if ai_attributions and hasattr(s, "write_ai_attribution"):
+                _ensure_unit_lease_for_write("ai_attribution")
                 logger.info(
                     "Writing %d AI attribution records to %s",
                     len(ai_attributions),
@@ -889,29 +937,43 @@ def run_work_items_sync_job(
 
             for s in sinks:
                 if wi_metrics:
+                    _ensure_unit_lease_for_write("work_item_metrics_daily")
                     s.write_work_item_metrics(wi_metrics)
                 if wi_user_metrics:
+                    _ensure_unit_lease_for_write("work_item_user_metrics_daily")
                     s.write_work_item_user_metrics(wi_user_metrics)
                 if wi_cycle_times:
+                    _ensure_unit_lease_for_write("work_item_cycle_times")
                     s.write_work_item_cycle_times(wi_cycle_times)
                 if wi_team_attributions and hasattr(
                     s, "write_work_item_team_attributions"
                 ):
+                    _ensure_unit_lease_for_write("work_item_team_attributions")
                     s.write_work_item_team_attributions(wi_team_attributions)
                 if wi_state_durations:
+                    _ensure_unit_lease_for_write("work_item_state_durations_daily")
                     s.write_work_item_state_durations(wi_state_durations)
 
                 if hasattr(s, "write_issue_type_metrics") and issue_type_metrics_rows:
+                    _ensure_unit_lease_for_write("issue_type_metrics_daily")
                     s.write_issue_type_metrics(issue_type_metrics_rows)
                 if (
                     hasattr(s, "write_investment_classifications")
                     and investment_classifications
                 ):
+                    _ensure_unit_lease_for_write("investment_classifications_daily")
                     s.write_investment_classifications(investment_classifications)
                 if hasattr(s, "write_investment_metrics") and investment_metrics_rows:
+                    _ensure_unit_lease_for_write("investment_metrics_daily")
                     s.write_investment_metrics(investment_metrics_rows)
+        observations: dict[str, Any] = {}
         if github_usage_observations:
-            return {"observations": {"github_usage": github_usage_observations}}
+            observations["github_usage"] = github_usage_observations
+        if "linear" in provider_set:
+            observations["linear_page_count"] = linear_page_count
+            observations["linear_batch_count"] = linear_batch_count
+        if observations:
+            return {"observations": observations}
         return None
     finally:
         for s in sinks:

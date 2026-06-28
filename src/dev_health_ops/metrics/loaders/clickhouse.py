@@ -28,6 +28,10 @@ from dev_health_ops.metrics.schemas import (
     PullRequestReviewRow,
     PullRequestRow,
 )
+from dev_health_ops.metrics.sinks.clickhouse.idempotency import (
+    WORK_ITEM_TRANSITIONS_DEDUPED,
+    WORK_ITEMS_DEDUPED,
+)
 from dev_health_ops.metrics.testops_schemas import (
     CoverageSnapshotRow,
     JobRunRow,
@@ -240,7 +244,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         params = self._inject_org_id(params)
 
         item_query = f"""
-        SELECT * FROM work_items
+        SELECT * FROM {WORK_ITEMS_DEDUPED}
         WHERE (created_at < {{end:DateTime}})
         AND (status != 'done' OR completed_at >= {{start:DateTime}})
         {repo_filter}
@@ -248,7 +252,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         """
 
         trans_query = f"""
-        SELECT * FROM work_item_transitions
+        SELECT * FROM {WORK_ITEM_TRANSITIONS_DEDUPED}
         WHERE (occurred_at < {{end:DateTime}})
         {repo_filter}
         {org_filter}

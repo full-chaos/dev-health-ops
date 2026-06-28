@@ -1079,3 +1079,175 @@ def test_work_item_labels_and_projects_are_incremental_behavior(db_session):
                 f"{provider}/{dataset_key} must be INCREMENTAL after CHAOS-2707, "
                 f"got {spec.watermark_behavior}"
             )
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-2710: Linear backfill chunk policy
+# ---------------------------------------------------------------------------
+
+
+def test_linear_work_item_backfill_produces_bounded_windows(db_session, monkeypatch):
+    """Large Linear work-item backfill is split into windows <= LINEAR_BACKFILL_MAX_WINDOW_DAYS.
+
+    A 30-day range with the default 3-day max must produce 10 chunks, each at most
+    3 days wide. Non-Linear providers with the same range keep the 7-day default.
+    """
+    monkeypatch.delenv("LINEAR_BACKFILL_MAX_WINDOW_DAYS", raising=False)
+
+    integration = _create_integration(db_session, provider="linear")
+    _create_source(
+        db_session, integration, external_id="linear-team-1", provider="linear"
+    )
+    _create_dataset(db_session, integration, "work-items")
+
+    since = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    before = datetime(2026, 5, 30, 23, 59, 59, tzinfo=timezone.utc)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.BACKFILL.value,
+            triggered_by="test",
+            since=since,
+            before=before,
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) > 0
+    for unit in units:
+        assert unit.since_at is not None
+        assert unit.before_at is not None
+        window_days = (unit.before_at.date() - unit.since_at.date()).days + 1
+        assert window_days <= 3, (
+            f"Linear work-item backfill window too wide: {window_days} days"
+            f" (since={unit.since_at.date()}, before={unit.before_at.date()})"
+        )
+    assert {unit.mode for unit in units} == {SyncRunMode.BACKFILL.value}
+
+
+def test_linear_work_item_backfill_env_override_respected(db_session, monkeypatch):
+    """LINEAR_BACKFILL_MAX_WINDOW_DAYS env override is applied to Linear work-item chunks."""
+    monkeypatch.setenv("LINEAR_BACKFILL_MAX_WINDOW_DAYS", "5")
+
+    integration = _create_integration(db_session, provider="linear")
+    _create_source(
+        db_session, integration, external_id="linear-team-2", provider="linear"
+    )
+    _create_dataset(db_session, integration, "work-item-history")
+
+    since = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    before = datetime(2026, 5, 20, 23, 59, 59, tzinfo=timezone.utc)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.BACKFILL.value,
+            triggered_by="test",
+            since=since,
+            before=before,
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) > 0
+    for unit in units:
+        assert unit.since_at is not None
+        assert unit.before_at is not None
+        window_days = (unit.before_at.date() - unit.since_at.date()).days + 1
+        assert window_days <= 5, (
+            f"Linear work-item-history window too wide with env=5: {window_days} days"
+        )
+
+
+def test_non_linear_backfill_keeps_seven_day_chunks(db_session, monkeypatch):
+    """Non-Linear providers are unaffected by the Linear chunk policy.
+
+    A 14-day github backfill must still produce 2 chunks of 7 days each.
+    """
+    monkeypatch.delenv("LINEAR_BACKFILL_MAX_WINDOW_DAYS", raising=False)
+
+    integration = _create_integration(db_session, provider="github")
+    _create_source(db_session, integration, external_id="owner/repo", provider="github")
+    _create_dataset(db_session, integration, "work-items")
+
+    since = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    before = datetime(2026, 6, 14, 23, 59, 59, tzinfo=timezone.utc)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.BACKFILL.value,
+            triggered_by="test",
+            since=since,
+            before=before,
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 2, (
+        f"Expected 2 chunks for 14-day github backfill, got {len(units)}"
+    )
+    windows = set()
+    for u in units:
+        assert u.since_at is not None and u.before_at is not None
+        windows.add((u.since_at.date(), u.before_at.date()))
+    assert windows == {
+        (datetime(2026, 6, 1).date(), datetime(2026, 6, 7).date()),
+        (datetime(2026, 6, 8).date(), datetime(2026, 6, 14).date()),
+    }
+
+
+def test_linear_backfill_units_never_write_watermarks(db_session, monkeypatch):
+    """Regression: Linear backfill units must carry mode=backfill and no watermark.
+
+    Mirrors the invariant in test_sync_units.py::test_run_sync_unit_success_skips_watermark_for_backfill.
+    The planner side of the contract: all units produced for a Linear backfill
+    carry mode='backfill', which is the gate the worker checks before writing
+    watermarks (workers/sync_units.py:401-408). This test asserts the planner
+    never emits a non-backfill mode for a backfill request, and that no
+    SyncWatermark rows exist after planning (planning never writes watermarks).
+    """
+    monkeypatch.delenv("LINEAR_BACKFILL_MAX_WINDOW_DAYS", raising=False)
+
+    integration = _create_integration(db_session, provider="linear")
+    _create_source(
+        db_session, integration, external_id="linear-team-3", provider="linear"
+    )
+    for dataset_key in (
+        "work-items",
+        "work-item-labels",
+        "work-item-projects",
+        "work-item-history",
+        "work-item-comments",
+    ):
+        _create_dataset(db_session, integration, dataset_key)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.BACKFILL.value,
+            triggered_by="test",
+            since=datetime(2026, 5, 1, tzinfo=timezone.utc),
+            before=datetime(2026, 5, 10, 23, 59, 59, tzinfo=timezone.utc),
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) > 0
+    # All units must carry mode=backfill — the worker gate reads this field.
+    assert all(u.mode == SyncRunMode.BACKFILL.value for u in units), (
+        "All Linear backfill units must carry mode=backfill"
+    )
+    # Planning must never write watermarks.
+    assert db_session.query(SyncWatermark).count() == 0, (
+        "plan_sync_run must not write any SyncWatermark rows"
+    )

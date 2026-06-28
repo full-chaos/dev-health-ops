@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
+from dev_health_ops.metrics.sinks.clickhouse.idempotency import WORK_ITEMS_DEDUPED
+
 if TYPE_CHECKING:
     import sqlalchemy.ext.asyncio
     from clickhouse_connect.driver import Client as ClickHouseClient
@@ -522,7 +524,7 @@ async def get_backlog_size_clickhouse(
 
     query = f"""
         SELECT count(*) as backlog_size
-        FROM work_items
+        FROM {WORK_ITEMS_DEDUPED}
         WHERE {where_clause}
     """
 

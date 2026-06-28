@@ -375,7 +375,7 @@ class AIOpportunityDetector:
             ON attr.repo_id = pr.repo_id
             AND attr.subject_type = 'pull_request'
             AND (attr.subject_id = toString(pr.number) OR attr.subject_id = link.work_item_id)
-        LEFT JOIN work_items AS wi
+        LEFT JOIN work_items AS wi FINAL
             ON wi.repo_id = link.repo_id AND wi.work_item_id = link.work_item_id
         WHERE {where_clause}
           AND attr.kind IN ('ai_assisted', 'agent_created', 'ai_review')

@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
+from dev_health_ops.metrics.sinks.clickhouse.idempotency import WORK_ITEMS_DEDUPED
 
 
 def query_dicts(
@@ -81,7 +82,7 @@ def fetch_work_items(
         created_at,
         updated_at,
         completed_at
-        FROM work_items
+        FROM {WORK_ITEMS_DEDUPED}
         {where_sql}
     """
     return query_dicts(sink, query, params)
@@ -106,7 +107,7 @@ def fetch_parent_titles(
         SELECT
         work_item_id,
         title
-        FROM work_items
+        FROM {WORK_ITEMS_DEDUPED}
         {where_sql}
     """
     rows = query_dicts(sink, query, params)

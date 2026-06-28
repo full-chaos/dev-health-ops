@@ -5,6 +5,14 @@ from typing import Any
 
 from celery.schedules import crontab
 
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
 # Broker and backend (Valkey, using redis:// wire protocol)
 broker_url = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
 result_backend = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
@@ -61,6 +69,14 @@ stream_consumer_expires_seconds = 30
 # Retry settings
 task_default_retry_delay = 60  # 1 minute between retries
 task_max_retries = 3
+sync_unit_expired_lease_max_retries = max(
+    0,
+    _int_env("SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES", 1),
+)
+sync_unit_expired_lease_retry_backoff_seconds = max(
+    0,
+    _int_env("SYNC_UNIT_EXPIRED_LEASE_RETRY_BACKOFF_SECONDS", 60),
+)
 
 # Queue settings
 task_default_queue = "default"

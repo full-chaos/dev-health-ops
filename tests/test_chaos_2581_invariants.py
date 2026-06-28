@@ -846,7 +846,7 @@ def test_a4_worker_dies_after_running_bucket_frees_and_run_redrives_terminal(
     assert units[0].status == SyncRunUnitStatus.FAILED.value
     assert units[0].result is not None
     assert units[0].result["error_category"] == "worker_lost"
-    assert "lease_expired_at" in units[0].result
+    assert "last_lease_expired_at" in units[0].result
     assert units[0].lease_owner is None
     assert units[1].status == SyncRunUnitStatus.PLANNED.value
     assert dispatches == [((str(run.id),), "sync")]

@@ -58,11 +58,22 @@ def _patch_db_session(monkeypatch, session):
     )
 
 
-def _seed_run(session, *, planned_units=0):
+def _seed_run(
+    session,
+    *,
+    planned_units=0,
+    provider="github",
+    mode=SyncRunMode.INCREMENTAL.value,
+    dataset_key="commits",
+    source_type="repo",
+    external_id="full-chaos/dev-health",
+    name="dev-health",
+    full_name="full-chaos/dev-health",
+):
     org_id = str(uuid.uuid4())
     integration = Integration(
         org_id=org_id,
-        provider="github",
+        provider=provider,
         name="demo",
         config={},
         is_active=True,
@@ -72,11 +83,11 @@ def _seed_run(session, *, planned_units=0):
     source = IntegrationSource(
         org_id=org_id,
         integration_id=integration.id,
-        provider="github",
-        source_type="repo",
-        external_id="full-chaos/dev-health",
-        name="dev-health",
-        full_name="full-chaos/dev-health",
+        provider=provider,
+        source_type=source_type,
+        external_id=external_id,
+        name=name,
+        full_name=full_name,
         metadata_={},
         is_enabled=True,
     )
@@ -84,7 +95,7 @@ def _seed_run(session, *, planned_units=0):
         org_id=org_id,
         integration_id=integration.id,
         triggered_by="manual",
-        mode=SyncRunMode.INCREMENTAL.value,
+        mode=mode,
         status=SyncRunStatus.DISPATCHING.value,
         total_units=planned_units + 1,
         completed_units=0,
@@ -98,10 +109,10 @@ def _seed_run(session, *, planned_units=0):
         sync_run_id=run.id,
         integration_id=integration.id,
         source_id=source.id,
-        provider="github",
-        dataset_key="commits",
+        provider=provider,
+        dataset_key=dataset_key,
         cost_class="medium",
-        mode=SyncRunMode.INCREMENTAL.value,
+        mode=mode,
         status=SyncRunUnitStatus.RUNNING.value,
         attempts=1,
         lease_owner="worker-dead",
@@ -116,10 +127,10 @@ def _seed_run(session, *, planned_units=0):
             sync_run_id=run.id,
             integration_id=integration.id,
             source_id=source.id,
-            provider="github",
+            provider=provider,
             dataset_key=f"prs-{index}",
             cost_class="medium",
-            mode=SyncRunMode.INCREMENTAL.value,
+            mode=mode,
             status=SyncRunUnitStatus.PLANNED.value,
             attempts=0,
         )
@@ -279,6 +290,181 @@ def test_reconciler_does_not_expire_live_lease(db_session, monkeypatch):
     assert running.status == SyncRunUnitStatus.RUNNING.value
     assert dispatches == []
     assert finalizers == []
+
+
+def test_reconciler_retries_eligible_expired_linear_backfill_work_item_unit_once(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler, sync_units
+
+    run, running, _planned = _seed_run(
+        db_session,
+        provider="linear",
+        mode=SyncRunMode.BACKFILL.value,
+        dataset_key="work-items",
+        source_type="team",
+        external_id="ENG",
+        name="ENG",
+        full_name="ENG",
+    )
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setenv("SYNC_UNIT_EXPIRED_LEASE_RETRY_BACKOFF_SECONDS", "60")
+    monkeypatch.setenv("SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES", "2")
+    monkeypatch.setattr(
+        sync_units,
+        "_CLICKHOUSE_RETRY_PROVEN_SAFE_SURFACES",
+        sync_units._LINEAR_BACKFILL_WORK_ITEM_IN_BAND_WRITE_SURFACES,
+    )
+    dispatches = []
+    finalizers = []
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: dispatches.append((args, queue)),
+    )
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: finalizers.append((args, queue)),
+    )
+
+    first = sync_reconciler.reconcile_sync_dispatch(limit=10)
+    second = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    db_session.refresh(running)
+    dispatch_row = _outbox_row(db_session, run, OUTBOX_KIND_DISPATCH)
+    assert first["expired_units"] == 1
+    assert first["expired_retry_units"] == 1
+    assert first["expired_retry_exhausted_units"] == 0
+    assert first["relayed_dispatch"] == 0
+    assert second["expired_units"] == 0
+    assert running.status == SyncRunUnitStatus.RETRYING.value
+    assert running.expired_lease_retry_count == 1
+    assert running.last_retry_reason == "expired_lease"
+    assert running.result is not None
+    assert running.result["error_category"] == "worker_lost"
+    assert running.result["retry_count"] == 1
+    assert running.result["retry_reason"] == "expired_lease"
+    assert running.result["retry_exhausted"] is False
+    assert running.result["last_lease_expired_at"] is not None
+    assert running.result["next_retry_at"] is not None
+    assert running.lease_owner is None
+    assert running.lease_expires_at is None
+    assert dispatches == []
+    assert finalizers == []
+    assert dispatch_row.status == OUTBOX_STATUS_PENDING
+    assert _aware(dispatch_row.available_at) > datetime.now(timezone.utc)
+
+
+def test_reconciler_does_not_retry_linear_backfill_when_surface_is_unproven(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler, sync_units
+
+    run, running, _planned = _seed_run(
+        db_session,
+        provider="linear",
+        mode=SyncRunMode.BACKFILL.value,
+        dataset_key="work-items",
+        source_type="team",
+        external_id="ENG",
+        name="ENG",
+        full_name="ENG",
+    )
+    proven_safe = set(sync_units._LINEAR_BACKFILL_WORK_ITEM_IN_BAND_WRITE_SURFACES)
+    proven_safe.remove("investment_classifications_daily")
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setenv("SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES", "2")
+    monkeypatch.setattr(
+        sync_units,
+        "_CLICKHOUSE_RETRY_PROVEN_SAFE_SURFACES",
+        frozenset(proven_safe),
+    )
+    dispatches = []
+    finalizers = []
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: dispatches.append((args, queue)),
+    )
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: finalizers.append((args, queue)),
+    )
+
+    result = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    db_session.refresh(running)
+    assert result["expired_units"] == 1
+    assert result["expired_retry_units"] == 0
+    assert result["expired_retry_exhausted_units"] == 0
+    assert running.status == SyncRunUnitStatus.FAILED.value
+    assert running.expired_lease_retry_count == 0
+    assert running.retry_exhausted_at is None
+    assert running.result is not None
+    assert running.result["error_category"] == "worker_lost"
+    assert running.result["retry_exhausted"] is False
+    assert "investment_classifications_daily" in running.result["retry_surfaces"]
+    assert dispatches == []
+    assert finalizers == [((str(run.id),), "sync")]
+
+
+def test_reconciler_exhausted_linear_backfill_retry_fails_worker_lost_exhausted(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler, sync_units
+
+    run, running, _planned = _seed_run(
+        db_session,
+        provider="linear",
+        mode=SyncRunMode.BACKFILL.value,
+        dataset_key="work-items",
+        source_type="team",
+        external_id="ENG",
+        name="ENG",
+        full_name="ENG",
+    )
+    running.expired_lease_retry_count = 1
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setenv("SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES", "1")
+    monkeypatch.setattr(
+        sync_units,
+        "_CLICKHOUSE_RETRY_PROVEN_SAFE_SURFACES",
+        sync_units._LINEAR_BACKFILL_WORK_ITEM_IN_BAND_WRITE_SURFACES,
+    )
+    dispatches = []
+    finalizers = []
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: dispatches.append((args, queue)),
+    )
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: finalizers.append((args, queue)),
+    )
+
+    result = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    db_session.refresh(running)
+    finalize_row = _outbox_row(db_session, run, OUTBOX_KIND_FINALIZE)
+    assert result["expired_units"] == 1
+    assert result["expired_retry_units"] == 0
+    assert result["expired_retry_exhausted_units"] == 1
+    assert result["relayed_finalize"] == 1
+    assert running.status == SyncRunUnitStatus.FAILED.value
+    assert running.expired_lease_retry_count == 1
+    assert running.retry_exhausted_at is not None
+    assert running.result is not None
+    assert running.result["error_category"] == "worker_lost_retry_exhausted"
+    assert running.result["retry_count"] == 1
+    assert running.result["retry_exhausted"] is True
+    assert dispatches == []
+    assert finalizers == [((str(run.id),), "sync")]
+    assert finalize_row.status == OUTBOX_STATUS_DISPATCHED
 
 
 def test_reconciler_rearms_dispatch_outbox_after_publish_failure(

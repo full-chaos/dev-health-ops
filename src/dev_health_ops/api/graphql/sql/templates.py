@@ -237,7 +237,7 @@ _FLOW_MATRIX_ENRICHED_CTE = """WITH enriched AS (
         wi.repo_id,
         wi.type AS work_item_type
     FROM work_item_cycle_times AS wct
-    INNER JOIN work_items AS wi ON wct.work_item_id = wi.work_item_id
+    INNER JOIN work_items AS wi FINAL ON wct.work_item_id = wi.work_item_id
     WHERE wct.org_id = %(org_id)s
       AND wct.day >= %(start_date)s AND wct.day <= %(end_date)s
       AND wi.org_id = %(org_id)s
@@ -258,7 +258,7 @@ SELECT
     toString(wi.repo_id) AS node_id,
     uniqExact(wct.work_item_id) AS value
 FROM work_item_cycle_times AS wct
-INNER JOIN work_items AS wi ON wct.work_item_id = wi.work_item_id
+INNER JOIN work_items AS wi FINAL ON wct.work_item_id = wi.work_item_id
 WHERE wct.day >= %(start_date)s AND wct.day <= %(end_date)s
   AND wct.org_id = %(org_id)s
   AND wi.org_id = %(org_id)s
@@ -329,7 +329,7 @@ SELECT
     wi.type AS node_id,
     uniqExact(wct.work_item_id) AS value
 FROM work_item_cycle_times AS wct
-INNER JOIN work_items AS wi ON wct.work_item_id = wi.work_item_id
+INNER JOIN work_items AS wi FINAL ON wct.work_item_id = wi.work_item_id
 WHERE wct.day >= %(start_date)s AND wct.day <= %(end_date)s
   AND wct.org_id = %(org_id)s
   AND wi.org_id = %(org_id)s
@@ -442,7 +442,7 @@ LEFT JOIN (
         COUNT(*) AS count
     FROM {count_source_table}
     WHERE team_id IS NOT NULL
-      AND {count_source_table}.org_id = %(org_id)s
+      AND org_id = %(org_id)s
       AND toString(team_id) != ''
     GROUP BY team_id
 ) AS activity ON activity.team_id = t.id

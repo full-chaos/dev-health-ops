@@ -393,3 +393,27 @@ class TestMeasureDbExpression:
             Measure.db_expression(Measure.CYCLE_TIME_HOURS, use_investment=True)
             == "AVG(dateDiff('hour', from_ts, to_ts))"
         )
+
+
+def test_non_investment_timeseries_dedups_investment_metrics_daily():
+    """CHAOS-2710: investment_metrics_daily is a plain MergeTree, so a Linear-backfill
+    retry (or the daily recompute) can leave duplicate rows per natural key. The generic
+    analytics templates must collapse them with argMax(col, computed_at) over the natural
+    key before aggregating, else flat SUM()s double-count on the Investment explorer."""
+    sql, _params = compile_timeseries(
+        TimeseriesRequest(
+            dimension="team",
+            measure="count",
+            interval="day",
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+            use_investment=False,
+        ),
+        org_id="org-1",
+    )
+    # Source is the deduped derived table aliased back to investment_metrics_daily.
+    assert ") AS investment_metrics_daily" in sql
+    assert "argMax(work_items_completed, computed_at)" in sql
+    assert (
+        "GROUP BY org_id, day, repo_id, team_id, investment_area, project_stream" in sql
+    )

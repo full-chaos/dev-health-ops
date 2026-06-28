@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ast
+import inspect
 import json
 import logging
 import uuid
@@ -7,6 +9,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from billiard.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -262,6 +265,49 @@ def _patch_worker_enqueues(monkeypatch):
     )
     monkeypatch.setattr(sync_units, "chord", lambda *args, **kwargs: FakeChord())
     return dispatch_calls, finalize_calls, chord_calls
+
+
+def test_linear_backfill_retry_surface_contract_matches_work_item_write_fences():
+    from dev_health_ops.metrics import job_work_items
+    from dev_health_ops.workers import sync_units
+
+    surface_labels = set()
+    tree = ast.parse(inspect.getsource(job_work_items.run_work_items_sync_job))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Name):
+            continue
+        if node.func.id != "_ensure_unit_lease_for_write":
+            continue
+        if not node.args:
+            continue
+        label = node.args[0]
+        if isinstance(label, ast.Constant) and isinstance(label.value, str):
+            surface_labels.add(label.value)
+
+    assert (
+        surface_labels == sync_units._LINEAR_BACKFILL_WORK_ITEM_IN_BAND_WRITE_SURFACES
+    )
+
+
+def test_linear_backfill_retry_enabled_in_production_surface_registry():
+    """CHAOS-2710: the work-items backfill unit's full in-band write set must be a
+    subset of the proven-safe registry, so expired-lease/soft-timeout retry is ENABLED
+    in production. Locks the feature on -- if a written surface ever loses its proven
+    idempotency mechanism (dropped from the registry), this fails and retry must be
+    re-justified before shipping."""
+    from dev_health_ops.workers import sync_units
+
+    assert sync_units._LINEAR_BACKFILL_WORK_ITEM_IN_BAND_WRITE_SURFACES.issubset(
+        sync_units._CLICKHOUSE_RETRY_PROVEN_SAFE_SURFACES
+    )
+    # The registry is a strict superset (it documents proven-safe surfaces this job
+    # does not itself write), so the subset check is meaningful, not a tautology.
+    assert (
+        sync_units._LINEAR_BACKFILL_WORK_ITEM_IN_BAND_WRITE_SURFACES
+        != sync_units._CLICKHOUSE_RETRY_PROVEN_SAFE_SURFACES
+    )
 
 
 def test_run_sync_unit_success_persists_status_and_incremental_watermark(
@@ -591,6 +637,106 @@ def test_run_sync_unit_failure_persists_failed_and_error(db_session, monkeypatch
     )
     assert finalize_outbox.status == OUTBOX_STATUS_PENDING
     assert finalize_calls == [((str(run.id),), "sync")]
+
+
+def test_run_sync_unit_soft_timeout_retries_eligible_linear_backfill_unit(
+    db_session, monkeypatch
+):
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(
+        db_session,
+        mode=SyncRunMode.BACKFILL.value,
+        provider="linear",
+        source_type="team",
+        external_id="ENG",
+        name="ENG",
+        full_name="ENG",
+        dataset_key="work-items",
+        processor_flags={},
+    )
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    finalize_calls = _patch_finalize_apply(monkeypatch)
+    monkeypatch.setenv("SYNC_UNIT_EXPIRED_LEASE_RETRY_BACKOFF_SECONDS", "0")
+    monkeypatch.setenv("SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES", "2")
+    monkeypatch.setattr(
+        sync_units,
+        "_CLICKHOUSE_RETRY_PROVEN_SAFE_SURFACES",
+        sync_units._LINEAR_BACKFILL_WORK_ITEM_IN_BAND_WRITE_SURFACES,
+    )
+
+    def timeout(ctx, runtime):
+        raise SoftTimeLimitExceeded()
+
+    monkeypatch.setattr(dataset_adapters, "run_dataset_unit", timeout)
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    db_session.refresh(unit)
+    assert result["status"] == "soft_timeout_deferred"
+    assert result["error_category"] == "soft_timeout"
+    assert unit.status == SyncRunUnitStatus.RETRYING.value
+    assert unit.available_at is not None
+    assert unit.expired_lease_retry_count == 1
+    assert unit.last_retry_reason == "soft_timeout"
+    assert unit.result is not None
+    assert unit.result["error_category"] == "soft_timeout"
+    assert unit.result["retry_count"] == 1
+    assert unit.result["retry_reason"] == "soft_timeout"
+    assert unit.result["retry_exhausted"] is False
+    assert unit.lease_owner is None
+    assert unit.lease_expires_at is None
+    assert finalize_calls == []
+
+
+def test_run_sync_unit_lost_lease_before_work_item_sink_aborts_without_finalize(
+    db_session, monkeypatch
+):
+    from dev_health_ops.metrics.job_work_items import _ensure_unit_lease_for_write
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(
+        db_session,
+        mode=SyncRunMode.BACKFILL.value,
+        provider="linear",
+        source_type="team",
+        external_id="ENG",
+        name="ENG",
+        full_name="ENG",
+        dataset_key="work-items",
+        processor_flags={},
+    )
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    finalize_calls = _patch_finalize_apply(monkeypatch)
+
+    def lose_lease_before_write(ctx, runtime):
+        db_session.refresh(unit)
+        unit.lease_owner = "other-worker"
+        db_session.flush()
+        _ensure_unit_lease_for_write("work_items")
+        raise AssertionError("write fence should abort before this point")
+
+    monkeypatch.setattr(dataset_adapters, "run_dataset_unit", lose_lease_before_write)
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    db_session.refresh(unit)
+    assert result == {
+        "status": "skipped",
+        "unit_id": str(unit.id),
+        "reason": "lease_lost",
+        "surface": "work_items",
+    }
+    assert unit.status == SyncRunUnitStatus.RUNNING.value
+    assert unit.lease_owner == "other-worker"
+    assert finalize_calls == []
 
 
 def test_run_sync_unit_sets_and_clears_lease_around_provider_call(
@@ -3287,11 +3433,12 @@ def test_heartbeat_lease_capped_at_deadline(db_session, monkeypatch):
     )
 
     db_session.refresh(unit)
-    assert unit.lease_expires_at is not None
+    lease_expires_at = unit.lease_expires_at
+    assert lease_expires_at is not None
     # The persisted lease must not exceed the deadline
-    assert _aware(unit.lease_expires_at) <= deadline + timedelta(seconds=1)
+    assert _aware(lease_expires_at) <= deadline + timedelta(seconds=1)
     # And it must be strictly less than now + 600s (the uncapped value)
-    assert _aware(unit.lease_expires_at) < now + timedelta(seconds=600)
+    assert _aware(lease_expires_at) < now + timedelta(seconds=600)
 
 
 def test_success_stamp_noop_when_lease_already_lost(tmp_path, monkeypatch, caplog):

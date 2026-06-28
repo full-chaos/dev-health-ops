@@ -33,6 +33,7 @@ Invariants:
 
 from __future__ import annotations
 
+import os
 import uuid
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -290,6 +291,7 @@ def _build_planned_units(
                 request=request,
                 mode=mode,
                 org_id=integration.org_id,
+                source_provider=provider,
                 watermark_source_key=source.external_id,
                 dataset_key=dataset.dataset_key,
                 watermark_behavior=spec.watermark_behavior,
@@ -320,6 +322,46 @@ def _build_planned_units(
 # ---------------------------------------------------------------------------
 
 _DEFAULT_INITIAL_SYNC_DEPTH_DAYS: int = 30
+
+
+# ---------------------------------------------------------------------------
+# Linear backfill chunk policy (CHAOS-2710)
+# ---------------------------------------------------------------------------
+
+_DEFAULT_LINEAR_BACKFILL_MAX_WINDOW_DAYS: int = 3
+
+_LINEAR_WORK_ITEM_DATASETS: frozenset[str] = frozenset(
+    {
+        "work-items",
+        "work-item-labels",
+        "work-item-projects",
+        "work-item-history",
+        "work-item-comments",
+    }
+)
+
+
+def _linear_backfill_max_window_days() -> int:
+    """Return the max chunk window (days) for Linear work-item-family backfills.
+
+    Reads LINEAR_BACKFILL_MAX_WINDOW_DAYS from the environment; falls back to
+    the conservative default of 3 days so large historical ranges are split
+    into small enough windows to stay within Linear's GraphQL budget.
+    """
+    raw = os.getenv("LINEAR_BACKFILL_MAX_WINDOW_DAYS")
+    if raw is not None:
+        try:
+            value = int(raw)
+            if value > 0:
+                return value
+        except ValueError:
+            pass
+    return _DEFAULT_LINEAR_BACKFILL_MAX_WINDOW_DAYS
+
+
+def _is_linear_work_item_family(provider: str, dataset_key: str) -> bool:
+    """True when the provider is linear AND the dataset is in the work-item family."""
+    return provider == "linear" and dataset_key in _LINEAR_WORK_ITEM_DATASETS
 
 
 def resolve_initial_sync_depth(
@@ -398,6 +440,7 @@ def _resolve_windows(
     request: SyncPlanRequest,
     mode: str,
     org_id: str,
+    source_provider: str,
     watermark_source_key: str,
     dataset_key: str,
     watermark_behavior: WatermarkBehavior,
@@ -419,7 +462,9 @@ def _resolve_windows(
         return ((window_start, _request_before_or_now(request, now)),)
 
     if mode == SyncRunMode.BACKFILL.value:
-        return _backfill_windows(request)
+        return _backfill_windows(
+            request, provider=source_provider, dataset_key=dataset_key
+        )
 
     if mode == SyncRunMode.FULL_RESYNC.value:
         # full_resync: use configured depth for all datasets (CHAOS-2569).
@@ -432,6 +477,9 @@ def _resolve_windows(
 
 def _backfill_windows(
     request: SyncPlanRequest,
+    *,
+    provider: str = "",
+    dataset_key: str = "",
 ) -> tuple[tuple[datetime | None, datetime | None], ...]:
     if request.since is None or request.before is None:
         raise ValueError("Backfill sync planning requires since and before")
@@ -441,7 +489,13 @@ def _backfill_windows(
     if since > before:
         raise ValueError("Backfill since must be before or equal to before")
 
-    chunks = chunk_date_range(since=since.date(), before=before.date())
+    if _is_linear_work_item_family(provider, dataset_key):
+        chunk_days = _linear_backfill_max_window_days()
+    else:
+        chunk_days = 7
+    chunks = chunk_date_range(
+        since=since.date(), before=before.date(), chunk_days=chunk_days
+    )
     return tuple(
         _chunk_to_window(chunk_since, chunk_before, since, before)
         for chunk_since, chunk_before in chunks

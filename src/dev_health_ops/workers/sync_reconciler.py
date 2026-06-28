@@ -51,7 +51,12 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
         build_post_sync_dispatch_payload,
     )
     from dev_health_ops.workers.sync_units import (
+        _WORKER_LOST_RETRY_EXHAUSTED_CATEGORY,
+        _expired_lease_retry_backoff_seconds,
+        _failed_retry_result_payload,
+        _retry_result_payload,
         _stale_dispatch_seconds,
+        _sync_unit_expired_lease_retry_decision,
         dispatch_sync_run,
         finalize_sync_run,
         sync_observers_for_terminal_sync_run,
@@ -88,9 +93,74 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
         _acquire_bucket_advisory_locks(session, buckets)
         expired_run_ids: set[uuid.UUID] = set()
         expired_count = 0
+        expired_retry_count = 0
+        expired_retry_exhausted_count = 0
         for unit in expired_units:
             observed_lease_owner = unit.lease_owner
-            result: Any = session.execute(
+            decision = _sync_unit_expired_lease_retry_decision(unit)
+            if decision["should_retry"]:
+                retry_at = now + timedelta(
+                    seconds=_expired_lease_retry_backoff_seconds()
+                )
+                retry_payload = _retry_result_payload(
+                    error_category="worker_lost",
+                    retry_reason="expired_lease",
+                    decision=decision,
+                    next_retry_at=retry_at,
+                    last_lease_expired_at=now,
+                )
+                result: Any = session.execute(
+                    update(SyncRunUnit)
+                    .where(
+                        SyncRunUnit.id == unit.id,
+                        SyncRunUnit.status == SyncRunUnitStatus.RUNNING.value,
+                        SyncRunUnit.lease_owner == observed_lease_owner,
+                        SyncRunUnit.lease_owner.is_not(None),
+                        SyncRunUnit.lease_expires_at.is_not(None),
+                        SyncRunUnit.lease_expires_at <= now,
+                        SyncRunUnit.sync_run_id.in_(_nonterminal_run_ids_select()),
+                    )
+                    .values(
+                        status=SyncRunUnitStatus.RETRYING.value,
+                        available_at=retry_at,
+                        error="sync unit lease expired",
+                        result=retry_payload,
+                        expired_lease_retry_count=(
+                            SyncRunUnit.expired_lease_retry_count + 1
+                        ),
+                        last_retry_reason="expired_lease",
+                        retry_exhausted_at=None,
+                        updated_at=now,
+                        lease_owner=None,
+                        lease_expires_at=None,
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+                if int(result.rowcount or 0) > 0:
+                    expired_count += 1
+                    expired_retry_count += 1
+                    expired_run_ids.add(unit.sync_run_id)
+                    upsert_outbox_wakeup(
+                        session,
+                        sync_run_id=unit.sync_run_id,
+                        kind=OUTBOX_KIND_DISPATCH,
+                        available_at=retry_at,
+                        now=now,
+                    )
+                continue
+
+            error_category = (
+                _WORKER_LOST_RETRY_EXHAUSTED_CATEGORY
+                if decision["retry_exhausted"]
+                else "worker_lost"
+            )
+            failed_payload = _failed_retry_result_payload(
+                error_category=error_category,
+                retry_reason="expired_lease",
+                decision=decision,
+                last_lease_expired_at=now,
+            )
+            result = session.execute(
                 update(SyncRunUnit)
                 .where(
                     SyncRunUnit.id == unit.id,
@@ -104,10 +174,11 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
                 .values(
                     status=SyncRunUnitStatus.FAILED.value,
                     error="sync unit lease expired",
-                    result={
-                        "error_category": "worker_lost",
-                        "lease_expired_at": now.isoformat(),
-                    },
+                    result=failed_payload,
+                    last_retry_reason="expired_lease",
+                    retry_exhausted_at=now
+                    if failed_payload["retry_exhausted"]
+                    else None,
                     updated_at=now,
                     lease_owner=None,
                     lease_expires_at=None,
@@ -116,6 +187,8 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
             )
             if int(result.rowcount or 0) > 0:
                 expired_count += 1
+                if failed_payload["retry_exhausted"]:
+                    expired_retry_exhausted_count += 1
                 expired_run_ids.add(unit.sync_run_id)
         session.flush()
         session.commit()
@@ -251,6 +324,8 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
 
     return {
         "expired_units": expired_count,
+        "expired_retry_units": expired_retry_count,
+        "expired_retry_exhausted_units": expired_retry_exhausted_count,
         "materialized_dispatch": materialized_dispatch,
         "materialized_finalize": materialized_finalize,
         "materialized_post_sync": materialized_post_sync,

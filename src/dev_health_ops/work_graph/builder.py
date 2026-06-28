@@ -22,6 +22,7 @@ from dev_health_ops.metrics.schemas import (
     WorkGraphIssuePRRecord,
     WorkGraphPRCommitRecord,
 )
+from dev_health_ops.metrics.sinks.clickhouse.idempotency import WORK_ITEMS_DEDUPED
 from dev_health_ops.metrics.sinks.factory import create_sink
 from dev_health_ops.work_graph.extractors.text_parser import (
     RefType,
@@ -465,7 +466,7 @@ class WorkGraphBuilder:
         known_keys = list(flag_identities.keys())
 
         # 2. Load issue text (work_items title + description).
-        wi_query = "SELECT work_item_id, title, description FROM work_items"
+        wi_query = f"SELECT work_item_id, title, description FROM {WORK_ITEMS_DEDUPED}"
         if self.config.org_id:
             wi_query += f" WHERE org_id = '{self.config.org_id}'"
         wi_rows = self.sink.query_dicts(wi_query, {})
@@ -679,7 +680,7 @@ class WorkGraphBuilder:
             provider,
             project_key,
             project_id
-        FROM work_items
+        FROM work_items FINAL
         """
         if self.config.org_id:
             wi_query += f" WHERE org_id = '{self.config.org_id}'"
@@ -987,7 +988,7 @@ class WorkGraphBuilder:
             provider,
             project_key,
             project_id
-        FROM work_items
+        FROM work_items FINAL
         """
         if self.config.org_id:
             wi_query += f" WHERE org_id = '{self.config.org_id}'"
@@ -1210,7 +1211,7 @@ class WorkGraphBuilder:
             repo_id,
             work_item_id,
             updated_at
-        FROM work_items
+        FROM work_items FINAL
         WHERE repo_id IS NOT NULL
         """
         org_id_clause = self._org_id_clause()

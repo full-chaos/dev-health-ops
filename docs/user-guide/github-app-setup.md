@@ -18,7 +18,7 @@ GitHub → **Settings → Developer settings → GitHub Apps → New GitHub App*
 
 | Field | Value |
 | --- | --- |
-| **User authorization callback URL** | `https://YOUR_HOST/admin/integrations/github-app/callback` |
+| **User authorization callback URL** | `https://YOUR_HOST/org/admin/integrations/github-app/callback` |
 | **Request user authorization (OAuth) during installation** | ✅ **Checked** |
 | **Expire user authorization tokens** | ✅ leave checked (the code is used once at install) |
 | **Enable Device Flow** | ⬜ unchecked |
@@ -27,6 +27,17 @@ GitHub Apps support up to 10 registered callback URLs. If you register more than
 one (e.g. a localhost URL and a production URL), set `GITHUB_APP_CALLBACK_URL` to
 the exact URL for the current environment so the install flow redirects
 deterministically — otherwise GitHub uses the first registered callback URL.
+
+If you also use the same GitHub App for **Sign in with GitHub**, add the Auth.js
+callback URL too:
+
+```text
+https://YOUR_HOST/api/auth/callback/github
+```
+
+You do **not** need a separate GitHub OAuth App. The GitHub App's **Client ID**
+and **Client secret** are OAuth credentials and can be reused for both the
+installation flow and social login.
 
 Because OAuth‑during‑install is on, GitHub greys out **Setup URL** and uses the
 callback URL above instead — that is expected; leave Setup URL blank.
@@ -107,15 +118,23 @@ GITHUB_APP_ID=<App ID>
 GITHUB_APP_CLIENT_ID=<Client ID>
 GITHUB_APP_CLIENT_SECRET=<generated client secret>
 GITHUB_WEBHOOK_SECRET=<the webhook secret from step 1>
-GITHUB_APP_CALLBACK_URL=https://YOUR_HOST/admin/integrations/github-app/callback
+GITHUB_APP_CALLBACK_URL=https://YOUR_HOST/org/admin/integrations/github-app/callback
+# backend verification for Sign in with GitHub; use the same Client ID/secret
+SOCIAL_GITHUB_CLIENT_ID=<same Client ID>
+SOCIAL_GITHUB_CLIENT_SECRET=<same client secret>
 # private key — choose ONE (see below)
 GITHUB_APP_PRIVATE_KEY_PATH=/run/secrets/github-app.pem
 # GITHUB_APP_PRIVATE_KEY="<single-line PEM with \n escapes — see 'Providing the private key' below>"
 
-# web (unified social login on the same App)
+# web (Sign in with GitHub on the same App)
+AUTH_URL=https://YOUR_HOST
 AUTH_GITHUB_ID=<same Client ID>
 AUTH_GITHUB_SECRET=<same client secret>
 ```
+
+`compose.yml` loads `ops/.env` into the API/worker services and `web/.env` into
+the web service, but it does not alias these names for you. Copy the same Client
+ID/secret into each required variable above.
 
 ### Providing the private key (PEM)
 
@@ -162,9 +181,11 @@ install + OAuth callback works on `localhost` because GitHub redirects the
 **browser** (which is on your machine), and the backend's OAuth/`/user/installations`
 calls are outbound:
 
-- Set **User authorization callback URL** = `http://localhost:3000/admin/integrations/github-app/callback`.
-- Set `GITHUB_APP_CALLBACK_URL=http://localhost:3000/admin/integrations/github-app/callback` so
+- Set **User authorization callback URL** = `http://localhost:3000/org/admin/integrations/github-app/callback`.
+- If testing **Sign in with GitHub**, also register `http://localhost:3000/api/auth/callback/github`.
+- Set `GITHUB_APP_CALLBACK_URL=http://localhost:3000/org/admin/integrations/github-app/callback` so
   the install flow returns to localhost even if a production callback URL is also registered.
+- Set `AUTH_URL=http://localhost:3000` in `web/.env` when using Docker/reverse proxy local dev.
 - In **Webhook**, **uncheck "Active"** (drops the required URL). You lose only
   automatic credential‑deactivation on uninstall during the test.
 

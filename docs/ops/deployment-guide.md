@@ -49,12 +49,18 @@ All deployment methods use the same environment variables:
 | Variable | Description |
 |----------|-------------|
 | `GITHUB_TOKEN` | GitHub Personal Access Token |
+| `GITHUB_APP_SLUG` | GitHub App URL slug for one-click install/connect |
 | `GITHUB_APP_ID` | GitHub App id for app-based auth |
+| `GITHUB_APP_CLIENT_ID` | GitHub App OAuth Client ID for installation authorization |
+| `GITHUB_APP_CLIENT_SECRET` | GitHub App OAuth Client secret for installation authorization |
+| `GITHUB_APP_CALLBACK_URL` | Exact web callback for GitHub App install, for example `https://app.example.com/org/admin/integrations/github-app/callback` |
 | `GITHUB_APP_PRIVATE_KEY_PATH` | Path to a mounted GitHub App private key |
 | `GITHUB_APP_PRIVATE_KEY` | Inline GitHub App private key for the API GitHub App integration config path; worker sync env fallback uses `GITHUB_APP_PRIVATE_KEY_PATH` |
 | `GITHUB_APP_INSTALLATION_ID` | GitHub App installation id for single-installation fallback |
 | `GITHUB_BASE_URL` | GitHub API base URL |
 | `GITHUB_LINEAR_LINKBACK_BOTS` | Comma-separated GitHub bot actors trusted for Linear linkback comments |
+| `SOCIAL_GITHUB_CLIENT_ID` | GitHub OAuth Client ID used by `/auth/social-login`; may be the same value as `GITHUB_APP_CLIENT_ID` |
+| `SOCIAL_GITHUB_CLIENT_SECRET` | GitHub OAuth Client secret used by `/auth/social-login`; may be the same value as `GITHUB_APP_CLIENT_SECRET` |
 | `GITLAB_TOKEN` | GitLab Private Token |
 | `GITLAB_URL` | GitLab instance URL (default: gitlab.com) |
 | `JIRA_BASE_URL` | Jira Cloud URL (e.g., your-org.atlassian.net) |

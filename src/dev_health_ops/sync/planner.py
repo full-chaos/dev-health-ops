@@ -355,6 +355,7 @@ def _linear_backfill_max_window_days() -> int:
             if value > 0:
                 return value
         except ValueError:
+            # Non-integer env override: fall through to the conservative default below.
             pass
     return _DEFAULT_LINEAR_BACKFILL_MAX_WINDOW_DAYS
 

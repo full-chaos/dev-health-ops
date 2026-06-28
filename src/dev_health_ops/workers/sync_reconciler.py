@@ -23,6 +23,8 @@ from dev_health_ops.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
+_WORKER_LOST_RETRY_EXHAUSTED_CATEGORY = "worker_lost_retry_exhausted"
+
 # Relay contract (CHAOS-2581 / CHAOS-2596): dispatch_sync_run and
 # finalize_sync_run wakeups remain durable at-least-once because their consumers
 # are idempotent. post_sync is intentionally AT-MOST-ONCE: the relay marks the
@@ -51,7 +53,6 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
         build_post_sync_dispatch_payload,
     )
     from dev_health_ops.workers.sync_units import (
-        _WORKER_LOST_RETRY_EXHAUSTED_CATEGORY,
         _expired_lease_retry_backoff_seconds,
         _failed_retry_result_payload,
         _retry_result_payload,

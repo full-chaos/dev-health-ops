@@ -177,7 +177,6 @@ _CLICKHOUSE_RETRY_PROVEN_SAFE_SURFACES = frozenset(
         "manual_attribution_fallbacks",
     }
 )
-_WORKER_LOST_RETRY_EXHAUSTED_CATEGORY = "worker_lost_retry_exhausted"
 
 
 class _PendingUnitCounts(TypedDict):
@@ -818,7 +817,6 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
     except SoftTimeLimitExceeded as exc:
         if terminal_txn_started:
             raise
-        terminal_txn_started = True
         timeout_result, should_finalize = _stamp_sync_unit_soft_timeout(
             unit_id=unit_id,
             lease_owner=lease_owner,

@@ -397,10 +397,19 @@ def _finalizable_run_ids(session, limit: int) -> set[str]:
         )
         .exists()
     )
+    inflight_discovery_exists = (
+        session.query(SyncRunReferenceDiscovery.id)
+        .filter(
+            SyncRunReferenceDiscovery.sync_run_id == SyncRun.id,
+            SyncRunReferenceDiscovery.status.in_({"planned", "retrying", "running"}),
+        )
+        .exists()
+    )
     rows = (
         session.query(SyncRun.id)
         .filter(SyncRun.status.not_in(_TERMINAL_RUN_STATUSES))
         .filter(~nonterminal_unit_exists)
+        .filter(~inflight_discovery_exists)
         .order_by(SyncRun.created_at.asc(), SyncRun.id.asc())
         .limit(max(1, int(limit)))
         .all()
@@ -724,6 +733,17 @@ def _run_is_finalizable(session, sync_run_id: str | uuid.UUID) -> bool:
         is not None
     )
     if not run_exists:
+        return False
+    inflight_discovery = (
+        session.query(SyncRunReferenceDiscovery.id)
+        .filter(
+            SyncRunReferenceDiscovery.sync_run_id == run_uuid,
+            SyncRunReferenceDiscovery.status.in_({"planned", "retrying", "running"}),
+        )
+        .first()
+        is not None
+    )
+    if inflight_discovery:
         return False
     terminal_statuses = {
         SyncRunUnitStatus.SUCCESS.value,

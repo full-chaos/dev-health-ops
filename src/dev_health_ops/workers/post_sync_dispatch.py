@@ -161,11 +161,23 @@ def _dispatch_post_sync_tasks(
     if metrics_backfill_days is not None:
         daily_metrics_kwargs["backfill_days"] = metrics_backfill_days
 
-    if has_work_items:
-        dispatched.append("run_daily_metrics")
-    elif has_git:
+    if has_git or has_work_items:
         dispatched.append("run_daily_metrics")
 
+    # run_complexity_job writes file_complexity_snapshots, which run_daily_metrics
+    # reads (job_daily._load_complexity_map_for_repo). Chaining complexity ->
+    # daily guarantees the daily risk/hotspot rows reflect the just-synced file
+    # contents instead of the previous cycle's snapshot — important for a newly
+    # onboarded org's first daily run, which would otherwise show zero complexity.
+    #
+    # Trade-off (CHAOS review #1078): as the chain head, a *terminal* complexity
+    # failure (after its 3 internal retries) aborts the rest of the chain
+    # (daily/build/materialize), so the /investment refresh is skipped for that
+    # sync. This is accepted as fresh-or-nothing: terminal complexity failures are
+    # rare and usually stem from ClickHouse being unavailable, in which case the
+    # downstream steps would fail anyway; daily also degrades gracefully on a
+    # missing snapshot, so the next cycle recovers. If hard isolation is ever
+    # needed, decouple via a non-raising wrapper task rather than link_error.
     complexity_sig = None
     if has_git:
         complexity_sig = celery_app.signature(
@@ -191,11 +203,13 @@ def _dispatch_post_sync_tasks(
         if to_date is not None:
             materialize_kwargs["to_date"] = to_date
 
+        # Every link below the chain head must be immutable so a parent's return
+        # value is not injected as a positional arg into the next task.
         build_sig = celery_app.signature(
             "dev_health_ops.workers.tasks.run_work_graph_build",
             kwargs=build_kwargs,
             queue="metrics",
-            immutable=has_work_items or has_git,
+            immutable=True,
         )
         materialize_sig = celery_app.signature(
             "dev_health_ops.workers.tasks.dispatch_investment_materialize_partitioned",
@@ -203,22 +217,16 @@ def _dispatch_post_sync_tasks(
             queue="default",
             immutable=True,
         )
-        if has_work_items or has_git:
-            daily_metrics_sig = celery_app.signature(
-                "dev_health_ops.workers.tasks.run_daily_metrics",
-                kwargs=daily_metrics_kwargs,
-                queue="metrics",
-                immutable=True,
-            )
-            chain(
-                *(
-                    [complexity_sig, daily_metrics_sig, build_sig, materialize_sig]
-                    if complexity_sig is not None
-                    else [daily_metrics_sig, build_sig, materialize_sig]
-                )
-            ).apply_async()
-        else:
-            chain(build_sig, materialize_sig).apply_async()
+        daily_metrics_sig = celery_app.signature(
+            "dev_health_ops.workers.tasks.run_daily_metrics",
+            kwargs=daily_metrics_kwargs,
+            queue="metrics",
+            immutable=True,
+        )
+        chain_sigs = [daily_metrics_sig, build_sig, materialize_sig]
+        if complexity_sig is not None:
+            chain_sigs.insert(0, complexity_sig)
+        chain(*chain_sigs).apply_async()
         dispatched.append("run_work_graph_build")
         dispatched.append("dispatch_investment_materialize_partitioned")
 

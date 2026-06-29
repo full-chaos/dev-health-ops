@@ -170,6 +170,8 @@ def populate(
     strict = bool(scope.get("strict_reference_discovery"))
     jira_credentials = jira_credentials_from_mapping(credentials)
     if jira_credentials is None:
+        if strict:
+            raise ValueError("missing Jira credentials for strict reference discovery")
         return {
             "status": "skipped",
             "reason": "missing_jira_credentials",

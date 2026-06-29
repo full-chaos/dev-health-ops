@@ -41,6 +41,7 @@ _WORKER_LOST_RETRY_EXHAUSTED_CATEGORY = "worker_lost_retry_exhausted"
 def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
     from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.sync.dispatch_outbox import (
+        OUTBOX_KIND_DISCOVERY,
         OUTBOX_KIND_DISPATCH,
         OUTBOX_KIND_FINALIZE,
         OUTBOX_KIND_POST_SYNC,
@@ -69,6 +70,7 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
     stale_dispatch_cutoff = now - timedelta(seconds=_stale_dispatch_seconds())
     materialized_finalize = 0
     materialized_dispatch = 0
+    materialized_discovery = 0
     materialized_post_sync = 0
     relayed_dispatch = 0
     relayed_finalize = 0
@@ -226,6 +228,15 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
             upsert_outbox_wakeup=upsert_outbox_wakeup,
         )
 
+        discovery_run_ids = _discoverable_run_ids(session, limit, now)
+        materialized_discovery = _materialize_outbox_wakeups(
+            session,
+            run_ids=discovery_run_ids,
+            kind=OUTBOX_KIND_DISCOVERY,
+            now=now,
+            upsert_outbox_wakeup=upsert_outbox_wakeup,
+        )
+
         missing_post_sync_run_ids = _missing_post_sync_outbox_run_ids(session, limit)
         materialized_post_sync = _materialize_outbox_wakeups(
             session,
@@ -290,6 +301,7 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
                     dispatch_sync_run=dispatch_sync_run,
                     finalize_sync_run=finalize_sync_run,
                     run_sync_reference_discovery=run_sync_reference_discovery,
+                    upsert_outbox_wakeup=upsert_outbox_wakeup,
                 )
             except Exception as exc:
                 publish_failures += 1
@@ -331,6 +343,7 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
         "expired_retry_units": expired_retry_count,
         "expired_retry_exhausted_units": expired_retry_exhausted_count,
         "materialized_dispatch": materialized_dispatch,
+        "materialized_discovery": materialized_discovery,
         "materialized_finalize": materialized_finalize,
         "materialized_post_sync": materialized_post_sync,
         "relayed_dispatch": relayed_dispatch,
@@ -410,6 +423,32 @@ def _missing_post_sync_outbox_run_ids(session, limit: int) -> set[str]:
         .order_by(
             SyncRunPostDispatch.dispatched_at.asc(),
             SyncRunPostDispatch.sync_run_id.asc(),
+        )
+        .limit(max(1, int(limit)))
+        .all()
+    )
+    return {str(run_id) for (run_id,) in rows}
+
+
+def _discoverable_run_ids(session, limit: int, now: datetime) -> set[str]:
+    rows = (
+        session.query(SyncRunReferenceDiscovery.sync_run_id)
+        .join(SyncRun, SyncRun.id == SyncRunReferenceDiscovery.sync_run_id)
+        .filter(SyncRun.status.not_in(_TERMINAL_RUN_STATUSES))
+        .filter(
+            (
+                SyncRunReferenceDiscovery.status.in_({"planned", "retrying"})
+                & (SyncRunReferenceDiscovery.available_at <= now)
+            )
+            | (
+                (SyncRunReferenceDiscovery.status == "running")
+                & SyncRunReferenceDiscovery.lease_expires_at.is_not(None)
+                & (SyncRunReferenceDiscovery.lease_expires_at <= now)
+            )
+        )
+        .order_by(
+            SyncRunReferenceDiscovery.available_at.asc(),
+            SyncRunReferenceDiscovery.sync_run_id.asc(),
         )
         .limit(max(1, int(limit)))
         .all()
@@ -522,6 +561,7 @@ def _publish_claimed_outbox_row(
     dispatch_sync_run,
     finalize_sync_run,
     run_sync_reference_discovery,
+    upsert_outbox_wakeup,
 ) -> str | None:
     from dev_health_ops.sync.dispatch_outbox import (
         OUTBOX_KIND_DISCOVERY,
@@ -537,6 +577,12 @@ def _publish_claimed_outbox_row(
 
     if row.kind == OUTBOX_KIND_DISPATCH:
         if not _reference_discovery_successful(session, row.sync_run_id):
+            _ensure_reference_discovery_wakeup(
+                session,
+                sync_run_id=row.sync_run_id,
+                now=datetime.now(timezone.utc),
+                upsert_outbox_wakeup=upsert_outbox_wakeup,
+            )
             return None
         if not _run_has_dispatchable_units(
             session, row.sync_run_id, stale_dispatch_cutoff
@@ -575,6 +621,39 @@ def _reference_discovery_successful(session, sync_run_id: uuid.UUID) -> bool:
         )
         .one_or_none()
         is not None
+    )
+
+
+def _ensure_reference_discovery_wakeup(
+    session,
+    *,
+    sync_run_id: uuid.UUID,
+    now: datetime,
+    upsert_outbox_wakeup,
+) -> None:
+    ledger = (
+        session.query(SyncRunReferenceDiscovery)
+        .join(SyncRun, SyncRun.id == SyncRunReferenceDiscovery.sync_run_id)
+        .filter(
+            SyncRunReferenceDiscovery.sync_run_id == sync_run_id,
+            SyncRun.status.not_in(_TERMINAL_RUN_STATUSES),
+            SyncRunReferenceDiscovery.status.in_({"planned", "retrying", "running"}),
+        )
+        .one_or_none()
+    )
+    if ledger is None:
+        return
+    available_at = ledger.available_at or now
+    if ledger.status == "running":
+        if ledger.lease_expires_at is None or _as_aware(ledger.lease_expires_at) > now:
+            return
+        available_at = now
+    upsert_outbox_wakeup(
+        session,
+        sync_run_id=sync_run_id,
+        kind="reference_discovery",
+        available_at=available_at,
+        now=now,
     )
 
 

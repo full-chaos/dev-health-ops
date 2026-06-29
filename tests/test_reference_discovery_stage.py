@@ -219,6 +219,44 @@ def test_reference_discovery_success_stamps_ledger_and_arms_dispatch(
     assert calls[0]["scope"]["source_external_ids"] == ["ENG"]
 
 
+def test_reference_discovery_fails_when_unit_source_inventory_is_incomplete(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dev_health_ops.workers import reference_discovery
+
+    run, unit = _seed_unitized_run(db_session)
+    unit.source_id = uuid.uuid4()
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+
+    with pytest.raises(ValueError, match="source inventory incomplete"):
+        reference_discovery._load_discovery_context(run.id)
+
+
+@pytest.mark.parametrize(
+    ("module_name", "message"),
+    [
+        ("team_autoimport_linear", "missing Linear credentials"),
+        ("team_autoimport_jira", "missing Jira credentials"),
+        ("team_autoimport_github", "missing GitHub credentials"),
+        ("team_autoimport_gitlab", "missing GitLab credentials"),
+    ],
+)
+def test_strict_reference_discovery_missing_credentials_raise(
+    module_name: str, message: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = __import__(f"dev_health_ops.workers.{module_name}", fromlist=["populate"])
+    if module_name in {"team_autoimport_github", "team_autoimport_gitlab"}:
+        monkeypatch.setattr(module, "_provider_capable", lambda: True)
+
+    with pytest.raises(ValueError, match=message):
+        module.populate(
+            org_id="org-1",
+            credentials={},
+            scope={"strict_reference_discovery": True},
+        )
+
+
 def test_reference_discovery_readback_verifies_exact_team_and_sprint_keys(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -254,13 +292,17 @@ def test_reference_discovery_readback_verifies_exact_team_and_sprint_keys(
     )
 
     assert len(queries) == 2
-    assert "teams FINAL" in queries[0][0]
+    assert "FROM teams" in queries[0][0]
+    assert "FINAL" not in queries[0][0]
+    assert "GROUP BY org_id, provider, native_team_key" in queries[0][0]
     assert queries[0][1] == {
         "org_id": "org-1",
         "provider": "linear",
         "keys": ["ENG", "OPS"],
     }
-    assert "sprints FINAL" in queries[1][0]
+    assert "FROM sprints" in queries[1][0]
+    assert "FINAL" not in queries[1][0]
+    assert "GROUP BY org_id, provider, sprint_id" in queries[1][0]
     assert queries[1][1] == {
         "org_id": "org-1",
         "provider": "linear",

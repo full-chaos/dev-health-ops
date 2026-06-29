@@ -61,6 +61,10 @@ async def _populate_async(
 ) -> dict[str, Any]:
     strict = bool(scope.get("strict_reference_discovery"))
     if not _provider_capable():
+        if strict:
+            raise ValueError(
+                "GitLab is not import-capable for strict reference discovery"
+            )
         return _zero_summary(org_id=org_id, reason="provider_not_import_capable")
 
     token = _first_string(credentials, "token", "access_token", "private_token")
@@ -70,6 +74,10 @@ async def _populate_async(
         or DEFAULT_GITLAB_URL
     )
     if not token or not group_path:
+        if strict:
+            raise ValueError(
+                "missing GitLab credentials or group for strict reference discovery"
+            )
         return _zero_summary(
             org_id=org_id, reason="missing_gitlab_credentials_or_group"
         )

@@ -152,6 +152,10 @@ def populate(
     strict = bool(scope.get("strict_reference_discovery"))
     linear_credentials = linear_credentials_from_mapping(credentials)
     if linear_credentials is None:
+        if strict:
+            raise ValueError(
+                "missing Linear credentials for strict reference discovery"
+            )
         return {
             "status": "skipped",
             "reason": "missing_linear_credentials",

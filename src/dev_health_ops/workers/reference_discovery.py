@@ -222,13 +222,28 @@ def _load_discovery_context(run_uuid: uuid.UUID) -> dict[str, Any]:
             if source_ids
             else []
         )
+        source_external_ids = {
+            source.id: str(source.external_id)
+            for source in sources
+            if source.external_id is not None and str(source.external_id).strip()
+        }
+        unresolved_source_ids = sorted(
+            str(source_id)
+            for source_id in source_ids
+            if source_id not in source_external_ids
+        )
+        if unresolved_source_ids:
+            raise ValueError(
+                "reference discovery source inventory incomplete: "
+                f"unresolved_source_ids={unresolved_source_ids}"
+            )
         scope = {
             "mode": "sync_reference_discovery",
             "sync_run_id": str(run_uuid),
             "triggered_by": str(run.triggered_by),
             "sync_targets": sorted({str(unit.dataset_key) for unit in units}),
             "source_external_ids": sorted(
-                str(source.external_id) for source in sources
+                source_external_ids[source_id] for source_id in source_ids
             ),
             "sync_options": dict(integration.config or {}),
         }
@@ -281,9 +296,14 @@ def _missing_team_keys(
     if not expected_keys:
         return set()
     rows = sink.query_dicts(
-        "SELECT native_team_key FROM teams FINAL "
+        "SELECT native_team_key FROM ("
+        "SELECT org_id, provider, native_team_key, "
+        "argMax(id, updated_at) AS id "
+        "FROM teams "
         "WHERE org_id = {org_id:String} AND provider = {provider:String} "
-        "AND native_team_key IN {keys:Array(String)}",
+        "AND native_team_key IN {keys:Array(String)} "
+        "GROUP BY org_id, provider, native_team_key"
+        ")",
         {"org_id": org_id, "provider": provider, "keys": sorted(expected_keys)},
     )
     visible = {str(row.get("native_team_key")) for row in rows}
@@ -300,9 +320,14 @@ def _missing_sprint_ids(
     if not expected_ids:
         return set()
     rows = sink.query_dicts(
-        "SELECT sprint_id FROM sprints FINAL "
+        "SELECT sprint_id FROM ("
+        "SELECT org_id, provider, sprint_id, "
+        "argMax(name, last_synced) AS name "
+        "FROM sprints "
         "WHERE org_id = {org_id:String} AND provider = {provider:String} "
-        "AND sprint_id IN {ids:Array(String)}",
+        "AND sprint_id IN {ids:Array(String)} "
+        "GROUP BY org_id, provider, sprint_id"
+        ")",
         {"org_id": org_id, "provider": provider, "ids": sorted(expected_ids)},
     )
     visible = {str(row.get("sprint_id")) for row in rows}

@@ -179,7 +179,7 @@ def test_jira_budget_estimator_returns_jql_and_enrichment_budgets() -> None:
     assert estimates[0].bucket.provider == "jira"
     assert estimates[0].bucket.org_id == "org-1"
     assert estimates[0].bucket.host == "chaos.atlassian.net"
-    assert estimates[0].estimated_units == 2
+    assert estimates[0].estimated_units == 4
     assert estimates[0].confidence == "medium"
     assert estimates[0].to_dict()["bucket"]["dimension"] == "search"
 
@@ -305,7 +305,7 @@ def test_jira_budget_guard_defers_second_unit_by_jql_reservation(
     db_session.add(second)
     db_session.flush()
     monkeypatch.setenv(
-        "SYNC_BUDGET_BUCKET_LIMITS", json.dumps({"jira:search:jira_jql": 2})
+        "SYNC_BUDGET_BUCKET_LIMITS", json.dumps({"jira:search:jira_jql": 4})
     )
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_SECONDS", "60")
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
@@ -352,7 +352,7 @@ def test_jira_budget_guard_active_reservation_blocks_planned_unit(
     db_session.flush()
     active.updated_at = datetime.now(timezone.utc)
     monkeypatch.setenv(
-        "SYNC_BUDGET_BUCKET_LIMITS", json.dumps({"jira:search:jira_jql": 2})
+        "SYNC_BUDGET_BUCKET_LIMITS", json.dumps({"jira:search:jira_jql": 4})
     )
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_SECONDS", "60")
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")

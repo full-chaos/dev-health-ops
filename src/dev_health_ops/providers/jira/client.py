@@ -20,6 +20,19 @@ from dev_health_ops.providers.utils import EnvSpec, read_env_spec
 
 logger = logging.getLogger(__name__)
 
+_DIAGNOSTIC_HEADER_NAMES = (
+    "x-ratelimit-limit",
+    "x-ratelimit-remaining",
+    "x-ratelimit-reset",
+    "ratelimit-limit",
+    "ratelimit-remaining",
+    "ratelimit-reset",
+    "retry-after",
+    "x-request-id",
+    "atl-traceid",
+)
+_MAX_USAGE_OBSERVATION_KEYS = 50
+
 
 def _require_jira() -> Any:
     try:
@@ -51,6 +64,14 @@ def _normalize_jira_base_url(value: str) -> str:
     if url.startswith("https://"):
         return url
     return "https://" + url.lstrip("/")
+
+
+def _diagnostic_headers(headers: object) -> dict[str, str]:
+    get_items = getattr(headers, "items", None)
+    if get_items is None:
+        return {}
+    lowered = {str(k).lower(): str(v) for k, v in get_items()}
+    return {name: lowered[name] for name in _DIAGNOSTIC_HEADER_NAMES if name in lowered}
 
 
 @dataclass(frozen=True)
@@ -95,6 +116,8 @@ class JiraClient:
             config=RateLimitConfig(initial_backoff_seconds=1.0),
         )
         self.max_retries_429 = max(0, int(max_retries_429))
+        self._usage_observations: dict[tuple[str, str], dict[str, Any]] = {}
+        self._usage_observation_overflow = 0
 
         self.session = requests.Session()
         self.session.auth = (auth.email, auth.api_token)
@@ -143,6 +166,9 @@ class JiraClient:
                 resp = self.session.get(
                     url, params=params, timeout=self.timeout_seconds
                 )
+                self._record_rest_usage(
+                    f"GET {path}", headers=resp.headers, status=resp.status_code
+                )
                 if resp.status_code == 429:
                     retry_after = parse_retry_after_header(resp.headers)
                     applied = penalize_from_response(self.gate, resp)
@@ -176,6 +202,80 @@ class JiraClient:
                 )
                 raise
         raise RuntimeError("Jira request retry loop exited without a result")
+
+    def _record_usage_observation(
+        self,
+        *,
+        transport: str,
+        operation: str,
+        headers: dict[str, str],
+        rate_limit: dict[str, Any],
+        status: int | None = None,
+    ) -> None:
+        if not headers and not rate_limit and status is None:
+            return
+        key = (transport, operation)
+        observation = self._usage_observations.get(key)
+        if observation is None:
+            if len(self._usage_observations) >= _MAX_USAGE_OBSERVATION_KEYS:
+                self._usage_observation_overflow += 1
+                return
+            observation = {
+                "transport": transport,
+                "operation": operation,
+                "request_count": 0,
+            }
+            self._usage_observations[key] = observation
+        observation["request_count"] = int(observation["request_count"]) + 1
+        if status is not None:
+            observation["latest_status"] = status
+        if headers:
+            observation["latest_headers"] = dict(headers)
+        if rate_limit:
+            observation["rate_limit"] = dict(rate_limit)
+
+    def _record_rest_usage(
+        self,
+        operation: str,
+        *,
+        headers: object | None = None,
+        status: int | None = None,
+    ) -> None:
+        safe_headers = _diagnostic_headers(headers or {})
+        rate_limit: dict[str, Any] = {}
+        for source, target in {
+            "x-ratelimit-remaining": "remaining",
+            "ratelimit-remaining": "remaining",
+            "x-ratelimit-reset": "reset",
+            "ratelimit-reset": "reset",
+            "x-ratelimit-limit": "limit",
+            "ratelimit-limit": "limit",
+            "retry-after": "retry_after",
+        }.items():
+            value = safe_headers.get(source)
+            if value is not None:
+                rate_limit[target] = value
+        self._record_usage_observation(
+            transport="rest",
+            operation=operation,
+            headers=safe_headers,
+            rate_limit=rate_limit,
+            status=status,
+        )
+
+    def drain_usage_observations(self) -> list[dict[str, Any]]:
+        observations = [dict(value) for value in self._usage_observations.values()]
+        if self._usage_observation_overflow:
+            observations.append(
+                {
+                    "transport": "summary",
+                    "operation": "overflow",
+                    "dropped_operation_count": self._usage_observation_overflow,
+                }
+            )
+        self._usage_observations.clear()
+        self._usage_observation_overflow = 0
+        return observations
 
     def search_issues_page(
         self,

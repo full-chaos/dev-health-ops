@@ -9,6 +9,7 @@ from dev_health_ops.sync.budget_types import (
     BudgetBucketKey,
     BudgetDimension,
     BudgetEstimate,
+    window_span_days,
 )
 from dev_health_ops.sync.datasets import DatasetKey
 from dev_health_ops.workers.sync_bootstrap import SyncTaskContext
@@ -36,6 +37,7 @@ class LinearBudgetEstimator:
                 org_id=context.org_id,
                 host=host,
                 credential_fingerprint=credential_fingerprint,
+                span_days=window_span_days(context),
             )
         )
 
@@ -46,6 +48,7 @@ def _dataset_estimates(
     org_id: str,
     host: str,
     credential_fingerprint: str,
+    span_days: int,
 ) -> tuple[BudgetEstimate, ...]:
     bucket = _bucket_factory(
         org_id=org_id,
@@ -60,7 +63,7 @@ def _dataset_estimates(
             ),
             _estimate(
                 bucket(BudgetDimension.GRAPHQL_COST),
-                5,
+                _scaled_units(5, span_days, per_day_weight=2),
                 _CONFIDENCE_LOW,
                 "issues",
                 notes=(
@@ -71,13 +74,22 @@ def _dataset_estimates(
                 bucket(BudgetDimension.GRAPHQL_COST), 2, _CONFIDENCE_LOW, "cycles"
             ),
             _estimate(
-                bucket(BudgetDimension.GRAPHQL_COST), 2, _CONFIDENCE_LOW, "comments"
+                bucket(BudgetDimension.GRAPHQL_COST),
+                _scaled_units(2, span_days),
+                _CONFIDENCE_LOW,
+                "comments",
             ),
             _estimate(
-                bucket(BudgetDimension.GRAPHQL_COST), 1, _CONFIDENCE_LOW, "attachments"
+                bucket(BudgetDimension.GRAPHQL_COST),
+                _scaled_units(1, span_days),
+                _CONFIDENCE_LOW,
+                "attachments",
             ),
             _estimate(
-                bucket(BudgetDimension.GRAPHQL_COST), 2, _CONFIDENCE_LOW, "history"
+                bucket(BudgetDimension.GRAPHQL_COST),
+                _scaled_units(2, span_days),
+                _CONFIDENCE_LOW,
+                "history",
             ),
         )
 
@@ -107,14 +119,20 @@ def _dataset_estimates(
     if dataset_key == DatasetKey.WORK_ITEM_HISTORY.value:
         return (
             _estimate(
-                bucket(BudgetDimension.GRAPHQL_COST), 3, _CONFIDENCE_LOW, "history"
+                bucket(BudgetDimension.GRAPHQL_COST),
+                _scaled_units(3, span_days),
+                _CONFIDENCE_LOW,
+                "history",
             ),
         )
 
     if dataset_key == DatasetKey.WORK_ITEM_COMMENTS.value:
         return (
             _estimate(
-                bucket(BudgetDimension.GRAPHQL_COST), 3, _CONFIDENCE_LOW, "comments"
+                bucket(BudgetDimension.GRAPHQL_COST),
+                _scaled_units(3, span_days),
+                _CONFIDENCE_LOW,
+                "comments",
             ),
         )
 
@@ -151,6 +169,12 @@ def _estimate(
         route_family=route_family,
         notes=notes,
     )
+
+
+def _scaled_units(fixed_floor: int, span_days: int, *, per_day_weight: int = 1) -> int:
+    if span_days <= 1:
+        return fixed_floor
+    return max(fixed_floor, fixed_floor * span_days * max(1, per_day_weight))
 
 
 def _host_from_credentials(credentials: object) -> str:

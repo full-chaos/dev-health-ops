@@ -9,6 +9,7 @@ from dev_health_ops.sync.budget_types import (
     BudgetBucketKey,
     BudgetDimension,
     BudgetEstimate,
+    window_span_days,
 )
 from dev_health_ops.sync.datasets import DatasetKey
 from dev_health_ops.workers.sync_bootstrap import SyncTaskContext
@@ -43,6 +44,7 @@ class GitLabBudgetEstimator:
                 org_id=context.org_id,
                 host=host,
                 credential_fingerprint=credential_fingerprint,
+                span_days=window_span_days(context),
             )
         )
         return tuple(estimates)
@@ -55,6 +57,7 @@ def _dataset_estimates(
     org_id: str,
     host: str,
     credential_fingerprint: str,
+    span_days: int,
 ) -> tuple[BudgetEstimate, ...]:
     bucket = _bucket_factory(
         org_id=org_id,
@@ -72,7 +75,10 @@ def _dataset_estimates(
     if dataset_key == DatasetKey.COMMITS.value:
         return (
             _estimate(
-                bucket(BudgetDimension.REST_CORE), 2, _CONFIDENCE_MEDIUM, "project"
+                bucket(BudgetDimension.REST_CORE),
+                _scaled_units(2, span_days),
+                _CONFIDENCE_MEDIUM,
+                "project",
             ),
         )
 
@@ -80,7 +86,7 @@ def _dataset_estimates(
         return (
             _estimate(
                 bucket(BudgetDimension.REST_CORE),
-                4,
+                _scaled_units(4, span_days),
                 _CONFIDENCE_LOW,
                 "project",
                 notes=("commit detail expansion varies by commit volume",),
@@ -91,7 +97,10 @@ def _dataset_estimates(
         return (
             _estimate(
                 bucket(BudgetDimension.REST_CORE),
-                5 if dataset_key == DatasetKey.BLAME.value else 3,
+                _scaled_units(
+                    5 if dataset_key == DatasetKey.BLAME.value else 3,
+                    span_days,
+                ),
                 _CONFIDENCE_LOW,
                 "project",
                 notes=("repository file expansion is high variance",),
@@ -102,7 +111,7 @@ def _dataset_estimates(
         return (
             _estimate(
                 bucket(BudgetDimension.REST_CORE),
-                4,
+                _scaled_units(4, span_days),
                 _CONFIDENCE_MEDIUM,
                 "merge_requests",
                 notes=("merge request iterators are pagination-heavy",),
@@ -113,14 +122,14 @@ def _dataset_estimates(
         return (
             _estimate(
                 bucket(BudgetDimension.REST_CORE),
-                4,
+                _scaled_units(4, span_days),
                 _CONFIDENCE_MEDIUM,
                 "merge_requests",
                 notes=("merge request iterators are pagination-heavy",),
             ),
             _estimate(
                 bucket(BudgetDimension.REST_CORE),
-                3,
+                _scaled_units(3, span_days),
                 _CONFIDENCE_LOW,
                 "notes",
                 notes=("MR note expansion varies by discussion volume",),
@@ -135,7 +144,7 @@ def _dataset_estimates(
         return (
             _estimate(
                 bucket(BudgetDimension.REST_CORE),
-                6,
+                _scaled_units(6, span_days),
                 _CONFIDENCE_LOW,
                 "pipelines",
                 notes=("pipeline job expansion varies by pipeline volume",),
@@ -183,14 +192,14 @@ def _dataset_estimates(
             ),
             _estimate(
                 bucket(BudgetDimension.REST_CORE),
-                4,
+                _scaled_units(4, span_days),
                 _CONFIDENCE_LOW,
                 "epics",
                 notes=("group epic expansion requires premium APIs when available",),
             ),
             _estimate(
                 bucket(BudgetDimension.REST_CORE),
-                4,
+                _scaled_units(4, span_days),
                 _CONFIDENCE_MEDIUM,
                 "issues",
                 notes=("issue iterator and per-issue events are pagination-heavy",),
@@ -204,7 +213,7 @@ def _dataset_estimates(
             estimates.append(
                 _estimate(
                     bucket(BudgetDimension.REST_CORE),
-                    3,
+                    _scaled_units(3, span_days),
                     _CONFIDENCE_LOW,
                     "notes",
                     notes=("issue/MR notes and state events vary by activity",),
@@ -214,7 +223,7 @@ def _dataset_estimates(
             estimates.append(
                 _estimate(
                     bucket(BudgetDimension.REST_CORE),
-                    4,
+                    _scaled_units(4, span_days),
                     _CONFIDENCE_MEDIUM,
                     "merge_requests",
                     notes=("MR iterator runs alongside issue ingestion by default",),
@@ -226,7 +235,7 @@ def _dataset_estimates(
         return (
             _estimate(
                 bucket(BudgetDimension.REST_CORE),
-                2,
+                _scaled_units(2, span_days),
                 _CONFIDENCE_LOW,
                 "project",
                 notes=("GitLab feature-flag APIs share the REST core budget",),
@@ -266,6 +275,10 @@ def _estimate(
         route_family=route_family,
         notes=notes,
     )
+
+
+def _scaled_units(fixed_floor: int, span_days: int) -> int:
+    return max(fixed_floor, fixed_floor * max(1, span_days))
 
 
 def _host_from_credentials(credentials: object) -> str:

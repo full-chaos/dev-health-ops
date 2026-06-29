@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -55,3 +56,15 @@ class BudgetEstimate:
 class BudgetEstimator(Protocol):
     def estimate(self, context: SyncTaskContext) -> tuple[BudgetEstimate, ...]:
         return ()
+
+
+def window_span_days(context: SyncTaskContext) -> int:
+    start = context.window_start
+    end = context.window_end
+    if not isinstance(start, datetime) or not isinstance(end, datetime):
+        return 1
+    try:
+        days = (end - start).days
+    except TypeError:
+        return 1
+    return max(1, days)

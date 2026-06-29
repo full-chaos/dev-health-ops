@@ -18,6 +18,24 @@ from dev_health_ops.providers.utils import EnvSpec, read_env_spec
 
 logger = logging.getLogger(__name__)
 
+_DIAGNOSTIC_HEADER_NAMES = (
+    "ratelimit-limit",
+    "ratelimit-remaining",
+    "ratelimit-reset",
+    "retry-after",
+    "x-request-id",
+    "x-runtime",
+)
+_MAX_USAGE_OBSERVATION_KEYS = 50
+
+
+def _diagnostic_headers(headers: object) -> dict[str, str]:
+    get_items = getattr(headers, "items", None)
+    if get_items is None:
+        return {}
+    lowered = {str(k).lower(): str(v) for k, v in get_items()}
+    return {name: lowered[name] for name in _DIAGNOSTIC_HEADER_NAMES if name in lowered}
+
 
 def _maybe_raise_gitlab_rate_limit(exc: BaseException) -> None:
     """Raise RateLimitException if exc is a GitLab rate-limit error (HTTP 429,
@@ -116,6 +134,8 @@ class GitLabWorkClient:
             host=host,
             config=RateLimitConfig(initial_backoff_seconds=1.0),
         )
+        self._usage_observations: dict[tuple[str, str], dict[str, Any]] = {}
+        self._usage_observation_overflow = 0
 
         self.gl = gitlab.Gitlab(
             auth.base_url,
@@ -143,10 +163,101 @@ class GitLabWorkClient:
     def get_project(self, project_id_or_path: str) -> Any:
         try:
             with gate_call(self.gate):
-                return self.gl.projects.get(project_id_or_path)
+                project = self.gl.projects.get(project_id_or_path)
+            self._record_last_response_usage("GET /projects/:id")
+            return project
         except Exception as exc:
+            self._record_exception_usage("GET /projects/:id", exc)
             _maybe_raise_gitlab_rate_limit(exc)
             raise
+
+    def _record_usage_observation(
+        self,
+        *,
+        transport: str,
+        operation: str,
+        headers: dict[str, str],
+        rate_limit: dict[str, Any],
+        status: int | None = None,
+    ) -> None:
+        if not headers and not rate_limit and status is None:
+            return
+        key = (transport, operation)
+        observation = self._usage_observations.get(key)
+        if observation is None:
+            if len(self._usage_observations) >= _MAX_USAGE_OBSERVATION_KEYS:
+                self._usage_observation_overflow += 1
+                return
+            observation = {
+                "transport": transport,
+                "operation": operation,
+                "request_count": 0,
+            }
+            self._usage_observations[key] = observation
+        observation["request_count"] = int(observation["request_count"]) + 1
+        if status is not None:
+            observation["latest_status"] = status
+        if headers:
+            observation["latest_headers"] = dict(headers)
+        if rate_limit:
+            observation["rate_limit"] = dict(rate_limit)
+
+    def _record_rest_usage(
+        self,
+        operation: str,
+        *,
+        headers: object | None = None,
+        status: int | None = None,
+    ) -> None:
+        safe_headers = _diagnostic_headers(headers or {})
+        rate_limit: dict[str, Any] = {}
+        for source, target in {
+            "ratelimit-remaining": "remaining",
+            "ratelimit-reset": "reset",
+            "ratelimit-limit": "limit",
+            "retry-after": "retry_after",
+        }.items():
+            value = safe_headers.get(source)
+            if value is not None:
+                rate_limit[target] = value
+        self._record_usage_observation(
+            transport="rest",
+            operation=operation,
+            headers=safe_headers,
+            rate_limit=rate_limit,
+            status=status,
+        )
+
+    def _record_last_response_usage(self, operation: str) -> None:
+        headers = getattr(self.gl, "last_response_headers", None)
+        status = getattr(self.gl, "last_response_code", None)
+        self._record_rest_usage(
+            operation,
+            headers=headers,
+            status=status if isinstance(status, int) else None,
+        )
+
+    def _record_exception_usage(self, operation: str, exc: BaseException) -> None:
+        status = getattr(exc, "response_code", None)
+        self._record_rest_usage(
+            operation,
+            headers=getattr(exc, "response_headers", None),
+            status=status if isinstance(status, int) else None,
+        )
+
+    def drain_usage_observations(self) -> list[dict[str, Any]]:
+        observations = [dict(value) for value in self._usage_observations.values()]
+        if self._usage_observation_overflow:
+            observations.append(
+                {
+                    "transport": "summary",
+                    "operation": "overflow",
+                    "dropped_operation_count": self._usage_observation_overflow,
+                }
+            )
+        self._usage_observations.clear()
+        self._usage_observation_overflow = 0
+        return observations
 
     def _gated_iter(self, iterable: Any) -> Iterator[Any]:
         """Consume a python-gitlab lazy iterator with each page fetch routed
@@ -163,9 +274,11 @@ class GitLabWorkClient:
                         item = next(iterator)
                     except StopIteration:
                         return
+                self._record_last_response_usage("GET iterator page")
             except StopIteration:
                 return
             except Exception as exc:
+                self._record_exception_usage("GET iterator page", exc)
                 _maybe_raise_gitlab_rate_limit(exc)
                 raise
             yield item

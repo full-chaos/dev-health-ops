@@ -9,6 +9,7 @@ from dev_health_ops.sync.budget_types import (
     BudgetBucketKey,
     BudgetDimension,
     BudgetEstimate,
+    window_span_days,
 )
 from dev_health_ops.sync.datasets import DatasetKey
 from dev_health_ops.workers.sync_bootstrap import SyncTaskContext
@@ -43,6 +44,7 @@ class GitHubBudgetEstimator:
                 org_id=context.org_id,
                 host=host,
                 credential_fingerprint=credential_fingerprint,
+                span_days=window_span_days(context),
             )
         )
         return tuple(estimates)
@@ -55,6 +57,7 @@ def _dataset_estimates(
     org_id: str,
     host: str,
     credential_fingerprint: str,
+    span_days: int,
 ) -> tuple[BudgetEstimate, ...]:
     bucket = _bucket_factory(
         org_id=org_id,
@@ -69,17 +72,25 @@ def _dataset_estimates(
 
     if dataset_key == DatasetKey.COMMITS.value:
         return (
-            _estimate(bucket(BudgetDimension.REST_CORE), 2, _CONFIDENCE_MEDIUM, "git"),
+            _estimate(
+                bucket(BudgetDimension.REST_CORE),
+                _scaled_units(2, span_days),
+                _CONFIDENCE_MEDIUM,
+                "git",
+            ),
         )
 
     if dataset_key == DatasetKey.COMMIT_STATS.value:
         return (
             _estimate(
-                bucket(BudgetDimension.REST_CORE), 4, _CONFIDENCE_LOW, "commit_stats"
+                bucket(BudgetDimension.REST_CORE),
+                _scaled_units(4, span_days),
+                _CONFIDENCE_LOW,
+                "commit_stats",
             ),
             _estimate(
                 bucket(BudgetDimension.CONTENTS_BLOB),
-                2,
+                _scaled_units(2, span_days),
                 _CONFIDENCE_LOW,
                 "commit_stats",
                 notes=("commit-file expansion varies by commit volume",),
@@ -88,10 +99,15 @@ def _dataset_estimates(
 
     if dataset_key == DatasetKey.FILES.value:
         return (
-            _estimate(bucket(BudgetDimension.REST_CORE), 3, _CONFIDENCE_LOW, "files"),
+            _estimate(
+                bucket(BudgetDimension.REST_CORE),
+                _scaled_units(3, span_days),
+                _CONFIDENCE_LOW,
+                "files",
+            ),
             _estimate(
                 bucket(BudgetDimension.CONTENTS_BLOB),
-                5,
+                _scaled_units(5, span_days),
                 _CONFIDENCE_LOW,
                 "files",
                 notes=("repository tree/blob expansion is high variance",),
@@ -103,7 +119,7 @@ def _dataset_estimates(
             _estimate(bucket(BudgetDimension.REST_CORE), 3, _CONFIDENCE_LOW, "blame"),
             _estimate(
                 bucket(BudgetDimension.CONTENTS_BLOB),
-                8,
+                _scaled_units(8, span_days),
                 _CONFIDENCE_LOW,
                 "blame",
                 notes=("blame expansion is file-count dependent",),
@@ -116,10 +132,15 @@ def _dataset_estimates(
         DatasetKey.PR_COMMENTS.value,
     }:
         return (
-            _estimate(bucket(BudgetDimension.REST_CORE), 2, _CONFIDENCE_MEDIUM, "prs"),
+            _estimate(
+                bucket(BudgetDimension.REST_CORE),
+                _scaled_units(2, span_days),
+                _CONFIDENCE_MEDIUM,
+                "prs",
+            ),
             _estimate(
                 bucket(BudgetDimension.GRAPHQL_COST),
-                4,
+                _scaled_units(4, span_days),
                 _CONFIDENCE_MEDIUM,
                 "pr_social",
             ),
@@ -139,11 +160,14 @@ def _dataset_estimates(
     }:
         return (
             _estimate(
-                bucket(BudgetDimension.REST_CORE), 4, _CONFIDENCE_LOW, dataset_key
+                bucket(BudgetDimension.REST_CORE),
+                _scaled_units(4, span_days),
+                _CONFIDENCE_LOW,
+                dataset_key,
             ),
             _estimate(
                 bucket(BudgetDimension.CONTENTS_BLOB),
-                2,
+                _scaled_units(2, span_days),
                 _CONFIDENCE_LOW,
                 dataset_key,
                 notes=("workflow artifact expansion varies by repository activity",),
@@ -153,7 +177,10 @@ def _dataset_estimates(
     if dataset_key == DatasetKey.SECURITY.value:
         return (
             _estimate(
-                bucket(BudgetDimension.REST_CORE), 2, _CONFIDENCE_LOW, "security"
+                bucket(BudgetDimension.REST_CORE),
+                _scaled_units(2, span_days),
+                _CONFIDENCE_LOW,
+                "security",
             ),
         )
 
@@ -167,7 +194,10 @@ def _dataset_estimates(
         estimates = [
             _estimate(
                 bucket(BudgetDimension.REST_CORE),
-                2 if dataset_key == DatasetKey.WORK_ITEMS.value else 1,
+                _scaled_units(
+                    2 if dataset_key == DatasetKey.WORK_ITEMS.value else 1,
+                    span_days,
+                ),
                 _CONFIDENCE_MEDIUM,
                 "work_items",
             )
@@ -176,7 +206,7 @@ def _dataset_estimates(
             estimates.append(
                 _estimate(
                     bucket(BudgetDimension.GRAPHQL_COST),
-                    3,
+                    _scaled_units(3, span_days),
                     _CONFIDENCE_MEDIUM,
                     "work_item_prs",
                 )
@@ -225,6 +255,10 @@ def _estimate(
         route_family=route_family,
         notes=notes,
     )
+
+
+def _scaled_units(fixed_floor: int, span_days: int) -> int:
+    return max(fixed_floor, fixed_floor * max(1, span_days))
 
 
 def _host_from_credentials(credentials: object) -> str:

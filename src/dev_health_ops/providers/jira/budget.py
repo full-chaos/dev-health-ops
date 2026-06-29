@@ -10,6 +10,7 @@ from dev_health_ops.sync.budget_types import (
     BudgetBucketKey,
     BudgetDimension,
     BudgetEstimate,
+    window_span_days,
 )
 from dev_health_ops.sync.datasets import DatasetKey
 from dev_health_ops.workers.sync_bootstrap import SyncTaskContext
@@ -41,6 +42,7 @@ class JiraBudgetEstimator:
             org_id=context.org_id,
             host=host,
             credential_fingerprint=credential_fingerprint,
+            span_days=window_span_days(context),
         )
 
 
@@ -51,6 +53,7 @@ def _dataset_estimates(
     org_id: str,
     host: str,
     credential_fingerprint: str,
+    span_days: int,
 ) -> tuple[BudgetEstimate, ...]:
     bucket = _bucket_factory(
         org_id=org_id,
@@ -81,14 +84,14 @@ def _dataset_estimates(
     estimates: list[BudgetEstimate] = [
         _estimate(
             bucket(BudgetDimension.SEARCH),
-            2,
+            _scaled_units(2, span_days),
             _CONFIDENCE_MEDIUM,
             "jira_jql",
             notes=("Jira work-item listing uses REST /search/jql pagination",),
         ),
         _estimate(
             bucket(BudgetDimension.REST_CORE),
-            2,
+            _scaled_units(2, span_days),
             _CONFIDENCE_MEDIUM,
             "jira_issue_enrichment",
             notes=(
@@ -101,7 +104,7 @@ def _dataset_estimates(
         estimates.append(
             _estimate(
                 bucket(BudgetDimension.REST_CORE),
-                2,
+                _scaled_units(2, span_days),
                 _CONFIDENCE_LOW,
                 "jira_comments",
                 notes=("comment pagination is issue-activity dependent",),
@@ -112,7 +115,7 @@ def _dataset_estimates(
         estimates.append(
             _estimate(
                 bucket(BudgetDimension.REST_CORE),
-                3,
+                _scaled_units(3, span_days),
                 _CONFIDENCE_LOW,
                 "jira_worklogs",
                 notes=("JIRA_FETCH_WORKLOGS adds per-issue worklog expansion",),
@@ -123,7 +126,7 @@ def _dataset_estimates(
         estimates.append(
             _estimate(
                 bucket(BudgetDimension.GRAPHQL_COST),
-                3,
+                _scaled_units(3, span_days),
                 _CONFIDENCE_MEDIUM,
                 "jira_gql_enrichment",
                 notes=("ATLASSIAN_GQL_ENABLED routes Jira enrichment through AGG",),
@@ -163,6 +166,10 @@ def _estimate(
         route_family=route_family,
         notes=notes,
     )
+
+
+def _scaled_units(fixed_floor: int, span_days: int) -> int:
+    return max(fixed_floor, fixed_floor * max(1, span_days))
 
 
 def _flag_enabled(flags: Mapping[str, bool], *names: str) -> bool:

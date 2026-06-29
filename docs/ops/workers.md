@@ -26,6 +26,7 @@ Operators can trigger background operations on-demand through three primary API 
 1. **Data Sync Trigger**
    * **Endpoint**: `POST /api/v1/admin/sync-configs/{config_id}/trigger` (defined in `api/admin/routers/sync.py:997-1164`)
    * **Flow**: Creates a canonical `JobRun` activity row, builds a `SyncPlanRequest` from the config's migrated integration, plans a `SyncRun` (one `SyncRunUnit` per source/dataset/window), stores `sync_run_id` in `JobRun.result`, and enqueues `dispatch_sync_run` onto the `sync` queue. The integration planner is the only routing path — the legacy `run_sync_config` / `dispatch_batch_sync` in-process workers were removed in CHAOS-2647.
+     * The `source × dataset × window` decomposition and why **reference data** (teams/cycles/sprints) belongs on a once-per-run axis is documented in [Sync Unit Model](../architecture/sync-unit-model.md).
 
 2. **Historical Backfill Trigger**
    * **Endpoint**: `POST /api/v1/admin/sync-configs/{config_id}/backfill` (defined in `api/admin/routers/sync.py:1167-1233`)

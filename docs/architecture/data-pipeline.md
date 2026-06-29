@@ -291,6 +291,8 @@ Backfill depth is gated by organization billing tier:
 
 ### Composition with Incremental Sync (no date gap)
 
+> Unit decomposition and reference-data cardinality: see [Sync Unit Model](sync-unit-model.md). The work-item-family collapse writes per-dataset watermarks only for incremental/full-resync units, preserving the invariant below.
+
 Backfill **never seeds the watermark** (CHAOS-2514), so the first incremental
 sync after a backfill cold-starts. Continuity across the seam is provided by the
 incremental **cold-start depth** (CHAOS-2569): with no watermark, the planner

@@ -335,8 +335,12 @@ def run_work_items_sync_job(
 
         _sprints_data = (
             primary_sink.query_dicts(
-                "SELECT provider, sprint_id, name, state, started_at, ended_at, completed_at, last_synced, org_id FROM sprints FINAL"
-                + (" WHERE org_id = {org_id:String}" if org_id else ""),
+                "SELECT provider, sprint_id, argMax(name, last_synced) AS name, argMax(state, last_synced) AS state, "
+                "argMax(started_at, last_synced) AS started_at, argMax(ended_at, last_synced) AS ended_at, "
+                "argMax(completed_at, last_synced) AS completed_at, max(last_synced) AS last_synced, "
+                "org_id FROM sprints"
+                + (" WHERE org_id = {org_id:String}" if org_id else "")
+                + " GROUP BY provider, sprint_id, org_id",
                 {"org_id": org_id} if org_id else {},
             )
             if hasattr(primary_sink, "query_dicts")
@@ -544,6 +548,13 @@ def run_work_items_sync_job(
             from dev_health_ops.providers.base import IngestionContext, IngestionWindow
             from dev_health_ops.providers.linear.provider import LinearProvider
 
+            linear_repo_name = repo_name.strip() if repo_name else None
+            if repo_name is not None and not linear_repo_name:
+                logger.error("Linear work-item sync received an empty source context")
+                raise ValueError(
+                    "Linear work-item sync requires a non-empty source team key"
+                )
+
             linear_provider = LinearProvider(
                 status_mapping=status_mapping,
                 identity=identity,
@@ -553,7 +564,7 @@ def run_work_items_sync_job(
             )
             ctx = IngestionContext(
                 window=IngestionWindow(updated_since=since_dt, active_until=until_dt),
-                repo=None,
+                repo=linear_repo_name,
                 org_id=uuid.UUID(org_id) if org_id else None,
                 reference_teams=_teams_data,
                 reference_sprints=reference_sprints,

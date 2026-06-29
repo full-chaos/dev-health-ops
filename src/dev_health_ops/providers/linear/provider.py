@@ -6,10 +6,9 @@ This wraps the Linear client and normalization logic for work item ingestion.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Iterable, Sequence
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from dev_health_ops.models.work_items import (
@@ -61,7 +60,11 @@ def _linear_reference_team(row: Any, team_key: str) -> dict[str, Any] | None:
     }
 
 
-def _linear_sprints_from_reference(rows: Sequence[Sprint] | None) -> list[Sprint]:
+def _linear_sprints_from_reference(
+    rows: Sequence[Sprint] | None, *, team_key: str | None, scope: str | None
+) -> list[Sprint]:
+    if not team_key or scope != team_key:
+        return []
     return [sprint for sprint in rows or [] if sprint.provider == "linear"]
 
 
@@ -154,11 +157,6 @@ class LinearProvider(ProviderWithClient[LinearClient]):
         fetch_history = _env_flag("LINEAR_FETCH_HISTORY", True)
         fetch_cycles = _env_flag("LINEAR_FETCH_CYCLES", True)
 
-        cycle_cache: dict[str, Sprint] = {
-            sprint.sprint_id: sprint
-            for sprint in _linear_sprints_from_reference(ctx.reference_sprints)
-        }
-
         updated_after: datetime | None = None
         if ctx.window.updated_since:
             updated_after = _to_utc(ctx.window.updated_since)
@@ -168,17 +166,27 @@ class LinearProvider(ProviderWithClient[LinearClient]):
 
         yielded_batch = False
         team_key = ctx.repo
+        cycle_cache: dict[str, Sprint] = {
+            sprint.sprint_id: sprint
+            for sprint in _linear_sprints_from_reference(
+                ctx.reference_sprints,
+                team_key=team_key,
+                scope=ctx.reference_sprints_scope,
+            )
+        }
         teams_to_sync: list[dict] = []
 
         if team_key:
+            api_team: dict[str, Any] | None = None
             for row in ctx.reference_teams or []:
                 team = _linear_reference_team(row, team_key)
                 if team:
                     teams_to_sync.append(team)
                     break
             if not teams_to_sync:
-                team = client.get_team_by_key(team_key)
-                if not isinstance(team, dict) or not team:
+                api_team = client.get_team_by_key(team_key)
+                team = api_team
+                if not isinstance(api_team, dict) or not api_team:
                     if ctx.reference_teams is None:
                         for legacy_team in client.iter_teams():
                             if (
@@ -189,38 +197,13 @@ class LinearProvider(ProviderWithClient[LinearClient]):
                                 break
                     if not isinstance(team, dict) or not team:
                         raise ValueError(f"Linear team '{team_key}' not found")
-                teams_to_sync.append(team)
-                sink = ctx.reference_sink
-                if sink is not None:
-                    persisted_team = team
-
-                    async def _persist_team() -> None:
-                        await sink.insert_teams(
-                            [
-                                {
-                                    "id": persisted_team.get("key") or team_key,
-                                    "name": persisted_team.get("name") or team_key,
-                                    "description": persisted_team.get("description"),
-                                    "members": [],
-                                    "project_keys": [
-                                        persisted_team.get("key") or team_key
-                                    ],
-                                    "repo_patterns": [],
-                                    "is_active": True,
-                                    "updated_at": datetime.now(timezone.utc),
-                                    "org_id": str(ctx.org_id or ""),
-                                    "provider": "linear",
-                                    "native_team_key": persisted_team.get("key")
-                                    or team_key,
-                                    "parent_team_id": None,
-                                }
-                            ]
-                        )
-
-                    asyncio.run(_persist_team())
+                assert isinstance(team, dict)
+                resolved_team: dict[str, Any] = team
+                teams_to_sync.append(resolved_team)
             if not cycle_cache and fetch_cycles:
                 fetched_sprints = []
-                api_team = client.get_team_by_key(team_key)
+                if api_team is None and teams_to_sync:
+                    api_team = teams_to_sync[0]
                 if api_team and api_team.get("id"):
                     for cycle in client.iter_cycles(team_id=str(api_team["id"])):
                         sprint = linear_cycle_to_sprint(cycle)

@@ -100,6 +100,7 @@ class IngestionContext:
     )
     reference_teams: Sequence[dict[str, Any]] | None = None
     reference_sprints: Sequence[Sprint] | None = None
+    reference_sprints_scope: str | None = None
     reference_sink: Any | None = None
 
 

@@ -119,9 +119,15 @@ def discover_repos(
     try:
         query = "SELECT id, repo, settings, provider FROM repos"
         params: dict[str, str] = {}
+        filters: list[str] = []
         if org_id:
-            query += " WHERE org_id = {org_id:String}"
+            filters.append("org_id = {org_id:String}")
             params["org_id"] = org_id
+        if repo_name:
+            filters.append("repo = {repo_name:String}")
+            params["repo_name"] = repo_name
+        if filters:
+            query += " WHERE " + " AND ".join(filters)
         rows = primary_sink.client.query(query, parameters=params).result_rows
         return [
             DiscoveredRepo(

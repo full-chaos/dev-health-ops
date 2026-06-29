@@ -66,6 +66,31 @@ def test_discover_repos_sets_source_from_provider():
     assert result_db[1].source == "github"
 
 
+def test_discover_repos_filters_by_repo_name_when_no_repo_id():
+    from dev_health_ops.metrics.job_daily import discover_repos
+
+    db_repo_id = uuid.uuid4()
+    mock_sink = SimpleNamespace(client=MagicMock())
+    mock_sink.client.query.return_value = SimpleNamespace(
+        result_rows=[(str(db_repo_id), "org/scoped-repo", {}, "github")]
+    )
+
+    repos = discover_repos(
+        backend="clickhouse",
+        primary_sink=mock_sink,
+        repo_name="org/scoped-repo",
+        org_id="org-1",
+        provider="github",
+    )
+
+    assert [repo.full_name for repo in repos] == ["org/scoped-repo"]
+    mock_sink.client.query.assert_called_once_with(
+        "SELECT id, repo, settings, provider FROM repos "
+        "WHERE org_id = {org_id:String} AND repo = {repo_name:String}",
+        parameters={"org_id": "org-1", "repo_name": "org/scoped-repo"},
+    )
+
+
 class TestSourceFilteringInWorkItemFetchers:
     """Verify that work-item fetcher functions correctly filter repos by source.
 

@@ -250,6 +250,20 @@ def test_work_item_derivative_dataset_uses_same_work_item_path() -> None:
     assert work_items.call_args.kwargs["jira_project_keys"] == ["ENG"]
 
 
+def test_linear_work_item_unit_threads_team_key_as_repo_scope() -> None:
+    ctx = _context(
+        provider="linear", dataset_key="work-items", source_external_id="ENG"
+    )
+
+    with patch(
+        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job"
+    ) as work_items:
+        run_dataset_unit(ctx, _runtime())
+
+    work_items.assert_called_once()
+    assert work_items.call_args.kwargs["repo_name"] == "ENG"
+
+
 def test_gitlab_feature_flags_route_to_existing_feature_flag_sync() -> None:
     ctx = _context(
         provider="gitlab",

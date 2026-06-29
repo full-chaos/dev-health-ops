@@ -526,7 +526,7 @@ def run_work_items_sync_job(
             )
             ctx = IngestionContext(
                 window=IngestionWindow(updated_since=since_dt, active_until=until_dt),
-                repo=None,
+                repo=repo_name,
                 org_id=uuid.UUID(org_id) if org_id else None,
             )
             fetched_items = 0

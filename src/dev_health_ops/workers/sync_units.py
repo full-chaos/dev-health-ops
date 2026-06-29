@@ -1453,16 +1453,23 @@ def sync_observers_for_terminal_sync_run(session, run: SyncRun) -> None:
     completed_at = run.completed_at or datetime.now(timezone.utc)
     run.completed_at = completed_at
     success = run.status == SyncRunStatus.SUCCESS.value
+    run_result = run.result if isinstance(run.result, dict) else {}
+    cancelled = bool(run_result.get("cancelled"))
     job_run_status = (
-        JobRunStatus.SUCCESS.value if success else JobRunStatus.FAILED.value
+        JobRunStatus.SUCCESS.value
+        if success
+        else JobRunStatus.CANCELLED.value
+        if cancelled
+        else JobRunStatus.FAILED.value
     )
-    backfill_status = "completed" if success else "failed"
+    backfill_status = "completed" if success else "cancelled" if cancelled else "failed"
     error = None if success else (run.error or "Sync run completed with failed units")
     result_patch = {
         "sync_run_status": run.status,
         "total_units": int(run.total_units or 0),
         "completed_units": int(run.completed_units or 0),
         "failed_units": int(run.failed_units or 0),
+        **({"cancelled": True} if cancelled else {}),
     }
 
     marker = f"sync_run:{run.id}"

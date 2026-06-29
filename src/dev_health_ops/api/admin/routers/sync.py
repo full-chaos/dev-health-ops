@@ -44,6 +44,12 @@ from dev_health_ops.models.settings import (
     ScheduledJob,
     SyncConfiguration,
 )
+from dev_health_ops.sync.cancellation import (
+    SyncCancellationResult,
+    cancel_sync_run,
+    cancel_sync_run_for_backfill_job,
+    cancel_sync_run_for_job_run,
+)
 from dev_health_ops.sync.datasets import supported_datasets, supported_legacy_targets
 from dev_health_ops.sync.execution_trigger import (
     create_sync_execution_trigger,
@@ -283,6 +289,17 @@ def _planner_job_run_status(run_status: str) -> int:
     return JobRunStatus.RUNNING.value
 
 
+def _cancellation_response(result: SyncCancellationResult) -> dict[str, Any]:
+    return {
+        "status": result.status,
+        "sync_run_id": result.sync_run_id,
+        "cancelled_units": result.cancelled_units,
+        "cleared_outbox_rows": result.cleared_outbox_rows,
+        "cancelled_job_runs": result.cancelled_job_runs,
+        "cancelled_backfill_jobs": result.cancelled_backfill_jobs,
+    }
+
+
 async def _planner_sync_runs_for_job_runs(
     session: AsyncSession, runs: Sequence[object], org_id: str
 ) -> dict[str, SyncRun]:
@@ -328,6 +345,11 @@ def _job_run_response(
             "failed_units": int(getattr(planner_sync_run, "failed_units")),
         }
         status_value = _planner_job_run_status(str(getattr(planner_sync_run, "status")))
+        sync_cancelled = bool(
+            isinstance(sync_result, dict) and sync_result.get("cancelled")
+        )
+        if sync_cancelled:
+            status_value = JobRunStatus.CANCELLED.value
         started_at = getattr(planner_sync_run, "started_at")
         completed_at = getattr(planner_sync_run, "completed_at")
         duration_seconds = _elapsed_seconds(started_at, completed_at)
@@ -1810,6 +1832,51 @@ async def trigger_sync_config_backfill(
         raise HTTPException(status_code=503, detail=f"Task queue unavailable: {e}")
 
 
+@router.post("/sync-runs/{sync_run_id}/cancel", status_code=202)
+async def cancel_sync_run_endpoint(
+    sync_run_id: str,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+) -> dict[str, Any]:
+    result = await session.run_sync(
+        lambda sync_session: cancel_sync_run(
+            sync_session,
+            sync_run_id,
+            org_id=org_id,
+            reason="cancelled by operator",
+        )
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Sync run not found")
+    await session.commit()
+    return _cancellation_response(result)
+
+
+@router.post("/sync-configs/{config_id}/jobs/{run_id}/cancel", status_code=202)
+async def cancel_sync_config_job_run(
+    config_id: str,
+    run_id: str,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+) -> dict[str, Any]:
+    svc = SyncConfigurationService(session, org_id)
+    existing = await svc.get_by_id(config_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Sync configuration not found")
+    result = await session.run_sync(
+        lambda sync_session: cancel_sync_run_for_job_run(
+            sync_session,
+            run_id,
+            org_id=org_id,
+            reason="cancelled by operator",
+        )
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Sync job run not found")
+    await session.commit()
+    return _cancellation_response(result)
+
+
 @router.get("/sync-configs/{config_id}/jobs", response_model=list[JobRunResponse])
 async def list_sync_config_jobs(
     config_id: str,
@@ -1896,3 +1963,23 @@ async def get_backfill_job(
         raise HTTPException(status_code=404, detail="Backfill job not found")
     run_counts = await _backfill_job_run_counts(session, job)
     return _backfill_job_response(job, run_counts)
+
+
+@router.post("/backfill-jobs/{job_id}/cancel", status_code=202)
+async def cancel_backfill_job(
+    job_id: str,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+) -> dict[str, Any]:
+    result = await session.run_sync(
+        lambda sync_session: cancel_sync_run_for_backfill_job(
+            sync_session,
+            job_id,
+            org_id=org_id,
+            reason="cancelled by operator",
+        )
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Backfill job not found")
+    await session.commit()
+    return _cancellation_response(result)

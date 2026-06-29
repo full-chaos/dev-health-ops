@@ -134,7 +134,11 @@ class JiraProvider(ProviderWithClient[JiraClient]):
                     "Invalid JIRA_COMMENTS_LIMIT value %r; falling back to 0",
                     raw_comments_limit,
                 )
-        sprint_cache: dict[str, Sprint] = {}
+        sprint_cache: dict[str, Sprint] = {
+            sprint.sprint_id: sprint
+            for sprint in ctx.reference_sprints or []
+            if sprint.provider == "jira"
+        }
         sprint_ids: set[str] = set()
 
         # Build time window parameters
@@ -242,17 +246,17 @@ class JiraProvider(ProviderWithClient[JiraClient]):
                             )
 
                     if wi.sprint_id:
-                        if wi.sprint_id not in sprint_cache:
-                            sprint_ids.add(wi.sprint_id)
+                        sprint_ids.add(wi.sprint_id)
 
                     fetched_count += 1
 
                 if ctx.limit is not None and fetched_count >= ctx.limit:
                     break
 
-            # Fetch sprint details
+            fetched_sprints: list[Sprint] = []
             for sprint_id in sorted(sprint_ids):
                 if sprint_id in sprint_cache:
+                    sprints.append(sprint_cache[sprint_id])
                     continue
                 try:
                     payload = client.get_sprint(sprint_id=str(sprint_id))
@@ -265,6 +269,9 @@ class JiraProvider(ProviderWithClient[JiraClient]):
                 if sprint:
                     sprint_cache[sprint_id] = sprint
                     sprints.append(sprint)
+                    fetched_sprints.append(sprint)
+            if ctx.reference_sink is not None and fetched_sprints:
+                ctx.reference_sink.write_sprints(fetched_sprints)
 
             logger.info(
                 "Jira: fetched %d work items (updated_since=%s)",
@@ -366,7 +373,11 @@ class JiraProvider(ProviderWithClient[JiraClient]):
         work_items: list[WorkItem] = []
         transitions: list[WorkItemStatusTransition] = []
         reopen_events: list[WorkItemReopenEvent] = []
-        sprints: list[Sprint] = []
+        sprints: list[Sprint] = [
+            sprint
+            for sprint in ctx.reference_sprints or []
+            if sprint.provider == "jira"
+        ]
         worklogs: list[Worklog] = []
         sprint_ids: set[str] = set()
 
@@ -515,8 +526,9 @@ class JiraProvider(ProviderWithClient[JiraClient]):
                 if ctx.limit is not None and fetched_count >= ctx.limit:
                     break
 
-            if _env_flag("JIRA_FETCH_BOARD_SPRINTS", False):
+            if _env_flag("JIRA_FETCH_BOARD_SPRINTS", False) and not sprints:
                 try:
+                    fetched_sprints: list[Sprint] = []
                     for board in iter_boards_via_rest(client):
                         logger.debug(
                             "Jira: fetching sprints for board %s (%s)",
@@ -526,7 +538,12 @@ class JiraProvider(ProviderWithClient[JiraClient]):
                         for sprint in iter_board_sprints_via_rest(
                             client, board_id=int(board.id)
                         ):
-                            sprints.append(canonical_sprint_to_model(sprint=sprint))
+                            fetched_sprints.append(
+                                canonical_sprint_to_model(sprint=sprint)
+                            )
+                    sprints.extend(fetched_sprints)
+                    if ctx.reference_sink is not None and fetched_sprints:
+                        ctx.reference_sink.write_sprints(fetched_sprints)
                 except Exception as exc:
                     logger.warning("Jira: failed to fetch board sprints: %s", exc)
 

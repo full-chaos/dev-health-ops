@@ -323,7 +323,7 @@ def run_work_items_sync_job(
 
         _teams_data = (
             primary_sink.query_dicts(
-                "SELECT id, name, project_keys FROM teams FINAL"
+                "SELECT id, name, project_keys, provider, native_team_key FROM teams FINAL"
                 + (" WHERE org_id = {org_id:String}" if org_id else ""),
                 {"org_id": org_id} if org_id else {},
             )
@@ -331,6 +331,31 @@ def run_work_items_sync_job(
             else []
         )
         pk_resolver = build_project_key_resolver(_teams_data)
+        from dev_health_ops.models.work_items import Sprint
+
+        _sprints_data = (
+            primary_sink.query_dicts(
+                "SELECT provider, sprint_id, name, state, started_at, ended_at, completed_at, last_synced, org_id FROM sprints FINAL"
+                + (" WHERE org_id = {org_id:String}" if org_id else ""),
+                {"org_id": org_id} if org_id else {},
+            )
+            if hasattr(primary_sink, "query_dicts")
+            else []
+        )
+        reference_sprints = [
+            Sprint(
+                provider=row["provider"],
+                sprint_id=row["sprint_id"],
+                name=row.get("name"),
+                state=row.get("state"),
+                started_at=row.get("started_at"),
+                ended_at=row.get("ended_at"),
+                completed_at=row.get("completed_at"),
+                last_synced=row.get("last_synced") or computed_at,
+                org_id=str(row.get("org_id") or ""),
+            )
+            for row in _sprints_data
+        ]
 
         discovered_repos = _discover_repos(
             backend=backend,
@@ -399,6 +424,8 @@ def run_work_items_sync_job(
                 jql_override=jira_jql,
                 fetch_all=jira_fetch_all,
                 use_env_query_options=not bool(org_id or credentials),
+                reference_sprints=reference_sprints,
+                reference_sink=primary_sink,
             )
             work_items.extend(items)
             transitions.extend(tr)
@@ -528,6 +555,9 @@ def run_work_items_sync_job(
                 window=IngestionWindow(updated_since=since_dt, active_until=until_dt),
                 repo=None,
                 org_id=uuid.UUID(org_id) if org_id else None,
+                reference_teams=_teams_data,
+                reference_sprints=reference_sprints,
+                reference_sink=primary_sink,
             )
             fetched_items = 0
             fetched_transitions = 0

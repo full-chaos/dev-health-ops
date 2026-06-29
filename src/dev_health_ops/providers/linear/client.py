@@ -197,6 +197,22 @@ query Teams($first: Int!, $after: String) {
 }
 """
 
+TEAM_BY_KEY_QUERY = """
+query TeamByKey($first: Int!, $filter: TeamFilter) {
+  teams(first: $first, filter: $filter) {
+    nodes {
+      id
+      key
+      name
+      description
+      createdAt
+      updatedAt
+      timezone
+    }
+  }
+}
+"""
+
 TEAM_MEMBERS_QUERY = """
 query TeamMembers($teamId: String!, $first: Int!, $after: String) {
   team(id: $teamId) {
@@ -691,6 +707,18 @@ class LinearClient:
             if not page_info.get("hasNextPage"):
                 break
             cursor = page_info.get("endCursor")
+
+    def get_team_by_key(self, team_key: str) -> dict[str, Any] | None:
+        variables = {
+            "first": 2,
+            "filter": {"key": {"eq": team_key}},
+        }
+        data = self._execute(TEAM_BY_KEY_QUERY, variables)
+        nodes = (data.get("teams") or {}).get("nodes") or []
+        for node in nodes:
+            if node.get("key") == team_key or node.get("name") == team_key:
+                return node
+        return None
 
     def get_team_members(
         self,

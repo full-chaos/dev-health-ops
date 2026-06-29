@@ -6,9 +6,11 @@ This wraps the Linear client and normalization logic for work item ingestion.
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from collections.abc import Iterable
-from datetime import datetime
+from collections.abc import Iterable, Sequence
+from datetime import datetime, timezone
+from typing import Any
 
 from dev_health_ops.models.work_items import (
     Sprint,
@@ -29,6 +31,38 @@ from dev_health_ops.providers.normalize_common import to_utc as _to_utc
 from dev_health_ops.providers.utils import env_flag as _env_flag
 
 logger = logging.getLogger(__name__)
+
+
+def _row_value(row: Any, key: str, default: Any = None) -> Any:
+    return (
+        row.get(key, default) if isinstance(row, dict) else getattr(row, key, default)
+    )
+
+
+def _linear_reference_team(row: Any, team_key: str) -> dict[str, Any] | None:
+    row_provider = str(_row_value(row, "provider", "") or "")
+    if row_provider and row_provider != "linear":
+        return None
+    row_id = str(_row_value(row, "id", "") or "").strip()
+    row_name = str(_row_value(row, "name", "") or "").strip()
+    native_key = str(_row_value(row, "native_team_key", "") or "").strip()
+    project_keys = [
+        str(key).strip() for key in (_row_value(row, "project_keys", []) or [])
+    ]
+    candidates = {
+        value for value in [row_id, row_name, native_key, *project_keys] if value
+    }
+    if team_key not in candidates:
+        return None
+    return {
+        "id": row_id or team_key,
+        "key": native_key or team_key,
+        "name": row_name or team_key,
+    }
+
+
+def _linear_sprints_from_reference(rows: Sequence[Sprint] | None) -> list[Sprint]:
+    return [sprint for sprint in rows or [] if sprint.provider == "linear"]
 
 
 class LinearProvider(ProviderWithClient[LinearClient]):
@@ -120,7 +154,10 @@ class LinearProvider(ProviderWithClient[LinearClient]):
         fetch_history = _env_flag("LINEAR_FETCH_HISTORY", True)
         fetch_cycles = _env_flag("LINEAR_FETCH_CYCLES", True)
 
-        cycle_cache: dict[str, Sprint] = {}
+        cycle_cache: dict[str, Sprint] = {
+            sprint.sprint_id: sprint
+            for sprint in _linear_sprints_from_reference(ctx.reference_sprints)
+        }
 
         updated_after: datetime | None = None
         if ctx.window.updated_since:
@@ -129,22 +166,100 @@ class LinearProvider(ProviderWithClient[LinearClient]):
         if ctx.window.active_until:
             updated_before = _to_utc(ctx.window.active_until)
 
+        yielded_batch = False
         team_key = ctx.repo
         teams_to_sync: list[dict] = []
 
         if team_key:
-            all_teams = list(client.iter_teams())
-            for team in all_teams:
-                if team.get("key") == team_key or team.get("name") == team_key:
+            for row in ctx.reference_teams or []:
+                team = _linear_reference_team(row, team_key)
+                if team:
                     teams_to_sync.append(team)
                     break
             if not teams_to_sync:
-                raise ValueError(
-                    f"Linear team '{team_key}' not found. "
-                    f"Available teams: {[t.get('key') for t in all_teams]}"
-                )
+                team = client.get_team_by_key(team_key)
+                if not isinstance(team, dict) or not team:
+                    if ctx.reference_teams is None:
+                        for legacy_team in client.iter_teams():
+                            if (
+                                legacy_team.get("key") == team_key
+                                or legacy_team.get("name") == team_key
+                            ):
+                                team = legacy_team
+                                break
+                    if not isinstance(team, dict) or not team:
+                        raise ValueError(f"Linear team '{team_key}' not found")
+                teams_to_sync.append(team)
+                sink = ctx.reference_sink
+                if sink is not None:
+                    persisted_team = team
+
+                    async def _persist_team() -> None:
+                        await sink.insert_teams(
+                            [
+                                {
+                                    "id": persisted_team.get("key") or team_key,
+                                    "name": persisted_team.get("name") or team_key,
+                                    "description": persisted_team.get("description"),
+                                    "members": [],
+                                    "project_keys": [
+                                        persisted_team.get("key") or team_key
+                                    ],
+                                    "repo_patterns": [],
+                                    "is_active": True,
+                                    "updated_at": datetime.now(timezone.utc),
+                                    "org_id": str(ctx.org_id or ""),
+                                    "provider": "linear",
+                                    "native_team_key": persisted_team.get("key")
+                                    or team_key,
+                                    "parent_team_id": None,
+                                }
+                            ]
+                        )
+
+                    asyncio.run(_persist_team())
+            if not cycle_cache and fetch_cycles:
+                fetched_sprints = []
+                api_team = client.get_team_by_key(team_key)
+                if api_team and api_team.get("id"):
+                    for cycle in client.iter_cycles(team_id=str(api_team["id"])):
+                        sprint = linear_cycle_to_sprint(cycle)
+                        cycle_cache[sprint.sprint_id] = sprint
+                        fetched_sprints.append(sprint)
+                if fetched_sprints and ctx.reference_sink is not None:
+                    ctx.reference_sink.write_sprints(
+                        [
+                            Sprint(
+                                provider=sprint.provider,
+                                sprint_id=sprint.sprint_id,
+                                name=sprint.name,
+                                state=sprint.state,
+                                started_at=sprint.started_at,
+                                ended_at=sprint.ended_at,
+                                completed_at=sprint.completed_at,
+                                last_synced=sprint.last_synced,
+                                org_id=str(ctx.org_id or ""),
+                            )
+                            for sprint in fetched_sprints
+                        ]
+                    )
         else:
             teams_to_sync = list(client.iter_teams())
+            if fetch_cycles:
+                for team in teams_to_sync:
+                    team_id = team.get("id")
+                    if not team_id:
+                        continue
+                    for cycle in client.iter_cycles(team_id=team_id):
+                        sprint = linear_cycle_to_sprint(cycle)
+                        cycle_cache.setdefault(sprint.sprint_id, sprint)
+                if cycle_cache:
+                    yield ProviderBatch(sprints=list(cycle_cache.values()))
+                    yielded_batch = True
+
+        if team_key and cycle_cache:
+            yield ProviderBatch(sprints=list(cycle_cache.values()))
+            yielded_batch = True
 
         logger.info(
             "Linear: syncing %d team(s) (updated_after=%s)",
@@ -155,7 +270,6 @@ class LinearProvider(ProviderWithClient[LinearClient]):
         fetched_count = 0
         fetched_transitions = 0
         fetched_interactions = 0
-        yielded_batch = False
 
         for team in teams_to_sync:
             team_id = team.get("id")
@@ -165,25 +279,6 @@ class LinearProvider(ProviderWithClient[LinearClient]):
                 continue
 
             logger.info("Linear: fetching issues for team %s", team_key_str)
-
-            batch_sprints: list[Sprint] = []
-            if fetch_cycles:
-                try:
-                    for cycle in client.iter_cycles(team_id=team_id):
-                        sprint = linear_cycle_to_sprint(cycle)
-                        if sprint.sprint_id not in cycle_cache:
-                            cycle_cache[sprint.sprint_id] = sprint
-                            batch_sprints.append(sprint)
-                except Exception as exc:
-                    logger.warning(
-                        "Linear: failed to fetch cycles for team %s: %s",
-                        team_key_str,
-                        exc,
-                    )
-
-            if batch_sprints:
-                yield ProviderBatch(sprints=batch_sprints)
-                yielded_batch = True
 
             try:
                 pages_seen = False

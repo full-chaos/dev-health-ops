@@ -143,7 +143,9 @@ def db_session():
     engine.dispose()
 
 
-def _seed_linear_run(session: Session) -> tuple[SyncRun, SyncRunUnit]:
+def _seed_linear_run(
+    session: Session, before_at: datetime = WIDE_END
+) -> tuple[SyncRun, SyncRunUnit]:
     org_id = str(uuid.uuid4())
     integration = Integration(
         org_id=org_id,
@@ -187,7 +189,7 @@ def _seed_linear_run(session: Session) -> tuple[SyncRun, SyncRunUnit]:
         cost_class="high",
         mode=SyncRunMode.BACKFILL.value,
         since_at=NARROW_START,
-        before_at=WIDE_END,
+        before_at=before_at,
         status=SyncRunUnitStatus.PLANNED.value,
         attempts=0,
         processor_flags={},
@@ -222,6 +224,25 @@ def test_linear_backfill_budget_guard_defers_wide_window_unit(
     )
     assert issue_observation["estimated_units"] > 500
     assert issue_observation["bucket"]["provider"] == "linear"
+
+
+def test_linear_incremental_narrow_window_not_deferred(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY", "secret-linear-token")
+    monkeypatch.setenv(
+        "SYNC_BUDGET_BUCKET_LIMITS", json.dumps({"linear:graphql_cost": 500})
+    )
+    monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_SECONDS", "60")
+    monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
+    run, unit = _seed_linear_run(db_session, before_at=NARROW_END)
+
+    result = BudgetGuard.enforce_run(db_session, str(run.id))
+
+    db_session.refresh(unit)
+    assert result.deferred_unit_ids == frozenset()
+    assert unit.status == SyncRunUnitStatus.PLANNED.value
 
 
 def test_jira_usage_observation_captures_rate_headers_without_tokens() -> None:

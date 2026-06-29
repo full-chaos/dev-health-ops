@@ -199,7 +199,7 @@ def _dataset_estimates(
             ),
             _estimate(
                 bucket(BudgetDimension.REST_CORE),
-                4,
+                _scaled_units(4, span_days),
                 _CONFIDENCE_MEDIUM,
                 "issues",
                 notes=("issue iterator and per-issue events are pagination-heavy",),

@@ -243,18 +243,18 @@ class JiraClient:
     ) -> None:
         safe_headers = _diagnostic_headers(headers or {})
         rate_limit: dict[str, Any] = {}
-        for source, target in {
-            "x-ratelimit-remaining": "remaining",
-            "ratelimit-remaining": "remaining",
-            "x-ratelimit-reset": "reset",
-            "ratelimit-reset": "reset",
-            "x-ratelimit-limit": "limit",
-            "ratelimit-limit": "limit",
-            "retry-after": "retry_after",
-        }.items():
+        for source, target in [
+            ("x-ratelimit-remaining", "remaining"),
+            ("x-ratelimit-reset", "reset"),
+            ("x-ratelimit-limit", "limit"),
+            ("ratelimit-remaining", "remaining"),
+            ("ratelimit-reset", "reset"),
+            ("ratelimit-limit", "limit"),
+            ("retry-after", "retry_after"),
+        ]:
             value = safe_headers.get(source)
             if value is not None:
-                rate_limit[target] = value
+                rate_limit.setdefault(target, value)
         self._record_usage_observation(
             transport="rest",
             operation=operation,

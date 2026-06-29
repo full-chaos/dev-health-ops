@@ -63,4 +63,8 @@ def window_span_days(context: SyncTaskContext) -> int:
     end = context.window_end
     if not isinstance(start, datetime) or not isinstance(end, datetime):
         return 1
-    return max(1, (end - start).days)
+    try:
+        days = (end - start).days
+    except TypeError:
+        return 1
+    return max(1, days)

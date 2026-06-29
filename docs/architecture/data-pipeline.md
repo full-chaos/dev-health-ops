@@ -227,7 +227,7 @@ Historical backfill reuses the same data pipeline (Connectors -> Processors -> S
 
 ### How It Works
 
-1. **Date range splitting** -- The `BackfillChunker` divides the requested date range into bounded windows. Non-Linear providers use the default 7-day window. Linear work-item-family backfills use a tighter `LINEAR_BACKFILL_MAX_WINDOW_DAYS` (default `3`) window so a single chunk stays inside the lease/heartbeat budget and avoids soft-timeouts on large ranges.
+1. **Date range splitting** -- The `BackfillChunker` divides the requested date range into bounded windows. Non-Linear providers use the default 7-day window. Linear work-item-family backfills use `LINEAR_BACKFILL_MAX_WINDOW_DAYS` (default `14`); CHAOS-2717 bounds each window's issue crawl to its own slice (`updatedAt` gte/lte), so the size balances a single unit's lease/soft-timeout budget against per-hour request volume (smaller windows re-multiply per-window teams/cycles fetches toward Linear's rate limit).
 2. **Sequential processing** -- Each chunk runs through the standard sync pipeline independently
 3. **Progress tracking** -- A `BackfillJob` record in PostgreSQL tracks chunk completion and overall progress
 
@@ -238,7 +238,7 @@ Historical backfill reuses the same data pipeline (Connectors -> Processors -> S
 | Trigger | Scheduled / manual | Manual or API-triggered |
 | Date range | From watermark to now | Explicit `--since` / `--before` |
 | Watermarks | Updates SyncWatermarks | **Never** updates watermarks |
-| Chunking | Single pass | Bounded windows (7d default; Linear work-item families use `LINEAR_BACKFILL_MAX_WINDOW_DAYS`, default `3`) |
+| Chunking | Single pass | Bounded windows (7d default; Linear work-item families use `LINEAR_BACKFILL_MAX_WINDOW_DAYS`, default `14`) |
 | Progress | Job run status only | Per-chunk progress via BackfillJob |
 | Queue | `sync` | `sync` fan-out (`dispatch_sync_run` → `run_sync_unit` → `finalize_sync_run`; the dedicated `backfill` queue was retired in CHAOS-2647) |
 

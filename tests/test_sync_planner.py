@@ -1089,8 +1089,8 @@ def test_work_item_labels_and_projects_are_incremental_behavior(db_session):
 def test_linear_work_item_backfill_produces_bounded_windows(db_session, monkeypatch):
     """Large Linear work-item backfill is split into windows <= LINEAR_BACKFILL_MAX_WINDOW_DAYS.
 
-    A 30-day range with the default 3-day max must produce 10 chunks, each at most
-    3 days wide. Non-Linear providers with the same range keep the 7-day default.
+    A 90-day range with the default 14-day max must produce 7 chunks, each at most
+    14 days wide. Non-Linear providers with the same range keep the 7-day default.
     """
     monkeypatch.delenv("LINEAR_BACKFILL_MAX_WINDOW_DAYS", raising=False)
 
@@ -1100,7 +1100,7 @@ def test_linear_work_item_backfill_produces_bounded_windows(db_session, monkeypa
     )
     _create_dataset(db_session, integration, "work-items")
 
-    since = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    since = datetime(2026, 3, 2, tzinfo=timezone.utc)
     before = datetime(2026, 5, 30, 23, 59, 59, tzinfo=timezone.utc)
 
     plan = plan_sync_run(
@@ -1116,12 +1116,12 @@ def test_linear_work_item_backfill_produces_bounded_windows(db_session, monkeypa
     )
 
     units = _planned_units(db_session, plan.sync_run_id)
-    assert len(units) > 0
+    assert len(units) == 7, f"expected 7 fortnightly chunks, got {len(units)}"
     for unit in units:
         assert unit.since_at is not None
         assert unit.before_at is not None
         window_days = (unit.before_at.date() - unit.since_at.date()).days + 1
-        assert window_days <= 3, (
+        assert window_days <= 14, (
             f"Linear work-item backfill window too wide: {window_days} days"
             f" (since={unit.since_at.date()}, before={unit.before_at.date()})"
         )

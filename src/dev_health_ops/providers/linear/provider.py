@@ -125,6 +125,9 @@ class LinearProvider(ProviderWithClient[LinearClient]):
         updated_after: datetime | None = None
         if ctx.window.updated_since:
             updated_after = _to_utc(ctx.window.updated_since)
+        updated_before: datetime | None = None
+        if ctx.window.active_until:
+            updated_before = _to_utc(ctx.window.active_until)
 
         team_key = ctx.repo
         teams_to_sync: list[dict] = []
@@ -187,6 +190,7 @@ class LinearProvider(ProviderWithClient[LinearClient]):
                 for issues_page in client.iter_issues_pages(
                     team_keys=[team_key_str] if team_key_str else None,
                     updated_after=updated_after,
+                    updated_before=updated_before,
                 ):
                     pages_seen = True
                     page_items: list[WorkItem] = []
@@ -266,6 +270,7 @@ class LinearProvider(ProviderWithClient[LinearClient]):
                         client.iter_issues(
                             team_keys=[team_key_str] if team_key_str else None,
                             updated_after=updated_after,
+                            updated_before=updated_before,
                             limit=ctx.limit,
                         )
                     )

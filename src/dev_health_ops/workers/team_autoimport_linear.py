@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 from collections.abc import Coroutine, Sequence
+from dataclasses import replace
 from datetime import datetime, timezone
 from threading import Thread
 from typing import Any, Protocol, TypeVar, cast
@@ -28,7 +29,10 @@ from dev_health_ops.metrics.schemas import (
     TeamProjectOwnershipRecord,
 )
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+from dev_health_ops.models.work_items import Sprint
 from dev_health_ops.providers.identity import load_identity_resolver
+from dev_health_ops.providers.linear.client import LinearAuth, LinearClient
+from dev_health_ops.providers.linear.normalize import linear_cycle_to_sprint
 
 _T = TypeVar("_T")
 _REAL_CLICKHOUSE_SINK_TYPE = ClickHouseMetricsSink
@@ -41,6 +45,7 @@ class _DimensionSink(Protocol):
     def write_team_project_ownership(
         self, rows: Sequence[TeamProjectOwnershipRecord]
     ) -> None: ...
+    def write_sprints(self, rows: Sequence[Sprint]) -> None: ...
     async def insert_teams(self, teams: list[dict[str, Any]]) -> None: ...
     def close(self) -> None: ...
 
@@ -144,8 +149,13 @@ def populate(
     scope: dict[str, Any],
     **kwargs: Any,
 ) -> dict[str, Any]:
+    strict = bool(scope.get("strict_reference_discovery"))
     linear_credentials = linear_credentials_from_mapping(credentials)
     if linear_credentials is None:
+        if strict:
+            raise ValueError(
+                "missing Linear credentials for strict reference discovery"
+            )
         return {
             "status": "skipped",
             "reason": "missing_linear_credentials",
@@ -166,6 +176,7 @@ def populate(
     member_rows: list[MemberRecord] = []
     membership_rows: list[TeamMembershipRecord] = []
     ownership_rows: list[TeamProjectOwnershipRecord] = []
+    sprint_rows: list[Sprint] = []
 
     for team in teams:
         team_id = _team_id(team)
@@ -269,6 +280,23 @@ def populate(
             )
         team_rows[-1]["members"] = roster_facets
 
+    try:
+        with LinearClient(
+            auth=LinearAuth(api_key=linear_credentials.api_key), org_id=org_id
+        ) as client:
+            for team in teams:
+                api_team = client.get_team_by_key(_team_id(team))
+                if not api_team or not api_team.get("id"):
+                    continue
+                for cycle in client.iter_cycles(team_id=str(api_team["id"])):
+                    sprint_rows.append(
+                        replace(linear_cycle_to_sprint(cycle), org_id=org_id)
+                    )
+    except Exception:
+        if strict:
+            raise
+        sprint_rows = []
+
     sink, should_close = _sink_from_kwargs(scope, kwargs)
     try:
         team_store = _team_store_from_kwargs(sink, kwargs)
@@ -304,6 +332,8 @@ def populate(
         sink.write_members(members)
         sink.write_team_memberships(memberships)
         sink.write_team_project_ownership(ownership)
+        if hasattr(sink, "write_sprints"):
+            sink.write_sprints(sprint_rows)
     finally:
         if should_close:
             sink.close()
@@ -311,10 +341,13 @@ def populate(
     return {
         "mode": scope.get("mode"),
         "teams_imported": len(team_rows),
+        "reference_team_keys": [str(row["native_team_key"]) for row in team_rows],
+        "reference_sprint_ids": [str(row.sprint_id) for row in sprint_rows],
         "projects_imported": len(projects),
         "members_imported": len(members),
         "team_memberships_imported": len(memberships),
         "team_project_ownership_imported": len(ownership),
+        "sprints_imported": len(sprint_rows),
         "team_repo_ownership_imported": 0,
         "work_item_team_attributions_imported": 0,
     }

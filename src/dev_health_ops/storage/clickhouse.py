@@ -32,6 +32,7 @@ from dev_health_ops.models.git import (
     Repo,
 )
 from dev_health_ops.models.work_items import (
+    Sprint,
     WorkItem,
     WorkItemDependency,
     WorkItemStatusTransition,
@@ -2221,6 +2222,45 @@ class ClickHouseStore:
                     )
                 )
         return teams
+
+    async def get_all_sprints(self, org_id: str | None = None) -> list[Sprint]:
+        assert self.client is not None
+        query = (
+            "SELECT provider, sprint_id, argMax(name, last_synced) AS name, "
+            "argMax(state, last_synced) AS state, "
+            "argMax(started_at, last_synced) AS started_at, "
+            "argMax(ended_at, last_synced) AS ended_at, "
+            "argMax(completed_at, last_synced) AS completed_at, "
+            "max(last_synced) AS last_synced_max, org_id FROM sprints"
+        )
+        params: dict[str, str] = {}
+        scoped_org_id = str(org_id or self.org_id or "")
+        if scoped_org_id:
+            query += " WHERE org_id = {org_id:String}"
+            params["org_id"] = scoped_org_id
+        query += " GROUP BY provider, sprint_id, org_id"
+        async with self._lock:
+            result = await asyncio.to_thread(
+                self.client.query, query, parameters=params
+            )
+
+        sprints: list[Sprint] = []
+        for row in result.result_rows or []:
+            last_synced = _parse_datetime_value(row[7]) or datetime.now(timezone.utc)
+            sprints.append(
+                Sprint(
+                    provider=row[0],
+                    sprint_id=row[1],
+                    name=row[2],
+                    state=row[3],
+                    started_at=_parse_datetime_value(row[4]),
+                    ended_at=_parse_datetime_value(row[5]),
+                    completed_at=_parse_datetime_value(row[6]),
+                    last_synced=last_synced,
+                    org_id=row[8],
+                )
+            )
+        return sprints
 
     async def get_jira_project_ops_team_links(self) -> list[JiraProjectOpsTeamLink]:
         from dev_health_ops.models.teams import JiraProjectOpsTeamLink

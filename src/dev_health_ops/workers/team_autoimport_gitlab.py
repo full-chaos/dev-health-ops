@@ -59,7 +59,12 @@ async def _populate_async(
     scope: dict[str, Any],
     team_store: Any | None = None,
 ) -> dict[str, Any]:
+    strict = bool(scope.get("strict_reference_discovery"))
     if not _provider_capable():
+        if strict:
+            raise ValueError(
+                "GitLab is not import-capable for strict reference discovery"
+            )
         return _zero_summary(org_id=org_id, reason="provider_not_import_capable")
 
     token = _first_string(credentials, "token", "access_token", "private_token")
@@ -69,6 +74,10 @@ async def _populate_async(
         or DEFAULT_GITLAB_URL
     )
     if not token or not group_path:
+        if strict:
+            raise ValueError(
+                "missing GitLab credentials or group for strict reference discovery"
+            )
         return _zero_summary(
             org_id=org_id, reason="missing_gitlab_credentials_or_group"
         )
@@ -81,6 +90,8 @@ async def _populate_async(
             url=url,
         )
     except Exception as exc:
+        if strict:
+            raise
         logger.info(
             "Skipping GitLab team auto-import for org_id=%s group=%s: discovery failed: %s",
             org_id,
@@ -107,6 +118,7 @@ async def _populate_async(
         teams=teams,
         now=now,
         resolver=resolver,
+        strict=strict,
     )
     for team_row in team_rows:
         team_row["members"] = member_roster.get(str(team_row["id"]), [])
@@ -124,6 +136,8 @@ async def _populate_async(
 
     summary: dict[str, Any] = {
         "teams_imported": len(team_rows),
+        "reference_team_keys": [str(row["native_team_key"]) for row in team_rows],
+        "reference_sprint_ids": [],
         "projects_imported": len({row.project_id for row in project_rows}),
         "members_imported": len({row.member_id for row in membership_rows}),
         "team_memberships_imported": len(membership_rows),
@@ -242,6 +256,7 @@ async def _membership_rows(
     teams: Iterable[Any],
     now: datetime,
     resolver: IdentityResolver,
+    strict: bool,
 ) -> tuple[list[TeamMembershipRecord], dict[str, list[str]]]:
     service = TeamMembershipService(session=cast(Any, None), org_id=org_id)
     rows: list[TeamMembershipRecord] = []
@@ -257,6 +272,8 @@ async def _membership_rows(
                 url=url,
             )
         except Exception as exc:
+            if strict:
+                raise
             logger.info(
                 "Skipping GitLab membership import for org_id=%s group=%s: %s",
                 org_id,

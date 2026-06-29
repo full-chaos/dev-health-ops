@@ -16,6 +16,7 @@ from dev_health_ops.models import (
     SyncDispatchOutbox,
     SyncRun,
     SyncRunMode,
+    SyncRunReferenceDiscovery,
     SyncRunStatus,
     SyncRunUnit,
     SyncRunUnitStatus,
@@ -24,7 +25,7 @@ from dev_health_ops.models import (
 from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.users import Organization
 from dev_health_ops.sync.dispatch_outbox import (
-    OUTBOX_KIND_DISPATCH,
+    OUTBOX_KIND_DISCOVERY,
     OUTBOX_STATUS_PENDING,
 )
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
@@ -136,7 +137,12 @@ def test_enabled_sources_and_enabled_datasets_fan_out_to_units(db_session):
     units = _planned_units(db_session, plan.sync_run_id)
     outbox = (
         db_session.query(SyncDispatchOutbox)
-        .filter_by(sync_run_id=plan.sync_run_id, kind=OUTBOX_KIND_DISPATCH)
+        .filter_by(sync_run_id=plan.sync_run_id, kind=OUTBOX_KIND_DISCOVERY)
+        .one()
+    )
+    discovery = (
+        db_session.query(SyncRunReferenceDiscovery)
+        .filter_by(sync_run_id=plan.sync_run_id)
         .one()
     )
 
@@ -154,6 +160,8 @@ def test_enabled_sources_and_enabled_datasets_fan_out_to_units(db_session):
     assert {unit.mode for unit in units} == {SyncRunMode.INCREMENTAL.value}
     assert outbox.status == OUTBOX_STATUS_PENDING
     assert outbox.claim_token is None
+    assert discovery.status == "planned"
+    assert discovery.org_id == ORG_ID
 
 
 def test_unsupported_provider_dataset_pairs_are_skipped(db_session):
@@ -648,6 +656,7 @@ def test_postgres_missing_tier_limits_stays_inside_planner_savepoint():
                 IntegrationSource,
                 IntegrationDataset,
                 SyncRun,
+                SyncRunReferenceDiscovery,
                 SyncRunUnit,
                 SyncDispatchOutbox,
                 SyncWatermark,
@@ -711,7 +720,7 @@ def test_postgres_missing_tier_limits_stays_inside_planner_savepoint():
             units = _planned_units(session, plan.sync_run_id)
             outbox = (
                 session.query(SyncDispatchOutbox)
-                .filter_by(sync_run_id=plan.sync_run_id, kind=OUTBOX_KIND_DISPATCH)
+                .filter_by(sync_run_id=plan.sync_run_id, kind=OUTBOX_KIND_DISCOVERY)
                 .one()
             )
             assert run is not None
@@ -1251,3 +1260,190 @@ def test_linear_backfill_units_never_write_watermarks(db_session, monkeypatch):
     assert db_session.query(SyncWatermark).count() == 0, (
         "plan_sync_run must not write any SyncWatermark rows"
     )
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-2721 (AD-3): work-item-family plan-time collapse
+# ---------------------------------------------------------------------------
+
+_FAMILY_DATASETS = (
+    "work-items",
+    "work-item-labels",
+    "work-item-projects",
+    "work-item-history",
+    "work-item-comments",
+)
+
+
+def test_work_item_family_collapses_to_single_composite_unit(db_session):
+    """Enabling all five work-item-family datasets emits ONE composite unit
+    (canonical dataset_key="work-items") with a boolean family_dataset_<key>
+    flag per enabled dataset, instead of five units each re-running the full
+    crawl (CHAOS-2721)."""
+    integration = _create_integration(db_session, provider="linear")
+    _create_source(
+        db_session, integration, external_id="linear-team-1", provider="linear"
+    )
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1, f"expected ONE composite work-items unit, got {len(units)}"
+    unit = units[0]
+    assert unit.dataset_key == "work-items"
+    flags = unit.processor_flags or {}
+    for dataset_key in _FAMILY_DATASETS:
+        flag = "family_dataset_" + dataset_key.replace("-", "_")
+        assert flags.get(flag) is True, f"{flag} must be set on the composite unit"
+
+
+def test_work_item_family_collapse_uses_earliest_window_across_datasets(db_session):
+    """The composite unit's since_at is the EARLIEST watermark across enabled
+    family datasets, so the single crawl covers every dataset (over-fetch is
+    safe; CHAOS-2721 / AD-3)."""
+    integration = _create_integration(db_session, provider="linear")
+    source = _create_source(
+        db_session, integration, external_id="linear-team-1", provider="linear"
+    )
+    _create_dataset(db_session, integration, "work-items")
+    _create_dataset(db_session, integration, "work-item-comments")
+    # work-items synced more recently than comments -> comments is the laggard.
+    newer = datetime(2026, 6, 15, 0, 0, tzinfo=timezone.utc)
+    older = datetime(2026, 6, 1, 0, 0, tzinfo=timezone.utc)
+    set_watermark(db_session, ORG_ID, source.external_id, "work-items", newer)
+    set_watermark(db_session, ORG_ID, source.external_id, "work-item-comments", older)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+            before=datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc),
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    assert units[0].since_at is not None
+    assert units[0].since_at.replace(tzinfo=timezone.utc) == older
+
+
+@pytest.mark.parametrize(
+    "provider, external_id",
+    [
+        ("github", "full-chaos/dev-health"),
+        ("gitlab", "group/project"),
+        ("jira", "jira-project"),
+        ("linear", "linear-team-1"),
+    ],
+)
+def test_work_item_family_collapse_provider_matrix(db_session, provider, external_id):
+    """Family collapse is provider-agnostic: all four providers collapse the
+    enabled family to a single composite unit (provider x entity contract)."""
+    integration = _create_integration(db_session, provider=provider)
+    _create_source(db_session, integration, external_id=external_id, provider=provider)
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    work_item_units = [
+        u
+        for u in _planned_units(db_session, plan.sync_run_id)
+        if u.dataset_key in _FAMILY_DATASETS
+    ]
+    assert len(work_item_units) == 1
+    assert work_item_units[0].dataset_key == "work-items"
+
+
+def test_work_item_family_collapse_backfill_one_composite_per_chunk(
+    db_session, monkeypatch
+):
+    """A Linear backfill enabling all five family datasets produces ONE composite
+    unit per chunk (7 for a 90-day/14-day backfill), not 5x7=35 (CHAOS-2721)."""
+    monkeypatch.delenv("LINEAR_BACKFILL_MAX_WINDOW_DAYS", raising=False)
+    integration = _create_integration(db_session, provider="linear")
+    _create_source(
+        db_session, integration, external_id="linear-team-1", provider="linear"
+    )
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+
+    since = datetime(2026, 3, 2, tzinfo=timezone.utc)
+    before = datetime(2026, 5, 30, 23, 59, 59, tzinfo=timezone.utc)
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.BACKFILL.value,
+            triggered_by="test",
+            since=since,
+            before=before,
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 7, f"expected 7 composite chunks, got {len(units)}"
+    assert {u.dataset_key for u in units} == {"work-items"}
+
+
+def test_github_family_composite_carries_prs_signal_alongside_code_unit(db_session):
+    """github: the composite work-items unit carries sync_prs while the PRS code
+    dataset remains its own unit (collapse only folds the work-item family)."""
+    integration = _create_integration(db_session, provider="github")
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+    _create_dataset(db_session, integration, "prs")
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    work_items = [u for u in units if u.dataset_key == "work-items"]
+    prs_units = [u for u in units if u.dataset_key == "prs"]
+    assert len(work_items) == 1
+    assert (work_items[0].processor_flags or {}).get("sync_prs") is True
+    assert len(prs_units) == 1
+
+
+def test_merge_family_windows_rejects_mismatched_window_counts():
+    """The index-aligned merge assumes every enabled family dataset resolves to
+    the same number of windows; a mismatch is a planner invariant violation and
+    must fail fast rather than silently dropping windows."""
+    from dev_health_ops.sync.planner import _merge_family_windows
+
+    a = datetime(2026, 6, 1, 0, 0, tzinfo=timezone.utc)
+    b = datetime(2026, 6, 2, 0, 0, tzinfo=timezone.utc)
+    c = datetime(2026, 6, 3, 0, 0, tzinfo=timezone.utc)
+    d = datetime(2026, 6, 4, 0, 0, tzinfo=timezone.utc)
+    with pytest.raises(ValueError, match="mismatched window counts"):
+        _merge_family_windows([((a, b),), ((a, b), (c, d))])

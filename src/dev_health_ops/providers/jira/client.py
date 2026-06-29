@@ -406,6 +406,41 @@ class JiraClient:
             params={},
         )
 
+    def iter_boards(
+        self, *, project_key: str | None = None
+    ) -> Iterator[dict[str, Any]]:
+        start_at = 0
+        while True:
+            params: dict[str, Any] = {
+                "startAt": start_at,
+                "maxResults": self.per_page,
+            }
+            if project_key:
+                params["projectKeyOrId"] = project_key
+            page = self._request_json(path="/rest/agile/1.0/board", params=params)
+            boards = list((page or {}).get("values") or [])
+            if not boards:
+                break
+            yield from boards
+            start_at += len(boards)
+            if (page or {}).get("isLast") is True:
+                break
+
+    def iter_board_sprints(self, *, board_id: int | str) -> Iterator[dict[str, Any]]:
+        start_at = 0
+        while True:
+            page = self._request_json(
+                path=f"/rest/agile/1.0/board/{board_id}/sprint",
+                params={"startAt": start_at, "maxResults": self.per_page},
+            )
+            sprints = list((page or {}).get("values") or [])
+            if not sprints:
+                break
+            yield from sprints
+            start_at += len(sprints)
+            if (page or {}).get("isLast") is True:
+                break
+
     def get_all_projects(self) -> list[dict[str, Any]]:
         """
         Fetch all visible projects from Jira.

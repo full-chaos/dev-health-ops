@@ -167,6 +167,7 @@ def _work_item_kwargs(context: SyncTaskContext) -> dict[str, Any]:
         "provider": context.provider,
         "org_id": context.org_id,
         "credentials": _credentials_mapping(context) or None,
+        "require_source": True,
     }
     if context.provider in {"github", "gitlab", "linear"}:
         kwargs["repo_name"] = context.source_external_id

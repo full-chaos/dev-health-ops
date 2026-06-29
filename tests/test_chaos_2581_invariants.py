@@ -19,12 +19,14 @@ from dev_health_ops.models import (
     SyncRun,
     SyncRunMode,
     SyncRunPostDispatch,
+    SyncRunReferenceDiscovery,
     SyncRunStatus,
     SyncRunUnit,
     SyncRunUnitStatus,
     SyncWatermark,
 )
 from dev_health_ops.sync.dispatch_outbox import (
+    OUTBOX_KIND_DISCOVERY,
     OUTBOX_KIND_DISPATCH,
     OUTBOX_KIND_FINALIZE,
     OUTBOX_KIND_POST_SYNC,
@@ -156,6 +158,16 @@ def _seed_run(
         )
         session.add(unit)
         units.append(unit)
+    session.add(
+        SyncRunReferenceDiscovery(
+            org_id=integration.org_id,
+            sync_run_id=run.id,
+            status="success",
+            attempts=1,
+            available_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc),
+        )
+    )
     session.flush()
     return run, units
 
@@ -695,7 +707,7 @@ def test_a1_first_sync_fresh_source_uses_configured_initial_depth(
     planned_run = db_session.get(SyncRun, uuid.UUID(plan.sync_run_id))
     assert planned_run is not None
     assert (
-        _outbox(db_session, planned_run, OUTBOX_KIND_DISPATCH).status
+        _outbox(db_session, planned_run, OUTBOX_KIND_DISCOVERY).status
         == OUTBOX_STATUS_PENDING
     )
 

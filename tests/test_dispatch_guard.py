@@ -14,6 +14,7 @@ from dev_health_ops.models import (
     SyncDispatchOutbox,
     SyncRun,
     SyncRunMode,
+    SyncRunReferenceDiscovery,
     SyncRunStatus,
     SyncRunUnit,
     SyncRunUnitStatus,
@@ -85,6 +86,16 @@ def _seed_run(session, *, unit_count=1, status=SyncRunUnitStatus.PLANNED.value):
         )
         units.append(unit)
     session.add_all(units)
+    session.add(
+        SyncRunReferenceDiscovery(
+            org_id=org_id,
+            sync_run_id=run.id,
+            status="success",
+            attempts=1,
+            available_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc),
+        )
+    )
     session.flush()
     return run, units, integration, source
 
@@ -451,6 +462,17 @@ def _seed_zero_unit_run(db_session):
         failed_units=0,
     )
     db_session.add(run)
+    db_session.flush()
+    db_session.add(
+        SyncRunReferenceDiscovery(
+            org_id=org_id,
+            sync_run_id=run.id,
+            status="success",
+            attempts=1,
+            available_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc),
+        )
+    )
     db_session.flush()
     return run
 

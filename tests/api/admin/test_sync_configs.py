@@ -20,6 +20,7 @@ from dev_health_ops.models.integrations import (
     IntegrationSource,
     SyncDispatchOutbox,
     SyncRun,
+    SyncRunReferenceDiscovery,
     SyncRunUnit,
 )
 from dev_health_ops.models.licensing import OrgLicense
@@ -54,6 +55,7 @@ _TABLES = tables_of(
     IntegrationDataset,
     SyncDispatchOutbox,
     SyncRun,
+    SyncRunReferenceDiscovery,
     SyncRunUnit,
     SyncWatermark,
 )

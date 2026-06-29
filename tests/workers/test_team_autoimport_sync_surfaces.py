@@ -29,11 +29,13 @@ _ORG = "team-autoimport-sync-org"
 def test_backfill_autoimport_false_or_absent_does_not_call(monkeypatch) -> None:
     calls: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        backfill_runner, "run_team_autoimport", lambda **kwargs: calls.append(kwargs)
+        backfill_runner,
+        "run_team_autoimport_strict",
+        lambda **kwargs: calls.append(kwargs),
     )
 
     assert (
-        backfill_runner._run_team_autoimport_for_backfill(
+        backfill_runner._run_strict_reference_discovery_for_backfill(
             provider="jira",
             org_id="org-1",
             credentials={},
@@ -47,7 +49,7 @@ def test_backfill_autoimport_false_or_absent_does_not_call(monkeypatch) -> None:
         is None
     )
     assert (
-        backfill_runner._run_team_autoimport_for_backfill(
+        backfill_runner._run_strict_reference_discovery_for_backfill(
             provider="jira",
             org_id="org-1",
             credentials={},
@@ -71,10 +73,11 @@ def test_backfill_autoimport_true_calls_once(monkeypatch) -> None:
         return {"status": "success"}
 
     monkeypatch.setattr(
-        backfill_runner, "run_team_autoimport", fake_run_team_autoimport
+        backfill_runner, "run_team_autoimport_strict", fake_run_team_autoimport
     )
+    monkeypatch.setattr(backfill_runner, "_verify_reference_readback", lambda **_: None)
 
-    result = backfill_runner._run_team_autoimport_for_backfill(
+    result = backfill_runner._run_strict_reference_discovery_for_backfill(
         provider="jira",
         org_id="org-1",
         credentials={"email": "dev@example.com"},

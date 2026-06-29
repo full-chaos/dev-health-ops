@@ -14,6 +14,7 @@ from dev_health_ops.workers.product_tasks import (
 )
 from dev_health_ops.workers.queue_monitor import monitor_queue_depths
 from dev_health_ops.workers.recommendations_tasks import run_recommendations_job
+from dev_health_ops.workers.reference_discovery import run_sync_reference_discovery
 from dev_health_ops.workers.report_scheduler import dispatch_scheduled_reports
 from dev_health_ops.workers.report_task import execute_saved_report
 from dev_health_ops.workers.sync_reconciler import reconcile_sync_dispatch
@@ -83,6 +84,7 @@ __all__ = [
     "run_product_telemetry_consumer",
     "run_recommendations_job",
     "run_release_impact_job",
+    "run_sync_reference_discovery",
     "run_sync_unit",
     "run_post_sync_team_autoimport",
     "sync_team_drift",

@@ -179,6 +179,40 @@ def test_run_backfill_derives_org_from_config_when_org_omitted(
     assert captured["org_id"] == config_org
 
 
+def test_run_backfill_strict_reference_discovery_failure_blocks_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_org = "55555555-5555-5555-5555-555555555555"
+    _patch_session_with_config(
+        monkeypatch,
+        _FakeConfig(
+            config_org,
+            provider="linear",
+            sync_options={"auto_import_teams": True},
+        ),
+    )
+    writes: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner.run_work_items_sync_job",
+        lambda *args, **kwargs: writes.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner.run_team_autoimport_strict",
+        lambda **_: (_ for _ in ()).throw(ValueError("missing Linear credentials")),
+    )
+
+    with pytest.raises(ValueError, match="missing Linear credentials"):
+        run_backfill_for_config(
+            db_url="clickhouse://local",
+            sync_config_id="66666666-6666-6666-6666-666666666666",
+            org_id=None,
+            since=date(2026, 1, 1),
+            before=date(2026, 1, 3),
+        )
+
+    assert writes == []
+
+
 def test_run_backfill_raises_on_org_mismatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

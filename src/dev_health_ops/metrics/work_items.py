@@ -90,6 +90,8 @@ def fetch_jira_work_items_with_extras(
     jql_override: str | None = None,
     fetch_all: bool | None = None,
     use_env_query_options: bool = True,
+    reference_sprints: Sequence[Sprint] | None = None,
+    reference_sink: Any | None = None,
 ) -> tuple[
     list[WorkItem],
     list[WorkItemStatusTransition],
@@ -173,7 +175,11 @@ def fetch_jira_work_items_with_extras(
 
     fetch_comments = _env_flag("JIRA_FETCH_COMMENTS", True)
     comments_limit = int(os.getenv("JIRA_COMMENTS_LIMIT", "0"))  # 0 means no limit
-    sprint_cache: dict[str, Sprint] = {}
+    sprint_cache: dict[str, Sprint] = {
+        sprint.sprint_id: sprint
+        for sprint in reference_sprints or []
+        if sprint.provider == "jira"
+    }
     sprint_ids: set[str] = set()
 
     updated_since = to_utc(since).date().isoformat()
@@ -267,11 +273,12 @@ def fetch_jira_work_items_with_extras(
                     )
 
             if wi.sprint_id:
-                if wi.sprint_id not in sprint_cache:
-                    sprint_ids.add(wi.sprint_id)
+                sprint_ids.add(wi.sprint_id)
 
+    fetched_sprints: list[Sprint] = []
     for sprint_id in sorted(sprint_ids):
         if sprint_id in sprint_cache:
+            sprints.append(sprint_cache[sprint_id])
             continue
         try:
             payload = jira_client.get_sprint(sprint_id=str(sprint_id))
@@ -282,6 +289,9 @@ def fetch_jira_work_items_with_extras(
         if sprint:
             sprint_cache[sprint_id] = sprint
             sprints.append(sprint)
+            fetched_sprints.append(sprint)
+    if reference_sink is not None and fetched_sprints:
+        reference_sink.write_sprints(fetched_sprints)
 
     logger.info("Fetched %d Jira work items (since %s)", len(work_items), updated_since)
     try:

@@ -16,11 +16,13 @@ from dev_health_ops.models import (
     SyncRun,
     SyncRunMode,
     SyncRunPostDispatch,
+    SyncRunReferenceDiscovery,
     SyncRunStatus,
     SyncRunUnit,
     SyncRunUnitStatus,
 )
 from dev_health_ops.sync.dispatch_outbox import (
+    OUTBOX_KIND_DISCOVERY,
     OUTBOX_KIND_DISPATCH,
     OUTBOX_KIND_FINALIZE,
     OUTBOX_KIND_POST_SYNC,
@@ -102,6 +104,17 @@ def _seed_run(
         failed_units=0,
     )
     session.add_all([source, run])
+    session.flush()
+    session.add(
+        SyncRunReferenceDiscovery(
+            org_id=org_id,
+            sync_run_id=run.id,
+            status="success",
+            attempts=1,
+            available_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc),
+        )
+    )
     session.flush()
     now = datetime.now(timezone.utc)
     running = SyncRunUnit(
@@ -630,6 +643,96 @@ def test_reconciler_materializes_and_relays_committed_planned_run(
     assert finalizers == []
     assert dispatch_row.status == OUTBOX_STATUS_DISPATCHED
     assert dispatch_row.attempts == 1
+
+
+def test_reconciler_rearms_expired_reference_discovery_lease(db_session, monkeypatch):
+    from dev_health_ops.workers import reference_discovery, sync_reconciler, sync_units
+
+    run, running, _planned = _seed_run(db_session, planned_units=0)
+    db_session.delete(running)
+    ledger = (
+        db_session.query(SyncRunReferenceDiscovery).filter_by(sync_run_id=run.id).one()
+    )
+    ledger.status = "running"
+    ledger.lease_owner = "dead-discovery-worker"
+    ledger.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    ledger.available_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    discovery_dispatches = []
+    monkeypatch.setattr(
+        reference_discovery.run_sync_reference_discovery,
+        "apply_async",
+        lambda args=None, queue=None: discovery_dispatches.append((args, queue)),
+    )
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: None,
+    )
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: None,
+    )
+
+    result = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    discovery_row = _outbox_row(db_session, run, OUTBOX_KIND_DISCOVERY)
+    assert result["materialized_discovery"] == 1
+    assert discovery_dispatches == [((str(run.id),), "sync")]
+    assert discovery_row.status == OUTBOX_STATUS_DISPATCHED
+
+
+def test_reconciler_rearms_discovery_when_dispatch_blocked_on_ledger(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import reference_discovery, sync_reconciler, sync_units
+
+    run, running, planned = _seed_run(db_session, planned_units=1)
+    db_session.delete(running)
+    ledger = (
+        db_session.query(SyncRunReferenceDiscovery).filter_by(sync_run_id=run.id).one()
+    )
+    ledger.status = "planned"
+    ledger.completed_at = None
+    ledger.available_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+    upsert_outbox_wakeup(
+        db_session,
+        sync_run_id=run.id,
+        kind=OUTBOX_KIND_DISPATCH,
+        available_at=datetime.now(timezone.utc),
+    )
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    dispatches = []
+    discovery_dispatches = []
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: dispatches.append((args, queue)),
+    )
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: None,
+    )
+    monkeypatch.setattr(
+        reference_discovery.run_sync_reference_discovery,
+        "apply_async",
+        lambda args=None, queue=None: discovery_dispatches.append((args, queue)),
+    )
+
+    result = sync_reconciler.reconcile_sync_dispatch(limit=1)
+
+    dispatch_row = _outbox_row(db_session, run, OUTBOX_KIND_DISPATCH)
+    discovery_row = _outbox_row(db_session, run, OUTBOX_KIND_DISCOVERY)
+    assert result["relayed_dispatch"] == 0
+    assert dispatches == []
+    assert discovery_dispatches == []
+    assert dispatch_row.status == OUTBOX_STATUS_DISPATCHED
+    assert discovery_row.status == OUTBOX_STATUS_PENDING
+    assert planned[0].status == SyncRunUnitStatus.PLANNED.value
 
 
 def test_reconciler_zero_unit_run_relays_finalize_and_terminalizes(

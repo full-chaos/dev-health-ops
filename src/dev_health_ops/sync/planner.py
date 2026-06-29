@@ -47,13 +47,18 @@ from dev_health_ops.models import (
     IntegrationSource,
     SyncRun,
     SyncRunMode,
+    SyncRunReferenceDiscovery,
     SyncRunStatus,
     SyncRunUnit,
     SyncRunUnitStatus,
 )
-from dev_health_ops.sync.datasets import WatermarkBehavior, get_dataset_spec
+from dev_health_ops.sync.datasets import (
+    DatasetSpec,
+    WatermarkBehavior,
+    get_dataset_spec,
+)
 from dev_health_ops.sync.dispatch_outbox import (
-    OUTBOX_KIND_DISPATCH,
+    OUTBOX_KIND_DISCOVERY,
     upsert_outbox_wakeup,
 )
 from dev_health_ops.sync.watermarks import get_watermark_with_overlap
@@ -175,10 +180,20 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
     ]
     session.add_all(unit_rows)
     session.flush()
+    session.add(
+        SyncRunReferenceDiscovery(
+            org_id=integration.org_id,
+            sync_run_id=sync_run.id,
+            status="planned",
+            attempts=0,
+            available_at=now,
+        )
+    )
+    session.flush()
     upsert_outbox_wakeup(
         session,
         sync_run_id=sync_run.id,
-        kind=OUTBOX_KIND_DISPATCH,
+        kind=OUTBOX_KIND_DISCOVERY,
         available_at=now,
         now=now,
     )
@@ -272,19 +287,21 @@ def _build_planned_units(
     for source in sources:
         provider = source.provider
         prs_enabled = _prs_dataset_enabled(provider, datasets)
+        family_specs: list[tuple[IntegrationDataset, DatasetSpec]] = []
         for dataset in datasets:
             spec = get_dataset_spec(provider, dataset.dataset_key)
             if spec is None or not spec.supported:
                 continue
 
+            # CHAOS-2721 (AD-3): work-item-family datasets are collapsed into a
+            # single composite unit per (source, window) below, instead of one
+            # unit each. Defer them; a single work-items crawl already emits the
+            # whole family.
+            if dataset.dataset_key in _WORK_ITEM_FAMILY_DATASETS:
+                family_specs.append((dataset, spec))
+                continue
+
             processor_flags = dict(spec.processor_flags)
-            # CHAOS-646: github work-items ingest PRs as work items only when
-            # the PRS dataset is also enabled for this config. The work-items
-            # unit has no sibling-dataset visibility at run time, so stamp the
-            # signal here for ``_work_item_kwargs`` to thread into
-            # ``run_work_items_sync_job(include_pull_requests=...)``.
-            if provider == "github" and "work-items" in spec.legacy_targets:
-                processor_flags["sync_prs"] = prs_enabled
 
             windows = _resolve_windows(
                 session=session,
@@ -314,6 +331,20 @@ def _build_planned_units(
                         processor_flags=dict(processor_flags),
                     )
                 )
+
+        planned_units.extend(
+            _build_work_item_family_units(
+                session=session,
+                request=request,
+                integration=integration,
+                source=source,
+                provider=provider,
+                mode=mode,
+                now=now,
+                family_specs=family_specs,
+                prs_enabled=prs_enabled,
+            )
+        )
     return planned_units
 
 
@@ -369,6 +400,172 @@ def _linear_backfill_max_window_days() -> int:
 def _is_linear_work_item_family(provider: str, dataset_key: str) -> bool:
     """True when the provider is linear AND the dataset is in the work-item family."""
     return provider == "linear" and dataset_key in _LINEAR_WORK_ITEM_DATASETS
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-2721 (AD-3): work-item-family plan-time collapse
+# ---------------------------------------------------------------------------
+#
+# The five work-item-family datasets are all produced by a SINGLE
+# ``run_work_items_sync_job`` crawl (labels/projects/history/comments are
+# bookkeeping over the same issue crawl). Emitting one unit per dataset re-ran
+# the full ingest 5x. The planner instead emits ONE composite unit (canonical
+# ``dataset_key="work-items"``) carrying a boolean ``family_dataset_<key>`` flag
+# per enabled dataset; the worker fans those back out into per-dataset
+# watermarks + audit metadata on success. Provider-agnostic: github/gitlab/jira/
+# linear all expose these keys.
+_WORK_ITEM_FAMILY_DATASET_ORDER: tuple[str, ...] = (
+    "work-items",
+    "work-item-labels",
+    "work-item-projects",
+    "work-item-history",
+    "work-item-comments",
+)
+_WORK_ITEM_FAMILY_DATASETS: frozenset[str] = frozenset(_WORK_ITEM_FAMILY_DATASET_ORDER)
+_FAMILY_CANONICAL_DATASET_KEY = "work-items"
+_FAMILY_DATASET_FLAG_PREFIX = "family_dataset_"
+
+
+def _family_dataset_flag(dataset_key: str) -> str:
+    """Boolean processor-flag name marking an enabled work-item-family dataset."""
+    return _FAMILY_DATASET_FLAG_PREFIX + dataset_key.replace("-", "_")
+
+
+def family_dataset_keys_from_flags(
+    processor_flags: Mapping[str, object] | None,
+) -> list[str]:
+    """Enabled work-item-family dataset keys encoded on a collapsed composite
+    unit's ``processor_flags`` (CHAOS-2721), in canonical order.
+
+    ``SyncTaskBootstrap.load`` bool-coerces every processor_flags value, so the
+    composite cannot carry a *list* of enabled datasets — each is encoded as its
+    own boolean ``family_dataset_<key>`` flag. This reader validates against the
+    known family keys so a stray/unknown flag can never advance a bogus
+    watermark or pollute audit metadata.
+    """
+    flags = processor_flags or {}
+    return [
+        key
+        for key in _WORK_ITEM_FAMILY_DATASET_ORDER
+        if bool(flags.get(_family_dataset_flag(key)))
+    ]
+
+
+def _build_work_item_family_units(
+    *,
+    session: Session,
+    request: SyncPlanRequest,
+    integration: Integration,
+    source: IntegrationSource,
+    provider: str,
+    mode: str,
+    now: datetime,
+    family_specs: list[tuple[IntegrationDataset, DatasetSpec]],
+    prs_enabled: bool,
+) -> list[PlannedUnit]:
+    """Collapse the enabled work-item-family datasets into ONE composite unit
+    per (source, window) (CHAOS-2721, AD-3)."""
+    if not family_specs:
+        return []
+
+    canonical_spec = get_dataset_spec(provider, _FAMILY_CANONICAL_DATASET_KEY)
+    if canonical_spec is None:
+        # Provider has no work-items dataset in the registry (should not happen
+        # for the four work-item providers). Stay defensive: do not synthesize a
+        # unit for a dataset the provider cannot run.
+        return []
+
+    # Each family dataset owns its own watermark identity (org, source, key), so
+    # resolve windows independently then merge index-aligned (earliest start so
+    # the single crawl covers every enabled dataset; over-fetch is safe because
+    # set_watermark is monotonic).
+    per_dataset_windows = [
+        _resolve_windows(
+            session=session,
+            request=request,
+            mode=mode,
+            org_id=integration.org_id,
+            source_provider=provider,
+            watermark_source_key=source.external_id,
+            dataset_key=dataset.dataset_key,
+            watermark_behavior=spec.watermark_behavior,
+            now=now,
+            integration=integration,
+            dataset=dataset,
+        )
+        for dataset, spec in family_specs
+    ]
+    composite_windows = _merge_family_windows(per_dataset_windows)
+
+    processor_flags: dict[str, bool] = dict(canonical_spec.processor_flags)
+    for dataset, _spec in family_specs:
+        processor_flags[_family_dataset_flag(dataset.dataset_key)] = True
+    if provider == "github":
+        # CHAOS-646: thread the PRS-as-work-items signal onto the composite so
+        # ``_work_item_kwargs`` sets ``include_pull_requests`` correctly.
+        processor_flags["sync_prs"] = prs_enabled
+
+    return [
+        PlannedUnit(
+            org_id=integration.org_id,
+            integration_id=str(integration.id),
+            source_id=str(source.id),
+            provider=provider,
+            dataset_key=_FAMILY_CANONICAL_DATASET_KEY,
+            cost_class=canonical_spec.default_cost_class.value,
+            mode=mode,
+            window_start=window_start,
+            window_end=window_end,
+            processor_flags=dict(processor_flags),
+        )
+        for window_start, window_end in composite_windows
+    ]
+
+
+def _merge_family_windows(
+    per_dataset_windows: list[tuple[tuple[datetime | None, datetime | None], ...]],
+) -> tuple[tuple[datetime | None, datetime | None], ...]:
+    """Index-aligned merge of each enabled family dataset's resolved windows.
+
+    The family shares one chunk schedule per (provider, mode): incremental and
+    full_resync resolve exactly one window; backfill resolves an identical chunk
+    count (chunk policy keys on provider + family membership, not the specific
+    dataset_key). So the per-dataset tuples are the same length and no window is
+    dropped. Only the start can differ (per-dataset incremental watermark) — take
+    the earliest so the single crawl covers every enabled dataset.
+    """
+    if not per_dataset_windows:
+        return ()
+    lengths = {len(windows) for windows in per_dataset_windows}
+    if len(lengths) > 1:
+        raise ValueError(
+            "work-item-family datasets resolved to mismatched window counts: "
+            f"{sorted(lengths)}"
+        )
+    merged: list[tuple[datetime | None, datetime | None]] = []
+    for slice_windows in zip(*per_dataset_windows):
+        starts = [start for start, _end in slice_windows]
+        ends = [end for _start, end in slice_windows]
+        merged.append((_earliest_bound(starts), _latest_bound(ends)))
+    return tuple(merged)
+
+
+def _earliest_bound(bounds: list[datetime | None]) -> datetime | None:
+    # ``None`` means "no lower bound" (crawl from the beginning) and therefore
+    # wins as the earliest start.
+    concrete = [bound for bound in bounds if bound is not None]
+    if len(concrete) != len(bounds):
+        return None
+    return min(concrete) if concrete else None
+
+
+def _latest_bound(bounds: list[datetime | None]) -> datetime | None:
+    # ``None`` means "no upper bound" (open-ended) and wins as the latest end.
+    # window_end is concrete for every family mode today; stay symmetric anyway.
+    concrete = [bound for bound in bounds if bound is not None]
+    if len(concrete) != len(bounds):
+        return None
+    return max(concrete) if concrete else None
 
 
 def resolve_initial_sync_depth(

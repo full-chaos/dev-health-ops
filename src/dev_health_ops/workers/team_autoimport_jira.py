@@ -5,6 +5,7 @@ import json
 import logging
 import os
 from collections.abc import Coroutine, Sequence
+from dataclasses import replace
 from datetime import datetime, timezone
 from threading import Thread
 from typing import Any, Protocol, TypeVar, cast
@@ -29,7 +30,10 @@ from dev_health_ops.metrics.schemas import (
     TeamProjectOwnershipRecord,
 )
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+from dev_health_ops.models.work_items import Sprint
 from dev_health_ops.providers.identity import load_identity_resolver
+from dev_health_ops.providers.jira.client import JiraAuth, JiraClient
+from dev_health_ops.providers.jira.normalize import jira_sprint_payload_to_model
 
 _T = TypeVar("_T")
 _REAL_CLICKHOUSE_SINK_TYPE = ClickHouseMetricsSink
@@ -45,6 +49,7 @@ class _DimensionSink(Protocol):
     def write_team_project_ownership(
         self, rows: Sequence[TeamProjectOwnershipRecord]
     ) -> None: ...
+    def write_sprints(self, rows: Sequence[Sprint]) -> None: ...
     async def insert_teams(self, teams: list[dict[str, Any]]) -> None: ...
     def close(self) -> None: ...
 
@@ -162,8 +167,11 @@ def populate(
     scope: dict[str, Any],
     **kwargs: Any,
 ) -> dict[str, Any]:
+    strict = bool(scope.get("strict_reference_discovery"))
     jira_credentials = jira_credentials_from_mapping(credentials)
     if jira_credentials is None:
+        if strict:
+            raise ValueError("missing Jira credentials for strict reference discovery")
         return {
             "status": "skipped",
             "reason": "missing_jira_credentials",
@@ -185,6 +193,8 @@ def populate(
             )
         )
     except Exception as exc:
+        if strict:
+            raise
         # Mirror github/gitlab: a discovery failure (e.g. HTTP 403) skips the
         # import INTERNALLY without writing anything, so a manual ownership row
         # is never clobbered and the sync stays successful (CHAOS-2609).
@@ -215,6 +225,7 @@ def populate(
     member_rows: list[MemberRecord] = []
     membership_rows: list[TeamMembershipRecord] = []
     ownership_rows: list[TeamProjectOwnershipRecord] = []
+    sprint_rows: list[Sprint] = []
 
     for team in teams:
         team_id = str(team.provider_team_id)
@@ -327,6 +338,34 @@ def populate(
             )
         team_rows[-1]["members"] = roster_facets
 
+    try:
+        client = JiraClient(
+            auth=JiraAuth(
+                base_url=jira_credentials.base_url,
+                email=jira_credentials.email,
+                api_token=jira_credentials.api_token,
+            ),
+            org_id=org_id,
+        )
+        try:
+            for project_key in {
+                row.project_key for row in project_rows if row.project_key
+            }:
+                for board in client.iter_boards(project_key=project_key):
+                    board_id = board.get("id")
+                    if board_id is None:
+                        continue
+                    for payload in client.iter_board_sprints(board_id=board_id):
+                        sprint = jira_sprint_payload_to_model(payload)
+                        if sprint:
+                            sprint_rows.append(replace(sprint, org_id=org_id))
+        finally:
+            client.close()
+    except Exception:
+        if strict:
+            raise
+        sprint_rows = []
+
     sink, should_close = _sink_from_kwargs(scope, kwargs)
     try:
         for link in _load_jira_legacy_links(sink, org_id=org_id):
@@ -397,6 +436,8 @@ def populate(
         sink.write_members(members)
         sink.write_team_memberships(memberships)
         sink.write_team_project_ownership(ownership)
+        if hasattr(sink, "write_sprints"):
+            sink.write_sprints(sprint_rows)
     finally:
         if should_close:
             sink.close()
@@ -405,10 +446,13 @@ def populate(
     return {
         "mode": scope.get("mode"),
         "teams_imported": len(team_rows),
+        "reference_team_keys": [str(row["native_team_key"]) for row in team_rows],
+        "reference_sprint_ids": [str(row.sprint_id) for row in sprint_rows],
         "projects_imported": len(projects),
         "members_imported": len(members),
         "team_memberships_imported": len(memberships),
         "team_project_ownership_imported": len(ownership),
+        "sprints_imported": len(sprint_rows),
         "jira_legacy_project_ownership_imported": jira_legacy_count,
         "team_repo_ownership_imported": 0,
         "work_item_team_attributions_imported": 0,

@@ -205,6 +205,9 @@ class SyncRun(Base):
     dispatch_outbox: Mapped[list[SyncDispatchOutbox]] = relationship(
         back_populates="sync_run", cascade="all, delete-orphan"
     )
+    reference_discovery: Mapped[SyncRunReferenceDiscovery | None] = relationship(
+        back_populates="sync_run", cascade="all, delete-orphan", uselist=False
+    )
 
     __table_args__ = (
         Index(
@@ -319,6 +322,55 @@ class SyncRunPostDispatch(Base):
         UniqueConstraint(
             "sync_run_id", "kind", name="uq_sync_run_post_dispatches_run_kind"
         ),
+    )
+
+
+class SyncRunReferenceDiscovery(Base):
+    __tablename__ = "sync_run_reference_discoveries"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    sync_run_id: Mapped[uuid.UUID] = mapped_column(
+        GUID, ForeignKey("sync_runs.id"), nullable=False, unique=True
+    )
+    org_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    lease_owner: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    sync_run: Mapped[SyncRun] = relationship(back_populates="reference_discovery")
+
+    __table_args__ = (
+        Index(
+            "ix_sync_run_reference_discoveries_status_available",
+            "status",
+            "available_at",
+        ),
+        Index("ix_sync_run_reference_discoveries_org", "org_id"),
     )
 
 

@@ -30,6 +30,7 @@ from dev_health_ops.models import (
     SyncRun,
     SyncRunMode,
     SyncRunPostDispatch,
+    SyncRunReferenceDiscovery,
     SyncRunStatus,
     SyncRunUnit,
     SyncRunUnitStatus,
@@ -184,6 +185,16 @@ def _seed_run(
         processor_flags=processor_flags or {"sync_git": True},
     )
     session.add(unit)
+    session.add(
+        SyncRunReferenceDiscovery(
+            org_id=org_id,
+            sync_run_id=run.id,
+            status="success",
+            attempts=1,
+            available_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc),
+        )
+    )
     session.flush()
     return run, unit
 
@@ -215,6 +226,17 @@ def _seed_zero_unit_run(session):
         failed_units=0,
     )
     session.add(run)
+    session.flush()
+    session.add(
+        SyncRunReferenceDiscovery(
+            org_id=org_id,
+            sync_run_id=run.id,
+            status="success",
+            attempts=1,
+            available_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc),
+        )
+    )
     session.flush()
     return run
 
@@ -3567,3 +3589,127 @@ def test_bootstrap_live_refresh_lease_capped_at_deadline(db_session, monkeypatch
     assert lease_at < now + timedelta(seconds=600), (
         f"live-refresh lease {lease_at} was not capped (got full 600s lease)"
     )
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-2721 (AD-3): collapsed work-item-family unit watermark + audit fan-out
+# ---------------------------------------------------------------------------
+
+
+def test_run_sync_unit_writes_per_dataset_family_watermarks_on_incremental(
+    db_session, monkeypatch
+):
+    """CHAOS-2721: a collapsed work-item-family unit advances the watermark for
+    EACH enabled family dataset, not just canonical work-items."""
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(
+        db_session,
+        provider="linear",
+        source_type="team",
+        external_id="ENG",
+        name="ENG",
+        full_name="ENG",
+        dataset_key="work-items",
+        processor_flags={
+            "family_dataset_work_items": True,
+            "family_dataset_work_item_labels": True,
+            "family_dataset_work_item_comments": True,
+        },
+    )
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        dataset_adapters, "run_dataset_unit", lambda ctx, runtime: {"ok": True}
+    )
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    assert result["status"] == "success"
+    watermark_keys = {w.dataset_key for w in db_session.query(SyncWatermark).all()}
+    assert watermark_keys == {
+        "work-items",
+        "work-item-labels",
+        "work-item-comments",
+    }
+
+
+def test_run_sync_unit_family_backfill_writes_no_watermark(db_session, monkeypatch):
+    """CHAOS-2721 + CHAOS-2514: a backfill composite family unit still writes NO
+    watermarks — the per-dataset loop preserves the mode gate."""
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(
+        db_session,
+        mode=SyncRunMode.BACKFILL.value,
+        provider="linear",
+        source_type="team",
+        external_id="ENG",
+        name="ENG",
+        full_name="ENG",
+        dataset_key="work-items",
+        processor_flags={
+            "family_dataset_work_items": True,
+            "family_dataset_work_item_comments": True,
+        },
+    )
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        dataset_adapters, "run_dataset_unit", lambda ctx, runtime: {"ok": True}
+    )
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    assert result["status"] == "success"
+    assert db_session.query(SyncWatermark).count() == 0
+
+
+def test_finalize_checkpoint_carries_family_dataset_audit_metadata(
+    db_session, monkeypatch
+):
+    """CHAOS-2721: the compute checkpoint for a collapsed family unit records the
+    enabled family datasets so per-dataset provenance survives the collapse."""
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(
+        db_session,
+        provider="linear",
+        source_type="team",
+        external_id="ENG",
+        name="ENG",
+        full_name="ENG",
+        dataset_key="work-items",
+        processor_flags={
+            "family_dataset_work_items": True,
+            "family_dataset_work_item_history": True,
+        },
+    )
+    unit.status = SyncRunUnitStatus.SUCCESS.value
+    unit.since_at = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    unit.before_at = datetime(2026, 6, 2, tzinfo=timezone.utc)
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+
+    result = sync_units.finalize_sync_run(str(run.id))
+
+    assert result["status"] == "finalized"
+    checkpoint = db_session.query(SyncComputeCheckpoint).one()
+    assert checkpoint.dataset_key == "work-items"
+    assert checkpoint.checkpoint_metadata["legacy_targets"] == ["work-items"]
+    assert checkpoint.checkpoint_metadata["family_datasets"] == [
+        "work-items",
+        "work-item-history",
+    ]

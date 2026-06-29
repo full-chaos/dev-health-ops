@@ -36,6 +36,7 @@ from dev_health_ops.metrics.sinks.clickhouse._insert import (
     _dt_to_clickhouse_datetime,
 )
 from dev_health_ops.metrics.sinks.factory import detect_backend
+from dev_health_ops.models.work_items import Sprint
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +119,37 @@ class ClickHouseCore(BaseMetricsSink):
                 }
             )
         return teams
+
+    async def get_all_sprints(self, org_id: str | None = None) -> list[Sprint]:
+        _org_id = str(org_id or getattr(self, "org_id", None) or "")
+        query = (
+            "SELECT provider, sprint_id, argMax(name, last_synced) AS name, "
+            "argMax(state, last_synced) AS state, "
+            "argMax(started_at, last_synced) AS started_at, "
+            "argMax(ended_at, last_synced) AS ended_at, "
+            "argMax(completed_at, last_synced) AS completed_at, "
+            "max(last_synced) AS last_synced_max, org_id FROM sprints"
+        )
+        params: dict[str, str] = {}
+        if _org_id:
+            query += " WHERE org_id = {org_id:String}"
+            params["org_id"] = _org_id
+        query += " GROUP BY provider, sprint_id, org_id"
+        result = await asyncio.to_thread(self.client.query, query, parameters=params)
+        return [
+            Sprint(
+                provider=row[0],
+                sprint_id=row[1],
+                name=row[2],
+                state=row[3],
+                started_at=row[4],
+                ended_at=row[5],
+                completed_at=row[6],
+                last_synced=row[7],
+                org_id=row[8],
+            )
+            for row in result.result_rows or []
+        ]
 
     async def insert_teams(self, teams: list[Any]) -> None:
         if not teams:

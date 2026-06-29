@@ -57,6 +57,8 @@ At-most-once provider execution is not enforced by the outbox. It is guaranteed 
 
 `JobRun` is not an execution lock. It is the activity/index row used by admin history surfaces. `SyncRun` and `SyncRunUnit` remain the execution source of truth, and the outbox remains the durable dispatch mechanism.
 
+For how each `SyncRunUnit` is decomposed (`source × dataset × window`) and the reference-tier vs work-item-tier distinction, see [Sync Unit Model](sync-unit-model.md).
+
 ---
 
 ## Crash-Window Recovery Flow

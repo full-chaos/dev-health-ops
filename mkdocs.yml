@@ -38,6 +38,7 @@ nav:
       - Overview: architecture.md
       - Data Pipeline: architecture/data-pipeline.md
       - Durable Dispatch Outbox: architecture/dispatch-outbox.md
+      - Sync Unit Model: architecture/sync-unit-model.md
       - Team Attribution: architecture/team-attribution.md
       - Investment Categorization Pipeline: architecture/investment-categorization-pipeline.md
       - Investment Data Model: architecture/investment-data-model.md

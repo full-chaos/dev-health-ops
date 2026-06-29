@@ -706,13 +706,14 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                 SyncRunMode.INCREMENTAL.value,
                 SyncRunMode.FULL_RESYNC.value,  # full_resync stamps watermark on success
             }:
-                set_watermark(
-                    session,
-                    ctx.org_id,
-                    ctx.source_external_id,
-                    ctx.dataset_key,
-                    started_at,
-                )
+                for watermark_dataset_key in _watermark_dataset_keys(ctx):
+                    set_watermark(
+                        session,
+                        ctx.org_id,
+                        ctx.source_external_id,
+                        watermark_dataset_key,
+                        started_at,
+                    )
             session.flush()
             should_finalize = True
         logger.info(
@@ -1342,6 +1343,35 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
     }
 
 
+def _watermark_dataset_keys(ctx: SyncTaskContext) -> list[str]:
+    """Dataset keys whose watermark this unit advances on success.
+
+    CHAOS-2721: a collapsed work-item-family unit (canonical dataset_key
+    "work-items") carries the enabled family datasets as boolean
+    ``family_dataset_<key>`` flags; advance each enabled dataset's watermark
+    independently so per-dataset incremental identity is preserved. A plain unit
+    advances only its own dataset_key.
+    """
+    from dev_health_ops.sync.planner import family_dataset_keys_from_flags
+
+    family_keys = family_dataset_keys_from_flags(ctx.processor_flags)
+    return family_keys or [ctx.dataset_key]
+
+
+def _family_dataset_audit_metadata(unit: SyncRunUnit) -> dict[str, list[str]]:
+    """CHAOS-2721: a collapsed work-item-family unit records only its canonical
+    "work-items" dataset_key, which would hide that labels/projects/history/
+    comments also ran. Surface the enabled family datasets in the compute
+    checkpoint metadata so admin/API/debug views keep per-dataset provenance.
+    """
+    from dev_health_ops.sync.planner import family_dataset_keys_from_flags
+
+    family_keys = family_dataset_keys_from_flags(unit.processor_flags)
+    if not family_keys:
+        return {}
+    return {"family_datasets": family_keys}
+
+
 def _checkpoint_successful_compute_inputs(
     session,
     units: list[SyncRunUnit],
@@ -1375,6 +1405,7 @@ def _checkpoint_successful_compute_inputs(
                 "cost_class": str(unit.cost_class),
                 "mode": str(unit.mode),
                 "legacy_targets": sorted(legacy_targets),
+                **_family_dataset_audit_metadata(unit),
             },
         )
         nested = session.begin_nested()

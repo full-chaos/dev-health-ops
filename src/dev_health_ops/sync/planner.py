@@ -325,10 +325,10 @@ _DEFAULT_INITIAL_SYNC_DEPTH_DAYS: int = 30
 
 
 # ---------------------------------------------------------------------------
-# Linear backfill chunk policy (CHAOS-2710)
+# Linear backfill chunk policy (CHAOS-2710, rebalanced in CHAOS-2717)
 # ---------------------------------------------------------------------------
 
-_DEFAULT_LINEAR_BACKFILL_MAX_WINDOW_DAYS: int = 3
+_DEFAULT_LINEAR_BACKFILL_MAX_WINDOW_DAYS: int = 14
 
 _LINEAR_WORK_ITEM_DATASETS: frozenset[str] = frozenset(
     {
@@ -344,9 +344,15 @@ _LINEAR_WORK_ITEM_DATASETS: frozenset[str] = frozenset(
 def _linear_backfill_max_window_days() -> int:
     """Return the max chunk window (days) for Linear work-item-family backfills.
 
-    Reads LINEAR_BACKFILL_MAX_WINDOW_DAYS from the environment; falls back to
-    the conservative default of 3 days so large historical ranges are split
-    into small enough windows to stay within Linear's GraphQL budget.
+    Reads LINEAR_BACKFILL_MAX_WINDOW_DAYS from the environment; falls back to a
+    default of 14 days. CHAOS-2717 bounds each window's issue crawl to its own
+    slice via the provider's updatedAt gte/lte filter, so a window no longer
+    re-scans to now. The window size then trades two opposing budgets:
+    smaller windows multiply the per-window fixed overhead (teams + cycles are
+    re-fetched per unit) and push the per-hour request count back toward Linear's
+    rate limit, while larger windows lengthen a single unit's crawl and risk the
+    worker lease/soft-timeout budget (see docs/ops/workers.md). 14 days is the
+    balance; operators can override per tenant.
     """
     raw = os.getenv("LINEAR_BACKFILL_MAX_WINDOW_DAYS")
     if raw is not None:

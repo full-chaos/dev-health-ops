@@ -551,6 +551,7 @@ class LinearClient:
         *,
         team_keys: list[str] | None = None,
         updated_after: datetime | None = None,
+        updated_before: datetime | None = None,
         include_archived: bool = False,
         limit: int | None = None,
     ) -> Iterable[dict[str, Any]]:
@@ -559,6 +560,7 @@ class LinearClient:
         for nodes in self.iter_issues_pages(
             team_keys=team_keys,
             updated_after=updated_after,
+            updated_before=updated_before,
             include_archived=include_archived,
         ):
             for node in nodes:
@@ -572,6 +574,7 @@ class LinearClient:
         *,
         team_keys: list[str] | None = None,
         updated_after: datetime | None = None,
+        updated_before: datetime | None = None,
         include_archived: bool = False,
     ) -> Iterable[list[dict[str, Any]]]:
         cursor: str | None = None
@@ -579,8 +582,13 @@ class LinearClient:
         filter_obj: dict[str, Any] = {}
         if team_keys:
             filter_obj["team"] = {"key": {"in": team_keys}}
+        updated_at_filter: dict[str, Any] = {}
         if updated_after:
-            filter_obj["updatedAt"] = {"gte": updated_after.isoformat()}
+            updated_at_filter["gte"] = updated_after.isoformat()
+        if updated_before:
+            updated_at_filter["lte"] = updated_before.isoformat()
+        if updated_at_filter:
+            filter_obj["updatedAt"] = updated_at_filter
         if not include_archived:
             filter_obj["archivedAt"] = {"null": True}
 

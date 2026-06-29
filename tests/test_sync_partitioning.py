@@ -887,6 +887,63 @@ class TestWorkItemsProviderCredentialIsolation:
         assert isinstance(captured_clients[0], LinearClient)
         assert captured_clients[0].auth.api_key == "lin_explicit"
 
+    @patch.dict(os.environ, {}, clear=True)
+    @patch("dev_health_ops.metrics.job_work_items.ClickHouseMetricsSink")
+    @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
+    def test_linear_work_items_empty_source_raises(
+        self, mock_from_env, mock_sink_class
+    ):
+        from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
+
+        sink = MagicMock()
+        sink.query_dicts.return_value = []
+        mock_sink_class.return_value = sink
+
+        with pytest.raises(ValueError, match="non-empty source team key"):
+            run_work_items_sync_job(
+                db_url="clickhouse://localhost/dev",
+                day=datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
+                backfill_days=1,
+                provider="linear",
+                org_id="00000000-0000-0000-0000-000000000001",
+                credentials={"api_key": "lin_explicit"},
+                repo_name="   ",
+            )
+
+    @patch.dict(os.environ, {}, clear=True)
+    @patch("dev_health_ops.metrics.job_work_items.ClickHouseMetricsSink")
+    @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
+    def test_linear_work_items_threads_source_into_ingestion_repo(
+        self, mock_from_env, mock_sink_class
+    ):
+        from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
+
+        sink = MagicMock()
+        sink.query_dicts.return_value = []
+        mock_sink_class.return_value = sink
+
+        captured_repos: list[object] = []
+
+        def _fake_iter_ingest(self, ctx):
+            captured_repos.append(ctx.repo)
+            return iter(())
+
+        with patch(
+            "dev_health_ops.providers.linear.provider.LinearProvider.iter_ingest",
+            new=_fake_iter_ingest,
+        ):
+            run_work_items_sync_job(
+                db_url="clickhouse://localhost/dev",
+                day=datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
+                backfill_days=1,
+                provider="linear",
+                org_id="00000000-0000-0000-0000-000000000001",
+                credentials={"api_key": "lin_explicit"},
+                repo_name="ENG",
+            )
+
+        assert captured_repos == ["ENG"]
+
     @patch.dict(
         os.environ,
         {"JIRA_JQL": "project = ENV", "JIRA_PROJECT_KEYS": "ENV"},

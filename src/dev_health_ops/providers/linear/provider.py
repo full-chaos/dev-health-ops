@@ -202,8 +202,8 @@ class LinearProvider(ProviderWithClient[LinearClient]):
                 teams_to_sync.append(resolved_team)
             if not cycle_cache and fetch_cycles:
                 fetched_sprints = []
-                if api_team is None and teams_to_sync:
-                    api_team = teams_to_sync[0]
+                if api_team is None:
+                    api_team = client.get_team_by_key(team_key)
                 if api_team and api_team.get("id"):
                     for cycle in client.iter_cycles(team_id=str(api_team["id"])):
                         sprint = linear_cycle_to_sprint(cycle)

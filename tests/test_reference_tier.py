@@ -158,7 +158,7 @@ def test_linear_unscoped_sprint_cache_does_not_skip_current_team_fetch() -> None
         repo="ENG",
         reference_teams=[
             {
-                "id": "api-eng",
+                "id": "ENG",
                 "name": "Engineering",
                 "provider": "linear",
                 "native_team_key": "ENG",
@@ -170,7 +170,7 @@ def test_linear_unscoped_sprint_cache_does_not_skip_current_team_fetch() -> None
 
     batches = list(_linear_provider(client).iter_ingest(ctx))
 
-    assert client.get_team_by_key_calls == 0
+    assert client.get_team_by_key_calls == 1
     assert client.iter_cycles_calls == 1
     assert [item.sprint_id for batch in batches for item in batch.sprints] == [
         "linear:cycle:cycle-1"

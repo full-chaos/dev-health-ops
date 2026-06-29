@@ -36,6 +36,7 @@ _INVESTMENT_TASK = (
 _WORK_GRAPH_TASK = "dev_health_ops.workers.tasks.run_work_graph_build"
 _PROJECTION_TASK = "dev_health_ops.workers.tasks.run_membership_backfill"
 _DAILY_METRICS_TASK = "dev_health_ops.workers.tasks.run_daily_metrics"
+_COMPLEXITY_TASK = "dev_health_ops.workers.tasks.run_complexity_job"
 
 
 def _run_dispatch(provider: str, sync_targets: list[str], org_id: str):
@@ -80,15 +81,16 @@ def test_investment_chain_dispatched_with_git_and_work_items() -> None:
     )
 
     assert mock_chain.call_count == 1
-    # CHAOS-2600 CS5: the team-sync bridge step was removed from the chain;
-    # ClickHouse is written directly by sync_teams / auto-import, not a daily
-    # Postgres->ClickHouse bridge. Chain is daily_metrics -> build -> materialize.
-    daily_sig, build_sig, materialize_sig = mock_chain.call_args.args
+    complexity_sig, daily_sig, build_sig, materialize_sig = mock_chain.call_args.args
+    assert complexity_sig.task_name == _COMPLEXITY_TASK
     assert daily_sig.task_name == _DAILY_METRICS_TASK
     assert build_sig.task_name == _WORK_GRAPH_TASK
     assert materialize_sig.task_name == _INVESTMENT_TASK
 
     # All signatures are org-scoped onto the metrics queue.
+    assert complexity_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
+    assert complexity_sig.sig_kwargs["queue"] == "metrics"
+    assert complexity_sig.sig_kwargs.get("immutable") is True
     assert daily_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
     assert daily_sig.sig_kwargs["queue"] == "metrics"
     assert daily_sig.sig_kwargs.get("immutable") is True
@@ -120,7 +122,9 @@ def test_investment_chain_dispatched_with_git_only() -> None:
     )
 
     assert mock_chain.call_count == 1
-    build_sig, materialize_sig = mock_chain.call_args.args
+    complexity_sig, daily_sig, build_sig, materialize_sig = mock_chain.call_args.args
+    assert complexity_sig.task_name == _COMPLEXITY_TASK
+    assert daily_sig.task_name == _DAILY_METRICS_TASK
     assert build_sig.task_name == _WORK_GRAPH_TASK
     assert materialize_sig.task_name == _INVESTMENT_TASK
     chain_instance.apply_async.assert_called_once_with()

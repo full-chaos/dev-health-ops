@@ -149,6 +149,7 @@ def populate(
     scope: dict[str, Any],
     **kwargs: Any,
 ) -> dict[str, Any]:
+    strict = bool(scope.get("strict_reference_discovery"))
     linear_credentials = linear_credentials_from_mapping(credentials)
     if linear_credentials is None:
         return {
@@ -288,6 +289,8 @@ def populate(
                         replace(linear_cycle_to_sprint(cycle), org_id=org_id)
                     )
     except Exception:
+        if strict:
+            raise
         sprint_rows = []
 
     sink, should_close = _sink_from_kwargs(scope, kwargs)
@@ -334,6 +337,8 @@ def populate(
     return {
         "mode": scope.get("mode"),
         "teams_imported": len(team_rows),
+        "reference_team_keys": [str(row["native_team_key"]) for row in team_rows],
+        "reference_sprint_ids": [str(row.sprint_id) for row in sprint_rows],
         "projects_imported": len(projects),
         "members_imported": len(members),
         "team_memberships_imported": len(memberships),

@@ -14,6 +14,7 @@ from dev_health_ops.models import (
     SyncDispatchOutbox,
     SyncRun,
     SyncRunPostDispatch,
+    SyncRunReferenceDiscovery,
     SyncRunStatus,
     SyncRunUnit,
     SyncRunUnitStatus,
@@ -52,6 +53,7 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
         _dispatch_post_sync_tasks,
         build_post_sync_dispatch_payload,
     )
+    from dev_health_ops.workers.reference_discovery import run_sync_reference_discovery
     from dev_health_ops.workers.sync_units import (
         _expired_lease_retry_backoff_seconds,
         _failed_retry_result_payload,
@@ -287,6 +289,7 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
                     stale_dispatch_cutoff=stale_dispatch_cutoff,
                     dispatch_sync_run=dispatch_sync_run,
                     finalize_sync_run=finalize_sync_run,
+                    run_sync_reference_discovery=run_sync_reference_discovery,
                 )
             except Exception as exc:
                 publish_failures += 1
@@ -518,13 +521,23 @@ def _publish_claimed_outbox_row(
     stale_dispatch_cutoff: datetime,
     dispatch_sync_run,
     finalize_sync_run,
+    run_sync_reference_discovery,
 ) -> str | None:
     from dev_health_ops.sync.dispatch_outbox import (
+        OUTBOX_KIND_DISCOVERY,
         OUTBOX_KIND_DISPATCH,
         OUTBOX_KIND_FINALIZE,
     )
 
+    if row.kind == OUTBOX_KIND_DISCOVERY:
+        getattr(run_sync_reference_discovery, "apply_async")(
+            args=(str(row.sync_run_id),), queue="sync"
+        )
+        return OUTBOX_KIND_DISCOVERY
+
     if row.kind == OUTBOX_KIND_DISPATCH:
+        if not _reference_discovery_successful(session, row.sync_run_id):
+            return None
         if not _run_has_dispatchable_units(
             session, row.sync_run_id, stale_dispatch_cutoff
         ):
@@ -551,6 +564,18 @@ def _publish_claimed_outbox_row(
         },
     )
     raise ValueError(f"unsupported sync dispatch outbox kind: {row.kind}")
+
+
+def _reference_discovery_successful(session, sync_run_id: uuid.UUID) -> bool:
+    return (
+        session.query(SyncRunReferenceDiscovery.id)
+        .filter(
+            SyncRunReferenceDiscovery.sync_run_id == sync_run_id,
+            SyncRunReferenceDiscovery.status == "success",
+        )
+        .one_or_none()
+        is not None
+    )
 
 
 def _publish_claimed_post_sync_row(

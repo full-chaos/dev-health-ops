@@ -16,6 +16,7 @@ from dev_health_ops.models import (
     SyncDispatchOutbox,
     SyncRun,
     SyncRunMode,
+    SyncRunReferenceDiscovery,
     SyncRunStatus,
     SyncRunUnit,
     SyncRunUnitStatus,
@@ -24,7 +25,7 @@ from dev_health_ops.models import (
 from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.users import Organization
 from dev_health_ops.sync.dispatch_outbox import (
-    OUTBOX_KIND_DISPATCH,
+    OUTBOX_KIND_DISCOVERY,
     OUTBOX_STATUS_PENDING,
 )
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
@@ -136,7 +137,12 @@ def test_enabled_sources_and_enabled_datasets_fan_out_to_units(db_session):
     units = _planned_units(db_session, plan.sync_run_id)
     outbox = (
         db_session.query(SyncDispatchOutbox)
-        .filter_by(sync_run_id=plan.sync_run_id, kind=OUTBOX_KIND_DISPATCH)
+        .filter_by(sync_run_id=plan.sync_run_id, kind=OUTBOX_KIND_DISCOVERY)
+        .one()
+    )
+    discovery = (
+        db_session.query(SyncRunReferenceDiscovery)
+        .filter_by(sync_run_id=plan.sync_run_id)
         .one()
     )
 
@@ -154,6 +160,8 @@ def test_enabled_sources_and_enabled_datasets_fan_out_to_units(db_session):
     assert {unit.mode for unit in units} == {SyncRunMode.INCREMENTAL.value}
     assert outbox.status == OUTBOX_STATUS_PENDING
     assert outbox.claim_token is None
+    assert discovery.status == "planned"
+    assert discovery.org_id == ORG_ID
 
 
 def test_unsupported_provider_dataset_pairs_are_skipped(db_session):
@@ -648,6 +656,7 @@ def test_postgres_missing_tier_limits_stays_inside_planner_savepoint():
                 IntegrationSource,
                 IntegrationDataset,
                 SyncRun,
+                SyncRunReferenceDiscovery,
                 SyncRunUnit,
                 SyncDispatchOutbox,
                 SyncWatermark,
@@ -711,7 +720,7 @@ def test_postgres_missing_tier_limits_stays_inside_planner_savepoint():
             units = _planned_units(session, plan.sync_run_id)
             outbox = (
                 session.query(SyncDispatchOutbox)
-                .filter_by(sync_run_id=plan.sync_run_id, kind=OUTBOX_KIND_DISPATCH)
+                .filter_by(sync_run_id=plan.sync_run_id, kind=OUTBOX_KIND_DISCOVERY)
                 .one()
             )
             assert run is not None

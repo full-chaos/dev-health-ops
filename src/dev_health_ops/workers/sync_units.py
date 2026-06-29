@@ -275,9 +275,12 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
     """
 
     from dev_health_ops.db import get_postgres_session_sync
+    from dev_health_ops.workers.reference_discovery import (
+        ensure_reference_discovery_wakeup,
+        reference_discovery_succeeded,
+    )
 
     with get_postgres_session_sync() as session:
-        decision = DispatchGuard.authorize_run(session, sync_run_id)
         run_uuid = uuid.UUID(str(sync_run_id))
         run = session.query(SyncRun).filter(SyncRun.id == run_uuid).one_or_none()
         if run is None:
@@ -286,6 +289,20 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                 extra={"sync_run_id": sync_run_id},
             )
             return {"status": "missing", "sync_run_id": sync_run_id}
+        if not reference_discovery_succeeded(session, run_uuid):
+            now = datetime.now(timezone.utc)
+            ensure_reference_discovery_wakeup(session, run_uuid, now=now)
+            session.flush()
+            logger.info(
+                "dispatch_sync_run.blocked_on_reference_discovery",
+                extra={"sync_run_id": sync_run_id},
+            )
+            return {
+                "status": "blocked_on_reference_discovery",
+                "sync_run_id": sync_run_id,
+            }
+
+        decision = DispatchGuard.authorize_run(session, sync_run_id)
 
         # --- Total-cap hard-deny: whole run is over the org unit ceiling ---
         if not decision.allowed:

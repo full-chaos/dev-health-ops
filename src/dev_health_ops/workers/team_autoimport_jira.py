@@ -167,6 +167,7 @@ def populate(
     scope: dict[str, Any],
     **kwargs: Any,
 ) -> dict[str, Any]:
+    strict = bool(scope.get("strict_reference_discovery"))
     jira_credentials = jira_credentials_from_mapping(credentials)
     if jira_credentials is None:
         return {
@@ -190,6 +191,8 @@ def populate(
             )
         )
     except Exception as exc:
+        if strict:
+            raise
         # Mirror github/gitlab: a discovery failure (e.g. HTTP 403) skips the
         # import INTERNALLY without writing anything, so a manual ownership row
         # is never clobbered and the sync stays successful (CHAOS-2609).
@@ -357,6 +360,8 @@ def populate(
         finally:
             client.close()
     except Exception:
+        if strict:
+            raise
         sprint_rows = []
 
     sink, should_close = _sink_from_kwargs(scope, kwargs)
@@ -439,6 +444,8 @@ def populate(
     return {
         "mode": scope.get("mode"),
         "teams_imported": len(team_rows),
+        "reference_team_keys": [str(row["native_team_key"]) for row in team_rows],
+        "reference_sprint_ids": [str(row.sprint_id) for row in sprint_rows],
         "projects_imported": len(projects),
         "members_imported": len(members),
         "team_memberships_imported": len(memberships),

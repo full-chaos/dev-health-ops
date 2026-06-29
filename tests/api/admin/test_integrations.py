@@ -23,6 +23,7 @@ from dev_health_ops.models.integrations import (
     IntegrationSource,
     SyncDispatchOutbox,
     SyncRun,
+    SyncRunReferenceDiscovery,
     SyncRunUnit,
 )
 from dev_health_ops.models.settings import (
@@ -32,7 +33,7 @@ from dev_health_ops.models.settings import (
 )
 from dev_health_ops.models.users import Organization, User
 from dev_health_ops.sync.dispatch_outbox import (
-    OUTBOX_KIND_DISPATCH,
+    OUTBOX_KIND_DISCOVERY,
     OUTBOX_STATUS_PENDING,
 )
 from tests._helpers import tables_of
@@ -52,6 +53,7 @@ _TABLES = tables_of(
     IntegrationDataset,
     SyncDispatchOutbox,
     SyncRun,
+    SyncRunReferenceDiscovery,
     SyncRunUnit,
     SyncConfiguration,
     IntegrationCredential,
@@ -573,7 +575,7 @@ async def test_trigger_sync_returns_202_when_enqueue_fails(
     assert run.status == "planned"
     assert run.error is None
     assert run.completed_at is None
-    assert outbox.kind == OUTBOX_KIND_DISPATCH
+    assert outbox.kind == OUTBOX_KIND_DISCOVERY
     assert outbox.status == OUTBOX_STATUS_PENDING
 
 
@@ -675,7 +677,7 @@ async def test_trigger_backfill_returns_202_when_enqueue_fails(
     assert run.mode == "backfill"
     assert run.error is None
     assert run.completed_at is None
-    assert outbox.kind == OUTBOX_KIND_DISPATCH
+    assert outbox.kind == OUTBOX_KIND_DISCOVERY
     assert outbox.status == OUTBOX_STATUS_PENDING
 
 

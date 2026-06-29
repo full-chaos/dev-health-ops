@@ -24,6 +24,7 @@ from dev_health_ops.models.integrations import (
     IntegrationSource,
     SyncDispatchOutbox,
     SyncRun,
+    SyncRunReferenceDiscovery,
     SyncRunUnit,
 )
 from dev_health_ops.models.licensing import OrgLicense, TierLimit
@@ -55,6 +56,7 @@ _TABLES = tables_of(
     IntegrationSource,
     IntegrationDataset,
     SyncRun,
+    SyncRunReferenceDiscovery,
     SyncRunUnit,
     SyncDispatchOutbox,
     ScheduledJob,

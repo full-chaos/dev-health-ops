@@ -269,6 +269,7 @@ def run_work_items_sync_job(
     include_pull_requests: bool | None = None,
     fetch_comments: bool | None = None,
     fetch_milestones: bool | None = None,
+    require_source: bool = False,
 ) -> dict[str, Any] | None:
     """
     Sync work tracking facts from provider APIs and write derived work item tables.
@@ -323,8 +324,11 @@ def run_work_items_sync_job(
 
         _teams_data = (
             primary_sink.query_dicts(
-                "SELECT id, name, project_keys, provider, native_team_key FROM teams FINAL"
-                + (" WHERE org_id = {org_id:String}" if org_id else ""),
+                "SELECT id, argMax(name, updated_at) AS name, "
+                "argMax(project_keys, updated_at) AS project_keys, provider, native_team_key "
+                "FROM teams"
+                + (" WHERE org_id = {org_id:String}" if org_id else "")
+                + " GROUP BY id, provider, native_team_key, org_id",
                 {"org_id": org_id} if org_id else {},
             )
             if hasattr(primary_sink, "query_dicts")
@@ -381,6 +385,34 @@ def run_work_items_sync_job(
             len(discovered_repos),
             before,
         )
+
+        if require_source:
+            if {"github", "gitlab"}.intersection(provider_set) and not repo_name:
+                logger.error("Work-item unit requires a non-empty source context")
+                raise ValueError("Work-item unit requires a non-empty source context")
+            if "jira" in provider_set and not jira_project_keys:
+                logger.error("Jira work-item unit requires a project source context")
+                raise ValueError(
+                    "Jira work-item unit requires a project source context"
+                )
+            if "linear" in provider_set and not repo_name:
+                logger.error("Linear work-item unit requires a team source context")
+                raise ValueError("Linear work-item unit requires a team source context")
+            if repo_name and {"github", "gitlab"}.intersection(provider_set):
+                provider_sources = {repo.source for repo in discovered_repos}
+                expected = {
+                    provider
+                    for provider in provider_set
+                    if provider in {"github", "gitlab"}
+                }
+                if not expected.issubset(provider_sources):
+                    logger.error(
+                        "Work-item unit source was not discovered",
+                        extra={"repo_name": repo_name, "providers": sorted(expected)},
+                    )
+                    raise ValueError(
+                        f"Work-item unit source was not discovered: {repo_name}"
+                    )
 
         if "synthetic" in provider_set and not any(
             r.source == "synthetic" for r in discovered_repos
@@ -549,7 +581,9 @@ def run_work_items_sync_job(
             from dev_health_ops.providers.linear.provider import LinearProvider
 
             linear_repo_name = repo_name.strip() if repo_name else None
-            if repo_name is not None and not linear_repo_name:
+            if (repo_name is not None and not linear_repo_name) or (
+                require_source and not linear_repo_name
+            ):
                 logger.error("Linear work-item sync received an empty source context")
                 raise ValueError(
                     "Linear work-item sync requires a non-empty source team key"

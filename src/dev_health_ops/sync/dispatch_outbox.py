@@ -41,6 +41,7 @@ from dev_health_ops.models import (
 )
 
 OUTBOX_KIND_DISPATCH = "dispatch_sync_run"
+OUTBOX_KIND_DISCOVERY = "reference_discovery"
 OUTBOX_KIND_FINALIZE = "finalize_sync_run"
 OUTBOX_KIND_POST_SYNC = "post_sync"
 

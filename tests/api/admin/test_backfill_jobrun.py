@@ -47,6 +47,7 @@ from dev_health_ops.models.integrations import (
     IntegrationSource,
     SyncDispatchOutbox,
     SyncRun,
+    SyncRunReferenceDiscovery,
     SyncRunStatus,
     SyncRunUnit,
 )
@@ -77,6 +78,7 @@ _TABLES = tables_of(
     IntegrationSource,
     IntegrationDataset,
     SyncRun,
+    SyncRunReferenceDiscovery,
     SyncRunUnit,
     SyncDispatchOutbox,
     BackfillJob,

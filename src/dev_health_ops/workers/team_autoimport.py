@@ -140,6 +140,44 @@ def run_team_autoimport(
     }
 
 
+def run_team_autoimport_strict(
+    *,
+    provider: str,
+    org_id: str,
+    credentials: dict[str, Any],
+    scope: dict[str, Any] | None = None,
+    analytics_db_url: str | None = None,
+) -> dict[str, Any]:
+    normalized_provider = provider.strip().lower()
+    if not _provider_capability(normalized_provider):
+        raise ValueError(f"provider is not import-capable: {normalized_provider}")
+    populator = _resolve_populator(normalized_provider)
+    if populator is None:
+        raise ValueError(
+            f"team auto-import populator is unavailable: {normalized_provider}"
+        )
+
+    populator_scope = dict(scope or {})
+    populator_scope["strict_reference_discovery"] = True
+    if analytics_db_url:
+        populator_scope["analytics_db"] = analytics_db_url
+    summary = populator(
+        org_id=org_id,
+        credentials=credentials,
+        scope=populator_scope,
+    )
+    if not isinstance(summary, Mapping):
+        raise TypeError(
+            f"team auto-import populator returned {type(summary).__name__}, expected mapping"
+        )
+    return {
+        "status": "success",
+        "provider": normalized_provider,
+        "org_id": org_id,
+        **dict(summary),
+    }
+
+
 @celery_app.task(
     queue="sync",
     name="dev_health_ops.workers.tasks.run_post_sync_team_autoimport",

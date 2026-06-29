@@ -26,6 +26,7 @@ from dev_health_ops.models.integrations import (
     IntegrationDataset,
     IntegrationSource,
     SyncRun,
+    SyncRunReferenceDiscovery,
     SyncRunUnit,
 )
 from dev_health_ops.models.settings import (
@@ -53,6 +54,7 @@ _TABLES = tables_of(
     IntegrationSource,
     IntegrationDataset,
     SyncRun,
+    SyncRunReferenceDiscovery,
     SyncRunUnit,
 )
 

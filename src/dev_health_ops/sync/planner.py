@@ -47,13 +47,14 @@ from dev_health_ops.models import (
     IntegrationSource,
     SyncRun,
     SyncRunMode,
+    SyncRunReferenceDiscovery,
     SyncRunStatus,
     SyncRunUnit,
     SyncRunUnitStatus,
 )
 from dev_health_ops.sync.datasets import WatermarkBehavior, get_dataset_spec
 from dev_health_ops.sync.dispatch_outbox import (
-    OUTBOX_KIND_DISPATCH,
+    OUTBOX_KIND_DISCOVERY,
     upsert_outbox_wakeup,
 )
 from dev_health_ops.sync.watermarks import get_watermark_with_overlap
@@ -175,10 +176,20 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
     ]
     session.add_all(unit_rows)
     session.flush()
+    session.add(
+        SyncRunReferenceDiscovery(
+            org_id=integration.org_id,
+            sync_run_id=sync_run.id,
+            status="planned",
+            attempts=0,
+            available_at=now,
+        )
+    )
+    session.flush()
     upsert_outbox_wakeup(
         session,
         sync_run_id=sync_run.id,
-        kind=OUTBOX_KIND_DISPATCH,
+        kind=OUTBOX_KIND_DISCOVERY,
         available_at=now,
         now=now,
     )

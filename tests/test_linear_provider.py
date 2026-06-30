@@ -814,9 +814,11 @@ class TestLinearProviderIngest:
 
     @patch.dict(os.environ, {"LINEAR_API_KEY": "test-api-key"}, clear=False)
     @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
+    @pytest.mark.parametrize("team_key", ["NONEXISTENT", "linear"])
     def test_ingest_team_not_found(
         self,
         mock_from_env: MagicMock,
+        team_key: str,
         mock_identity: IdentityResolver,
         mock_status_mapping: StatusMapping,
     ) -> None:
@@ -834,7 +836,7 @@ class TestLinearProviderIngest:
 
         ctx = IngestionContext(
             window=IngestionWindow(),
-            repo="NONEXISTENT",
+            repo=team_key,
         )
 
         with pytest.raises(ValueError, match="not found"):

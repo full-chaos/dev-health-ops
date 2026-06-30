@@ -38,6 +38,7 @@ def _context(
     provider: str = "github",
     dataset_key: str,
     source_external_id: str = "full-chaos/dev-health",
+    source_is_org_wide_placeholder: bool = False,
     processor_flags: dict[str, bool] | None = None,
     credentials: Mapping[str, object] | None = None,
 ) -> SyncTaskContext:
@@ -58,6 +59,7 @@ def _context(
         credential_id="credential-1",
         decrypted_credentials=dict(credentials or {"token": "secret-token"}),
         db_url="clickhouse://localhost/default",
+        source_is_org_wide_placeholder=source_is_org_wide_placeholder,
     )
 
 
@@ -234,6 +236,45 @@ def test_work_item_datasets_route_to_work_item_sync_scoped_to_source(
         assert "include_issues" not in kwargs
     assert result["work_items_synced"] is True
     assert result["source"] == source_external_id
+
+
+def test_linear_org_wide_provider_name_placeholder_routes_to_no_source() -> None:
+    ctx = _context(
+        provider="linear",
+        dataset_key="work-items",
+        source_external_id="linear",
+        source_is_org_wide_placeholder=True,
+    )
+
+    with patch(
+        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job"
+    ) as work_items:
+        result = run_dataset_unit(ctx, _runtime())
+
+    work_items.assert_called_once()
+    kwargs = work_items.call_args.kwargs
+    assert kwargs["provider"] == "linear"
+    assert kwargs["repo_name"] is None
+    assert kwargs["require_source"] is False
+    assert result["source"] == "linear"
+
+
+def test_linear_provider_name_scoped_source_stays_visible_to_provider() -> None:
+    ctx = _context(
+        provider="linear",
+        dataset_key="work-items",
+        source_external_id="linear",
+    )
+
+    with patch(
+        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job"
+    ) as work_items:
+        run_dataset_unit(ctx, _runtime())
+
+    work_items.assert_called_once()
+    kwargs = work_items.call_args.kwargs
+    assert kwargs["repo_name"] == "linear"
+    assert kwargs["require_source"] is True
 
 
 def test_work_item_derivative_dataset_uses_same_work_item_path() -> None:

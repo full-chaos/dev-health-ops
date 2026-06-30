@@ -60,6 +60,32 @@ class SyncTaskContext:
     credential_id: str | None
     decrypted_credentials: Any
     db_url: str
+    source_is_org_wide_placeholder: bool = False
+
+
+_NON_GIT_SOURCE_SCOPE_KEYS = ("project_id", "project_key", "team_id", "repo")
+
+
+def _linear_org_wide_placeholder_source(source: Any, integration: Any) -> bool:
+    provider = str(getattr(source, "provider", "") or integration.provider).lower()
+    if provider != "linear":
+        return False
+
+    metadata = dict(getattr(source, "metadata_", None) or {})
+    if metadata.get("org_wide_placeholder") is True:
+        return True
+
+    external_id = str(getattr(source, "external_id", "") or "").strip().lower()
+    if external_id != provider:
+        return False
+
+    if not metadata.get("planner_managed_sync_config_id"):
+        return False
+
+    config = dict(getattr(integration, "config", None) or {})
+    return not any(
+        str(config.get(key) or "").strip() for key in _NON_GIT_SOURCE_SCOPE_KEYS
+    )
 
 
 @dataclass(frozen=True)
@@ -193,6 +219,9 @@ class SyncTaskBootstrap:
             credential_id=str(credential_id) if credential_id is not None else None,
             decrypted_credentials=decrypted_credentials,
             db_url=_get_db_url(),
+            source_is_org_wide_placeholder=_linear_org_wide_placeholder_source(
+                source, integration
+            ),
         )
 
 

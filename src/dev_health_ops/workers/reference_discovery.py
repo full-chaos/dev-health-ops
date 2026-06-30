@@ -261,6 +261,10 @@ def _verify_reference_readback(
 ) -> None:
     expected_team_keys = _strings(summary.get("reference_team_keys"))
     expected_sprint_ids = _strings(summary.get("reference_sprint_ids"))
+    if not expected_team_keys and not expected_sprint_ids:
+        # Nothing claimed to verify (e.g. a non-import-capable provider's no-op
+        # discovery) — a true no-op that must not depend on ClickHouse.
+        return
     deadline = time.monotonic() + _readback_timeout_seconds()
     sink = ClickHouseMetricsSink(dsn=analytics_db_url)
     try:

@@ -150,7 +150,24 @@ def run_team_autoimport_strict(
 ) -> dict[str, Any]:
     normalized_provider = provider.strip().lower()
     if not _provider_capability(normalized_provider):
-        raise ValueError(f"provider is not import-capable: {normalized_provider}")
+        # Providers without a reference tier (e.g. launchdarkly) have nothing
+        # to discover today, so strict reference discovery is a successful
+        # no-op rather than a hard failure that would fail the whole sync run.
+        # (LD work-item association — Commits<>PRs<>Issues — is planned but not
+        # implemented yet; CHAOS-2740.) Genuine failures still surface: a capable
+        # provider with a missing populator raises below, and a capable provider
+        # with bad credentials raises inside the populator.
+        logger.info(
+            "Reference discovery no-op for provider=%s org_id=%s: provider is "
+            "not import-capable (nothing to discover yet)",
+            normalized_provider,
+            org_id,
+        )
+        return _zero_summary(
+            provider=normalized_provider,
+            org_id=org_id,
+            reason="provider_not_import_capable",
+        )
     populator = _resolve_populator(normalized_provider)
     if populator is None:
         raise ValueError(

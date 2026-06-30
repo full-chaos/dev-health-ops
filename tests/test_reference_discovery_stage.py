@@ -542,3 +542,42 @@ def test_backfill_runner_dispatch_path_blocks_until_discovery(
     assert run is not None
     assert _outbox_rows(db_session, run, OUTBOX_KIND_DISCOVERY)
     assert _outbox_rows(db_session, run, OUTBOX_KIND_DISPATCH) == []
+
+
+def test_reference_discovery_noop_for_non_capable_provider_arms_dispatch(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-import-capable provider (e.g. launchdarkly) yields a skip summary
+    with no reference keys; discovery must stamp success and arm dispatch
+    WITHOUT requiring ClickHouse (a true no-op). CHAOS-2740."""
+    from dev_health_ops.workers import reference_discovery
+
+    run, _unit = _seed_unitized_run(db_session)
+    _add_discovery(db_session, run)
+    _patch_db_session(monkeypatch, db_session)
+    # Point CLICKHOUSE_URI at an unreachable host to prove the no-op readback
+    # never connects (the early-return short-circuits before sink construction).
+    monkeypatch.setenv("CLICKHOUSE_URI", "clickhouse://unreachable.invalid:9000/db")
+
+    def strict_skip(**kwargs: Any) -> dict[str, Any]:
+        return {
+            "status": "skipped",
+            "provider": "launchdarkly",
+            "org_id": kwargs["org_id"],
+            "reason": "provider_not_import_capable",
+            "projects_imported": 0,
+        }
+
+    monkeypatch.setattr(reference_discovery, "run_team_autoimport_strict", strict_skip)
+
+    result = reference_discovery.run_sync_reference_discovery(str(run.id))
+
+    ledger = (
+        db_session.query(SyncRunReferenceDiscovery).filter_by(sync_run_id=run.id).one()
+    )
+    dispatch_outbox = _outbox_rows(db_session, run, OUTBOX_KIND_DISPATCH)
+    assert result["status"] == "success"
+    assert ledger.status == "success"
+    assert ledger.completed_at is not None
+    assert len(dispatch_outbox) == 1
+    assert dispatch_outbox[0].status == OUTBOX_STATUS_PENDING

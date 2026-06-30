@@ -149,6 +149,14 @@ def _patch_session_with_config(monkeypatch: pytest.MonkeyPatch, config: object) 
         "dev_health_ops.backfill.runner.get_postgres_session_sync",
         lambda: _Ctx(),
     )
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner.run_team_autoimport_strict",
+        lambda **_: {"status": "success"},
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner._verify_reference_readback",
+        lambda **_: None,
+    )
 
 
 def test_run_backfill_derives_org_from_config_when_org_omitted(
@@ -188,7 +196,7 @@ def test_run_backfill_strict_reference_discovery_failure_blocks_writes(
         _FakeConfig(
             config_org,
             provider="linear",
-            sync_options={"auto_import_teams": True},
+            sync_options={"auto_import_teams": False},
         ),
     )
     writes: list[dict[str, object]] = []
@@ -211,6 +219,60 @@ def test_run_backfill_strict_reference_discovery_failure_blocks_writes(
         )
 
     assert writes == []
+
+
+def test_run_backfill_strict_reference_discovery_runs_when_autoimport_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_org = "55555555-5555-5555-5555-555555555555"
+    _patch_session_with_config(
+        monkeypatch,
+        _FakeConfig(
+            config_org,
+            provider="linear",
+            sync_options={"auto_import_teams": False},
+        ),
+    )
+    calls: list[dict[str, object]] = []
+    writes: list[dict[str, object]] = []
+
+    def _strict_discovery(**kwargs: object) -> dict[str, object]:
+        calls.append(kwargs)
+        return {"status": "success", "teams_imported": 1, "sprints_imported": 1}
+
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner.run_team_autoimport_strict",
+        _strict_discovery,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner.run_work_items_sync_job",
+        lambda *args, **kwargs: writes.append(kwargs),
+    )
+
+    result = run_backfill_for_config(
+        db_url="clickhouse://local",
+        sync_config_id="66666666-6666-6666-6666-666666666666",
+        org_id=None,
+        since=date(2026, 1, 1),
+        before=date(2026, 1, 3),
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["provider"] == "linear"
+    assert calls[0]["scope"] == {
+        "mode": "backfill",
+        "sync_config_id": "66666666-6666-6666-6666-666666666666",
+        "sync_options": {"auto_import_teams": False},
+        "window_count": 1,
+        "since": "2026-01-01",
+        "before": "2026-01-03",
+    }
+    assert len(writes) == 1
+    assert result["team_autoimport"] == {
+        "status": "success",
+        "teams_imported": 1,
+        "sprints_imported": 1,
+    }
 
 
 def test_run_backfill_raises_on_org_mismatch(

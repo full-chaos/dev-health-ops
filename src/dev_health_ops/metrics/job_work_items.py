@@ -75,6 +75,16 @@ class WorkItemsSyncLeaseLost(RuntimeError):
         super().__init__(f"sync unit lease lost before {surface} write")
 
 
+class WorkItemUnitMissingSource(ValueError):
+    def __init__(self, provider: str, source_kind: str) -> None:
+        self.provider = provider
+        self.source_kind = source_kind
+        super().__init__(
+            f"{provider} work-item unit had no source ({source_kind}); "
+            "refusing org-wide fan-out"
+        )
+
+
 @contextmanager
 def work_items_sync_lease_check(check: _LeaseCheck) -> Iterator[None]:
     token = _WORK_ITEMS_SYNC_LEASE_CHECK.set(check)
@@ -95,6 +105,35 @@ def _date_range(end_day: date, backfill_days: int) -> list[date]:
         return [end_day]
     start_day = end_day - timedelta(days=backfill_days - 1)
     return [start_day + timedelta(days=i) for i in range(backfill_days)]
+
+
+def _has_text(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _require_work_item_unit_source(
+    *,
+    provider_set: set[str],
+    repo_name: str | None,
+    jira_project_keys: list[str] | None,
+) -> None:
+    required_sources = {
+        "github": (repo_name, "repo"),
+        "gitlab": (repo_name, "project"),
+        "linear": (repo_name, "team"),
+    }
+    for provider, (source, source_kind) in required_sources.items():
+        if provider in provider_set and not _has_text(source):
+            error = WorkItemUnitMissingSource(provider, source_kind)
+            logger.error(str(error))
+            raise error
+
+    if "jira" in provider_set and not any(
+        _has_text(project_key) for project_key in (jira_project_keys or [])
+    ):
+        error = WorkItemUnitMissingSource("jira", "project_keys")
+        logger.error(str(error))
+        raise error
 
 
 def _build_github_work_client(
@@ -342,7 +381,7 @@ def run_work_items_sync_job(
                 "SELECT provider, sprint_id, argMax(name, last_synced) AS name, argMax(state, last_synced) AS state, "
                 "argMax(started_at, last_synced) AS started_at, argMax(ended_at, last_synced) AS ended_at, "
                 "argMax(completed_at, last_synced) AS completed_at, max(last_synced) AS last_synced_max, "
-                "org_id FROM sprints"
+                "argMax(native_team_key, last_synced) AS native_team_key, org_id FROM sprints"
                 + (" WHERE org_id = {org_id:String}" if org_id else "")
                 + " GROUP BY provider, sprint_id, org_id",
                 {"org_id": org_id} if org_id else {},
@@ -359,11 +398,19 @@ def run_work_items_sync_job(
                 started_at=row.get("started_at"),
                 ended_at=row.get("ended_at"),
                 completed_at=row.get("completed_at"),
+                native_team_key=row.get("native_team_key") or None,
                 last_synced=row.get("last_synced_max") or computed_at,
                 org_id=str(row.get("org_id") or ""),
             )
             for row in _sprints_data
         ]
+
+        if require_source:
+            _require_work_item_unit_source(
+                provider_set=provider_set,
+                repo_name=repo_name,
+                jira_project_keys=jira_project_keys,
+            )
 
         discovered_repos = _discover_repos(
             backend=backend,
@@ -387,17 +434,6 @@ def run_work_items_sync_job(
         )
 
         if require_source:
-            if {"github", "gitlab"}.intersection(provider_set) and not repo_name:
-                logger.error("Work-item unit requires a non-empty source context")
-                raise ValueError("Work-item unit requires a non-empty source context")
-            if "jira" in provider_set and not jira_project_keys:
-                logger.error("Jira work-item unit requires a project source context")
-                raise ValueError(
-                    "Jira work-item unit requires a project source context"
-                )
-            if "linear" in provider_set and not repo_name:
-                logger.error("Linear work-item unit requires a team source context")
-                raise ValueError("Linear work-item unit requires a team source context")
             if repo_name and {"github", "gitlab"}.intersection(provider_set):
                 provider_sources = {repo.source for repo in discovered_repos}
                 expected = {

@@ -2231,7 +2231,9 @@ class ClickHouseStore:
             "argMax(started_at, last_synced) AS started_at, "
             "argMax(ended_at, last_synced) AS ended_at, "
             "argMax(completed_at, last_synced) AS completed_at, "
-            "max(last_synced) AS last_synced_max, org_id FROM sprints"
+            "max(last_synced) AS last_synced_max, "
+            "argMax(native_team_key, last_synced) AS native_team_key, "
+            "org_id FROM sprints"
         )
         params: dict[str, str] = {}
         scoped_org_id = str(org_id or self.org_id or "")
@@ -2256,8 +2258,9 @@ class ClickHouseStore:
                     started_at=_parse_datetime_value(row[4]),
                     ended_at=_parse_datetime_value(row[5]),
                     completed_at=_parse_datetime_value(row[6]),
+                    native_team_key=row[8] or None,
                     last_synced=last_synced,
-                    org_id=row[8],
+                    org_id=row[9],
                 )
             )
         return sprints

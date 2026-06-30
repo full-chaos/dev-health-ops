@@ -182,6 +182,7 @@ class Sprint:
     started_at: datetime | None
     ended_at: datetime | None
     completed_at: datetime | None
+    native_team_key: str | None = None
     last_synced: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     org_id: str = ""
 

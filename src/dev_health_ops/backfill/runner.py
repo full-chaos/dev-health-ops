@@ -84,8 +84,6 @@ def _run_strict_reference_discovery_for_backfill(
     window_count: int,
     analytics_db_url: str | None,
 ) -> dict[str, Any] | None:
-    if not sync_options.get("auto_import_teams"):
-        return None
     summary = run_team_autoimport_strict(
         provider=provider,
         org_id=org_id,

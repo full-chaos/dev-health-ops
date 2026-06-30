@@ -147,6 +147,7 @@ _LINEAR_BACKFILL_WORK_ITEM_IN_BAND_WRITE_SURFACES = frozenset(
 #                                 rows collapse to one persisted edge (no global FINAL needed)
 #   ai_attribution                -> RMT(computed_at) + FINAL+ROW_NUMBER resolved view
 #   work_item_metrics_daily       -> RMT(computed_at) (migration 055) + FINAL/argMax readers
+#   estimate_coverage_metrics_daily -> RMT(computed_at) (migration 063) + argMax readers
 #   work_item_user_metrics_daily  -> RMT(computed_at) (migration 055) + FINAL readers
 #   work_item_cycle_times         -> RMT(computed_at) + argMax/FINAL readers
 #   work_item_state_durations_daily -> argMax(duration, computed_at) readers over the key
@@ -168,6 +169,7 @@ _CLICKHOUSE_RETRY_PROVEN_SAFE_SURFACES = frozenset(
         "sprints",
         "ai_attribution",
         "work_item_metrics_daily",
+        "estimate_coverage_metrics_daily",
         "work_item_user_metrics_daily",
         "work_item_cycle_times",
         "work_item_state_durations_daily",

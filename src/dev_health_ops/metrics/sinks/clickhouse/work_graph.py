@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 from dev_health_ops.metrics.schemas import (
     CapacityForecastRecord,
     CommitMetricsRecord,
+    EstimateCoverageMetricsDailyRecord,
     FileComplexitySnapshot,
     FileHotspotDaily,
     FileMetricsRecord,
@@ -224,6 +225,29 @@ class WorkGraphMixin(_ClickHouseSinkBase):
                 "defect_intro_rate",
                 "wip_congestion_ratio",
                 "predictability_score",
+                "computed_at",
+                "org_id",
+            ],
+            rows,
+        )
+
+    def write_estimate_coverage_metrics(
+        self, rows: Sequence[EstimateCoverageMetricsDailyRecord]
+    ) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "estimate_coverage_metrics_daily",
+            [
+                "day",
+                "provider",
+                "work_scope_id",
+                "team_id",
+                "team_name",
+                "estimated_count",
+                "unestimated_count",
+                "backlog_size",
+                "ratio",
                 "computed_at",
                 "org_id",
             ],

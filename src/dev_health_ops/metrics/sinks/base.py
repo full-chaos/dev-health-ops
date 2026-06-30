@@ -18,6 +18,7 @@ from dev_health_ops.metrics.schemas import (
     CommitMetricsRecord,
     DeployMetricsDailyRecord,
     DORAMetricsRecord,
+    EstimateCoverageMetricsDailyRecord,
     FeatureFlagEventRecord,
     FeatureFlagLinkRecord,
     FeatureFlagRecord,
@@ -174,6 +175,11 @@ class BaseMetricsSink(ABC):
     ) -> None:
         """Write daily aggregate work item metrics."""
         ...
+
+    @abstractmethod
+    def write_estimate_coverage_metrics(
+        self, rows: Sequence[EstimateCoverageMetricsDailyRecord]
+    ) -> None: ...
 
     @abstractmethod
     def write_work_item_user_metrics(

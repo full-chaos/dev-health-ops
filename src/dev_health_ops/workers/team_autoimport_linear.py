@@ -290,7 +290,11 @@ def populate(
                     continue
                 for cycle in client.iter_cycles(team_id=str(api_team["id"])):
                     sprint_rows.append(
-                        replace(linear_cycle_to_sprint(cycle), org_id=org_id)
+                        replace(
+                            linear_cycle_to_sprint(cycle),
+                            native_team_key=_team_id(team),
+                            org_id=org_id,
+                        )
                     )
     except Exception:
         if strict:

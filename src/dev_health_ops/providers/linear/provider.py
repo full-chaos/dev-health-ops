@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Sequence
+from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
@@ -61,11 +62,15 @@ def _linear_reference_team(row: Any, team_key: str) -> dict[str, Any] | None:
 
 
 def _linear_sprints_from_reference(
-    rows: Sequence[Sprint] | None, *, team_key: str | None, scope: str | None
+    rows: Sequence[Sprint] | None, *, team_key: str | None
 ) -> list[Sprint]:
-    if not team_key or scope != team_key:
+    if not team_key:
         return []
-    return [sprint for sprint in rows or [] if sprint.provider == "linear"]
+    return [
+        sprint
+        for sprint in rows or []
+        if sprint.provider == "linear" and sprint.native_team_key == team_key
+    ]
 
 
 class LinearProvider(ProviderWithClient[LinearClient]):
@@ -171,7 +176,6 @@ class LinearProvider(ProviderWithClient[LinearClient]):
             for sprint in _linear_sprints_from_reference(
                 ctx.reference_sprints,
                 team_key=team_key,
-                scope=ctx.reference_sprints_scope,
             )
         }
         teams_to_sync: list[dict] = []
@@ -206,7 +210,9 @@ class LinearProvider(ProviderWithClient[LinearClient]):
                     api_team = client.get_team_by_key(team_key)
                 if api_team and api_team.get("id"):
                     for cycle in client.iter_cycles(team_id=str(api_team["id"])):
-                        sprint = linear_cycle_to_sprint(cycle)
+                        sprint = replace(
+                            linear_cycle_to_sprint(cycle), native_team_key=team_key
+                        )
                         cycle_cache[sprint.sprint_id] = sprint
                         fetched_sprints.append(sprint)
                 if fetched_sprints and ctx.reference_sink is not None:
@@ -220,6 +226,7 @@ class LinearProvider(ProviderWithClient[LinearClient]):
                                 started_at=sprint.started_at,
                                 ended_at=sprint.ended_at,
                                 completed_at=sprint.completed_at,
+                                native_team_key=team_key,
                                 last_synced=sprint.last_synced,
                                 org_id=str(ctx.org_id or ""),
                             )
@@ -233,8 +240,12 @@ class LinearProvider(ProviderWithClient[LinearClient]):
                     team_id = team.get("id")
                     if not team_id:
                         continue
+                    native_team_key = str(team.get("key") or "") or None
                     for cycle in client.iter_cycles(team_id=team_id):
-                        sprint = linear_cycle_to_sprint(cycle)
+                        sprint = replace(
+                            linear_cycle_to_sprint(cycle),
+                            native_team_key=native_team_key,
+                        )
                         cycle_cache.setdefault(sprint.sprint_id, sprint)
                 if cycle_cache:
                     yield ProviderBatch(sprints=list(cycle_cache.values()))

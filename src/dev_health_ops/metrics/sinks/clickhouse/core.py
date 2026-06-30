@@ -128,7 +128,9 @@ class ClickHouseCore(BaseMetricsSink):
             "argMax(started_at, last_synced) AS started_at, "
             "argMax(ended_at, last_synced) AS ended_at, "
             "argMax(completed_at, last_synced) AS completed_at, "
-            "max(last_synced) AS last_synced_max, org_id FROM sprints"
+            "max(last_synced) AS last_synced_max, "
+            "argMax(native_team_key, last_synced) AS native_team_key, "
+            "org_id FROM sprints"
         )
         params: dict[str, str] = {}
         if _org_id:
@@ -145,8 +147,9 @@ class ClickHouseCore(BaseMetricsSink):
                 started_at=row[4],
                 ended_at=row[5],
                 completed_at=row[6],
+                native_team_key=row[8] or None,
                 last_synced=row[7],
-                org_id=row[8],
+                org_id=row[9],
             )
             for row in result.result_rows or []
         ]

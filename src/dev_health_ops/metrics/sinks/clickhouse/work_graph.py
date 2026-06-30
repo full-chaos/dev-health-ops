@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -365,11 +366,16 @@ class WorkGraphMixin(_ClickHouseSinkBase):
     def write_sprints(self, rows: Sequence[Sprint]) -> None:
         if not rows:
             return
+        persisted_rows = [
+            replace(sprint, native_team_key=sprint.native_team_key or "")
+            for sprint in rows
+        ]
         self._insert_rows(
             "sprints",
             [
                 "provider",
                 "sprint_id",
+                "native_team_key",
                 "name",
                 "state",
                 "started_at",
@@ -378,7 +384,7 @@ class WorkGraphMixin(_ClickHouseSinkBase):
                 "last_synced",
                 "org_id",
             ],
-            rows,
+            persisted_rows,
         )
 
     def write_worklogs(self, rows: Sequence[Worklog]) -> None:

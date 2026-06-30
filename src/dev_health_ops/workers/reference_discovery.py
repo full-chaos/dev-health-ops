@@ -322,7 +322,8 @@ def _missing_sprint_ids(
     rows = sink.query_dicts(
         "SELECT sprint_id FROM ("
         "SELECT org_id, provider, sprint_id, "
-        "argMax(name, last_synced) AS name "
+        "argMax(name, last_synced) AS name, "
+        "argMax(native_team_key, last_synced) AS native_team_key "
         "FROM sprints "
         "WHERE org_id = {org_id:String} AND provider = {provider:String} "
         "AND sprint_id IN {ids:Array(String)} "

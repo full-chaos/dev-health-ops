@@ -1,8 +1,10 @@
 """Tests verifying org_id flows through schemas, sinks, and storage."""
 
+import importlib.util
 import uuid
 from dataclasses import asdict, fields
 from datetime import date, datetime, timezone
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -329,4 +331,29 @@ def test_migration_024_covers_all_tables():
     for table in expected_tables:
         assert f"ALTER TABLE {table}" in content, (
             f"Migration 024 missing ALTER TABLE for {table}"
+        )
+
+
+def test_migration_061_rebuilds_teams_sprints_with_org_id_first_sorting_keys():
+    """CHAOS-2735: teams/sprints RMT dedup keys must be tenant-scoped."""
+    migration_path = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "dev_health_ops"
+        / "migrations"
+        / "clickhouse"
+        / "061_teams_sprints_org_id_dedup_keys.py"
+    )
+    spec = importlib.util.spec_from_file_location(migration_path.stem, migration_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.TABLES == {
+        "teams": "(org_id, id)",
+        "sprints": "(org_id, provider, sprint_id)",
+    }
+    for table, order_by in module.TABLES.items():
+        assert order_by.startswith("(org_id,"), (
+            f"{table}: migration 061 ORDER BY must prepend org_id, got {order_by!r}"
         )

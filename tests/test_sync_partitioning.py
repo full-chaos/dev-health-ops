@@ -849,6 +849,54 @@ class TestCredentialMapping:
 
 
 class TestWorkItemsProviderCredentialIsolation:
+    @pytest.mark.parametrize(
+        ("provider", "source_kwargs", "message_fragment"),
+        [
+            ("github", {"repo_name": None}, "github work-item unit had no source"),
+            ("linear", {"repo_name": "   "}, "linear work-item unit had no source"),
+            ("gitlab", {"repo_name": ""}, "gitlab work-item unit had no source"),
+            (
+                "jira",
+                {"jira_project_keys": ["   "]},
+                "jira work-item unit had no source",
+            ),
+        ],
+    )
+    @patch("dev_health_ops.metrics.job_work_items.ClickHouseMetricsSink")
+    def test_require_source_missing_source_fails_before_org_wide_discovery(
+        self,
+        mock_sink_class,
+        provider,
+        source_kwargs,
+        message_fragment,
+        caplog,
+    ):
+        from dev_health_ops.metrics.job_work_items import (
+            WorkItemUnitMissingSource,
+            run_work_items_sync_job,
+        )
+
+        sink = MagicMock()
+        sink.query_dicts.return_value = []
+        mock_sink_class.return_value = sink
+        caplog.set_level("ERROR", logger="dev_health_ops.metrics.job_work_items")
+
+        with patch("dev_health_ops.metrics.job_work_items._discover_repos") as discover:
+            with pytest.raises(WorkItemUnitMissingSource, match=message_fragment):
+                run_work_items_sync_job(
+                    db_url="clickhouse://localhost/dev",
+                    day=datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
+                    backfill_days=1,
+                    provider=provider,
+                    org_id="00000000-0000-0000-0000-000000000001",
+                    require_source=True,
+                    **source_kwargs,
+                )
+
+        discover.assert_not_called()
+        assert message_fragment in caplog.text
+        assert "refusing org-wide fan-out" in caplog.text
+
     @patch.dict(os.environ, {}, clear=True)
     @patch("dev_health_ops.metrics.job_work_items.ClickHouseMetricsSink")
     @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
@@ -909,6 +957,42 @@ class TestWorkItemsProviderCredentialIsolation:
                 credentials={"api_key": "lin_explicit"},
                 repo_name="   ",
             )
+
+    @patch.dict(os.environ, {}, clear=True)
+    @patch("dev_health_ops.metrics.job_work_items.ClickHouseMetricsSink")
+    def test_linear_work_items_without_required_source_keeps_org_wide_path(
+        self, mock_sink_class
+    ):
+        from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
+        from dev_health_ops.providers.linear.client import LinearClient
+
+        sink = MagicMock()
+        sink.query_dicts.return_value = []
+        sink.client.query.return_value = SimpleNamespace(result_rows=[])
+        mock_sink_class.return_value = sink
+
+        captured_repos: list[object] = []
+
+        def _fake_iter_ingest(self, ctx):
+            client = self._make_client()
+            assert isinstance(client, LinearClient)
+            captured_repos.append(ctx.repo)
+            return iter(())
+
+        with patch(
+            "dev_health_ops.providers.linear.provider.LinearProvider.iter_ingest",
+            new=_fake_iter_ingest,
+        ):
+            run_work_items_sync_job(
+                db_url="clickhouse://localhost/dev",
+                day=datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
+                backfill_days=1,
+                provider="linear",
+                org_id="00000000-0000-0000-0000-000000000001",
+                credentials={"api_key": "lin_explicit"},
+            )
+
+        assert captured_repos == [None]
 
     @patch.dict(os.environ, {}, clear=True)
     @patch("dev_health_ops.metrics.job_work_items.ClickHouseMetricsSink")

@@ -26,43 +26,58 @@ _TEAM_AUTOIMPORT_TASK = "dev_health_ops.workers.tasks.run_post_sync_team_autoimp
 _ORG = "team-autoimport-sync-org"
 
 
-def test_backfill_autoimport_false_or_absent_does_not_call(monkeypatch) -> None:
+def test_backfill_autoimport_false_or_absent_runs_strict_discovery(monkeypatch) -> None:
     calls: list[dict[str, Any]] = []
+
+    def fake_run_team_autoimport(**kwargs: Any) -> dict[str, Any]:
+        calls.append(kwargs)
+        return {"status": "success"}
+
     monkeypatch.setattr(
         backfill_runner,
         "run_team_autoimport_strict",
-        lambda **kwargs: calls.append(kwargs),
+        fake_run_team_autoimport,
     )
 
-    assert (
-        backfill_runner._run_strict_reference_discovery_for_backfill(
-            provider="jira",
-            org_id="org-1",
-            credentials={},
-            sync_options={},
-            sync_config_id="cfg-1",
-            since=date(2026, 1, 1),
-            before=date(2026, 1, 7),
-            window_count=1,
-            analytics_db_url=None,
-        )
-        is None
-    )
-    assert (
-        backfill_runner._run_strict_reference_discovery_for_backfill(
-            provider="jira",
-            org_id="org-1",
-            credentials={},
-            sync_options={"auto_import_teams": False},
-            sync_config_id="cfg-1",
-            since=date(2026, 1, 1),
-            before=date(2026, 1, 7),
-            window_count=1,
-            analytics_db_url=None,
-        )
-        is None
-    )
-    assert calls == []
+    assert backfill_runner._run_strict_reference_discovery_for_backfill(
+        provider="jira",
+        org_id="org-1",
+        credentials={},
+        sync_options={},
+        sync_config_id="cfg-1",
+        since=date(2026, 1, 1),
+        before=date(2026, 1, 7),
+        window_count=1,
+        analytics_db_url=None,
+    ) == {"status": "success"}
+    assert backfill_runner._run_strict_reference_discovery_for_backfill(
+        provider="jira",
+        org_id="org-1",
+        credentials={},
+        sync_options={"auto_import_teams": False},
+        sync_config_id="cfg-1",
+        since=date(2026, 1, 1),
+        before=date(2026, 1, 7),
+        window_count=1,
+        analytics_db_url=None,
+    ) == {"status": "success"}
+    assert len(calls) == 2
+    assert calls[0]["scope"] == {
+        "mode": "backfill",
+        "sync_config_id": "cfg-1",
+        "sync_options": {},
+        "window_count": 1,
+        "since": "2026-01-01",
+        "before": "2026-01-07",
+    }
+    assert calls[1]["scope"] == {
+        "mode": "backfill",
+        "sync_config_id": "cfg-1",
+        "sync_options": {"auto_import_teams": False},
+        "window_count": 1,
+        "since": "2026-01-01",
+        "before": "2026-01-07",
+    }
 
 
 def test_backfill_autoimport_true_calls_once(monkeypatch) -> None:

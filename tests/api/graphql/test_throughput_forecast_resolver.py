@@ -705,6 +705,76 @@ async def test_load_throughput_history_passes_org_id_in_sql_params(ctx):
 
 
 @pytest.mark.asyncio
+async def test_load_work_item_overlay_passes_org_id_in_sql_params(ctx):
+    from dev_health_ops.api.graphql.resolvers.forecast import _load_work_item_overlay
+
+    with patch(
+        "dev_health_ops.api.graphql.resolvers.forecast.query_dicts",
+        new_callable=AsyncMock,
+        return_value=[{"current_wip": 5, "average_wip": 3.5}],
+    ) as mock_query:
+        current_wip, average_wip = await _load_work_item_overlay(
+            ctx,
+            team_ids=["team-a", "team-b"],
+            work_scope_id="scope-1",
+            history_weeks=4,
+        )
+
+    assert current_wip == 5.0
+    assert average_wip == 3.5
+    call_args = mock_query.await_args
+    assert call_args is not None
+    sql: str = call_args.args[1]
+    params: dict = call_args.args[2]
+    assert "{org_id:String}" in sql
+    assert params.get("org_id") == ctx.org_id
+    assert "team_id IN {team_ids:Array(String)}" in sql
+    assert params["team_ids"] == ["team-a", "team-b"]
+    assert "work_scope_id = {work_scope_id:String}" in sql
+    assert params["work_scope_id"] == "scope-1"
+
+
+@pytest.mark.asyncio
+async def test_load_review_overlay_passes_org_id_in_sql_params(ctx):
+    from dev_health_ops.api.graphql.resolvers.forecast import _load_review_overlay
+
+    with patch(
+        "dev_health_ops.api.graphql.resolvers.forecast.query_dicts",
+        new_callable=AsyncMock,
+        return_value=[{"review_latency_hours": 12.5}],
+    ) as mock_query:
+        review_latency_hours = await _load_review_overlay(ctx, history_weeks=4)
+
+    assert review_latency_hours == 12.5
+    call_args = mock_query.await_args
+    assert call_args is not None
+    sql: str = call_args.args[1]
+    params: dict = call_args.args[2]
+    assert "{org_id:String}" in sql
+    assert params.get("org_id") == ctx.org_id
+
+
+@pytest.mark.asyncio
+async def test_load_incident_overlay_passes_org_id_in_sql_params(ctx):
+    from dev_health_ops.api.graphql.resolvers.forecast import _load_incident_overlay
+
+    with patch(
+        "dev_health_ops.api.graphql.resolvers.forecast.query_dicts",
+        new_callable=AsyncMock,
+        return_value=[{"incident_count": 2.0}],
+    ) as mock_query:
+        incident_count = await _load_incident_overlay(ctx, history_weeks=4)
+
+    assert incident_count == 2.0
+    call_args = mock_query.await_args
+    assert call_args is not None
+    sql: str = call_args.args[1]
+    params: dict = call_args.args[2]
+    assert "{org_id:String}" in sql
+    assert params.get("org_id") == ctx.org_id
+
+
+@pytest.mark.asyncio
 async def test_load_backlog_org_id_isolation_other_org_rows_not_returned(ctx):
     """Another org's rows must not bleed into the current org's backlog.
 

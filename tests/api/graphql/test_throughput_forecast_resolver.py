@@ -90,6 +90,16 @@ def ctx():
     return c
 
 
+@pytest.fixture(autouse=True)
+def default_estimate_coverage_loader(monkeypatch, request):
+    if request.node.name.startswith("test_load_estimate_coverage"):
+        return
+    monkeypatch.setattr(
+        "dev_health_ops.api.graphql.resolvers.forecast._load_estimate_coverage",
+        AsyncMock(return_value=None),
+    )
+
+
 @pytest.mark.asyncio
 async def test_resolver_aggregates_org_wide_when_team_ids_is_none(ctx):
     """``team_ids=None`` must NOT short-circuit to None or sample data."""
@@ -144,6 +154,74 @@ async def test_resolver_aggregates_org_wide_when_team_ids_is_none(ctx):
     assert result.stale_wip.p90_age_hours == 96.0
     load_backlog.assert_awaited_once_with(ctx, team_ids=None, work_scope_id=None)
     load_stale_wip.assert_awaited_once_with(ctx, team_ids=None, work_scope_id=None)
+
+
+@pytest.mark.asyncio
+async def test_resolver_surfaces_estimate_coverage(ctx):
+    from dev_health_ops.api.graphql.models.inputs import ThroughputForecastInput
+    from dev_health_ops.api.graphql.models.outputs import ThroughputEstimateCoverage
+    from dev_health_ops.api.graphql.resolvers.forecast import (
+        resolve_throughput_forecast,
+    )
+
+    estimate_coverage = ThroughputEstimateCoverage(
+        ratio=0.75,
+        estimated_count=3,
+        unestimated_count=1,
+        backlog_size=4,
+    )
+    with (
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_throughput_history",
+            new_callable=AsyncMock,
+            return_value=_history(),
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_work_item_overlay",
+            new_callable=AsyncMock,
+            return_value=(0.0, 0.0),
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_stale_wip",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_estimate_coverage",
+            new_callable=AsyncMock,
+            return_value=estimate_coverage,
+        ) as load_estimate_coverage,
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_review_overlay",
+            new_callable=AsyncMock,
+            return_value=0.0,
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_incident_overlay",
+            new_callable=AsyncMock,
+            return_value=0.0,
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_backlog",
+            new_callable=AsyncMock,
+            return_value=4,
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast.forecast_throughput_capacity",
+            return_value=_result(team_id=None, backlog_size=4),
+        ),
+    ):
+        result = await resolve_throughput_forecast(ctx, ThroughputForecastInput())
+
+    assert result is not None
+    assert result.estimate_coverage is not None
+    assert result.estimate_coverage.ratio == 0.75
+    assert result.estimate_coverage.estimated_count == 3
+    assert result.estimate_coverage.unestimated_count == 1
+    assert result.estimate_coverage.backlog_size == 4
+    load_estimate_coverage.assert_awaited_once_with(
+        ctx, team_ids=None, work_scope_id=None
+    )
 
 
 @pytest.mark.asyncio
@@ -428,6 +506,55 @@ async def test_load_stale_wip_returns_none_without_age_rows(ctx):
         stale_wip = await _load_stale_wip(ctx, team_ids=None, work_scope_id=None)
 
     assert stale_wip is None
+
+
+@pytest.mark.asyncio
+async def test_load_estimate_coverage_passes_org_id_and_returns_ratio(ctx):
+    from dev_health_ops.api.graphql.resolvers.forecast import _load_estimate_coverage
+
+    with patch(
+        "dev_health_ops.api.graphql.resolvers.forecast.query_dicts",
+        new_callable=AsyncMock,
+        return_value=[
+            {"estimated_count": 3, "unestimated_count": 1, "backlog_size": 4}
+        ],
+    ) as query:
+        coverage = await _load_estimate_coverage(
+            ctx, team_ids=["team-a", "team-b"], work_scope_id="scope-a"
+        )
+
+    assert coverage is not None
+    assert coverage.ratio == 0.75
+    assert coverage.estimated_count == 3
+    assert coverage.unestimated_count == 1
+    assert coverage.backlog_size == 4
+    call_args = query.await_args
+    assert call_args is not None
+    sql: str = call_args.args[1]
+    params: dict = call_args.args[2]
+    assert "estimate_coverage_metrics_daily" in sql
+    assert "{org_id:String}" in sql
+    assert params["org_id"] == ctx.org_id
+    assert "team_id IN {team_ids:Array(String)}" in sql
+    assert params["team_ids"] == ["team-a", "team-b"]
+    assert "work_scope_id = {work_scope_id:String}" in sql
+    assert params["work_scope_id"] == "scope-a"
+
+
+@pytest.mark.asyncio
+async def test_load_estimate_coverage_returns_none_without_rows(ctx):
+    from dev_health_ops.api.graphql.resolvers.forecast import _load_estimate_coverage
+
+    with patch(
+        "dev_health_ops.api.graphql.resolvers.forecast.query_dicts",
+        new_callable=AsyncMock,
+        return_value=[
+            {"estimated_count": None, "unestimated_count": None, "backlog_size": None}
+        ],
+    ):
+        coverage = await _load_estimate_coverage(ctx, team_ids=None, work_scope_id=None)
+
+    assert coverage is None
 
 
 def _insufficient_result() -> ThroughputForecastResult:

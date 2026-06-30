@@ -829,6 +829,14 @@ class ThroughputStaleWip:
 
 
 @strawberry.type
+class ThroughputEstimateCoverage:
+    ratio: float | None = None
+    estimated_count: int
+    unestimated_count: int
+    backlog_size: int
+
+
+@strawberry.type
 class ThroughputForecast:
     """Throughput-based capacity forecast result.
 
@@ -849,6 +857,7 @@ class ThroughputForecast:
     primary_risk: ThroughputRiskOverlay
     wip_congestion: ThroughputRiskOverlay
     stale_wip: ThroughputStaleWip | None = None
+    estimate_coverage: ThroughputEstimateCoverage | None = None
     review_bottleneck: ThroughputRiskOverlay
     incident_load: ThroughputRiskOverlay
     insufficient_history: bool

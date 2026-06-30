@@ -18,6 +18,7 @@ from dev_health_ops.metrics.compute_work_item_state_durations import (
 )
 from dev_health_ops.metrics.compute_work_items import (
     build_linked_issue_team_resolver,
+    compute_estimate_coverage_metrics_daily,
     compute_work_item_metrics_daily,
     compute_work_item_team_attributions,
     resolve_team_attribution,
@@ -858,6 +859,15 @@ def run_work_items_sync_job(
                     attribution_context=team_attribution_context,
                 )
             )
+            estimate_coverage_metrics = compute_estimate_coverage_metrics_daily(
+                day=d,
+                work_items=work_items,
+                computed_at=computed_at,
+                team_resolver=team_resolver,
+                project_key_resolver=pk_resolver,
+                linked_issue_resolver=linked_issue_resolver,
+                attribution_context=team_attribution_context,
+            )
             wi_team_attributions = compute_work_item_team_attributions(
                 work_items=work_items,
                 computed_at=computed_at,
@@ -1050,6 +1060,11 @@ def run_work_items_sync_job(
                 if wi_metrics:
                     _ensure_unit_lease_for_write("work_item_metrics_daily")
                     s.write_work_item_metrics(wi_metrics)
+                if estimate_coverage_metrics and hasattr(
+                    s, "write_estimate_coverage_metrics"
+                ):
+                    _ensure_unit_lease_for_write("estimate_coverage_metrics_daily")
+                    s.write_estimate_coverage_metrics(estimate_coverage_metrics)
                 if wi_user_metrics:
                     _ensure_unit_lease_for_write("work_item_user_metrics_daily")
                     s.write_work_item_user_metrics(wi_user_metrics)

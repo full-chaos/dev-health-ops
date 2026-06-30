@@ -126,6 +126,7 @@ _LINEAR_BACKFILL_WORK_ITEM_IN_BAND_WRITE_SURFACES = frozenset(
         "sprints",
         "ai_attribution",
         "work_item_metrics_daily",
+        "estimate_coverage_metrics_daily",
         "work_item_user_metrics_daily",
         "work_item_cycle_times",
         "work_item_state_durations_daily",

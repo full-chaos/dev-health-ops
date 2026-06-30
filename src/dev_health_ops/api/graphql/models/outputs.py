@@ -823,6 +823,12 @@ class ThroughputRiskOverlay:
 
 
 @strawberry.type
+class ThroughputStaleWip:
+    p50_age_hours: float | None = None
+    p90_age_hours: float | None = None
+
+
+@strawberry.type
 class ThroughputForecast:
     """Throughput-based capacity forecast result.
 
@@ -842,6 +848,7 @@ class ThroughputForecast:
     rolling_windows: list[ThroughputRollingWindow]
     primary_risk: ThroughputRiskOverlay
     wip_congestion: ThroughputRiskOverlay
+    stale_wip: ThroughputStaleWip | None = None
     review_bottleneck: ThroughputRiskOverlay
     incident_load: ThroughputRiskOverlay
     insufficient_history: bool

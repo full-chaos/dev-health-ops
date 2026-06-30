@@ -94,6 +94,7 @@ def ctx():
 async def test_resolver_aggregates_org_wide_when_team_ids_is_none(ctx):
     """``team_ids=None`` must NOT short-circuit to None or sample data."""
     from dev_health_ops.api.graphql.models.inputs import ThroughputForecastInput
+    from dev_health_ops.api.graphql.models.outputs import ThroughputStaleWip
     from dev_health_ops.api.graphql.resolvers.forecast import (
         resolve_throughput_forecast,
     )
@@ -109,6 +110,11 @@ async def test_resolver_aggregates_org_wide_when_team_ids_is_none(ctx):
             new_callable=AsyncMock,
             return_value=(0.0, 0.0),
         ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_stale_wip",
+            new_callable=AsyncMock,
+            return_value=ThroughputStaleWip(p50_age_hours=24.0, p90_age_hours=96.0),
+        ) as load_stale_wip,
         patch(
             "dev_health_ops.api.graphql.resolvers.forecast._load_review_overlay",
             new_callable=AsyncMock,
@@ -134,7 +140,10 @@ async def test_resolver_aggregates_org_wide_when_team_ids_is_none(ctx):
     assert result is not None
     assert result.team_id is None
     assert result.backlog_size == 42
+    assert result.stale_wip is not None
+    assert result.stale_wip.p90_age_hours == 96.0
     load_backlog.assert_awaited_once_with(ctx, team_ids=None, work_scope_id=None)
+    load_stale_wip.assert_awaited_once_with(ctx, team_ids=None, work_scope_id=None)
 
 
 @pytest.mark.asyncio
@@ -156,6 +165,11 @@ async def test_resolver_aggregates_multi_team_selection(ctx):
             new_callable=AsyncMock,
             return_value=(0.0, 0.0),
         ) as load_wip,
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_stale_wip",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as load_stale_wip,
         patch(
             "dev_health_ops.api.graphql.resolvers.forecast._load_review_overlay",
             new_callable=AsyncMock,
@@ -192,6 +206,9 @@ async def test_resolver_aggregates_multi_team_selection(ctx):
     load_wip.assert_awaited_once_with(
         ctx, team_ids=["team-1", "team-2"], work_scope_id=None, history_weeks=12
     )
+    load_stale_wip.assert_awaited_once_with(
+        ctx, team_ids=["team-1", "team-2"], work_scope_id=None
+    )
     load_backlog.assert_awaited_once_with(
         ctx, team_ids=["team-1", "team-2"], work_scope_id=None
     )
@@ -215,6 +232,11 @@ async def test_resolver_single_team_sets_result_team_id(ctx):
             "dev_health_ops.api.graphql.resolvers.forecast._load_work_item_overlay",
             new_callable=AsyncMock,
             return_value=(0.0, 0.0),
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_stale_wip",
+            new_callable=AsyncMock,
+            return_value=None,
         ),
         patch(
             "dev_health_ops.api.graphql.resolvers.forecast._load_review_overlay",
@@ -262,6 +284,11 @@ async def test_resolver_skips_backlog_query_when_caller_provides_size(ctx):
             "dev_health_ops.api.graphql.resolvers.forecast._load_work_item_overlay",
             new_callable=AsyncMock,
             return_value=(0.0, 0.0),
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_stale_wip",
+            new_callable=AsyncMock,
+            return_value=None,
         ),
         patch(
             "dev_health_ops.api.graphql.resolvers.forecast._load_review_overlay",
@@ -359,6 +386,50 @@ async def test_load_backlog_uses_equality_for_single_team(ctx):
     assert "team_ids" not in params
 
 
+@pytest.mark.asyncio
+async def test_load_stale_wip_reads_latest_scoped_wip_age(ctx):
+    from dev_health_ops.api.graphql.resolvers.forecast import _load_stale_wip
+
+    with patch(
+        "dev_health_ops.api.graphql.resolvers.forecast.query_dicts",
+        new_callable=AsyncMock,
+        return_value=[{"p50_age_hours": 24.0, "p90_age_hours": 96.0}],
+    ) as query:
+        stale_wip = await _load_stale_wip(
+            ctx, team_ids=["team-a"], work_scope_id="scope-a"
+        )
+
+    assert stale_wip is not None
+    assert stale_wip.p50_age_hours == 24.0
+    assert stale_wip.p90_age_hours == 96.0
+    call_args = query.await_args
+    assert call_args is not None
+    sql = call_args.args[1]
+    params = call_args.args[2]
+    assert "argMax(wip_age_p50_hours, computed_at)" in sql
+    assert "argMax(wip_age_p90_hours, computed_at)" in sql
+    assert "org_id = {org_id:String}" in sql
+    assert "team_id = {team_id:String}" in sql
+    assert "work_scope_id = {work_scope_id:String}" in sql
+    assert params["org_id"] == ctx.org_id
+    assert params["team_id"] == "team-a"
+    assert params["work_scope_id"] == "scope-a"
+
+
+@pytest.mark.asyncio
+async def test_load_stale_wip_returns_none_without_age_rows(ctx):
+    from dev_health_ops.api.graphql.resolvers.forecast import _load_stale_wip
+
+    with patch(
+        "dev_health_ops.api.graphql.resolvers.forecast.query_dicts",
+        new_callable=AsyncMock,
+        return_value=[{"p50_age_hours": None, "p90_age_hours": None}],
+    ):
+        stale_wip = await _load_stale_wip(ctx, team_ids=None, work_scope_id=None)
+
+    assert stale_wip is None
+
+
 def _insufficient_result() -> ThroughputForecastResult:
     """Short-history forecast: no estimate, every window flagged insufficient."""
     return ThroughputForecastResult(
@@ -406,6 +477,11 @@ async def test_resolver_surfaces_insufficient_history_and_sample_count(ctx):
             "dev_health_ops.api.graphql.resolvers.forecast._load_work_item_overlay",
             new_callable=AsyncMock,
             return_value=(0.0, 0.0),
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_stale_wip",
+            new_callable=AsyncMock,
+            return_value=None,
         ),
         patch(
             "dev_health_ops.api.graphql.resolvers.forecast._load_review_overlay",

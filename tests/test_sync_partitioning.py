@@ -944,6 +944,77 @@ class TestWorkItemsProviderCredentialIsolation:
 
         assert captured_repos == ["ENG"]
 
+    @patch.dict(os.environ, {}, clear=True)
+    @patch("dev_health_ops.metrics.job_work_items.ClickHouseMetricsSink")
+    @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
+    def test_linear_work_items_org_wide_placeholder_reaches_unscoped_ingest(
+        self, mock_from_env, mock_sink_class
+    ):
+        from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
+
+        sink = MagicMock()
+        sink.query_dicts.return_value = []
+        mock_sink_class.return_value = sink
+
+        captured_repos: list[object] = []
+
+        def _fake_iter_ingest(self, ctx):
+            captured_repos.append(ctx.repo)
+            return iter(())
+
+        with patch(
+            "dev_health_ops.providers.linear.provider.LinearProvider.iter_ingest",
+            new=_fake_iter_ingest,
+        ):
+            run_work_items_sync_job(
+                db_url="clickhouse://localhost/dev",
+                day=datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
+                backfill_days=1,
+                provider="linear",
+                org_id="00000000-0000-0000-0000-000000000001",
+                credentials={"api_key": "lin_explicit"},
+                repo_name=None,
+                require_source=False,
+            )
+
+        assert captured_repos == [None]
+
+    @patch.dict(os.environ, {}, clear=True)
+    @patch("dev_health_ops.metrics.job_work_items.ClickHouseMetricsSink")
+    @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
+    def test_linear_work_items_scoped_provider_name_still_fails_visibly(
+        self, mock_from_env, mock_sink_class
+    ):
+        from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
+
+        sink = MagicMock()
+        sink.query_dicts.return_value = []
+        mock_sink_class.return_value = sink
+
+        captured_repos: list[object] = []
+
+        def _fake_iter_ingest(self, ctx):
+            captured_repos.append(ctx.repo)
+            raise ValueError("Linear team 'linear' not found")
+
+        with patch(
+            "dev_health_ops.providers.linear.provider.LinearProvider.iter_ingest",
+            new=_fake_iter_ingest,
+        ):
+            with pytest.raises(ValueError, match="Linear team 'linear' not found"):
+                run_work_items_sync_job(
+                    db_url="clickhouse://localhost/dev",
+                    day=datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
+                    backfill_days=1,
+                    provider="linear",
+                    org_id="00000000-0000-0000-0000-000000000001",
+                    credentials={"api_key": "lin_explicit"},
+                    repo_name="linear",
+                    require_source=True,
+                )
+
+        assert captured_repos == ["linear"]
+
     @patch.dict(
         os.environ,
         {"JIRA_JQL": "project = ENV", "JIRA_PROJECT_KEYS": "ENV"},

@@ -233,6 +233,44 @@ def test_reference_discovery_fails_when_unit_source_inventory_is_incomplete(
         reference_discovery._load_discovery_context(run.id)
 
 
+def test_sync_task_bootstrap_marks_linear_provider_name_source_as_org_wide(
+    db_session: Session,
+) -> None:
+    from dev_health_ops.workers.sync_bootstrap import SyncTaskBootstrap
+
+    run, unit = _seed_unitized_run(db_session, external_id="linear")
+    integration = db_session.query(Integration).filter_by(id=run.integration_id).one()
+    integration.config = {"auto_import_teams": False}
+    source = db_session.query(IntegrationSource).filter_by(id=unit.source_id).one()
+    source.source_type = "project"
+    source.metadata_ = {"planner_managed_sync_config_id": str(uuid.uuid4())}
+    db_session.flush()
+
+    context = SyncTaskBootstrap.load(db_session, str(unit.id))
+
+    assert context.source_external_id == "linear"
+    assert context.source_is_org_wide_placeholder is True
+
+
+def test_sync_task_bootstrap_keeps_explicit_provider_name_source_scoped(
+    db_session: Session,
+) -> None:
+    from dev_health_ops.workers.sync_bootstrap import SyncTaskBootstrap
+
+    run, unit = _seed_unitized_run(db_session, external_id="linear")
+    integration = db_session.query(Integration).filter_by(id=run.integration_id).one()
+    integration.config = {"team_id": "linear"}
+    source = db_session.query(IntegrationSource).filter_by(id=unit.source_id).one()
+    source.source_type = "project"
+    source.metadata_ = {"planner_managed_sync_config_id": str(uuid.uuid4())}
+    db_session.flush()
+
+    context = SyncTaskBootstrap.load(db_session, str(unit.id))
+
+    assert context.source_external_id == "linear"
+    assert context.source_is_org_wide_placeholder is False
+
+
 @pytest.mark.parametrize(
     ("module_name", "message"),
     [

@@ -790,15 +790,21 @@ def _non_git_source_rows(
     Jira project key) so every non-git config materializes exactly one
     planner-tagged source.
     """
-    external_id = str(
+    explicit_external_id = (
         sync_options.get("project_id")
         or sync_options.get("project_key")
         or sync_options.get("team_id")
         or sync_options.get("repo")
-        or name
+    )
+    is_linear_org_wide = provider.lower() == "linear" and not explicit_external_id
+    external_id = str(
+        explicit_external_id or (provider.lower() if is_linear_org_wide else name)
     )
     source_type = "project" if provider.lower() in {"jira", "linear"} else "source"
     full_name = str(sync_options.get("full_name") or external_id)
+    metadata: dict[str, Any] = {"planner_managed_sync_config_id": str(config_id)}
+    if is_linear_org_wide:
+        metadata["org_wide_placeholder"] = True
     return [
         IntegrationSource(
             org_id=org_id,
@@ -808,7 +814,7 @@ def _non_git_source_rows(
             external_id=external_id,
             name=name,
             full_name=full_name,
-            metadata_={"planner_managed_sync_config_id": str(config_id)},
+            metadata_=metadata,
             is_enabled=True,
         )
     ]

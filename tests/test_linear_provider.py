@@ -332,6 +332,19 @@ class TestLinearIssueToWorkItem:
 
         assert work_item.story_points == 5.0
 
+    def test_issue_with_zero_estimate_preserves_story_points(
+        self, mock_identity: IdentityResolver, mock_status_mapping: StatusMapping
+    ) -> None:
+        issue = _mock_linear_issue(estimate=0.0)
+
+        work_item, _ = linear_issue_to_work_item(
+            issue=issue,
+            status_mapping=mock_status_mapping,
+            identity=mock_identity,
+        )
+
+        assert work_item.story_points == 0.0
+
     def test_issue_with_labels(
         self, mock_identity: IdentityResolver, mock_status_mapping: StatusMapping
     ) -> None:

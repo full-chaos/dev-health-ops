@@ -23,6 +23,7 @@ from ..models.outputs import (
     ThroughputForecast,
     ThroughputRiskOverlay,
     ThroughputRollingWindow,
+    ThroughputStaleWip,
 )
 
 
@@ -37,7 +38,11 @@ def _risk_to_output(risk: RiskOverlay) -> ThroughputRiskOverlay:
     )
 
 
-def _result_to_output(result: ThroughputForecastResult) -> ThroughputForecast:
+def _result_to_output(
+    result: ThroughputForecastResult,
+    *,
+    stale_wip: ThroughputStaleWip | None = None,
+) -> ThroughputForecast:
     return ThroughputForecast(
         forecast_id=result.forecast_id,
         computed_at=result.computed_at.isoformat(),
@@ -59,6 +64,7 @@ def _result_to_output(result: ThroughputForecastResult) -> ThroughputForecast:
         ],
         primary_risk=_risk_to_output(result.primary_risk),
         wip_congestion=_risk_to_output(result.wip_congestion),
+        stale_wip=stale_wip,
         review_bottleneck=_risk_to_output(result.review_bottleneck),
         incident_load=_risk_to_output(result.incident_load),
         insufficient_history=result.insufficient_history,
@@ -187,6 +193,55 @@ async def _load_work_item_overlay(
     )
     row = rows[0] if rows else {}
     return float(row.get("current_wip") or 0.0), float(row.get("average_wip") or 0.0)
+
+
+async def _load_stale_wip(
+    context: GraphQLContext,
+    *,
+    team_ids: list[str] | None,
+    work_scope_id: str | None,
+) -> ThroughputStaleWip | None:
+    conditions: list[str] = ["org_id = {org_id:String}"]
+    params: dict[str, Any] = {"org_id": context.org_id}
+    _team_filter(team_ids, conditions, params)
+    if work_scope_id:
+        conditions.append("work_scope_id = {work_scope_id:String}")
+        params["work_scope_id"] = work_scope_id
+    where_sql = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    rows = await query_dicts(
+        context.client,
+        f"""
+        SELECT
+            avg(wip_age_p50_hours) AS p50_age_hours,
+            avg(wip_age_p90_hours) AS p90_age_hours
+        FROM (
+            SELECT
+                provider,
+                work_scope_id,
+                team_id,
+                argMax(wip_age_p50_hours, computed_at) AS wip_age_p50_hours,
+                argMax(wip_age_p90_hours, computed_at) AS wip_age_p90_hours
+            FROM work_item_metrics_daily
+            WHERE day = (
+                SELECT max(day) FROM work_item_metrics_daily{where_sql}
+            )
+            {("AND " + " AND ".join(conditions)) if conditions else ""}
+            GROUP BY provider, work_scope_id, team_id
+        )
+        WHERE wip_age_p50_hours IS NOT NULL OR wip_age_p90_hours IS NOT NULL
+        """,
+        params,
+    )
+    row = rows[0] if rows else {}
+    p50_age_hours = row.get("p50_age_hours")
+    p90_age_hours = row.get("p90_age_hours")
+    if p50_age_hours is None and p90_age_hours is None:
+        return None
+    return ThroughputStaleWip(
+        p50_age_hours=float(p50_age_hours) if p50_age_hours is not None else None,
+        p90_age_hours=float(p90_age_hours) if p90_age_hours is not None else None,
+    )
 
 
 async def _load_review_overlay(
@@ -349,6 +404,11 @@ async def resolve_throughput_forecast(
         work_scope_id=input.work_scope_id,
         history_weeks=input.history_weeks,
     )
+    stale_wip = await _load_stale_wip(
+        context,
+        team_ids=input.team_ids,
+        work_scope_id=input.work_scope_id,
+    )
     review_latency_hours = await _load_review_overlay(
         context,
         history_weeks=input.history_weeks,
@@ -368,4 +428,4 @@ async def resolve_throughput_forecast(
         review_latency_hours=review_latency_hours,
         incident_count=incident_count,
     )
-    return _result_to_output(result)
+    return _result_to_output(result, stale_wip=stale_wip)

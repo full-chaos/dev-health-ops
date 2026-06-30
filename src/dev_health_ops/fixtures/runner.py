@@ -1587,6 +1587,77 @@ AI_FIXTURE_TABLES: tuple[str, ...] = (
     "ai_policy_events",
 )
 
+COCKPIT_LIVE_DATA_TABLES: tuple[str, ...] = (
+    "repo_complexity_daily",
+    "repo_metrics_daily",
+    "compounding_risk_daily",
+    "testops_pipeline_metrics_daily",
+    "testops_test_metrics_daily",
+    "testops_coverage_metrics_daily",
+)
+
+
+def _validate_cockpit_live_data_fixture_tables(client: Any, table_exists) -> bool:
+    counts: dict[str, int] = {}
+    for table in COCKPIT_LIVE_DATA_TABLES:
+        if not table_exists(table):
+            logging.error(
+                "FAIL: Cockpit live-data table %s missing (run fixtures with --with-metrics).",
+                table,
+            )
+            return False
+        try:
+            counts[table] = _query_int(client, f"SELECT count() FROM {table}")
+        except Exception as exc:
+            logging.error("FAIL: Could not count %s rows: %s", table, exc)
+            return False
+        if counts[table] == 0:
+            logging.error(
+                "FAIL: Cockpit live-data table %s is empty (regression in --with-metrics).",
+                table,
+            )
+            return False
+
+    try:
+        review_latency_rows = _query_int(
+            client,
+            """
+            SELECT count()
+            FROM repo_metrics_daily
+            WHERE pr_first_review_p90_hours IS NOT NULL
+            """,
+        )
+        complexity_rows = _query_int(
+            client,
+            """
+            SELECT count()
+            FROM repo_complexity_daily
+            WHERE cyclomatic_per_kloc IS NOT NULL
+            """,
+        )
+    except Exception as exc:
+        logging.error("FAIL: Could not validate Compounding Risk inputs: %s", exc)
+        return False
+
+    if review_latency_rows == 0:
+        logging.error(
+            "FAIL: repo_metrics_daily has no pr_first_review_p90_hours rows; "
+            "Compounding Risk review-latency input is absent."
+        )
+        return False
+    if complexity_rows == 0:
+        logging.error(
+            "FAIL: repo_complexity_daily has no cyclomatic_per_kloc rows; "
+            "Compounding Risk complexity input is absent."
+        )
+        return False
+
+    logging.info(
+        "Cockpit live-data fixture tables: "
+        + ", ".join(f"{name}={counts[name]}" for name in COCKPIT_LIVE_DATA_TABLES)
+    )
+    return True
+
 
 def _validate_ai_fixture_tables(client: Any, table_exists) -> bool:
     """Verify every AI fixture/rollup table is present and non-empty."""
@@ -1898,6 +1969,9 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
             )
     except Exception as e:
         logging.error(f"FAIL: Could not validate Phase 2 metrics: {e}")
+        return 1
+
+    if not _validate_cockpit_live_data_fixture_tables(client, _table_exists):
         return 1
 
     # 2. Check prerequisites

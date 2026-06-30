@@ -172,6 +172,113 @@ def test_github_org_import_writes_provider_access_repo_grants_and_nested_specifi
     ]
 
 
+def test_github_strict_reference_discovery_uses_app_installation_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dev_health_ops.connectors.utils import github_app
+
+    token_provider_args: list[dict[str, str]] = []
+    discovery_calls: list[tuple[str, str]] = []
+
+    class FakeGitHubAppTokenProvider:
+        def __init__(
+            self,
+            *,
+            app_id: str,
+            private_key: str,
+            installation_id: str,
+            api_base_url: str,
+        ) -> None:
+            token_provider_args.append(
+                {
+                    "app_id": app_id,
+                    "private_key": private_key,
+                    "installation_id": installation_id,
+                    "api_base_url": api_base_url,
+                }
+            )
+
+        def get_token(self) -> str:
+            return "installation-token"
+
+    async def discover_github(self, token: str, org_name: str) -> list[DiscoveredTeam]:
+        discovery_calls.append((token, org_name))
+        return []
+
+    monkeypatch.setattr(
+        github_app, "GitHubAppTokenProvider", FakeGitHubAppTokenProvider
+    )
+    monkeypatch.setattr(
+        team_autoimport_github.TeamDiscoveryService,
+        "discover_github",
+        discover_github,
+    )
+
+    summary = team_autoimport_github.populate(
+        org_id="org-1",
+        credentials={
+            "app_id": "123",
+            "private_key": "private-key",
+            "installation_id": "456",
+        },
+        scope={
+            "strict_reference_discovery": True,
+            "sync_options": {"owner": "full-chaos"},
+        },
+    )
+
+    assert summary["status"] == "skipped"
+    assert summary["reason"] == "no_provider_teams"
+    assert token_provider_args == [
+        {
+            "app_id": "123",
+            "private_key": "private-key",
+            "installation_id": "456",
+            "api_base_url": "https://api.github.com",
+        }
+    ]
+    assert discovery_calls == [("installation-token", "full-chaos")]
+
+
+def test_github_strict_reference_discovery_with_app_auth_still_fails_provider_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dev_health_ops.connectors.utils import github_app
+
+    class FakeGitHubAppTokenProvider:
+        def __init__(self, **_: str) -> None:
+            return None
+
+        def get_token(self) -> str:
+            return "installation-token"
+
+    async def discover_github(self, token: str, org_name: str) -> list[DiscoveredTeam]:
+        raise RuntimeError("github discovery unavailable")
+
+    monkeypatch.setattr(
+        github_app, "GitHubAppTokenProvider", FakeGitHubAppTokenProvider
+    )
+    monkeypatch.setattr(
+        team_autoimport_github.TeamDiscoveryService,
+        "discover_github",
+        discover_github,
+    )
+
+    with pytest.raises(RuntimeError, match="github discovery unavailable"):
+        team_autoimport_github.populate(
+            org_id="org-1",
+            credentials={
+                "app_id": "123",
+                "private_key": "private-key",
+                "installation_id": "456",
+            },
+            scope={
+                "strict_reference_discovery": True,
+                "sync_options": {"owner": "full-chaos"},
+            },
+        )
+
+
 def test_gitlab_group_import_writes_provider_access_project_ownership(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

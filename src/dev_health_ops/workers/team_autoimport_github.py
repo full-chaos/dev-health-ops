@@ -63,7 +63,17 @@ async def _populate_async(
             )
         return _zero_summary(org_id=org_id, reason="provider_not_import_capable")
 
-    token = _first_string(credentials, "token", "access_token", "github_token")
+    try:
+        token = _github_access_token(credentials)
+    except Exception as exc:
+        if strict:
+            raise
+        logger.info(
+            "Skipping GitHub team auto-import for org_id=%s: credential token exchange failed: %s",
+            org_id,
+            exc,
+        )
+        return _zero_summary(org_id=org_id, reason="provider_discovery_skipped")
     org_name = _github_org(credentials=credentials, scope=scope)
     if not token or not org_name:
         if strict:
@@ -153,6 +163,31 @@ def _zero_summary(*, org_id: str, reason: str) -> dict[str, Any]:
         "team_repo_ownership_imported": 0,
         "work_item_team_attributions_imported": 0,
     }
+
+
+def _github_access_token(credentials: Mapping[str, Any]) -> str | None:
+    token = _first_string(credentials, "token", "access_token", "github_token")
+    if token:
+        return token
+
+    from dev_health_ops.connectors.utils.github_app import GitHubAppTokenProvider
+    from dev_health_ops.credentials.resolver import github_credentials_from_mapping
+
+    github_credentials = github_credentials_from_mapping(dict(credentials))
+    if github_credentials is None or not github_credentials.is_app_auth:
+        return None
+    if (
+        github_credentials.app_id is None
+        or github_credentials.private_key is None
+        or github_credentials.installation_id is None
+    ):
+        return None
+    return GitHubAppTokenProvider(
+        app_id=github_credentials.app_id,
+        private_key=github_credentials.private_key,
+        installation_id=github_credentials.installation_id,
+        api_base_url=github_credentials.base_url or "https://api.github.com",
+    ).get_token()
 
 
 def _github_org(

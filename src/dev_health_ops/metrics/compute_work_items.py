@@ -8,6 +8,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Literal, TypedDict
 
 from dev_health_ops.metrics.schemas import (
+    EstimateCoverageMetricsDailyRecord,
     WorkItemCycleTimeRecord,
     WorkItemMetricsDailyRecord,
     WorkItemTeamAttributionRecord,
@@ -739,6 +740,12 @@ class GroupBucket(TypedDict):
     predictability_score: float
 
 
+class EstimateCoverageBucket(TypedDict):
+    team_name: str
+    estimated_count: int
+    unestimated_count: int
+
+
 class UserBucket(TypedDict):
     team_name: str
     items_started: int
@@ -1094,6 +1101,78 @@ def compute_work_item_metrics_daily(
         )
 
     return group_records, user_records, cycle_time_records
+
+
+def compute_estimate_coverage_metrics_daily(
+    *,
+    day: date,
+    work_items: Sequence[WorkItem],
+    computed_at: datetime,
+    team_resolver: TeamResolver | None = None,
+    project_key_resolver: ProjectKeyTeamResolver | None = None,
+    linked_issue_resolver: LinkedIssueTeamResolver | None = None,
+    attribution_context: TeamAttributionContext | None = None,
+) -> list[EstimateCoverageMetricsDailyRecord]:
+    _start, end = _utc_day_window(day)
+    computed_at_utc = to_utc(computed_at)
+    by_group: dict[tuple[str, str, str | None], EstimateCoverageBucket] = {}
+
+    for item in work_items:
+        created_at = to_utc(item.created_at)
+        completed_at = to_utc(item.completed_at) if item.completed_at else None
+        if created_at >= end:
+            continue
+        if completed_at is not None and completed_at < end:
+            continue
+
+        team_id, team_name, _ = resolve_team_attribution(
+            item,
+            team_resolver,
+            project_key_resolver,
+            linked_issue_resolver=linked_issue_resolver,
+            attribution_context=attribution_context,
+        )
+        team_id_norm = normalize_team_id(team_id)
+        team_name_norm = normalize_team_name(team_name)
+        key = (item.provider, item.work_scope_id or "", team_id_norm)
+        bucket = by_group.get(key)
+        if bucket is None:
+            new_bucket: EstimateCoverageBucket = {
+                "team_name": team_name_norm,
+                "estimated_count": 0,
+                "unestimated_count": 0,
+            }
+            by_group[key] = new_bucket
+            bucket = new_bucket
+
+        if item.story_points is None:
+            bucket["unestimated_count"] += 1
+        else:
+            bucket["estimated_count"] += 1
+
+    records: list[EstimateCoverageMetricsDailyRecord] = []
+    for (provider, work_scope_id, team_id), bucket in sorted(
+        by_group.items(), key=lambda kv: (kv[0][0], kv[0][1], str(kv[0][2] or ""))
+    ):
+        estimated_count = bucket["estimated_count"]
+        unestimated_count = bucket["unestimated_count"]
+        backlog_size = estimated_count + unestimated_count
+        ratio = (float(estimated_count) / float(backlog_size)) if backlog_size else None
+        records.append(
+            EstimateCoverageMetricsDailyRecord(
+                day=day,
+                provider=provider,
+                work_scope_id=work_scope_id,
+                team_id=normalize_team_id(team_id),
+                team_name=bucket["team_name"],
+                estimated_count=estimated_count,
+                unestimated_count=unestimated_count,
+                backlog_size=backlog_size,
+                ratio=ratio,
+                computed_at=computed_at_utc,
+            )
+        )
+    return records
 
 
 def compute_work_item_team_attributions(

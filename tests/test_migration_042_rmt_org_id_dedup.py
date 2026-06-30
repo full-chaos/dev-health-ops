@@ -1,14 +1,14 @@
-"""Static checks for migration 042 (CHAOS-2290).
+"""Static checks for RMT org_id sorting-key rebuild migrations.
 
 ReplacingMergeTree deduplicates on the sorting key. If org_id is a column
 but not part of ``ORDER BY``, rows with identical natural keys across two
 tenants collapse into one row on a background merge — cross-tenant data
 loss. These tests guard, at the string/DDL level (no database needed):
 
-1. every rebuild target in migration 042 puts org_id FIRST in the new key;
+1. every rebuild target in migration 042/061 puts org_id FIRST in the new key;
 2. every ReplacingMergeTree table defined across ALL ClickHouse migrations
    ends up with org_id in its *effective* sorting key (file DDL, overridden
-   by the 027 / 042 rebuild maps);
+   by the 027 / 042 / 061 rebuild maps);
 3. the rebuild flow itself (against a fake client): post-EXCHANGE catch-up
    of writes that raced the snapshot copy, crash convergence from a
    leftover shadow, and the fail-closed sorting-key verification.
@@ -33,6 +33,7 @@ MIGRATIONS_DIR = (
 
 MIGRATION_042 = "042_rmt_org_id_dedup_keys.py"
 MIGRATION_027 = "027_add_org_id_to_sorting_keys.py"
+MIGRATION_061 = "061_teams_sprints_org_id_dedup_keys.py"
 
 
 def _load_migration(filename: str) -> ModuleType:
@@ -98,6 +99,44 @@ def test_migration_042_runs_after_the_migrations_it_repairs() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Migration 061: teams/sprints gap from CHAOS-2735
+# ---------------------------------------------------------------------------
+
+
+def test_migration_061_exists_and_has_upgrade() -> None:
+    module = _load_migration(MIGRATION_061)
+    assert callable(getattr(module, "upgrade", None))
+
+
+def test_migration_061_rebuilds_exact_teams_sprints_keys() -> None:
+    module = _load_migration(MIGRATION_061)
+    assert module.TABLES == {
+        "teams": "(org_id, id)",
+        "sprints": "(org_id, provider, sprint_id)",
+    }
+
+
+def test_migration_061_every_new_order_by_starts_with_org_id() -> None:
+    module = _load_migration(MIGRATION_061)
+    assert module.TABLES, "migration 061 must rebuild teams and sprints"
+    for table, order_by in module.TABLES.items():
+        assert re.match(r"\(\s*org_id\s*,", order_by), (
+            f"{table}: new ORDER BY must start with org_id, got {order_by!r}"
+        )
+
+
+def test_migration_061_runs_after_org_id_columns_exist() -> None:
+    for prerequisite in (
+        "002_teams.sql",
+        "011_work_item_extras.sql",
+        "024_add_org_id.sql",
+        "060_team_membership_identity_facets.sql",
+    ):
+        assert (MIGRATIONS_DIR / prerequisite).exists()
+        assert prerequisite < MIGRATION_061
+
+
+# ---------------------------------------------------------------------------
 # Whole-catalog guard: every RMT table's effective key includes org_id
 # ---------------------------------------------------------------------------
 
@@ -139,7 +178,7 @@ def test_every_rmt_table_effective_sorting_key_includes_org_id() -> None:
     """No ReplacingMergeTree table may dedup across tenants.
 
     The effective sorting key is the table's CREATE TABLE ORDER BY, unless a
-    later rebuild migration (027 or 042) replaced it. A failure here means a
+    later rebuild migration (027, 042, or 061) replaced it. A failure here means a
     migration introduced (or left behind) an RMT table whose dedup key lacks
     org_id — add the table to a rebuild migration or key it on org_id from
     the start.
@@ -147,6 +186,7 @@ def test_every_rmt_table_effective_sorting_key_includes_org_id() -> None:
     overrides: dict[str, str] = {}
     overrides.update(_load_migration(MIGRATION_027).TABLES)
     overrides.update(_load_migration(MIGRATION_042).TABLES)
+    overrides.update(_load_migration(MIGRATION_061).TABLES)
 
     offenders: list[str] = []
     for table, (filename, declared_order_by) in sorted(
@@ -241,6 +281,49 @@ class FakeClient:
 @pytest.fixture()
 def migration() -> ModuleType:
     return _load_migration(MIGRATION_042)
+
+
+@pytest.mark.parametrize(
+    ("table", "old_ddl", "old_key", "new_order_by", "new_key"),
+    [
+        (
+            "teams",
+            "CREATE TABLE teams (`id` String, `org_id` String, `updated_at` DateTime64(6)) "
+            "ENGINE = ReplacingMergeTree(updated_at) ORDER BY (id)",
+            "id",
+            "(org_id, id)",
+            "org_id, id",
+        ),
+        (
+            "sprints",
+            "CREATE TABLE sprints (`provider` String, `sprint_id` String, "
+            "`org_id` String, `last_synced` DateTime64(3)) "
+            "ENGINE = ReplacingMergeTree(last_synced) ORDER BY (provider, sprint_id)",
+            "provider, sprint_id",
+            "(org_id, provider, sprint_id)",
+            "org_id, provider, sprint_id",
+        ),
+    ],
+)
+def test_migration_061_rebuilds_target_tables_with_org_id_first_key(
+    table: str,
+    old_ddl: str,
+    old_key: str,
+    new_order_by: str,
+    new_key: str,
+) -> None:
+    migration_061 = _load_migration(MIGRATION_061)
+    client = FakeClient(
+        {table: {"ddl": old_ddl, "sorting_key": old_key}},
+        created_sorting_key=new_key,
+    )
+
+    migration_061._rebuild_table(client, table, new_order_by)
+
+    shadow = f"{table}_new"
+    assert shadow not in client.tables
+    assert client.tables[table]["sorting_key"] == new_key
+    assert f"EXCHANGE TABLES `{table}` AND `{shadow}`" in client.commands
 
 
 def test_rebuild_runs_catch_up_after_exchange_then_drops_shadow(migration) -> None:

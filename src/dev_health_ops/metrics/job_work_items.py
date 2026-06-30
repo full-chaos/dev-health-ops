@@ -342,7 +342,7 @@ def run_work_items_sync_job(
                 "SELECT provider, sprint_id, argMax(name, last_synced) AS name, argMax(state, last_synced) AS state, "
                 "argMax(started_at, last_synced) AS started_at, argMax(ended_at, last_synced) AS ended_at, "
                 "argMax(completed_at, last_synced) AS completed_at, max(last_synced) AS last_synced_max, "
-                "org_id FROM sprints"
+                "argMax(native_team_key, last_synced) AS native_team_key, org_id FROM sprints"
                 + (" WHERE org_id = {org_id:String}" if org_id else "")
                 + " GROUP BY provider, sprint_id, org_id",
                 {"org_id": org_id} if org_id else {},
@@ -359,6 +359,7 @@ def run_work_items_sync_job(
                 started_at=row.get("started_at"),
                 ended_at=row.get("ended_at"),
                 completed_at=row.get("completed_at"),
+                native_team_key=row.get("native_team_key") or None,
                 last_synced=row.get("last_synced_max") or computed_at,
                 org_id=str(row.get("org_id") or ""),
             )

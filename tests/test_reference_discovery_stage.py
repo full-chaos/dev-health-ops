@@ -272,9 +272,11 @@ def test_reference_discovery_readback_verifies_exact_team_and_sprint_keys(
             self, query: str, parameters: dict[str, Any]
         ) -> list[dict[str, Any]]:
             queries.append((query, parameters))
-            if "native_team_key" in query:
+            if "FROM teams" in query:
                 return [{"native_team_key": key} for key in parameters["keys"]]
-            return [{"sprint_id": sprint_id} for sprint_id in parameters["ids"]]
+            if "FROM sprints" in query:
+                return [{"sprint_id": sprint_id} for sprint_id in parameters["ids"]]
+            raise AssertionError(f"unexpected readback query: {query}")
 
         def close(self) -> None:
             return None
@@ -302,6 +304,7 @@ def test_reference_discovery_readback_verifies_exact_team_and_sprint_keys(
     }
     assert "FROM sprints" in queries[1][0]
     assert "FINAL" not in queries[1][0]
+    assert "argMax(native_team_key, last_synced) AS native_team_key" in queries[1][0]
     assert "GROUP BY org_id, provider, sprint_id" in queries[1][0]
     assert queries[1][1] == {
         "org_id": "org-1",

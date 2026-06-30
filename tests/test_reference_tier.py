@@ -92,6 +92,7 @@ def test_linear_store_hit_avoids_reference_api() -> None:
         started_at=None,
         ended_at=None,
         completed_at=None,
+        native_team_key="ENG",
     )
     ctx = IngestionContext(
         window=IngestionWindow(),
@@ -106,7 +107,6 @@ def test_linear_store_hit_avoids_reference_api() -> None:
             }
         ],
         reference_sprints=[sprint],
-        reference_sprints_scope="ENG",
     )
 
     batches = list(_linear_provider(client).iter_ingest(ctx))
@@ -116,6 +116,52 @@ def test_linear_store_hit_avoids_reference_api() -> None:
     assert client.iter_cycles_calls == 0
     assert [item.sprint_id for batch in batches for item in batch.sprints] == [
         "linear:cycle:cycle-1"
+    ]
+
+
+def test_linear_store_populated_by_team_fetches_cycles_at_most_once_per_run() -> None:
+    client = _LinearClient()
+    eng_sprint = Sprint(
+        provider="linear",
+        sprint_id="linear:cycle:eng-cycle",
+        name="Engineering Cycle",
+        state="future",
+        started_at=None,
+        ended_at=None,
+        completed_at=None,
+        native_team_key="ENG",
+    )
+    ops_sprint = Sprint(
+        provider="linear",
+        sprint_id="linear:cycle:ops-cycle",
+        name="Ops Cycle",
+        state="future",
+        started_at=None,
+        ended_at=None,
+        completed_at=None,
+        native_team_key="OPS",
+    )
+    ctx = IngestionContext(
+        window=IngestionWindow(),
+        repo="ENG",
+        reference_teams=[
+            {
+                "id": "ENG",
+                "name": "Engineering",
+                "provider": "linear",
+                "native_team_key": "ENG",
+                "project_keys": ["ENG"],
+            }
+        ],
+        reference_sprints=[eng_sprint, ops_sprint],
+    )
+
+    batches = list(_linear_provider(client).iter_ingest(ctx))
+
+    assert client.iter_cycles_calls <= 1
+    assert client.iter_cycles_calls == 0
+    assert [item.sprint_id for batch in batches for item in batch.sprints] == [
+        "linear:cycle:eng-cycle"
     ]
 
 
@@ -137,8 +183,12 @@ def test_linear_store_miss_fetches_scoped_references_once() -> None:
     assert client.iter_cycles_calls == 1
     assert sink.teams == []
     assert [sprint.sprint_id for sprint in sink.sprints] == ["linear:cycle:cycle-1"]
+    assert [sprint.native_team_key for sprint in sink.sprints] == ["ENG"]
     assert [item.sprint_id for batch in batches for item in batch.sprints] == [
         "linear:cycle:cycle-1"
+    ]
+    assert [item.native_team_key for batch in batches for item in batch.sprints] == [
+        "ENG"
     ]
 
 
@@ -152,6 +202,7 @@ def test_linear_unscoped_sprint_cache_does_not_skip_current_team_fetch() -> None
         started_at=None,
         ended_at=None,
         completed_at=None,
+        native_team_key="OPS",
     )
     ctx = IngestionContext(
         window=IngestionWindow(),
@@ -172,6 +223,7 @@ def test_linear_unscoped_sprint_cache_does_not_skip_current_team_fetch() -> None
 
     assert client.get_team_by_key_calls == 1
     assert client.iter_cycles_calls == 1
+    assert client.iter_cycles_calls <= 1
     assert [item.sprint_id for batch in batches for item in batch.sprints] == [
         "linear:cycle:cycle-1"
     ]
@@ -236,6 +288,7 @@ def test_jira_store_hit_avoids_per_sprint_api(monkeypatch: Any) -> None:
         started_at=None,
         ended_at=None,
         completed_at=None,
+        native_team_key=None,
     )
 
     *_, sprints = fetch_jira_work_items_with_extras(
@@ -244,6 +297,7 @@ def test_jira_store_hit_avoids_per_sprint_api(monkeypatch: Any) -> None:
 
     assert client.get_sprint_calls == 0
     assert [item.sprint_id for item in sprints] == ["7"]
+    assert [item.native_team_key for item in sprints] == [None]
 
 
 def test_jira_store_miss_fetches_and_persists_sprint_once(monkeypatch: Any) -> None:

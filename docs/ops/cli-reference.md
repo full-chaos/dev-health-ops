@@ -604,7 +604,7 @@ dev-hops fixtures generate \
 | `--pr-count` | `20` | Total pull requests to generate |
 | `--seed` | random | Deterministic seed for repeatable runs |
 | `--provider` | `synthetic` | Provider label: `synthetic`, `github`, `gitlab`, `jira` |
-| `--with-metrics` | off | Also generate derived metrics (daily, DORA, complexity, investment, etc.) |
+| `--with-metrics` | off | Also generate derived metrics (daily, DORA, complexity, investment, Cockpit/TestOps risk inputs, etc.) |
 | `--with-work-graph` | off | Build work graph edges after generation (ClickHouse only) |
 | `--team-count` | `8` | Number of synthetic teams to create |
 
@@ -625,6 +625,13 @@ tables are also seeded: `ai_attribution`, `ai_workflow_runs`,
 `ai_workflow_artifact_edges`, and `ai_workflow_issue_edges`. The daily metrics
 job then computes `ai_impact_metrics_daily`, `ai_governance_coverage_daily`,
 and `ai_policy_events` from those source rows.
+
+`--with-metrics` also writes the Cockpit/Govern risk inputs used by Compounding
+Risk and TestOps Delivery Risk: `repo_complexity_daily`, `repo_metrics_daily`,
+`compounding_risk_daily`, `testops_pipeline_metrics_daily`,
+`testops_test_metrics_daily`, and `testops_coverage_metrics_daily`. A base
+fixture run without this flag is suitable for raw-ingest checks, but those risk
+surfaces should be expected to report missing inputs until metrics are computed.
 
 ### `fixtures validate`
 

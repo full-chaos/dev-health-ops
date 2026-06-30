@@ -42,6 +42,23 @@ WHERE repo_id = '...'
 GROUP BY repo_id;
 ```
 
+For Cockpit/Govern risk surfaces, also confirm the derived analytics inputs are
+present. Delivery Risk/TestOps requires all three TestOps daily rollups;
+Compounding Risk requires review latency in `repo_metrics_daily` plus complexity
+rows in `repo_complexity_daily`:
+
+```sql
+SELECT 'testops_pipeline_metrics_daily' AS table_name, count() AS rows FROM testops_pipeline_metrics_daily
+UNION ALL
+SELECT 'testops_test_metrics_daily', count() FROM testops_test_metrics_daily
+UNION ALL
+SELECT 'testops_coverage_metrics_daily', count() FROM testops_coverage_metrics_daily
+UNION ALL
+SELECT 'repo_metrics_daily.review_latency', count() FROM repo_metrics_daily WHERE pr_first_review_p90_hours IS NOT NULL
+UNION ALL
+SELECT 'repo_complexity_daily.complexity', count() FROM repo_complexity_daily WHERE cyclomatic_per_kloc IS NOT NULL;
+```
+
 ### 3. Inspect Job Status
 Check for failed jobs in the `ci_job_runs` table:
 ```sql
@@ -55,18 +72,60 @@ LIMIT 10;
 ## Recovery Procedures
 
 ### 1. Manual Sync Trigger
-Trigger a manual sync for the affected provider:
+Trigger manual syncs for the affected provider. CI/CD pipeline runs/jobs and test
+artifacts are separate sync targets; run both when Delivery Risk/TestOps surfaces
+are missing pipeline, test, or coverage inputs:
 ```bash
-dev-hops sync testops --provider github --owner <org> --repo <repo>
+dev-hops sync cicd --provider github \
+  --auth "$GITHUB_TOKEN" \
+  --owner <org> \
+  --repo <repo>
+
+dev-hops sync tests --provider github \
+  --auth "$GITHUB_TOKEN" \
+  --owner <org> \
+  --repo <repo>
 ```
 
-### 2. Data Backfill
-If data is missing for a specific period, use the backfill command:
+### 2. Recompute Daily Metrics
+After source rows are restored, recompute the daily TestOps rollups for the
+affected window. Use `--repo-id` for a single repository or omit it for all repos:
 ```bash
-dev-hops backfill run --since 2024-01-01 --until 2024-01-07 --repo <repo_id>
+dev-hops metrics daily \
+  --since 2024-01-01 \
+  --before 2024-01-08 \
+  --repo-id <repo_id>
 ```
 
-### 3. Clear Watermarks
+For Compounding Risk, daily metrics restore the review-latency input, but the
+complexity input is produced by the complexity job. Rebuild complexity before
+recomputing the composite score:
+
+```bash
+dev-hops metrics complexity \
+  --since 2024-01-01 \
+  --before 2024-01-08 \
+  --repo-id <repo_id>
+
+dev-hops metrics compounding-risk \
+  --org <org_id> \
+  --day 2024-01-08 \
+  --backfill 7
+```
+
+### 3. Historical Backfill
+If the source sync configuration itself needs a historical replay, prefer the
+admin backfill API described in `workers.md`. For inline recovery, use the
+sync-configuration based command:
+
+```bash
+dev-hops backfill run \
+  --config-id <sync_config_uuid> \
+  --since 2024-01-01 \
+  --before 2024-01-08
+```
+
+### 4. Clear Watermarks
 If the sync is stuck due to a bad cursor, you may need to clear the watermark in the metadata store (PostgreSQL) to force a full re-sync of recent data.
 
 ## Alert Thresholds

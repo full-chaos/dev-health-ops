@@ -133,6 +133,30 @@ def test_legacy_connector_rate_limit_subclasses_root() -> None:
     assert exc.signal is None
 
 
+def test_handle_github_exception_forwards_signal() -> None:
+    """Root->legacy normalization in _handle_github_exception must carry the
+    signal, or the GraphQL classification sites populate signals that never
+    reach the worker (found in PR #1111 review)."""
+    from dev_health_ops.connectors.base import (
+        RateLimitException as LegacyRateLimitException,
+    )
+
+    conn = _new_github_connector()
+    signal = RateLimitSignal(
+        provider="github",
+        dimension=BudgetDimension.GRAPHQL_COST,
+        reason="primary",
+        retry_after_seconds=30.0,
+    )
+    root_exc = RootRateLimitException(
+        "graphql limited", retry_after_seconds=30.0, signal=signal
+    )
+    with pytest.raises(LegacyRateLimitException) as exc_info:
+        conn._handle_github_exception(root_exc)
+    assert exc_info.value.retry_after_seconds == 30.0
+    assert exc_info.value.signal is signal
+
+
 # ---------------------------------------------------------------------------
 # GitHub 403 triage populates signals at all three classification sites
 # ---------------------------------------------------------------------------

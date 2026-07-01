@@ -165,7 +165,11 @@ class GitHubConnector(GitConnector):
         # RETRYABLE (it is the ``exceptions=`` tuple member the decorator
         # catches), while preserving the ``retry_after_seconds`` wait.
         if isinstance(e, ExceptionsRateLimitException):
-            raise RateLimitException(str(e), retry_after_seconds=e.retry_after_seconds)
+            raise RateLimitException(
+                str(e),
+                retry_after_seconds=e.retry_after_seconds,
+                signal=getattr(e, "signal", None),
+            )
         if isinstance(e, ConnectorException):
             raise e
         if isinstance(e, RateLimitExceededException):

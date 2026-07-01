@@ -205,27 +205,26 @@ def run_post_sync_team_autoimport(sync_run_id: str) -> dict[str, Any]:
     Restores the legacy post-sync team auto-import (CHAOS-2647) on the unitized
     fan-out path. The post-sync relay dispatches this once per terminal SyncRun
     when the run's canonical config has ``auto_import_teams`` enabled. Credentials
-    are resolved from the run's ``Integration.credential_id`` — the SAME source the
-    unit workers used — so auto-import authenticates identically to the sync that
-    just completed (never the legacy ``SyncConfiguration.credential_id`` row, which
-    can drift). Best-effort and non-fatal: :func:`run_team_autoimport` capability-
+    are resolved via :func:`resolve_run_auth` — the SAME run-stamped auth context
+    the unit workers used (CHAOS-2755) — so auto-import authenticates identically
+    to the sync that just completed even if ``Integration.credential_id`` was
+    repointed mid-run (and never the legacy ``SyncConfiguration.credential_id``
+    row, which can drift). Best-effort and non-fatal: :func:`run_team_autoimport` capability-
     gates providers and swallows populator exceptions, so a failure here never
     fails the sync.
     """
     from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.models import (
         Integration,
-        IntegrationCredential,
         SyncRun,
         SyncRunStatus,
     )
     from dev_health_ops.sync.trigger_routing import (
         canonical_sync_config_for_sync_run,
     )
+    from dev_health_ops.workers.sync_bootstrap import resolve_run_auth
     from dev_health_ops.workers.task_utils import (
-        _credential_mapping,
         _get_db_url,
-        _resolve_env_credentials,
     )
 
     run_uuid = uuid.UUID(str(sync_run_id))
@@ -287,25 +286,26 @@ def run_post_sync_team_autoimport(sync_run_id: str) -> dict[str, Any]:
                 "reason": "integration_not_found",
                 "sync_run_id": sync_run_id,
             }
-        credential_id = integration.credential_id
-        if credential_id is None:
-            credentials: dict[str, Any] = dict(_resolve_env_credentials(provider))
-        else:
-            credential = (
-                session.query(IntegrationCredential)
-                .filter(
-                    IntegrationCredential.id == credential_id,
-                    IntegrationCredential.org_id == org_id,
-                )
-                .one_or_none()
+        # CHAOS-2755: resolve via the run-stamped auth context (resolve_run_auth)
+        # so a mid-run credential repoint cannot make post-sync attribution use a
+        # different credential than the units that produced the synced data.
+        # Best-effort contract preserved: resolution failures (stamped credential
+        # deleted, strict fingerprint mismatch) skip rather than fail the task.
+        try:
+            _credential_id, credentials = resolve_run_auth(
+                session,
+                run=run,
+                integration=integration,
+                provider=provider,
+                error_label=f"team_autoimport run: {sync_run_id}",
             )
-            if credential is None:
-                return {
-                    "status": "skipped",
-                    "reason": "credential_not_found",
-                    "sync_run_id": sync_run_id,
-                }
-            credentials = _credential_mapping(credential)
+        except Exception as exc:
+            return {
+                "status": "skipped",
+                "reason": "credential_resolution_failed",
+                "detail": str(exc),
+                "sync_run_id": sync_run_id,
+            }
 
     summary = run_team_autoimport(
         provider=provider,

@@ -380,6 +380,69 @@ def test_post_sync_team_autoimport_resolves_credentials_from_integration(
     assert captured[0]["credentials"] == {"token": "from-integration-cred"}
 
 
+def test_post_sync_team_autoimport_uses_run_stamped_credential_after_repoint(
+    db_session, monkeypatch
+) -> None:
+    """CHAOS-2755 freeze reaches post-sync attribution: a mid-run repoint of
+    ``Integration.credential_id`` must not switch auto-import onto a different
+    credential than the units that produced the synced data (PR #1109 review M1)."""
+    from dev_health_ops.credentials.fingerprint import (
+        AUTH_SOURCE_INTEGRATION_CREDENTIAL,
+    )
+
+    cred_a = IntegrationCredential(
+        org_id=_ORG,
+        provider="github",
+        name="stamped",
+        credentials_encrypted=None,
+        config={},
+    )
+    cred_b = IntegrationCredential(
+        org_id=_ORG,
+        provider="github",
+        name="repointed",
+        credentials_encrypted=None,
+        config={},
+    )
+    db_session.add_all([cred_a, cred_b])
+    db_session.flush()
+    run, integration, _config = _seed_run_with_config(
+        db_session,
+        status=SyncRunStatus.SUCCESS.value,
+        sync_options={"auto_import_teams": True},
+        credential_id=cred_a.id,
+    )
+    # Mimic the planner stamp (fingerprint None -> verification no-op), then
+    # repoint the mutable integration pointer mid-run.
+    run.credential_id = cred_a.id
+    run.auth_source = AUTH_SOURCE_INTEGRATION_CREDENTIAL
+    run.credential_fingerprint = None
+    integration.credential_id = cred_b.id
+    db_session.flush()
+
+    _patch_session(monkeypatch, db_session)
+    import dev_health_ops.workers.task_utils as task_utils
+
+    monkeypatch.setattr(
+        task_utils,
+        "_credential_mapping",
+        lambda cred: {"token": f"tok-{cred.name}"},
+    )
+    captured: list[dict[str, Any]] = []
+
+    def _run_autoimport(**kwargs: Any) -> dict[str, Any]:
+        captured.append(kwargs)
+        return {"status": "success"}
+
+    monkeypatch.setattr(team_autoimport, "run_team_autoimport", _run_autoimport)
+
+    team_autoimport.run_post_sync_team_autoimport(str(run.id))
+
+    assert len(captured) == 1
+    # Frozen on the stamped credential, NOT the repointed one.
+    assert captured[0]["credentials"] == {"token": "tok-stamped"}
+
+
 def test_post_sync_team_autoimport_skips_when_integration_missing(
     db_session, monkeypatch
 ) -> None:

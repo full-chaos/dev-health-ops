@@ -12,12 +12,39 @@ Key semantics:
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 from ..errors import ValidationError
 
 if TYPE_CHECKING:
     from ..models.inputs import FilterInput
+
+# CHAOS-2385/CHAOS-2492: author_email is the only identity column any
+# developer/author predicate can ever match (git_commits, git_pull_requests,
+# user_metrics_daily, commit_metrics; /api/v1/filters/options populates the
+# quick-filter picker with exactly this column). GraphQL input, URL-decoded
+# REST query params, and the advanced WhoSection UI (web repo) can all pass
+# arbitrary free-form strings (e.g. a raw "alice, bob" string instead of a
+# properly split array) -- silently building a predicate against a
+# non-email value would just match nothing and look like an unrelated bug
+# rather than a bad-input error. Validate format before ANY of who.developers
+# / scope.level=developer becomes a predicate (or a rejection).
+_EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+
+def _validate_developer_emails(values: list[str], field: str) -> None:
+    """Raise ValidationError if any developer filter value isn't an email."""
+    invalid = [v for v in values if not _EMAIL_PATTERN.match(v)]
+    if invalid:
+        raise ValidationError(
+            f"{field}.developers must be email addresses (author_email is "
+            "the shared identity column across git_commits/"
+            "git_pull_requests/user_metrics_daily/commit_metrics); got "
+            f"non-email value(s): {invalid!r}",
+            field=field,
+            value=invalid,
+        )
 
 
 def translate_scope_filter(
@@ -174,6 +201,7 @@ def translate_filters(
             )
             params["scope_ids"] = filters.scope.ids
         elif filters.scope.level.value == "developer" and filters.scope.ids:
+            _validate_developer_emails(filters.scope.ids, field="scope")
             # CHAOS-2385: no ClickHouse table reachable through this generic
             # analytics compiler carries a per-developer breakdown yet --
             # investment_metrics_daily has no author column at all, and
@@ -206,6 +234,7 @@ def translate_filters(
 
     # Who filter - developers
     if filters.who is not None and filters.who.developers:
+        _validate_developer_emails(filters.who.developers, field="who")
         # CHAOS-2385: same gap as scope.level=developer above -- reject
         # rather than emit a predicate against a nonexistent column.
         raise ValidationError(

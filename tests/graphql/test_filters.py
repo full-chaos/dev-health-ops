@@ -118,7 +118,7 @@ class TestFilterTranslation:
             what=WhatFilterInput(repos=["repo-1"]),
         )
         request = TimeseriesRequest(
-            dimension="author",
+            dimension="repo",
             measure="count",
             interval="day",
             start_date=date(2025, 1, 1),
@@ -157,7 +157,7 @@ class TestFilterTranslation:
     def test_none_filters(self):
         """Test that None filters returns no additional clauses."""
         request = TimeseriesRequest(
-            dimension="author",
+            dimension="repo",
             measure="count",
             interval="day",
             start_date=date(2025, 1, 1),
@@ -190,3 +190,45 @@ class TestFilterTranslation:
         with pytest.raises(ValidationError) as exc_info:
             compile_timeseries(request, org_id="org1", filters=filters)
         assert exc_info.value.field == "scope"
+
+    def test_who_filter_rejects_non_email_values(self):
+        """CHAOS-2385: who.developers values must look like email
+        addresses -- GraphQL input, URL-decoded REST query params, and the
+        advanced WhoSection UI (web repo) can all pass arbitrary free-form
+        strings (e.g. a raw "alice, bob" string instead of a properly split
+        array). Validate format before it ever reaches a predicate (or the
+        "not yet supported" rejection above)."""
+        filters = FilterInput(who=WhoFilterInput(developers=["alice, bob"]))
+        request = TimeseriesRequest(
+            dimension="team",
+            measure="count",
+            interval="day",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 1, 7),
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            compile_timeseries(request, org_id="org1", filters=filters)
+        assert exc_info.value.field == "who"
+        assert "email" in str(exc_info.value).lower()
+
+    def test_scope_filter_developer_rejects_non_email_values(self):
+        """CHAOS-2385: scope.level=developer ids must look like email
+        addresses -- same gap as who.developers above."""
+        filters = FilterInput(
+            scope=ScopeFilterInput(
+                level=ScopeLevelInput.DEVELOPER, ids=["not-an-email"]
+            )
+        )
+        request = TimeseriesRequest(
+            dimension="team",
+            measure="count",
+            interval="day",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 1, 7),
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            compile_timeseries(request, org_id="org1", filters=filters)
+        assert exc_info.value.field == "scope"
+        assert "email" in str(exc_info.value).lower()

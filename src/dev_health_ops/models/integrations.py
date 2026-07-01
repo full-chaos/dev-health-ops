@@ -189,6 +189,17 @@ class SyncRun(Base):
     )
     result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Run-auth freeze (CHAOS-2755): the credential resolved once at plan time and
+    # frozen for the whole run. ``credential_id`` is a PLAIN UUID with NO foreign
+    # key — a stamped credential deleted mid-run must not be blocked by an FK and
+    # instead surfaces as the existing "Credential not found" unit failure.
+    # ``credential_fingerprint`` is a safe-scope content witness (no raw secret).
+    # ``auth_source`` is 'integration_credential' | 'environment'; NULL marks a
+    # legacy/pre-migration or in-flight-at-deploy run that falls back to the
+    # mutable ``Integration.credential_id`` resolution path.
+    credential_id: Mapped[uuid.UUID | None] = mapped_column(GUID, nullable=True)
+    credential_fingerprint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    auth_source: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

@@ -41,6 +41,11 @@ from datetime import datetime, time, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from dev_health_ops.backfill.chunker import chunk_date_range
+from dev_health_ops.credentials.fingerprint import (
+    AUTH_SOURCE_ENVIRONMENT,
+    AUTH_SOURCE_INTEGRATION_CREDENTIAL,
+    credential_fingerprint,
+)
 from dev_health_ops.models import (
     Integration,
     IntegrationDataset,
@@ -133,6 +138,12 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
 
     integration = _load_integration(session, request.integration_id, request.org_id)
     mode = _validate_mode(request.mode)
+    # Freeze this run's auth at plan time (CHAOS-2755): resolve the credential
+    # ONCE here so every later phase reads the run-stamped credential and a
+    # mid-run credential edit can never produce a mixed-auth run.
+    credential_id, credential_fp, auth_source = _resolve_credential_stamp(
+        session, integration
+    )
     sources = _load_enabled_sources(session, integration, request.source_ids)
     datasets = _load_enabled_datasets(session, integration, request.dataset_keys)
     now = datetime.now(timezone.utc)
@@ -156,6 +167,9 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
         total_units=len(planned_units),
         completed_units=0,
         failed_units=0,
+        credential_id=credential_id,
+        credential_fingerprint=credential_fp,
+        auth_source=auth_source,
     )
     session.add(sync_run)
     session.flush()
@@ -217,6 +231,71 @@ def _load_integration(
     if integration is None:
         raise ValueError(f"Integration not found for org {org_id}: {integration_id}")
     return integration
+
+
+def _resolve_credential_stamp(
+    session: Session, integration: Integration
+) -> tuple[uuid.UUID | None, str, str]:
+    """Resolve the run-level auth stamp for :func:`plan_sync_run` (CHAOS-2755).
+
+    Returns ``(credential_id, credential_fingerprint, auth_source)``:
+
+      * ``Integration.credential_id`` is NULL -> environment auth. The stamp
+        carries ``credential_id=None``, ``auth_source='environment'`` and a
+        best-effort fingerprint of the resolved env credentials. This is
+        deliberately distinguishable from a legacy NULL-stamped run (whose
+        ``auth_source`` column itself is NULL).
+      * Otherwise the referenced ``IntegrationCredential`` is stamped. Its
+        ``is_active`` flag is enforced HERE, at plan time only — a run stamped
+        against an active credential deliberately tolerates that credential
+        being deactivated mid-run (that asymmetry is exactly what "freezing"
+        means; see docs/architecture/sync-unit-model.md). We do NOT persist the
+        full-payload secret hash; only the safe-scope content witness.
+    """
+    # Imported lazily: task_utils pulls in worker/encryption machinery, and the
+    # planner is imported from those layers — a module-level import would risk a
+    # cycle (mirrors the lazy TierLimitService import below).
+    from dev_health_ops.models import IntegrationCredential
+    from dev_health_ops.workers.task_utils import (
+        _credential_mapping,
+        _resolve_env_credentials,
+    )
+
+    provider = str(integration.provider)
+    integration_id = str(integration.id)
+
+    if integration.credential_id is None:
+        env_credentials = dict(_resolve_env_credentials(provider))
+        fingerprint = credential_fingerprint(
+            env_credentials, credential_id=None, integration_id=integration_id
+        )
+        return None, fingerprint, AUTH_SOURCE_ENVIRONMENT
+
+    credential = (
+        session.query(IntegrationCredential)
+        .filter(
+            IntegrationCredential.id == integration.credential_id,
+            IntegrationCredential.org_id == integration.org_id,
+        )
+        .one_or_none()
+    )
+    if credential is None:
+        raise ValueError(
+            "Integration credential not found at plan time: "
+            f"{integration.credential_id}"
+        )
+    if not credential.is_active:
+        raise ValueError(
+            f"Integration credential is inactive: {integration.credential_id}"
+        )
+
+    decrypted = _credential_mapping(credential)
+    fingerprint = credential_fingerprint(
+        decrypted,
+        credential_id=str(integration.credential_id),
+        integration_id=integration_id,
+    )
+    return integration.credential_id, fingerprint, AUTH_SOURCE_INTEGRATION_CREDENTIAL
 
 
 def _load_enabled_sources(

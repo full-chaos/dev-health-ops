@@ -17,7 +17,6 @@ from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.models import (
     Integration,
-    IntegrationCredential,
     IntegrationSource,
     SyncRun,
     SyncRunReferenceDiscovery,
@@ -31,11 +30,8 @@ from dev_health_ops.sync.dispatch_outbox import (
     upsert_outbox_wakeup,
 )
 from dev_health_ops.workers.celery_app import celery_app
-from dev_health_ops.workers.task_utils import (
-    _credential_mapping,
-    _get_db_url,
-    _resolve_env_credentials,
-)
+from dev_health_ops.workers.sync_bootstrap import resolve_run_auth
+from dev_health_ops.workers.task_utils import _get_db_url
 from dev_health_ops.workers.team_autoimport import run_team_autoimport_strict
 
 logger = logging.getLogger(__name__)
@@ -192,22 +188,17 @@ def _load_discovery_context(run_uuid: uuid.UUID) -> dict[str, Any]:
         )
         if integration is None:
             raise ValueError(f"integration not found for sync run: {run_uuid}")
-        if integration.credential_id is None:
-            credentials: dict[str, Any] = dict(
-                _resolve_env_credentials(integration.provider)
-            )
-        else:
-            credential = (
-                session.query(IntegrationCredential)
-                .filter(
-                    IntegrationCredential.id == integration.credential_id,
-                    IntegrationCredential.org_id == run.org_id,
-                )
-                .one_or_none()
-            )
-            if credential is None:
-                raise ValueError(f"credential not found for sync run: {run_uuid}")
-            credentials = _credential_mapping(credential)
+        # Prefer the run-stamped credential frozen at plan time (CHAOS-2755) so
+        # discovery resolves the SAME auth as this run's units. NULL-stamped
+        # (legacy/in-flight) runs fall back to integration.credential_id.
+        _stamped_credential_id, resolved_credentials = resolve_run_auth(
+            session,
+            run=run,
+            integration=integration,
+            provider=integration.provider,
+            error_label=f"sync run: {run_uuid}",
+        )
+        credentials: dict[str, Any] = dict(resolved_credentials)
         units = (
             session.query(SyncRunUnit)
             .filter(SyncRunUnit.sync_run_id == run_uuid)

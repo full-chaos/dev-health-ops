@@ -18,6 +18,7 @@ import pytest
 
 from dev_health_ops.workers.sync_bootstrap import (
     ProviderRuntime,
+    ProviderRuntimeCache,
     SyncTaskContext,
     _create_store,
 )
@@ -180,3 +181,109 @@ def test_concurrent_get_enters_exactly_one_store_per_key() -> None:
     assert len(created) == 1
     assert created[0].entered == 1
     assert results[0] is results[1]
+
+
+# --- RuntimeCacheKey scoping invariants (CHAOS-2756) --------------------------
+#
+# ProviderRuntimeCache keys on RuntimeCacheKey(org_id, integration_id,
+# credential_id, credential_fingerprint, provider, db_url). These tests pin that
+# strict scoping (a runtime is never shared across a differing key field) and the
+# rotation-eviction contract that makes "credentials are not capacity" hold at
+# the runtime layer: a rotated secret yields a fresh fingerprint -> fresh key ->
+# fresh runtime, and the rotated credential is never served the stale one. See
+# ``docs/providers/rate-limit-policy.md``. A non-ClickHouse ``db_url`` keeps
+# ``_create_store`` a no-op (returns None), so these exercise pure key scoping
+# with no live client.
+
+
+def _scoped_context(
+    *,
+    org_id: str = "org-1",
+    integration_id: str = "integration-1",
+    credential_id: str | None = "credential-1",
+    decrypted_credentials: Any = None,
+    provider: str = "github",
+    db_url: str = "postgresql://localhost/analytics",
+) -> SyncTaskContext:
+    return SyncTaskContext(
+        unit_id="unit-1",
+        sync_run_id="run-1",
+        org_id=org_id,
+        integration_id=integration_id,
+        source_id="source-1",
+        source_external_id="full-chaos/dev-health",
+        provider=provider,
+        dataset_key="commits",
+        cost_class="medium",
+        mode="incremental",
+        window_start=None,
+        window_end=None,
+        processor_flags={},
+        credential_id=credential_id,
+        decrypted_credentials=(
+            {"token": "secret"}
+            if decrypted_credentials is None
+            else decrypted_credentials
+        ),
+        db_url=db_url,
+    )
+
+
+def test_runtime_cache_scopes_by_all_six_key_fields() -> None:
+    # Strict scoping (sync_bootstrap.py: RuntimeCacheKey): an identical scope
+    # reuses one runtime; changing ANY of the six key fields alone yields a
+    # distinct runtime. The credential_fingerprint case varies only the
+    # decrypted secret (same credential_id) — rotation-in-place must still
+    # re-key.
+    cache = ProviderRuntimeCache()
+    base_runtime = cache.get(_scoped_context())
+    assert cache.get(_scoped_context()) is base_runtime
+
+    variations = {
+        "org_id": _scoped_context(org_id="org-2"),
+        "integration_id": _scoped_context(integration_id="integration-2"),
+        "credential_id": _scoped_context(credential_id="credential-2"),
+        "credential_fingerprint": _scoped_context(
+            decrypted_credentials={"token": "rotated-secret"}
+        ),
+        "provider": _scoped_context(provider="gitlab"),
+        "db_url": _scoped_context(db_url="postgresql://localhost/other"),
+    }
+    for field_name, context in variations.items():
+        assert cache.get(context) is not base_runtime, (
+            f"runtime must not be shared across differing {field_name}"
+        )
+
+
+def test_rotation_evicts_runtime_never_returns_stale() -> None:
+    # Same credential_id, NEW secret (in-place rotation) -> new fingerprint ->
+    # new runtime; the rotated credential must never be served the old runtime.
+    cache = ProviderRuntimeCache()
+    old_runtime = cache.get(
+        _scoped_context(
+            credential_id="credential-1", decrypted_credentials={"token": "old-secret"}
+        )
+    )
+    rotated = _scoped_context(
+        credential_id="credential-1", decrypted_credentials={"token": "new-secret"}
+    )
+    new_runtime = cache.get(rotated)
+
+    assert new_runtime is not old_runtime
+    # The rotated context keeps resolving to the NEW runtime, never the stale one.
+    for _ in range(3):
+        served = cache.get(rotated)
+        assert served is new_runtime
+        assert served is not old_runtime
+
+
+def test_connectors_are_per_unit_only_stores_cached() -> None:
+    # Contract (dataset_adapters.py): the runtime cache reuses STORES across
+    # units of a scope; connectors are built per unit and never cached, so
+    # ProviderRuntime.connector stays None. Pinned so any future connector
+    # caching must consciously break this test.
+    assert ProviderRuntime().connector is None
+
+    cache = ProviderRuntimeCache()
+    runtime = cache.get(_scoped_context())
+    assert runtime.connector is None

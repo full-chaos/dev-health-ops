@@ -61,6 +61,7 @@ async def _fetch_user_metrics(
     since_date: str,
     until_date: str,
     team_id: str | None,
+    repo_id: str | None,
 ) -> list[dict[str, Any]]:
     """SUM of latest-per-developer cognitive load columns, grouped by day.
 
@@ -70,7 +71,22 @@ async def _fetch_user_metrics(
     ``argMax(<col>, computed_at)``; the outer query SUMs those deduplicated
     rows by day. This prevents double-counting from re-computation passes.
 
-    Filters by ``org_id`` (always), date range, and optionally ``team_id``.
+    Filters by ``org_id`` (always), date range, and optionally ``team_id`` /
+    ``repo_id`` (the latter is valid here since ``user_metrics_daily`` carries
+    a ``repo_id`` column per row; ``team_metrics_daily`` does not, so
+    ``repo_id`` is never applied to the team-metrics query).
+
+    The GraphQL ``repoId`` input may be EITHER the repo's UUID (``repos.id``)
+    OR its human-readable full_name/slug (``repos.repo``, e.g.
+    ``"org/repo"``) — the web repo picker's option list
+    (``/api/v1/filters/options``) is populated from ``repos.repo`` slugs, not
+    UUIDs (see CHAOS-2745 for the broader platform-wide follow-up to make
+    every repo-scoped resolver accept slugs consistently). The predicate
+    below resolves either form via an org-scoped subquery over ``repos``
+    rather than comparing ``repo_id`` (a ``UUID``-typed column) directly
+    against the ``String`` parameter, which would force ClickHouse to parse
+    the parameter as a UUID and raise ``CANNOT_PARSE_UUID`` whenever a slug
+    is supplied.
     """
     inner_where = """
             WHERE org_id = {org_id:String}
@@ -85,6 +101,14 @@ async def _fetch_user_metrics(
     if team_id:
         inner_where += "\n              AND team_id = {team_id:String}"
         params["team_id"] = team_id
+    if repo_id:
+        inner_where += """
+              AND repo_id IN (
+                  SELECT id FROM repos
+                  WHERE org_id = {org_id:String}
+                    AND (repo = {repo_id:String} OR toString(id) = {repo_id:String})
+              )"""
+        params["repo_id"] = repo_id
 
     query = f"""
         SELECT
@@ -202,6 +226,7 @@ async def resolve_cognitive_load(
         since_date=since_date,
         until_date=until_date,
         team_id=input.team_id,
+        repo_id=input.repo_id,
     )
     team_rows = await _fetch_team_metrics(
         client,

@@ -238,6 +238,31 @@ def test_work_item_datasets_route_to_work_item_sync_scoped_to_source(
     assert result["source"] == source_external_id
 
 
+def test_github_work_item_unit_threads_source_scope_contract() -> None:
+    """CHAOS-2720: the adapter must hand ``run_work_items_sync_job`` the source
+    identity that lets it scope a GitHub unit to its own repo — ``repo_name`` set
+    to the ``owner/repo`` slug AND ``require_source=True`` (fail closed if the
+    source repo is not discovered). ``run_work_items_sync_job`` then drops
+    off-source GitHub repos before ingest, so one unit no longer fans out across
+    every org repo (call-count proof in tests/test_work_item_source_scope.py).
+    """
+    ctx = _context(
+        provider="github",
+        dataset_key="work-items",
+        source_external_id="full-chaos/dev-health",
+    )
+
+    with patch(
+        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job"
+    ) as work_items:
+        run_dataset_unit(ctx, _runtime())
+
+    work_items.assert_called_once()
+    kwargs = work_items.call_args.kwargs
+    assert kwargs["repo_name"] == "full-chaos/dev-health"
+    assert kwargs["require_source"] is True
+
+
 def test_linear_org_wide_provider_name_placeholder_routes_to_no_source() -> None:
     ctx = _context(
         provider="linear",

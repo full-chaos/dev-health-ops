@@ -57,6 +57,7 @@ from .models.outputs import (
     WorkItemTeamAttribution,
     WorkUnitTeamAttribution,
 )
+from .models.pr import PullRequestDetail
 from .models.recommendations import (
     Recommendation,
     WindowInput,
@@ -79,6 +80,7 @@ from .resolvers.complexity import resolve_complexity_timeseries, resolve_hotspot
 from .resolvers.compounding_risk import resolve_compounding_risk
 from .resolvers.data_health import resolve_data_health
 from .resolvers.improve import resolve_improve_opportunities
+from .resolvers.pr import resolve_pr
 from .resolvers.product_telemetry import (
     resolve_product_telemetry_dashboard,
     resolve_product_telemetry_platform_dashboard,
@@ -269,6 +271,21 @@ class Query:
 
         context = get_context(info)
         return await resolve_work_graph_edges(context, filters)
+
+    @strawberry.field(
+        description=(
+            "Pull request detail by stable id ({repo_id}#pr{number}) from "
+            "persisted ClickHouse PR, review, commit, and Work Graph tables."
+        )
+    )
+    async def pr(
+        self,
+        info: Info,
+        org_id: str,
+        id: strawberry.ID,
+    ) -> PullRequestDetail | None:
+        context = get_context(info)
+        return await resolve_pr(context, str(id))
 
     @strawberry.field(
         description="Per-node-type inflow/outflow over the full work graph"

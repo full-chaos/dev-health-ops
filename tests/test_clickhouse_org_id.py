@@ -14,6 +14,7 @@ from dev_health_ops.metrics.schemas import (
     CommitMetricsRecord,
     DeployMetricsDailyRecord,
     DORAMetricsRecord,
+    EstimateCoverageMetricsDailyRecord,
     FileComplexitySnapshot,
     FileHotspotDaily,
     FileMetricsRecord,
@@ -64,6 +65,7 @@ ALL_SCHEMA_CLASSES = [
     FileMetricsRecord,
     TeamMetricsDailyRecord,
     WorkItemMetricsDailyRecord,
+    EstimateCoverageMetricsDailyRecord,
     WorkItemUserMetricsDailyRecord,
     WorkItemCycleTimeRecord,
     WorkItemStateDurationDailyRecord,
@@ -200,6 +202,44 @@ def test_clickhouse_sink_write_repo_metrics_includes_org_id():
         matrix = call_args[0][1]
         org_id_idx = list(column_names).index("org_id")
         assert matrix[0][org_id_idx] == "test-org"
+
+
+def test_clickhouse_sink_write_estimate_coverage_metrics_includes_org_id():
+    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+
+    with patch.object(
+        ClickHouseMetricsSink, "__init__", lambda self, dsn, client=None: None
+    ):
+        sink = ClickHouseMetricsSink("clickhouse://dummy")
+        sink.client = MagicMock()
+
+        row = EstimateCoverageMetricsDailyRecord(
+            day=date(2026, 6, 30),
+            provider="jira",
+            work_scope_id="PROJ",
+            team_id="team-a",
+            team_name="Team A",
+            estimated_count=2,
+            unestimated_count=1,
+            backlog_size=3,
+            ratio=2 / 3,
+            computed_at=datetime(2026, 6, 30, tzinfo=timezone.utc),
+            org_id="test-org",
+        )
+        sink.write_estimate_coverage_metrics([row])
+
+        assert sink.client.insert.called
+        call_args = sink.client.insert.call_args
+        column_names = call_args[1].get("column_names") or call_args[0][2]
+        assert call_args[0][0] == "estimate_coverage_metrics_daily"
+        assert "org_id" in column_names
+        assert "ratio" in column_names
+
+        matrix = call_args[0][1]
+        org_id_idx = list(column_names).index("org_id")
+        ratio_idx = list(column_names).index("ratio")
+        assert matrix[0][org_id_idx] == "test-org"
+        assert matrix[0][ratio_idx] == 2 / 3
 
 
 def test_clickhouse_sink_write_work_graph_edges_includes_org_id():

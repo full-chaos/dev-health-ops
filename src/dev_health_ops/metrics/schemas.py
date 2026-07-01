@@ -476,6 +476,21 @@ class WorkItemMetricsDailyRecord:
 
 
 @dataclass(frozen=True)
+class EstimateCoverageMetricsDailyRecord:
+    day: date
+    provider: str
+    work_scope_id: str
+    team_id: str | None
+    team_name: str | None
+    estimated_count: int
+    unestimated_count: int
+    backlog_size: int
+    ratio: float | None
+    computed_at: datetime
+    org_id: str = ""
+
+
+@dataclass(frozen=True)
 class WorkItemUserMetricsDailyRecord:
     day: date
     provider: str

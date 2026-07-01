@@ -5,6 +5,7 @@ import json
 from collections.abc import Callable, Mapping
 from urllib.parse import urlparse
 
+from dev_health_ops.providers.usage import OperationResolver, UsageRouteFamily
 from dev_health_ops.sync.budget_types import (
     BudgetBucketKey,
     BudgetDimension,
@@ -230,3 +231,73 @@ def _fallback_credential_scope(
         "credential_id": credential_id or "env",
         "integration_id": integration_id,
     }
+
+
+# ---------------------------------------------------------------------------
+# Actuals recorder route-family registry (CHAOS-2754)
+# ---------------------------------------------------------------------------
+# Linear is GraphQL-only; the recorder records one observation per POST keyed by
+# the GraphQL operation name (lowercased). Markers map each named query to the
+# route_family the estimator emits. ``WorkflowStates`` has no estimator family
+# and falls through to the ``issues`` default. ``team_members`` is listed before
+# ``teams`` for clarity (the "teams" marker requires the trailing 's', so
+# "teammembers" never collides).
+LINEAR_USAGE_ROUTE_FAMILIES: tuple[UsageRouteFamily, ...] = (
+    UsageRouteFamily(
+        "issues",
+        BudgetDimension.GRAPHQL_COST,
+        transport="graphql",
+        operation_markers=("issues",),
+    ),
+    UsageRouteFamily(
+        "history",
+        BudgetDimension.GRAPHQL_COST,
+        transport="graphql",
+        operation_markers=("issuehistory", "history"),
+    ),
+    UsageRouteFamily(
+        "team_members",
+        BudgetDimension.GRAPHQL_COST,
+        transport="graphql",
+        operation_markers=("teammembers",),
+    ),
+    UsageRouteFamily(
+        "teams",
+        BudgetDimension.GRAPHQL_COST,
+        transport="graphql",
+        operation_markers=("teams", "teambykey"),
+    ),
+    UsageRouteFamily(
+        "cycles",
+        BudgetDimension.GRAPHQL_COST,
+        transport="graphql",
+        operation_markers=("cycles",),
+    ),
+    UsageRouteFamily(
+        "projects",
+        BudgetDimension.GRAPHQL_COST,
+        transport="graphql",
+        operation_markers=("projects",),
+    ),
+    UsageRouteFamily(
+        "comments",
+        BudgetDimension.GRAPHQL_COST,
+        transport="graphql",
+        operation_markers=("comments",),
+    ),
+    UsageRouteFamily(
+        "attachments",
+        BudgetDimension.GRAPHQL_COST,
+        transport="graphql",
+        operation_markers=("attachments",),
+    ),
+)
+
+LINEAR_USAGE_ROUTE_FAMILY_KEYS = frozenset(
+    family.route_family for family in LINEAR_USAGE_ROUTE_FAMILIES
+)
+
+LINEAR_USAGE_RESOLVER = OperationResolver(
+    families=LINEAR_USAGE_ROUTE_FAMILIES,
+    defaults=(("graphql", "issues", BudgetDimension.GRAPHQL_COST),),
+)

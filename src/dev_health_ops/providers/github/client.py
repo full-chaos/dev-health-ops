@@ -31,6 +31,7 @@ from dev_health_ops.credentials.resolver import (
 )
 from dev_health_ops.credentials.types import GitHubCredentials
 from dev_health_ops.providers._ratelimit import gate_call
+from dev_health_ops.providers.usage import UsageRecorder
 from dev_health_ops.sync.budget_types import BudgetDimension
 from dev_health_ops.sync.rate_limit_signal import RateLimitSignal
 
@@ -118,7 +119,6 @@ _DIAGNOSTIC_HEADER_NAMES = (
     "x-github-request-id",
     "x-accepted-github-permissions",
 )
-_MAX_USAGE_OBSERVATION_KEYS = 50
 
 _TItem = TypeVar("_TItem")
 
@@ -378,8 +378,9 @@ class GitHubWorkClient:
             host=host,
             config=RateLimitConfig(initial_backoff_seconds=1.0),
         )
-        self._usage_observations: dict[tuple[str, str], dict[str, Any]] = {}
-        self._usage_observation_overflow = 0
+        from dev_health_ops.providers.github.budget import GITHUB_USAGE_RESOLVER
+
+        self._usage = UsageRecorder(resolver=GITHUB_USAGE_RESOLVER)
         self._app_token_provider: GitHubAppTokenProvider | None = None
 
         token = auth.token
@@ -487,33 +488,21 @@ class GitHubWorkClient:
         rate_limit: dict[str, Any],
         status: int | None = None,
     ) -> None:
-        if not headers and not rate_limit and status is None:
+        # Re-keying by (transport, route_family, dimension) now lives in the
+        # shared recorder (CHAOS-2754). This client keeps ownership of the
+        # provider-specific header/rate-limit extraction only. The getattr guard
+        # preserves the pre-refactor tolerance of a stubbed __init__ (some tests
+        # replace __init__ to capture auth without constructing a real client).
+        recorder = getattr(self, "_usage", None)
+        if recorder is None:
             return
-        key = (transport, operation)
-        observations = getattr(self, "_usage_observations", None)
-        if observations is None:
-            observations = {}
-            self._usage_observations = observations
-        observation = observations.get(key)
-        if observation is None:
-            if len(observations) >= _MAX_USAGE_OBSERVATION_KEYS:
-                self._usage_observation_overflow = (
-                    getattr(self, "_usage_observation_overflow", 0) + 1
-                )
-                return
-            observation = {
-                "transport": transport,
-                "operation": operation,
-                "request_count": 0,
-            }
-            observations[key] = observation
-        observation["request_count"] = int(observation["request_count"]) + 1
-        if status is not None:
-            observation["latest_status"] = status
-        if headers:
-            observation["latest_headers"] = dict(headers)
-        if rate_limit:
-            observation["rate_limit"] = dict(rate_limit)
+        recorder.record(
+            transport=transport,
+            operation=operation,
+            headers=headers,
+            rate_limit=rate_limit,
+            status=status,
+        )
 
     def _record_rest_usage(
         self,
@@ -558,21 +547,10 @@ class GitHubWorkClient:
         )
 
     def drain_usage_observations(self) -> list[dict[str, Any]]:
-        usage_observations = getattr(self, "_usage_observations", {})
-        observations = [dict(value) for value in usage_observations.values()]
-        overflow = getattr(self, "_usage_observation_overflow", 0)
-        if overflow:
-            observations.append(
-                {
-                    "transport": "summary",
-                    "operation": "overflow",
-                    "dropped_operation_count": overflow,
-                }
-            )
-        usage_observations.clear()
-        self._usage_observations = usage_observations
-        self._usage_observation_overflow = 0
-        return observations
+        recorder = getattr(self, "_usage", None)
+        if recorder is None:
+            return []
+        return recorder.drain()
 
     def _raise_github_exception(self, exc: Exception, *, operation: str) -> NoReturn:
         from github import GithubException, RateLimitExceededException

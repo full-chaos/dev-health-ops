@@ -1174,15 +1174,19 @@ def test_github_provider_emits_client_usage_observations(
 
     batch = provider.ingest(ctx)
 
+    # CHAOS-2754: the legacy github_usage key is preserved verbatim and the
+    # provider-neutral provider_usage key is emitted ALONGSIDE it (same payload).
+    expected_usage = [
+        {
+            "transport": "rest",
+            "operation": "GET /repos/owner/repo/issues",
+            "request_count": 1,
+            "rate_limit": {"remaining": "4999", "reset": "1234567890"},
+        }
+    ]
     assert batch.observations == {
-        "github_usage": [
-            {
-                "transport": "rest",
-                "operation": "GET /repos/owner/repo/issues",
-                "request_count": 1,
-                "rate_limit": {"remaining": "4999", "reset": "1234567890"},
-            }
-        ]
+        "github_usage": expected_usage,
+        "provider_usage": expected_usage,
     }
 
 

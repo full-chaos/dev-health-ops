@@ -516,11 +516,19 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                 repo_full_name,
             )
 
-        drain_usage = getattr(client, "drain_usage_observations", None)
-        usage_observations = drain_usage() if callable(drain_usage) else []
-        observations = (
-            {"github_usage": usage_observations} if usage_observations else {}
+        from dev_health_ops.providers.usage import (
+            PROVIDER_USAGE_OBSERVATION_KEY,
+            drain_provider_usage,
         )
+
+        usage_observations = drain_provider_usage(client)
+        observations: dict[str, Any] = {}
+        if usage_observations:
+            # Emit the provider-neutral key (CHAOS-2754) alongside the legacy
+            # github_usage key, which is pinned by tests and the admin schema and
+            # must stay intact.
+            observations["github_usage"] = usage_observations
+            observations[PROVIDER_USAGE_OBSERVATION_KEY] = usage_observations
 
         return ProviderBatch(
             work_items=work_items,

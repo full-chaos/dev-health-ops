@@ -6,6 +6,7 @@ import os
 from collections.abc import Callable, Mapping
 from urllib.parse import urlparse
 
+from dev_health_ops.providers.usage import OperationResolver, UsageRouteFamily
 from dev_health_ops.sync.budget_types import (
     BudgetBucketKey,
     BudgetDimension,
@@ -283,3 +284,58 @@ def _normalize_base_url(value: str) -> str:
     if url.startswith("https://"):
         return url
     return "https://" + url.lstrip("/")
+
+
+# ---------------------------------------------------------------------------
+# Actuals recorder route-family registry (CHAOS-2754)
+# ---------------------------------------------------------------------------
+# The Jira work client labels reads as ``"GET <path>"``; markers match on the
+# REST path so JQL search, comment, worklog and issue-enrichment reads key by
+# the same route_family the estimator emits. The GraphQL enrichment family
+# (jira_gql_enrichment) is served by a separate atlassian-client that this
+# recorder does not instrument, so it is declared for coverage with no markers.
+# Marker order matters: ``/comment`` and ``/worklog`` are tested before the
+# broad ``/issue/`` enrichment marker so a comment/worklog sub-resource is not
+# swallowed by enrichment.
+JIRA_USAGE_ROUTE_FAMILIES: tuple[UsageRouteFamily, ...] = (
+    UsageRouteFamily(
+        "jira_jql",
+        BudgetDimension.SEARCH,
+        transport="rest",
+        operation_markers=("/search/jql",),
+    ),
+    UsageRouteFamily(
+        "jira_comments",
+        BudgetDimension.REST_CORE,
+        transport="rest",
+        operation_markers=("/comment",),
+    ),
+    UsageRouteFamily(
+        "jira_worklogs",
+        BudgetDimension.REST_CORE,
+        transport="rest",
+        operation_markers=("/worklog",),
+    ),
+    UsageRouteFamily(
+        "jira_issue_enrichment",
+        BudgetDimension.REST_CORE,
+        transport="rest",
+        operation_markers=("/issue/",),
+    ),
+    UsageRouteFamily(
+        "jira_metadata",
+        BudgetDimension.REST_CORE,
+        transport="rest",
+        operation_markers=("/project", "/agile/", "/board", "/sprint"),
+    ),
+    UsageRouteFamily("jira_gql_enrichment", BudgetDimension.GRAPHQL_COST),
+)
+
+JIRA_USAGE_ROUTE_FAMILY_KEYS = frozenset(
+    family.route_family for family in JIRA_USAGE_ROUTE_FAMILIES
+)
+
+JIRA_USAGE_RESOLVER = OperationResolver(
+    families=JIRA_USAGE_ROUTE_FAMILIES,
+    defaults=(("rest", "jira_metadata", BudgetDimension.REST_CORE),),
+)

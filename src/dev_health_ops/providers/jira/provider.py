@@ -28,6 +28,7 @@ from dev_health_ops.providers.base import (
 from dev_health_ops.providers.jira.atlassian_compat import atlassian_client_enabled
 from dev_health_ops.providers.jira.client import JiraClient
 from dev_health_ops.providers.normalize_common import to_utc as _to_utc
+from dev_health_ops.providers.usage import provider_usage_observations
 from dev_health_ops.providers.utils import env_flag as _env_flag
 
 logger = logging.getLogger(__name__)
@@ -284,6 +285,8 @@ class JiraProvider(ProviderWithClient[JiraClient]):
             except Exception as exc:
                 logger.warning("Failed to close Jira client: %s", exc)
 
+        # Drain after close: the recorder holds in-memory observations that
+        # client.close() (session teardown) does not clear.
         return ProviderBatch(
             work_items=work_items,
             status_transitions=transitions,
@@ -291,6 +294,7 @@ class JiraProvider(ProviderWithClient[JiraClient]):
             interactions=interactions,
             sprints=sprints,
             reopen_events=reopen_events,
+            observations=provider_usage_observations(client),
         )
 
     def _ingest_via_atlassian_client(self, ctx: IngestionContext) -> ProviderBatch:
@@ -567,4 +571,5 @@ class JiraProvider(ProviderWithClient[JiraClient]):
             sprints=list(sprints),
             reopen_events=reopen_events,
             worklogs=worklogs,
+            observations=provider_usage_observations(client),
         )

@@ -20,11 +20,18 @@ from dev_health_ops.models import (
     SyncRunUnitStatus,
 )
 from dev_health_ops.providers.github.budget import GitHubBudgetEstimator
-from dev_health_ops.providers.gitlab.budget import GitLabBudgetEstimator
+from dev_health_ops.providers.gitlab.budget import (
+    GITLAB_USAGE_RESOLVER,
+    GitLabBudgetEstimator,
+)
 from dev_health_ops.providers.gitlab.client import GitLabWorkClient
-from dev_health_ops.providers.jira.budget import JiraBudgetEstimator
+from dev_health_ops.providers.jira.budget import (
+    JIRA_USAGE_RESOLVER,
+    JiraBudgetEstimator,
+)
 from dev_health_ops.providers.jira.client import JiraClient
 from dev_health_ops.providers.linear.budget import LinearBudgetEstimator
+from dev_health_ops.providers.usage import UsageRecorder
 from dev_health_ops.sync.budget_guard import BudgetGuard
 from dev_health_ops.sync.budget_types import BudgetEstimator
 from dev_health_ops.workers.sync_bootstrap import SyncTaskContext
@@ -247,8 +254,7 @@ def test_linear_incremental_narrow_window_not_deferred(
 
 def test_jira_usage_observation_captures_rate_headers_without_tokens() -> None:
     client = JiraClient.__new__(JiraClient)
-    client._usage_observations = {}
-    client._usage_observation_overflow = 0
+    client._usage = UsageRecorder(resolver=JIRA_USAGE_RESOLVER)
 
     client._record_rest_usage(
         "GET /rest/api/3/search/jql",
@@ -267,8 +273,10 @@ def test_jira_usage_observation_captures_rate_headers_without_tokens() -> None:
     assert observations == [
         {
             "transport": "rest",
-            "operation": "GET /rest/api/3/search/jql",
+            "route_family": "jira_jql",
+            "dimension": "search",
             "request_count": 1,
+            "example_operation": "GET /rest/api/3/search/jql",
             "latest_status": 200,
             "latest_headers": {
                 "ratelimit-remaining": "42",
@@ -288,11 +296,10 @@ def test_jira_usage_observation_captures_rate_headers_without_tokens() -> None:
 
 def test_gitlab_usage_observation_captures_rate_headers_without_tokens() -> None:
     client = GitLabWorkClient.__new__(GitLabWorkClient)
-    client._usage_observations = {}
-    client._usage_observation_overflow = 0
+    client._usage = UsageRecorder(resolver=GITLAB_USAGE_RESOLVER)
 
     client._record_rest_usage(
-        "GET /projects/:id/issues",
+        "GET iterator page",
         headers={
             "RateLimit-Remaining": "17",
             "RateLimit-Reset": "1710000000",
@@ -308,8 +315,10 @@ def test_gitlab_usage_observation_captures_rate_headers_without_tokens() -> None
     assert observations == [
         {
             "transport": "rest",
-            "operation": "GET /projects/:id/issues",
+            "route_family": "issues",
+            "dimension": "rest_core",
             "request_count": 1,
+            "example_operation": "GET iterator page",
             "latest_status": 429,
             "latest_headers": {
                 "ratelimit-remaining": "17",

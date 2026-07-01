@@ -16,6 +16,7 @@ from dev_health_ops.providers._ratelimit import (
     parse_retry_after_header,
     penalize_from_response,
 )
+from dev_health_ops.providers.usage import UsageRecorder
 from dev_health_ops.providers.utils import EnvSpec, read_env_spec
 from dev_health_ops.sync.budget_types import BudgetDimension
 from dev_health_ops.sync.rate_limit_signal import RateLimitSignal
@@ -33,7 +34,6 @@ _DIAGNOSTIC_HEADER_NAMES = (
     "x-request-id",
     "atl-traceid",
 )
-_MAX_USAGE_OBSERVATION_KEYS = 50
 
 
 def _require_jira() -> Any:
@@ -118,8 +118,10 @@ class JiraClient:
             config=RateLimitConfig(initial_backoff_seconds=1.0),
         )
         self.max_retries_429 = max(0, int(max_retries_429))
-        self._usage_observations: dict[tuple[str, str], dict[str, Any]] = {}
-        self._usage_observation_overflow = 0
+
+        from dev_health_ops.providers.jira.budget import JIRA_USAGE_RESOLVER
+
+        self._usage = UsageRecorder(resolver=JIRA_USAGE_RESOLVER)
 
         self.session = requests.Session()
         self.session.auth = (auth.email, auth.api_token)
@@ -225,27 +227,15 @@ class JiraClient:
         rate_limit: dict[str, Any],
         status: int | None = None,
     ) -> None:
-        if not headers and not rate_limit and status is None:
-            return
-        key = (transport, operation)
-        observation = self._usage_observations.get(key)
-        if observation is None:
-            if len(self._usage_observations) >= _MAX_USAGE_OBSERVATION_KEYS:
-                self._usage_observation_overflow += 1
-                return
-            observation = {
-                "transport": transport,
-                "operation": operation,
-                "request_count": 0,
-            }
-            self._usage_observations[key] = observation
-        observation["request_count"] = int(observation["request_count"]) + 1
-        if status is not None:
-            observation["latest_status"] = status
-        if headers:
-            observation["latest_headers"] = dict(headers)
-        if rate_limit:
-            observation["rate_limit"] = dict(rate_limit)
+        # Aggregation/keying by route_family lives in the shared recorder
+        # (CHAOS-2754); this client only owns the header extraction below.
+        self._usage.record(
+            transport=transport,
+            operation=operation,
+            headers=headers,
+            rate_limit=rate_limit,
+            status=status,
+        )
 
     def _record_rest_usage(
         self,
@@ -277,18 +267,7 @@ class JiraClient:
         )
 
     def drain_usage_observations(self) -> list[dict[str, Any]]:
-        observations = [dict(value) for value in self._usage_observations.values()]
-        if self._usage_observation_overflow:
-            observations.append(
-                {
-                    "transport": "summary",
-                    "operation": "overflow",
-                    "dropped_operation_count": self._usage_observation_overflow,
-                }
-            )
-        self._usage_observations.clear()
-        self._usage_observation_overflow = 0
-        return observations
+        return self._usage.drain()
 
     def search_issues_page(
         self,

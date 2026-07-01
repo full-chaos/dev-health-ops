@@ -5,6 +5,7 @@ import json
 from collections.abc import Callable, Mapping
 from urllib.parse import urlparse
 
+from dev_health_ops.providers.usage import OperationResolver, UsageRouteFamily
 from dev_health_ops.sync.budget_types import (
     BudgetBucketKey,
     BudgetDimension,
@@ -319,3 +320,52 @@ def _fallback_credential_scope(
         "credential_id": credential_id or "env",
         "integration_id": integration_id,
     }
+
+
+# ---------------------------------------------------------------------------
+# Actuals recorder route-family registry (CHAOS-2754)
+# ---------------------------------------------------------------------------
+# Declares the full budget vocabulary the GitHub estimator emits so recorded
+# actuals key by the same (route_family, dimension) an estimate is keyed by.
+# Code-dataset families (git/commit_stats/files/blame/cicd/tests/deployments/
+# security) are budgeted but fetched through the frozen dataset path with no
+# instrumented client, so they carry no operation markers here (documented gap;
+# see docs/architecture/rate-limit-policy.md). Only the work-item families are
+# instrumented: every REST read in a work-item unit consumes the work_items
+# budget and every GraphQL POST consumes the work_item_prs budget, so resolution
+# is transport-based via the resolver defaults below.
+GITHUB_USAGE_ROUTE_FAMILIES: tuple[UsageRouteFamily, ...] = (
+    UsageRouteFamily("repo", BudgetDimension.REST_CORE),
+    UsageRouteFamily("git", BudgetDimension.REST_CORE),
+    UsageRouteFamily("commit_stats", BudgetDimension.REST_CORE),
+    UsageRouteFamily("commit_stats", BudgetDimension.CONTENTS_BLOB),
+    UsageRouteFamily("files", BudgetDimension.REST_CORE),
+    UsageRouteFamily("files", BudgetDimension.CONTENTS_BLOB),
+    UsageRouteFamily("blame", BudgetDimension.REST_CORE),
+    UsageRouteFamily("blame", BudgetDimension.CONTENTS_BLOB),
+    UsageRouteFamily("prs", BudgetDimension.REST_CORE),
+    UsageRouteFamily("pr_social", BudgetDimension.GRAPHQL_COST),
+    UsageRouteFamily("pr_social", BudgetDimension.SECONDARY_ABUSE_RISK),
+    UsageRouteFamily("cicd", BudgetDimension.REST_CORE),
+    UsageRouteFamily("cicd", BudgetDimension.CONTENTS_BLOB),
+    UsageRouteFamily("tests", BudgetDimension.REST_CORE),
+    UsageRouteFamily("tests", BudgetDimension.CONTENTS_BLOB),
+    UsageRouteFamily("deployments", BudgetDimension.REST_CORE),
+    UsageRouteFamily("deployments", BudgetDimension.CONTENTS_BLOB),
+    UsageRouteFamily("security", BudgetDimension.REST_CORE),
+    UsageRouteFamily("work_items", BudgetDimension.REST_CORE),
+    UsageRouteFamily("work_item_prs", BudgetDimension.GRAPHQL_COST),
+    UsageRouteFamily("work_item_prs", BudgetDimension.SECONDARY_ABUSE_RISK),
+)
+
+GITHUB_USAGE_ROUTE_FAMILY_KEYS = frozenset(
+    family.route_family for family in GITHUB_USAGE_ROUTE_FAMILIES
+)
+
+GITHUB_USAGE_RESOLVER = OperationResolver(
+    families=GITHUB_USAGE_ROUTE_FAMILIES,
+    defaults=(
+        ("rest", "work_items", BudgetDimension.REST_CORE),
+        ("graphql", "work_item_prs", BudgetDimension.GRAPHQL_COST),
+    ),
+)

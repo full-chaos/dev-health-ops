@@ -434,6 +434,43 @@ def run_work_items_sync_job(
             before,
         )
 
+        # CHAOS-2720: A config-aware work-item unit carries exactly one source
+        # repo in ``repo_name``. ``_discover_repos`` only short-circuits on
+        # ``repo_id`` and otherwise returns every repo for the org, so without
+        # scoping the GitHub ingest loop below runs a full ``iter_ingest`` per
+        # org repo — one unit fanning out into N-repo API amplification. Scope
+        # the discovered GitHub repos to the unit's source so a GitHub unit
+        # ingests only its own repo. Matching is case-insensitive on
+        # ``full_name`` because both the source ``external_id`` and
+        # ``repos.repo`` are the GitHub ``owner/repo`` slug (admin sync planner,
+        # api/admin/routers/sync.py). GitLab is intentionally left org-wide
+        # here: its ``repo_name`` is a numeric project id that does not match
+        # ``repos.repo`` (``path_with_namespace``), so a ``full_name`` filter
+        # would empty GitLab discovery and trip the require_source guard below
+        # (CHAOS-2737). Only GitHub-source repos are touched; every other
+        # source passes through unchanged. When ``repo_name`` is absent
+        # (CLI/org-wide), discovery stays org-wide as before.
+        if repo_name and "github" in provider_set:
+            wanted = repo_name.strip().lower()
+            scoped: list[Any] = []
+            dropped = 0
+            for repo in discovered_repos:
+                if (
+                    repo.source == "github"
+                    and (repo.full_name or "").strip().lower() != wanted
+                ):
+                    dropped += 1
+                    continue
+                scoped.append(repo)
+            if dropped:
+                logger.info(
+                    "Scoped GitHub work-item unit to source repo '%s': "
+                    "dropped %d off-source repo(s)",
+                    repo_name,
+                    dropped,
+                )
+            discovered_repos = scoped
+
         if require_source:
             if repo_name and {"github", "gitlab"}.intersection(provider_set):
                 provider_sources = {repo.source for repo in discovered_repos}

@@ -142,6 +142,14 @@ returns two projections of the same window:
   base table) plus `teamId` resolved via `RepoPatternTeamResolver`, the same
   mechanism `aiAttributedPrs` uses.
 
+Scoped by `AIAttributionScopeInput` (`repoId`, `teamId`, `buckets`), not the
+shared `AIScopeInput` — `ai_attribution_resolved` carries no `work_type`
+column, so `workType` is deliberately **not exposed** on this query rather
+than accepted and silently ignored (CHAOS-2744). `repoId`/`teamId` are
+applied as a real `WHERE repo_id = ...` / resolved-repo-set predicate before
+`GROUP BY`/`LIMIT`, and `buckets` filters `WHERE kind IN (...)` against the
+view's own `kind` column — all before the SQL `LIMIT`.
+
 ### `aiWorkflowDrilldown`
 
 Partial Work Graph rooted at an issue, PR, or work_unit.  Returns
@@ -157,6 +165,17 @@ input AIScopeInput {
   repoId: String
   teamId: String
   workType: String
+  buckets: [AIAttributionBucketInput!]
+}
+```
+
+`aiAttributionOverview` instead takes the narrower `AIAttributionScopeInput`
+(no `workType` — see above):
+
+```graphql
+input AIAttributionScopeInput {
+  repoId: String
+  teamId: String
   buckets: [AIAttributionBucketInput!]
 }
 ```

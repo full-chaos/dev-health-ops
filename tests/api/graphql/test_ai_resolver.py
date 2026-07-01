@@ -28,6 +28,7 @@ import pytest
 from dev_health_ops.api.graphql.context import GraphQLContext
 from dev_health_ops.api.graphql.models.ai import (
     AIAttributionBucketInput,
+    AIAttributionScopeInput,
     AIDateRangeInput,
     AIOpportunity,
     AIOpportunityKind,
@@ -1429,7 +1430,7 @@ async def test_ai_attribution_overview_reports_has_more_and_pages():
 
 @pytest.mark.asyncio
 async def test_ai_attribution_overview_passes_repo_scope_to_loaders():
-    scope = AIScopeInput(repo_id=str(REPO_ID))
+    scope = AIAttributionScopeInput(repo_id=str(REPO_ID))
     with (
         _patch_mix_loader([]) as mock_mix,
         _patch_evidence_loader([]) as mock_evidence,
@@ -1441,6 +1442,53 @@ async def test_ai_attribution_overview_passes_repo_scope_to_loaders():
 
 
 @pytest.mark.asyncio
+async def test_ai_attribution_overview_bucket_scope_filters_kind_in_sql():
+    """CHAOS-2744 (Oracle NO-GO): scope.buckets must reach the loaders as a
+    kind filter -- not be silently dropped. Regression coverage for the
+    finding that aiAttributionOverview never applied scope.buckets."""
+    scope = AIAttributionScopeInput(
+        buckets=[
+            AIAttributionBucketInput.AI_ASSISTED,
+            AIAttributionBucketInput.AGENT_CREATED,
+        ]
+    )
+    with (
+        _patch_mix_loader([]) as mock_mix,
+        _patch_evidence_loader([]) as mock_evidence,
+    ):
+        await resolve_ai_attribution_overview(_ctx(), _range(), scope)
+
+    assert mock_mix.await_args.kwargs["kinds"] == ["ai_assisted", "agent_created"]
+    assert mock_evidence.await_args.kwargs["kinds"] == [
+        "ai_assisted",
+        "agent_created",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ai_attribution_overview_no_bucket_scope_omits_kinds_filter():
+    with (
+        _patch_mix_loader([]) as mock_mix,
+        _patch_evidence_loader([]) as mock_evidence,
+    ):
+        await resolve_ai_attribution_overview(_ctx(), _range())
+
+    assert mock_mix.await_args.kwargs["kinds"] is None
+    assert mock_evidence.await_args.kwargs["kinds"] is None
+
+
+def test_ai_attribution_scope_input_does_not_expose_work_type():
+    """CHAOS-2744 (Oracle NO-GO): ai_attribution_resolved has no work_type
+    column, so AIAttributionScopeInput must not expose the field at all --
+    accepting-and-ignoring it was the original bug (silent no-op filter).
+    Use the shared AIScopeInput (which does carry work_type) for queries
+    backed by tables that actually have that column.
+    """
+    with pytest.raises(TypeError):
+        AIAttributionScopeInput(work_type="bug")  # type: ignore[call-arg]
+
+
+@pytest.mark.asyncio
 async def test_ai_attribution_overview_rejects_reversed_date_range():
     bad_range = AIDateRangeInput(start_date=DAY_END, end_date=DAY_START)
     with pytest.raises(ValueError, match="end_date must be >= start_date"):
@@ -1449,7 +1497,7 @@ async def test_ai_attribution_overview_rejects_reversed_date_range():
 
 @pytest.mark.asyncio
 async def test_ai_attribution_overview_team_with_no_repos_returns_empty():
-    scope = AIScopeInput(team_id="team-empty")
+    scope = AIAttributionScopeInput(team_id="team-empty")
     with (
         _patch_mix_loader([_mix_row("ai_assisted", 1)]) as mock_mix,
         _patch_evidence_loader([_evidence_row(subject_id="1")]) as mock_evidence,
@@ -1470,7 +1518,7 @@ async def test_ai_attribution_overview_team_scope_filters_in_sql_before_limit():
     applies to the already-filtered universe (dense pages), mirroring
     resolve_ai_attributed_prs (CHAOS-2180 Wave 2)."""
     rows = [_evidence_row(subject_id="1"), _evidence_row(subject_id="2")]
-    scope = AIScopeInput(team_id="team-a")
+    scope = AIAttributionScopeInput(team_id="team-a")
     repo_team_map = {str(REPO_ID): "team-a"}
     with (
         _patch_mix_loader([_mix_row("ai_assisted", 2)]) as mock_mix,
@@ -1499,7 +1547,7 @@ async def test_ai_attribution_overview_team_scope_drops_rows_outside_team():
         _evidence_row(subject_id="1", repo_id=REPO_ID),
         _evidence_row(subject_id="2", repo_id=REPO_B),
     ]
-    scope = AIScopeInput(team_id="team-a")
+    scope = AIAttributionScopeInput(team_id="team-a")
     repo_team_map = {str(REPO_ID): "team-a", str(REPO_B): "team-b"}
     with (
         _patch_mix_loader([_mix_row("ai_assisted", 2)]),

@@ -17,6 +17,8 @@ from dev_health_ops.providers._ratelimit import (
     penalize_from_response,
 )
 from dev_health_ops.providers.utils import EnvSpec, read_env_spec
+from dev_health_ops.sync.budget_types import BudgetDimension
+from dev_health_ops.sync.rate_limit_signal import RateLimitSignal
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +185,17 @@ class JiraClient:
                     raise RateLimitException(
                         f"Jira rate limited: giving up after {attempts} attempts (HTTP 429)",
                         retry_after_seconds=retry_after,
+                        signal=RateLimitSignal(
+                            provider="jira",
+                            host=urlparse(self.auth.base_url).hostname,
+                            dimension=BudgetDimension.REST_CORE,
+                            retry_after_seconds=retry_after,
+                            reset_at=RateLimitSignal.reset_at_from_epoch_seconds(
+                                resp.headers.get("X-RateLimit-Reset")
+                            ),
+                            reason="primary",
+                            request_id=resp.headers.get("X-AREQUESTID"),
+                        ),
                     )
                 resp.raise_for_status()
                 self.gate.reset()

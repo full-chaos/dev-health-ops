@@ -10,6 +10,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 import requests
 from github import Auth, Github, GithubException, RateLimitExceededException
@@ -51,6 +52,8 @@ from dev_health_ops.metrics.prometheus import (
     record_github_api_request,
     record_github_rate_limit,
 )
+from dev_health_ops.sync.budget_types import BudgetDimension
+from dev_health_ops.sync.rate_limit_signal import RateLimitSignal
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +165,11 @@ class GitHubConnector(GitConnector):
         # RETRYABLE (it is the ``exceptions=`` tuple member the decorator
         # catches), while preserving the ``retry_after_seconds`` wait.
         if isinstance(e, ExceptionsRateLimitException):
-            raise RateLimitException(str(e), retry_after_seconds=e.retry_after_seconds)
+            raise RateLimitException(
+                str(e),
+                retry_after_seconds=e.retry_after_seconds,
+                signal=getattr(e, "signal", None),
+            )
         if isinstance(e, ConnectorException):
             raise e
         if isinstance(e, RateLimitExceededException):
@@ -205,9 +212,21 @@ class GitHubConnector(GitConnector):
         # (a) primary rate limit.
         if diag.get("x-ratelimit-remaining") == "0":
             logger.warning("GitHub primary rate limit (403) headers=%s", diag)
+            reset_delay = self._rate_limit_reset_delay_seconds()
             raise RateLimitException(
                 f"GitHub rate limit (403) (headers={diag})",
-                retry_after_seconds=self._rate_limit_reset_delay_seconds(),
+                retry_after_seconds=reset_delay,
+                signal=RateLimitSignal(
+                    provider="github",
+                    host=urlparse(self._rest_base_url()).netloc or None,
+                    dimension=BudgetDimension.REST_CORE,
+                    retry_after_seconds=reset_delay,
+                    reset_at=RateLimitSignal.reset_at_from_epoch_seconds(
+                        diag.get("x-ratelimit-reset")
+                    ),
+                    reason="primary",
+                    request_id=diag.get("x-github-request-id"),
+                ),
             )
         # (b) secondary/abuse limit.
         retry_after = diag.get("retry-after")
@@ -220,6 +239,17 @@ class GitHubConnector(GitConnector):
             raise RateLimitException(
                 f"GitHub secondary/abuse rate limit (403) (headers={diag})",
                 retry_after_seconds=retry_after_seconds,
+                signal=RateLimitSignal(
+                    provider="github",
+                    host=urlparse(self._rest_base_url()).netloc or None,
+                    dimension=BudgetDimension.SECONDARY_ABUSE_RISK,
+                    retry_after_seconds=retry_after_seconds,
+                    reset_at=RateLimitSignal.reset_at_from_epoch_seconds(
+                        diag.get("x-ratelimit-reset")
+                    ),
+                    reason="secondary",
+                    request_id=diag.get("x-github-request-id"),
+                ),
             )
         # (c) permission/SSO/other 403 -> non-retryable.
         logger.warning("GitHub 403 (permission/SSO) headers=%s body=%s", diag, body)
@@ -886,6 +916,17 @@ class GitHubConnector(GitConnector):
             return RateLimitException(
                 f"GitHub rate limit (403) on {method} {endpoint} (headers={diag})",
                 retry_after_seconds=(float(retry_after) if retry_after else None),
+                signal=RateLimitSignal(
+                    provider="github",
+                    host=urlparse(self._rest_base_url()).netloc or None,
+                    dimension=BudgetDimension.REST_CORE,
+                    retry_after_seconds=(float(retry_after) if retry_after else None),
+                    reset_at=RateLimitSignal.reset_at_from_epoch_seconds(
+                        diag.get("x-ratelimit-reset")
+                    ),
+                    reason="primary",
+                    request_id=diag.get("x-github-request-id"),
+                ),
             )
         # (b) secondary/abuse limit -> backoff per Retry-After / body wording.
         if retry_after is not None or self._is_github_rate_limit_403(response):
@@ -899,6 +940,17 @@ class GitHubConnector(GitConnector):
                 f"GitHub secondary/abuse rate limit (403) on {method} {endpoint} "
                 f"(headers={diag})",
                 retry_after_seconds=(float(retry_after) if retry_after else None),
+                signal=RateLimitSignal(
+                    provider="github",
+                    host=urlparse(self._rest_base_url()).netloc or None,
+                    dimension=BudgetDimension.SECONDARY_ABUSE_RISK,
+                    retry_after_seconds=(float(retry_after) if retry_after else None),
+                    reset_at=RateLimitSignal.reset_at_from_epoch_seconds(
+                        diag.get("x-ratelimit-reset")
+                    ),
+                    reason="secondary",
+                    request_id=diag.get("x-github-request-id"),
+                ),
             )
         # (c) permission/SSO/other 403 -> not a rate limit.
         logger.warning(

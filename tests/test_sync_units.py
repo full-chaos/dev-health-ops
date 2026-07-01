@@ -661,6 +661,52 @@ def test_run_sync_unit_failure_persists_failed_and_error(db_session, monkeypatch
     assert finalize_calls == [((str(run.id),), "sync")]
 
 
+def test_legacy_connector_rate_limit_reaches_unit_deferral(db_session, monkeypatch):
+    """Regression for the RateLimitException class-split bug (CHAOS-2753).
+
+    ``connectors.base.RateLimitException`` (raised by the legacy GitLab/GitHub
+    connectors) now subclasses the root ``exceptions.RateLimitException``, so a
+    rate limit raised inside ``run_dataset_unit`` is caught by the deferral
+    branch in ``run_sync_unit`` -- the unit is stamped RETRYING with
+    ``error_category='rate_limit'`` instead of becoming a generic FAILED unit.
+    """
+    from dev_health_ops.connectors.base import (
+        RateLimitException as LegacyRateLimitException,
+    )
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    finalize_calls = _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    def rate_limited(ctx, runtime):
+        raise LegacyRateLimitException(
+            "GitLab rate limited (HTTP 429)", retry_after_seconds=30.0
+        )
+
+    monkeypatch.setattr(dataset_adapters, "run_dataset_unit", rate_limited)
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    db_session.refresh(unit)
+    # Caught by the deferral branch, not the generic failure branch.
+    assert result["status"] == "rate_limited_deferred"
+    assert result["rate_limit_deferrals"] == 1
+    assert unit.status == SyncRunUnitStatus.RETRYING.value
+    assert unit.result is not None
+    assert unit.result["error_category"] == "rate_limit"
+    assert unit.rate_limit_deferrals == 1
+    assert unit.available_at is not None
+    # Deferred work: not finalized as a run failure.
+    assert finalize_calls == []
+
+
 def test_run_sync_unit_soft_timeout_retries_eligible_linear_backfill_unit(
     db_session, monkeypatch
 ):

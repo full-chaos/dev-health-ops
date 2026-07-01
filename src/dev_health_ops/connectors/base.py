@@ -32,16 +32,26 @@ from dev_health_ops.connectors.utils.rate_limit_queue import (
     RateLimitConfig,
     RateLimitGate,
 )
+from dev_health_ops.exceptions import RateLimitException as _RootRateLimitException
 
 logger = logging.getLogger(__name__)
 
 
-class RateLimitException(Exception):
-    """Exception raised when API rate limit is reached."""
+class RateLimitException(_RootRateLimitException):
+    """Rate-limit error raised by the legacy Git connectors.
 
-    def __init__(self, message: str, retry_after_seconds: float | None = None):
-        super().__init__(message)
-        self.retry_after_seconds = retry_after_seconds
+    Subclasses the root :class:`dev_health_ops.exceptions.RateLimitException` so a
+    rate limit raised deep in a legacy connector (``connectors/gitlab.py``) is
+    caught by the worker deferral branch in ``workers/sync_units.py`` and deferred
+    as retryable work, instead of falling through to the generic ``Exception``
+    handler and becoming a FAILED unit (the class-split bug this fixes).
+
+    Kept as a *distinct* subclass rather than a plain alias so the
+    ``retry_with_backoff(exceptions=(RateLimitException, ...))`` decorator sites
+    in the legacy connectors keep referencing it by identity and retain their
+    existing in-connector retry semantics. The constructor is inherited from the
+    root (``message``, ``retry_after_seconds``, keyword-only ``signal``).
+    """
 
 
 @dataclass

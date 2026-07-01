@@ -51,6 +51,23 @@ LATEST_WORK_UNIT_INVESTMENTS_CTE = """
 """.rstrip()
 
 
+LATEST_WORK_UNIT_REPO_EFFORT_CTE = """
+        latest_work_unit_repo_effort AS (
+            SELECT
+                work_unit_id,
+                repo_id,
+                argMax(effort_metric, computed_at) AS effort_metric,
+                argMax(effort_value, computed_at) AS repo_effort_value,
+                argMax(allocation_source, computed_at) AS allocation_source,
+                org_id,
+                max(computed_at) AS latest_repo_effort_computed_at
+            FROM work_unit_repo_effort
+            WHERE org_id = %(org_id)s
+            GROUP BY org_id, work_unit_id, repo_id
+        )
+""".rstrip()
+
+
 # CHAOS-2492: work_unit_investments carries NO author/developer column at all
 # (see the WorkUnitInvestmentRecord write columns in metrics/sinks/clickhouse/
 # investment.py) -- the closest thing to a developer identity is the set of

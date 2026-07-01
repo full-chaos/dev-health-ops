@@ -20,12 +20,17 @@ def timeseries_template(
     extra_clauses: str = "",
     with_clause: str = "",
     use_investment: bool = False,
+    use_repo_allocation: bool = False,
     filter_clause: str = "",  # NEW: scope/category filters
 ) -> str:
     """Generate SQL template for timeseries query."""
     dim_col = Dimension.db_column(dimension, use_investment=use_investment)
-    measure_expr = Measure.db_expression(measure, use_investment=use_investment)
-    source_alias = source_table.split(" AS ")[-1]
+    measure_expr = Measure.db_expression(
+        measure,
+        use_investment=use_investment,
+        use_repo_allocation=use_repo_allocation,
+    )
+    source_alias = source_table.split(" AS ")[-1].strip()
     trunc_unit = BucketInterval.date_trunc_unit(interval)
 
     # Extract date column from filter for truncating
@@ -56,12 +61,17 @@ def breakdown_template(
     extra_clauses: str = "",
     with_clause: str = "",
     use_investment: bool = False,
+    use_repo_allocation: bool = False,
     filter_clause: str = "",  # NEW: scope/category filters
 ) -> str:
     """Generate SQL template for breakdown (top-N aggregation) query."""
     dim_col = Dimension.db_column(dimension, use_investment=use_investment)
-    measure_expr = Measure.db_expression(measure, use_investment=use_investment)
-    source_alias = source_table.split(" AS ")[-1]
+    measure_expr = Measure.db_expression(
+        measure,
+        use_investment=use_investment,
+        use_repo_allocation=use_repo_allocation,
+    )
+    source_alias = source_table.split(" AS ")[-1].strip()
 
     return f"""
 {with_clause}
@@ -88,11 +98,16 @@ def sankey_nodes_template(
     extra_clauses: str = "",
     with_clause: str = "",
     use_investment: bool = False,
+    use_repo_allocation: bool = False,
     filter_clause: str = "",  # NEW: scope/category filters
 ) -> str:
     """Generate SQL template for Sankey nodes query."""
-    measure_expr = Measure.db_expression(measure, use_investment=use_investment)
-    source_alias = source_table.split(" AS ")[-1]
+    measure_expr = Measure.db_expression(
+        measure,
+        use_investment=use_investment,
+        use_repo_allocation=use_repo_allocation,
+    )
+    source_alias = source_table.split(" AS ")[-1].strip()
 
     union_parts = []
     for dim in dimensions:
@@ -130,13 +145,18 @@ def sankey_edges_template(
     extra_clauses: str = "",
     with_clause: str = "",
     use_investment: bool = False,
+    use_repo_allocation: bool = False,
     filter_clause: str = "",  # NEW: scope/category filters
 ) -> str:
     """Generate SQL template for Sankey edges query."""
     source_col = Dimension.db_column(source_dim, use_investment=use_investment)
     target_col = Dimension.db_column(target_dim, use_investment=use_investment)
-    measure_expr = Measure.db_expression(measure, use_investment=use_investment)
-    source_alias = source_table.split(" AS ")[-1]
+    measure_expr = Measure.db_expression(
+        measure,
+        use_investment=use_investment,
+        use_repo_allocation=use_repo_allocation,
+    )
+    source_alias = source_table.split(" AS ")[-1].strip()
 
     return f"""
 {with_clause}
@@ -391,7 +411,7 @@ def catalog_values_template(
 ) -> str:
     """Generate SQL template for fetching distinct dimension values."""
     dim_col = Dimension.db_column(dimension, use_investment=use_investment)
-    source_alias = source_table.split(" AS ")[-1]
+    source_alias = source_table.split(" AS ")[-1].strip()
 
     return f"""
 {with_clause}

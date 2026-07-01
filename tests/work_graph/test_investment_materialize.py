@@ -26,6 +26,7 @@ from dev_health_ops.metrics.schemas import (
     LLMTokenUsageRecord,
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
+    WorkUnitRepoEffortRecord,
 )
 from dev_health_ops.work_graph.investment.categorize import CategorizationOutcome
 from dev_health_ops.work_graph.investment.llm_schema import EvidenceQuote
@@ -42,6 +43,7 @@ class FakeSink:
     def __init__(self) -> None:
         self.client = object()
         self.investment_rows: list[WorkUnitInvestmentRecord] = []
+        self.repo_effort_rows: list[WorkUnitRepoEffortRecord] = []
         self.quote_rows: list[WorkUnitInvestmentEvidenceQuoteRecord] = []
         self.llm_token_rows: list[LLMTokenUsageRecord] = []
         self.membership_rows: list = []
@@ -54,6 +56,9 @@ class FakeSink:
 
     def write_work_unit_investments(self, rows) -> None:
         self.investment_rows.extend(rows)
+
+    def write_work_unit_repo_effort(self, rows) -> None:
+        self.repo_effort_rows.extend(rows)
 
     def write_work_unit_investment_quotes(self, rows) -> None:
         self.quote_rows.extend(rows)
@@ -1540,6 +1545,144 @@ async def test_materialize_writes_records_with_org_id(monkeypatch):
     # Evidence quotes must be org-tagged too (same reader-scoping concern).
     assert sink.quote_rows, "expected at least one evidence quote row"
     assert all(q.org_id == "org-real-123" for q in sink.quote_rows)
+
+
+@pytest.mark.asyncio
+async def test_materialize_allocates_multi_repo_pr_effort(monkeypatch):
+    now = datetime.now(timezone.utc)
+    repo_one = str(uuid.uuid4())
+    repo_two = str(uuid.uuid4())
+    edges = [
+        {
+            "edge_id": "edge-1",
+            "source_type": "issue",
+            "source_id": "linear:ABC-1",
+            "target_type": "pr",
+            "target_id": f"{repo_one}#pr1",
+            "repo_id": repo_one,
+            "confidence": 0.9,
+        },
+        {
+            "edge_id": "edge-2",
+            "source_type": "issue",
+            "source_id": "linear:ABC-1",
+            "target_type": "pr",
+            "target_id": f"{repo_two}#pr2",
+            "repo_id": repo_two,
+            "confidence": 0.9,
+        },
+    ]
+    work_items = [
+        {
+            "work_item_id": "linear:ABC-1",
+            "provider": "linear",
+            "repo_id": None,
+            "title": "Ship cross-repo workflow",
+            "description": "Ship cross-repo workflow. " * 20,
+            "type": "story",
+            "labels": ["feature"],
+            "parent_id": "",
+            "epic_id": "",
+            "created_at": now - timedelta(days=2),
+            "updated_at": now - timedelta(days=1),
+            "completed_at": now - timedelta(days=1),
+        }
+    ]
+    prs = [
+        {
+            "repo_id": repo_one,
+            "number": 1,
+            "title": "Frontend workflow",
+            "created_at": now - timedelta(days=2),
+            "merged_at": now - timedelta(days=1),
+            "additions": 30,
+            "deletions": 10,
+        },
+        {
+            "repo_id": repo_two,
+            "number": 2,
+            "title": "Backend workflow",
+            "created_at": now - timedelta(days=2),
+            "merged_at": now - timedelta(days=1),
+            "additions": 20,
+            "deletions": 40,
+        },
+    ]
+    sink = FakeSink()
+
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.get_provider",
+        lambda *args, **kwargs: FakeProvider(),
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.fetch_work_graph_edges",
+        lambda client, repo_ids=None, **kwargs: edges,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.fetch_work_items",
+        lambda client, work_item_ids, **kwargs: work_items,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.fetch_work_item_active_hours",
+        lambda client, work_item_ids, **kwargs: {},
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.fetch_pull_requests",
+        lambda client, repo_numbers, **kwargs: prs,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.fetch_commits",
+        lambda client, repo_commits, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.fetch_commit_churn",
+        lambda client, repo_commits, **kwargs: {},
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.fetch_parent_titles",
+        lambda client, work_item_ids, **kwargs: {},
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.resolve_repo_ids_for_teams",
+        lambda client, team_ids, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.categorize_text_bundle",
+        _ok_categorize,
+    )
+
+    stats = await materialize_investments(
+        MaterializeConfig(
+            dsn="clickhouse://localhost:8123/default",
+            from_ts=now - timedelta(days=5),
+            to_ts=now,
+            repo_ids=[repo_one, repo_two],
+            llm_provider="mock",
+            persist_evidence_snippets=False,
+            llm_model="test-model",
+            org_id="org-real-123",
+        )
+    )
+
+    assert stats["records"] == 1
+    assert stats["repo_effort_records"] == 2
+    investment_row = sink.investment_rows[0]
+    assert investment_row.repo_id is None
+    assert investment_row.effort_metric == "churn_loc"
+    assert investment_row.effort_value == pytest.approx(100.0)
+    by_repo = {str(row.repo_id): row for row in sink.repo_effort_rows}
+    assert by_repo[repo_one].effort_value == pytest.approx(40.0)
+    assert by_repo[repo_one].allocation_weight == pytest.approx(0.4)
+    assert by_repo[repo_one].allocation_source == "pr_churn"
+    assert by_repo[repo_two].effort_value == pytest.approx(60.0)
+    assert by_repo[repo_two].allocation_weight == pytest.approx(0.6)
+    assert sum(row.effort_value for row in sink.repo_effort_rows) == pytest.approx(
+        investment_row.effort_value,
+        abs=1e-6,
+    )
 
 
 @pytest.mark.asyncio

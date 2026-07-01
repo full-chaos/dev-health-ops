@@ -879,6 +879,19 @@ class WorkUnitInvestmentRecord:
 
 
 @dataclass(frozen=True)
+class WorkUnitRepoEffortRecord:
+    work_unit_id: str
+    repo_id: uuid.UUID | None
+    effort_metric: str
+    effort_value: float
+    allocation_weight: float
+    allocation_source: str
+    categorization_run_id: str
+    computed_at: datetime
+    org_id: str = ""
+
+
+@dataclass(frozen=True)
 class WorkUnitMembershipRecord:
     """One row per (node, category) — reverse index for theme/subcategory filtering.
 

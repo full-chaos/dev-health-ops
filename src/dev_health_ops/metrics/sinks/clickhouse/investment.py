@@ -22,6 +22,7 @@ from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentRecord,
     WorkUnitMembershipRecord,
     WorkUnitMembershipRunRecord,
+    WorkUnitRepoEffortRecord,
     WorkUnitScopedMembershipRunRecord,
 )
 
@@ -139,6 +140,27 @@ class InvestmentMixin(_ClickHouseSinkBase):
                 "categorization_errors_json",
                 "categorization_model_version",
                 "categorization_input_hash",
+                "categorization_run_id",
+                "computed_at",
+                "org_id",
+            ],
+            rows,
+        )
+
+    def write_work_unit_repo_effort(
+        self, rows: Sequence[WorkUnitRepoEffortRecord]
+    ) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "work_unit_repo_effort",
+            [
+                "work_unit_id",
+                "repo_id",
+                "effort_metric",
+                "effort_value",
+                "allocation_weight",
+                "allocation_source",
                 "categorization_run_id",
                 "computed_at",
                 "org_id",

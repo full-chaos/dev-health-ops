@@ -12,6 +12,7 @@ from uuid import UUID
 from dev_health_ops.api.queries.investment import (
     LATEST_WORK_UNIT_AUTHORS_CTE,
     LATEST_WORK_UNIT_INVESTMENTS_CTE,
+    LATEST_WORK_UNIT_REPO_EFFORT_CTE,
     fetch_investment_quality_stats,
 )
 
@@ -697,24 +698,40 @@ async def resolve_analytics(
                             )
                             GROUP BY work_unit_id
                         ) AS ut ON ut.work_unit_id = work_unit_investments.work_unit_id
-                        LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)
+                        LEFT JOIN latest_work_unit_repo_effort AS wure
+                            ON wure.org_id = work_unit_investments.org_id
+                            AND wure.work_unit_id = work_unit_investments.work_unit_id
+                        LEFT JOIN repos AS r ON toString(r.id) = toString(wure.repo_id)
                         """
 
                 assigned_team_expr = f"lower(ifNull(nullIf({team_col}, ''), 'unassigned')) != 'unassigned'"
                 assigned_repo_expr = f"{repo_col} IS NOT NULL"
                 total_expr = "count()"
+                repo_total_expr = total_expr
                 assigned_team_count_expr = f"countIf({assigned_team_expr})"
                 assigned_repo_count_expr = f"countIf({assigned_repo_expr})"
                 if request.use_investment:
-                    assigned_repo_expr = f"lower({repo_col}) != 'unassigned'"
-                    total_expr = "uniqExact(work_unit_investments.work_unit_id)"
+                    # Effort-weighted, allocation-aware coverage so the numbers
+                    # match the effort-weighted Sankey flows (team coverage was
+                    # previously count-based and disagreed with the visual).
+                    # LEFT JOIN fallback: a work unit with no repo-effort
+                    # allocation row falls back to its scalar repo_id + full
+                    # effort, so it is never silently dropped.
+                    repo_effort_col = (
+                        "if(wure.work_unit_id != '', wure.repo_effort_value, "
+                        "work_unit_investments.effort_value)"
+                    )
+                    repo_assigned_col = (
+                        "if(wure.work_unit_id != '', wure.repo_id, "
+                        "work_unit_investments.repo_id)"
+                    )
+                    total_expr = f"sum({repo_effort_col})"
+                    repo_total_expr = total_expr
                     assigned_team_count_expr = (
-                        "uniqExactIf(work_unit_investments.work_unit_id, "
-                        f"{assigned_team_expr})"
+                        f"sumIf({repo_effort_col}, {assigned_team_expr})"
                     )
                     assigned_repo_count_expr = (
-                        "uniqExactIf(work_unit_investments.work_unit_id, "
-                        f"{assigned_repo_expr})"
+                        f"sumIf({repo_effort_col}, {repo_assigned_col} IS NOT NULL)"
                     )
 
                 has_author_filter = (
@@ -725,11 +742,13 @@ async def resolve_analytics(
                     (
                         f"WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE}, {LATEST_WORK_UNIT_AUTHORS_CTE}"
                         if has_author_filter
-                        else f"WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE}"
+                        else f"WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE}, {LATEST_WORK_UNIT_REPO_EFFORT_CTE}"
                     )
                     if request.use_investment
                     else ""
                 )
+                if request.use_investment and has_author_filter:
+                    with_clause = f"WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE}, {LATEST_WORK_UNIT_REPO_EFFORT_CTE}, {LATEST_WORK_UNIT_AUTHORS_CTE}"
                 source_alias = (
                     "work_unit_investments" if request.use_investment else table
                 )
@@ -762,9 +781,7 @@ async def resolve_analytics(
                     resolved_filters,
                     use_investment=bool(request.use_investment),
                     team_column=team_col,
-                    repo_column="work_unit_investments.repo_id"
-                    if request.use_investment
-                    else repo_col,
+                    repo_column="wure.repo_id" if request.use_investment else repo_col,
                     author_column="author_email",
                 )
 
@@ -773,6 +790,7 @@ async def resolve_analytics(
                     SELECT
                         {total_expr} as total,
                         {assigned_team_count_expr} as assigned_team,
+                        {repo_total_expr} as repo_total,
                         {assigned_repo_count_expr} as assigned_repo
                     FROM {base_table}
                     {joins}
@@ -793,11 +811,14 @@ async def resolve_analytics(
                     if c_rows:
                         total = float(c_rows[0].get("total", 0))
                         assigned_team = float(c_rows[0].get("assigned_team", 0))
+                        repo_total = float(c_rows[0].get("repo_total", 0))
                         assigned_repo = float(c_rows[0].get("assigned_repo", 0))
 
                         coverage = SankeyCoverage(
                             team_coverage=assigned_team / total if total > 0 else 0,
-                            repo_coverage=assigned_repo / total if total > 0 else 0,
+                            repo_coverage=assigned_repo / repo_total
+                            if repo_total > 0
+                            else 0,
                         )
                 except Exception as e:
                     logger.error("Coverage query failed: %s", e)

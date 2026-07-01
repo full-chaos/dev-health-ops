@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from dev_health_ops.api.queries.investment import (
     LATEST_WORK_UNIT_AUTHORS_CTE,
     LATEST_WORK_UNIT_INVESTMENTS_CTE,
+    LATEST_WORK_UNIT_REPO_EFFORT_CTE,
 )
 
 from ..authz import enforce_org_scope
@@ -153,6 +154,38 @@ def _get_context_params(
 
     if use_investment:
         joins = []
+        use_repo_allocation = Dimension.REPO in dimensions
+        source_table = "latest_work_unit_investments AS work_unit_investments"
+        if use_repo_allocation:
+            source_table = """
+            (
+                SELECT
+                    wui.work_unit_id AS work_unit_id,
+                    wui.work_unit_type AS work_unit_type,
+                    wui.work_unit_name AS work_unit_name,
+                    wui.from_ts AS from_ts,
+                    wui.to_ts AS to_ts,
+                    if(wure.work_unit_id != '', wure.repo_id, wui.repo_id) AS repo_id,
+                    wui.provider AS provider,
+                    if(wure.work_unit_id != '', wure.effort_metric, wui.effort_metric) AS effort_metric,
+                    if(wure.work_unit_id != '', wure.repo_effort_value, wui.effort_value) AS effort_value,
+                    if(wure.work_unit_id != '', wure.allocation_source, 'scalar_fallback') AS allocation_source,
+                    if(wure.work_unit_id != '', if(wui.effort_value > 0, wure.repo_effort_value / wui.effort_value, 0.0), 1.0) AS allocation_weight,
+                    wui.theme_distribution_json AS theme_distribution_json,
+                    wui.subcategory_distribution_json AS subcategory_distribution_json,
+                    wui.structural_evidence_json AS structural_evidence_json,
+                    wui.evidence_quality AS evidence_quality,
+                    wui.evidence_quality_band AS evidence_quality_band,
+                    wui.categorization_status AS categorization_status,
+                    wui.categorization_model_version AS categorization_model_version,
+                    wui.categorization_run_id AS categorization_run_id,
+                    wui.org_id AS org_id
+                FROM latest_work_unit_investments AS wui
+                LEFT JOIN latest_work_unit_repo_effort AS wure
+                    ON wure.org_id = wui.org_id
+                    AND wure.work_unit_id = wui.work_unit_id
+            ) AS work_unit_investments
+            """
         # ALWAYS join subcategory distribution for investment queries
         joins.append(
             "ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv"
@@ -202,6 +235,8 @@ def _get_context_params(
         # it. Chains LATEST_WORK_UNIT_AUTHORS_CTE onto the WITH clause -- only
         # when actually needed, to avoid the extra join cost otherwise.
         with_parts = [LATEST_WORK_UNIT_INVESTMENTS_CTE]
+        if use_repo_allocation:
+            with_parts.append(LATEST_WORK_UNIT_REPO_EFFORT_CTE)
         if Dimension.AUTHOR in dimensions or needs_author_join:
             with_parts.append(LATEST_WORK_UNIT_AUTHORS_CTE)
             joins.append(
@@ -209,11 +244,12 @@ def _get_context_params(
             )
 
         return {
-            "source_table": "latest_work_unit_investments AS work_unit_investments",
+            "source_table": source_table,
             "date_filter": "work_unit_investments.from_ts < %(end_date)s AND work_unit_investments.to_ts >= %(start_date)s",
             "extra_clauses": "\n".join(joins),
             "with_clause": f"WITH {', '.join(with_parts)}",
             "use_investment": True,
+            "use_repo_allocation": use_repo_allocation,
         }
 
     return {
@@ -222,6 +258,7 @@ def _get_context_params(
         "extra_clauses": "",
         "with_clause": "",
         "use_investment": False,
+        "use_repo_allocation": False,
     }
 
 

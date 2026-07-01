@@ -602,7 +602,11 @@ class AIImpactClickHouseLoader:
             uniqExactIf(
                 (pf.repo_id, pf.number), h.file_path != ''
             ) AS prs_touching_hotspots,
-            avgIf(h.risk_score, h.file_path != '') AS avg_hotspot_risk_score
+            if(
+                isNaN(avgIf(h.risk_score, h.file_path != '')),
+                NULL,
+                avgIf(h.risk_score, h.file_path != '')
+            ) AS avg_hotspot_risk_score
         FROM pr_files AS pf
         LEFT JOIN hotspots AS h
             ON h.repo_id = pf.repo_id AND h.file_path = pf.file_path

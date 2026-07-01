@@ -341,6 +341,8 @@ async def test_load_hotspot_overlap_uses_risk_score_convention():
     assert "work_graph_pr_commit" in query
     assert "git_commit_stats" in query
     assert "uniqExact((pf.repo_id, pf.number))" in query
+    assert "isNaN(avgIf(h.risk_score, h.file_path != ''))" in query
+    assert "NULL" in query
 
 
 @pytest.mark.asyncio

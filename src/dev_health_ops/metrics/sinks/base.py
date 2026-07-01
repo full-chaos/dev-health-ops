@@ -179,7 +179,11 @@ class BaseMetricsSink(ABC):
     @abstractmethod
     def write_estimate_coverage_metrics(
         self, rows: Sequence[EstimateCoverageMetricsDailyRecord]
-    ) -> None: ...
+    ) -> None:
+        """Write daily estimate coverage metrics."""
+        raise NotImplementedError(
+            "BaseMetricsSink.write_estimate_coverage_metrics() must be implemented by subclasses."
+        )
 
     @abstractmethod
     def write_work_item_user_metrics(

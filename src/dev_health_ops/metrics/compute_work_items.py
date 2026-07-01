@@ -52,6 +52,11 @@ def _percentile(values: Sequence[float], percentile: float) -> float:
     return sorted_vals[lo] * (1.0 - frac) + sorted_vals[hi] * frac
 
 
+def _earliest_utc(*values: datetime | None) -> datetime | None:
+    timestamps = [to_utc(value) for value in values if value is not None]
+    return min(timestamps) if timestamps else None
+
+
 def _resolve_team(
     team_resolver: TeamResolver | None, identity: str | None
 ) -> tuple[str | None, str | None]:
@@ -799,6 +804,7 @@ def compute_work_item_metrics_daily(
         created_at = to_utc(item.created_at)
         started_at = to_utc(item.started_at) if item.started_at else None
         completed_at = to_utc(item.completed_at) if item.completed_at else None
+        terminal_at = _earliest_utc(item.completed_at, item.closed_at)
 
         # Ignore items that don't exist yet on this day.
         if created_at >= end:
@@ -820,7 +826,7 @@ def compute_work_item_metrics_daily(
         wip_end_of_day = (
             started_at is not None
             and started_at < end
-            and (completed_at is None or completed_at >= end)
+            and (terminal_at is None or terminal_at >= end)
         )
 
         # Only emit a bucket for groups/users that have activity for this day.
@@ -1119,10 +1125,8 @@ def compute_estimate_coverage_metrics_daily(
 
     for item in work_items:
         created_at = to_utc(item.created_at)
-        completed_at = to_utc(item.completed_at) if item.completed_at else None
+        terminal_at = _earliest_utc(item.completed_at, item.closed_at)
         if created_at >= end:
-            continue
-        if completed_at is not None and completed_at < end:
             continue
 
         team_id, team_name, _ = resolve_team_attribution(
@@ -1144,6 +1148,9 @@ def compute_estimate_coverage_metrics_daily(
             }
             by_group[key] = new_bucket
             bucket = new_bucket
+
+        if terminal_at is not None and terminal_at < end:
+            continue
 
         if item.story_points is None:
             bucket["unestimated_count"] += 1

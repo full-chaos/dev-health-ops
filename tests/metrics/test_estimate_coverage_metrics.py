@@ -7,19 +7,33 @@ import pytest
 from dev_health_ops.metrics.compute_work_items import (
     compute_estimate_coverage_metrics_daily,
 )
-from dev_health_ops.models.work_items import WorkItem, WorkItemProvider
+from dev_health_ops.models.work_items import (
+    WorkItem,
+    WorkItemProvider,
+    WorkItemStatusCategory,
+)
 
 
-def _item(provider: WorkItemProvider, item_id: str, points: float | None) -> WorkItem:
+def _item(
+    provider: WorkItemProvider,
+    item_id: str,
+    points: float | None,
+    *,
+    status: WorkItemStatusCategory = "todo",
+    completed_at: datetime | None = None,
+    closed_at: datetime | None = None,
+) -> WorkItem:
     return WorkItem(
         work_item_id=f"{provider}:{item_id}",
         provider=provider,
         title=item_id,
         type="task",
-        status="todo",
-        status_raw="todo",
+        status=status,
+        status_raw=status,
         project_id="scope-a",
         created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        completed_at=completed_at,
+        closed_at=closed_at,
         story_points=points,
     )
 
@@ -89,3 +103,50 @@ def test_compute_estimate_coverage_excludes_completed_backlog_items():
     assert records[0].estimated_count == 0
     assert records[0].unestimated_count == 1
     assert records[0].backlog_size == 1
+
+
+@pytest.mark.parametrize("provider", ["jira", "gitlab", "github", "linear"])
+def test_compute_estimate_coverage_excludes_closed_terminal_backlog_items(
+    provider: WorkItemProvider,
+):
+    records = compute_estimate_coverage_metrics_daily(
+        day=datetime(2026, 6, 30, tzinfo=timezone.utc).date(),
+        work_items=[
+            _item(provider, "open", None),
+            _item(
+                provider,
+                "canceled",
+                8.0,
+                status="canceled",
+                closed_at=datetime(2026, 6, 2, tzinfo=timezone.utc),
+            ),
+        ],
+        computed_at=datetime(2026, 6, 30, 12, tzinfo=timezone.utc),
+    )
+
+    assert len(records) == 1
+    assert records[0].estimated_count == 0
+    assert records[0].unestimated_count == 1
+    assert records[0].backlog_size == 1
+
+
+def test_compute_estimate_coverage_emits_zero_backlog_for_known_empty_grain():
+    records = compute_estimate_coverage_metrics_daily(
+        day=datetime(2026, 6, 30, tzinfo=timezone.utc).date(),
+        work_items=[
+            _item(
+                "linear",
+                "canceled",
+                8.0,
+                status="canceled",
+                closed_at=datetime(2026, 6, 2, tzinfo=timezone.utc),
+            ),
+        ],
+        computed_at=datetime(2026, 6, 30, 12, tzinfo=timezone.utc),
+    )
+
+    assert len(records) == 1
+    assert records[0].estimated_count == 0
+    assert records[0].unestimated_count == 0
+    assert records[0].backlog_size == 0
+    assert records[0].ratio is None

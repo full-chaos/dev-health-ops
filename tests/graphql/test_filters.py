@@ -69,7 +69,11 @@ class TestFilterTranslation:
         )
         sql, params = compile_timeseries(request, org_id="org1", filters=filters)
 
-        assert "author_id IN %(developer_ids)s" in sql
+        # CHAOS-2385: author_id does not exist in any ClickHouse table; the
+        # real identity column shared across git_commits/user_metrics_daily/
+        # commit_metrics/git_pull_requests is author_email.
+        assert "author_email IN %(developer_ids)s" in sql
+        assert "author_id" not in sql
         assert params["developer_ids"] == ["dev-1", "dev-2"]
 
     def test_what_filter_repos(self):
@@ -161,3 +165,22 @@ class TestFilterTranslation:
         assert "work_categories" not in params
         assert "developer_ids" not in params
         assert "repo_filter_ids" not in params
+
+    def test_scope_filter_developer_uses_author_email(self):
+        """CHAOS-2385: scope.level=developer must target the real author_email
+        column, never the nonexistent author_id."""
+        filters = FilterInput(
+            scope=ScopeFilterInput(level=ScopeLevelInput.DEVELOPER, ids=["dev-1"])
+        )
+        request = TimeseriesRequest(
+            dimension="team",
+            measure="count",
+            interval="day",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 1, 7),
+        )
+        sql, params = compile_timeseries(request, org_id="org1", filters=filters)
+
+        assert "author_email IN %(scope_ids)s" in sql
+        assert "author_id" not in sql
+        assert params["scope_ids"] == ["dev-1"]

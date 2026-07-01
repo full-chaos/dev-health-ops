@@ -23,7 +23,7 @@ def translate_scope_filter(
     ids: list[str],
     team_column: str = "team_id",
     repo_column: str = "repo_id",
-    author_column: str = "author_id",
+    author_column: str = "author_email",
 ) -> tuple[str, dict[str, Any]]:
     """Translate scope filter to SQL predicate.
 
@@ -32,7 +32,7 @@ def translate_scope_filter(
         ids: List of IDs to filter by. Empty means "All" - no filtering.
         team_column: Column name for team filtering
         repo_column: Column name for repo filtering
-        author_column: Column name for developer/author filtering
+        author_column: Column name for developer/author filtering (default: real ClickHouse column `author_email`, e.g. git_commits/user_metrics_daily; CHAOS-2385 -- `author_id` does not exist in any ClickHouse table)
 
     Returns:
         Tuple of (SQL clause string, params dict)
@@ -109,13 +109,13 @@ def translate_repo_filter(
 
 def translate_developer_filter(
     developers: list[str],
-    author_column: str = "author_id",
+    author_column: str = "author_email",
 ) -> tuple[str, dict[str, Any]]:
     """Translate developer filter to SQL predicate.
 
     Args:
         developers: List of developer IDs to filter by. Empty means "All".
-        author_column: Column name for author/developer filtering
+        author_column: Column name for author/developer filtering (default: real ClickHouse column `author_email`; CHAOS-2385)
 
     Returns:
         Tuple of (SQL clause string, params dict)
@@ -131,7 +131,7 @@ def translate_filters(
     use_investment: bool = False,
     team_column: str = "team_id",
     repo_column: str = "repo_id",
-    author_column: str = "author_id",
+    author_column: str = "author_email",
 ) -> tuple[str, dict[str, Any]]:
     """Translate a complete FilterInput to SQL predicates.
 
@@ -143,7 +143,7 @@ def translate_filters(
         use_investment: Whether using investment tables
         team_column: Column name for team filtering
         repo_column: Column name for repo filtering
-        author_column: Column name for author/developer filtering
+        author_column: Column name for author/developer filtering (default: real ClickHouse column `author_email`; CHAOS-2385 -- `author_id` does not exist in any ClickHouse table)
 
     Returns:
         Tuple of (SQL clause string, params dict)

@@ -23,6 +23,7 @@ from typing import Any
 
 import strawberry
 
+from dev_health_ops.api.utils.numeric import safe_optional_float
 from dev_health_ops.metrics.ai_impact import (
     AI_BUCKETS as AI_ATTRIBUTION_BUCKETS,
 )
@@ -901,9 +902,7 @@ async def _load_overlap_rows(
                 prs_total=prs_total,
                 prs_touching_hotspots=touching,
                 hotspot_overlap_rate=_ratio(touching, prs_total),
-                avg_hotspot_risk_score=(
-                    float(avg_risk) if avg_risk is not None else None
-                ),
+                avg_hotspot_risk_score=safe_optional_float(avg_risk),
             )
         )
     hotspot_rows.sort(key=lambda r: r.bucket)

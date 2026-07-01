@@ -46,6 +46,7 @@ from dev_health_ops.api.graphql.resolvers.ai import (
     resolve_ai_risk_breakdown,
     resolve_ai_workflow_drilldown,
 )
+from dev_health_ops.api.graphql.schema import schema
 from dev_health_ops.metrics.ai_impact import AttributionBucket
 from dev_health_ops.metrics.schemas import (
     AIImpactMetricsDailyRecord,
@@ -1109,6 +1110,100 @@ async def test_risk_breakdown_populated_overlaps_drop_missing_states():
     assert cx.complexity_overlap_rate == pytest.approx(0.2)
     # Real data present → missing states must be gone.
     assert {s.key for s in result.missing_states} == set()
+
+
+@pytest.mark.asyncio
+async def test_risk_breakdown_hotspot_nan_average_becomes_null():
+    hotspot_raw = [
+        {
+            "bucket": "agent_created",
+            "prs_total": 1,
+            "prs_touching_hotspots": 0,
+            "avg_hotspot_risk_score": float("nan"),
+        }
+    ]
+    complexity_raw = [
+        {
+            "bucket": "agent_created",
+            "prs_total": 1,
+            "prs_touching_high_complexity": 0,
+        }
+    ]
+    with (
+        _patch_loader(_populated_rows()),
+        _patch_hotspot_overlap(hotspot_raw),
+        _patch_complexity_overlap(complexity_raw),
+    ):
+        result = await resolve_ai_risk_breakdown(_ctx(), _range())
+
+    assert len(result.hotspot_overlap) == 1
+    hs = result.hotspot_overlap[0]
+    assert hs.bucket == "agent_created"
+    assert hs.prs_total == 1
+    assert hs.prs_touching_hotspots == 0
+    assert hs.hotspot_overlap_rate == pytest.approx(0.0)
+    assert hs.avg_hotspot_risk_score is None
+
+
+@pytest.mark.asyncio
+async def test_risk_breakdown_graphql_serializes_nan_average_as_null():
+    hotspot_raw = [
+        {
+            "bucket": "agent_created",
+            "prs_total": 1,
+            "prs_touching_hotspots": 0,
+            "avg_hotspot_risk_score": float("nan"),
+        }
+    ]
+    complexity_raw = [
+        {
+            "bucket": "agent_created",
+            "prs_total": 1,
+            "prs_touching_high_complexity": 0,
+        }
+    ]
+    query = """
+    query AIRiskBreakdown($orgId: String!, $dateRange: AIDateRangeInput!) {
+      aiRiskBreakdown(orgId: $orgId, dateRange: $dateRange) {
+        hotspotOverlap {
+          bucket
+          prsTotal
+          prsTouchingHotspots
+          hotspotOverlapRate
+          avgHotspotRiskScore
+        }
+      }
+    }
+    """
+    variables = {
+        "orgId": ORG_ID,
+        "dateRange": {
+            "startDate": DAY_START.isoformat(),
+            "endDate": DAY_END.isoformat(),
+        },
+    }
+    with (
+        _patch_loader(_populated_rows()),
+        _patch_hotspot_overlap(hotspot_raw),
+        _patch_complexity_overlap(complexity_raw),
+    ):
+        result = await schema.execute(
+            query,
+            variable_values=variables,
+            context_value=_ctx(),
+        )
+
+    assert result.errors is None
+    assert result.data is not None
+    assert result.data["aiRiskBreakdown"]["hotspotOverlap"] == [
+        {
+            "bucket": "agent_created",
+            "prsTotal": 1,
+            "prsTouchingHotspots": 0,
+            "hotspotOverlapRate": 0.0,
+            "avgHotspotRiskScore": None,
+        }
+    ]
 
 
 @pytest.mark.asyncio

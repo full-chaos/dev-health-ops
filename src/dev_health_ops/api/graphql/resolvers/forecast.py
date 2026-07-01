@@ -430,11 +430,13 @@ async def resolve_throughput_forecast(
         )
     if backlog_size < 0:
         raise ValueError("backlog_size must be non-negative")
-    estimate_coverage = await _load_estimate_coverage(
-        context,
-        team_ids=input.team_ids,
-        work_scope_id=input.work_scope_id,
-    )
+    estimate_coverage = None
+    if backlog_size > 0:
+        estimate_coverage = await _load_estimate_coverage(
+            context,
+            team_ids=input.team_ids,
+            work_scope_id=input.work_scope_id,
+        )
     if not history.samples:
         # Empty scope / new team: return a structured no-estimate payload
         # instead of null so callers can distinguish "no data yet" from a

@@ -225,6 +225,69 @@ async def test_resolver_surfaces_estimate_coverage(ctx):
 
 
 @pytest.mark.asyncio
+async def test_resolver_suppresses_stale_estimate_coverage_for_zero_backlog(ctx):
+    from dev_health_ops.api.graphql.models.inputs import ThroughputForecastInput
+    from dev_health_ops.api.graphql.models.outputs import ThroughputEstimateCoverage
+    from dev_health_ops.api.graphql.resolvers.forecast import (
+        resolve_throughput_forecast,
+    )
+
+    stale_coverage = ThroughputEstimateCoverage(
+        ratio=1.0,
+        estimated_count=4,
+        unestimated_count=0,
+        backlog_size=4,
+    )
+    with (
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_throughput_history",
+            new_callable=AsyncMock,
+            return_value=_history(),
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_work_item_overlay",
+            new_callable=AsyncMock,
+            return_value=(0.0, 0.0),
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_stale_wip",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_estimate_coverage",
+            new_callable=AsyncMock,
+            return_value=stale_coverage,
+        ) as load_estimate_coverage,
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_review_overlay",
+            new_callable=AsyncMock,
+            return_value=0.0,
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_incident_overlay",
+            new_callable=AsyncMock,
+            return_value=0.0,
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_backlog",
+            new_callable=AsyncMock,
+            return_value=0,
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast.forecast_throughput_capacity",
+            return_value=_result(team_id=None, backlog_size=0),
+        ),
+    ):
+        result = await resolve_throughput_forecast(ctx, ThroughputForecastInput())
+
+    assert result is not None
+    assert result.backlog_size == 0
+    assert result.estimate_coverage is None
+    load_estimate_coverage.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_resolver_aggregates_multi_team_selection(ctx):
     """Multi-team ``team_ids`` must NOT collapse to one team's data."""
     from dev_health_ops.api.graphql.models.inputs import ThroughputForecastInput

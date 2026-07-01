@@ -264,6 +264,44 @@ class TestCompileSankey:
             assert "source" in edge_sql.lower() or "target" in edge_sql.lower()
             assert edge_params["org_id"] == org_id
 
+    def test_investment_sankey_repo_path_uses_allocation(self):
+        """Multi-repo fan-out: a TEAM->THEME->REPO investment Sankey reads the
+        persisted per-repo effort allocation (LATEST_WORK_UNIT_REPO_EFFORT_CTE)
+        so effort splits across a work unit's repos instead of collapsing to a
+        single scalar repo_id."""
+        request = SankeyRequest(
+            path=["team", "theme", "repo"],
+            measure="count",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 1, 31),
+            max_nodes=50,
+            max_edges=200,
+            use_investment=True,
+        )
+        nodes_queries, edges_queries = compile_sankey(request, "test-org")
+        nodes_sql, _ = nodes_queries[0]
+        assert "latest_work_unit_repo_effort" in nodes_sql
+        assert "repo_effort_value" in nodes_sql
+        # LEFT JOIN fallback so units without an allocation row are not dropped
+        assert "LEFT JOIN latest_work_unit_repo_effort" in nodes_sql
+        for edge_sql, _ in edges_queries:
+            assert "latest_work_unit_repo_effort" in edge_sql
+
+    def test_investment_sankey_non_repo_path_skips_allocation(self):
+        """A path WITHOUT repo must not pay the repo-allocation fan-out."""
+        request = SankeyRequest(
+            path=["team", "theme"],
+            measure="count",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 1, 31),
+            max_nodes=50,
+            max_edges=200,
+            use_investment=True,
+        )
+        nodes_queries, _ = compile_sankey(request, "test-org")
+        nodes_sql, _ = nodes_queries[0]
+        assert "latest_work_unit_repo_effort" not in nodes_sql
+
     def test_investment_sankey_who_developers_filter_uses_author_join(self):
         """CHAOS-2492: who.developers on an investment Sankey must chain the
         work_unit_authors CTE/join and filter nodes+edges via
@@ -339,6 +377,36 @@ class TestCompileSankey:
 
         nodes_sql, _nodes_params = nodes_queries[0]
         assert "work_unit_authors" not in nodes_sql
+
+    def test_investment_sankey_repo_path_uses_repo_effort_allocation(self):
+        request = SankeyRequest(
+            path=["team", "theme", "repo"],
+            measure="count",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 1, 31),
+            max_nodes=50,
+            max_edges=200,
+            use_investment=True,
+        )
+
+        nodes_queries, edges_queries = compile_sankey(request, "test-org")
+        all_sql = "\n".join([nodes_queries[0][0], *(sql for sql, _ in edges_queries)])
+
+        assert "latest_work_unit_repo_effort" in all_sql
+        # LEFT JOIN + scalar fallback so units without an allocation row are
+        # not dropped (an INNER JOIN silently discarded them and skewed
+        # coverage / hid effort).
+        assert "LEFT JOIN latest_work_unit_repo_effort AS wure" in all_sql
+        assert "wure.repo_effort_value, wui.effort_value) AS effort_value" in all_sql
+        assert "wure.repo_id, wui.repo_id) AS repo_id" in all_sql
+        assert "SUM(subcategory_kv.2 * effort_value)" in all_sql
+        # Unassigned repo emits '' (NOT 'unassigned') so it does not collide
+        # with the unassigned team node name in ECharts (the "Sankey is a DAG"
+        # cycle bug).
+        assert (
+            "ifNull(nullIf(r.repo, ''), if(repo_id IS NULL, '', toString(repo_id)))"
+            in all_sql
+        )
 
     def test_invalid_path(self):
         """Test that invalid path raises ValidationError."""

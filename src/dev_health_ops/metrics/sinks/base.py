@@ -56,6 +56,7 @@ from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentRecord,
     WorkUnitMembershipRecord,
     WorkUnitMembershipRunRecord,
+    WorkUnitRepoEffortRecord,
     WorkUnitScopedMembershipRunRecord,
 )
 from dev_health_ops.metrics.testops_schemas import (
@@ -371,6 +372,12 @@ class BaseMetricsSink(ABC):
         self, rows: Sequence[WorkUnitInvestmentRecord]
     ) -> None:
         """Write work unit-level investment materializations."""
+        pass
+
+    def write_work_unit_repo_effort(
+        self, rows: Sequence[WorkUnitRepoEffortRecord]
+    ) -> None:
+        """Write per-repository work unit effort allocation rows."""
         pass
 
     @abstractmethod

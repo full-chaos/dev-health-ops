@@ -41,6 +41,7 @@ from dev_health_ops.metrics.llm_token_usage import write_llm_token_usage
 from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
+    WorkUnitRepoEffortRecord,
 )
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.metrics.sinks.factory import create_sink
@@ -909,6 +910,67 @@ def _effort_from_work_unit(
     return "churn_loc", 0.0
 
 
+def _allocate_repo_effort(
+    *,
+    issue_ids: Iterable[str],
+    pr_ids: Iterable[str],
+    commit_ids: Iterable[str],
+    pr_churn: dict[str, float],
+    commit_churn: dict[str, float],
+    active_hours: dict[str, float],
+    effort_metric: str,
+    effort_value: float,
+) -> list[tuple[uuid.UUID | None, float, float, str]]:
+    commit_effort_by_repo: dict[str, float] = {}
+    commit_total = 0.0
+    for commit_id in commit_ids:
+        churn = float(commit_churn.get(commit_id, 0.0))
+        commit_total += churn
+        if churn <= 0:
+            continue
+        repo_id, _ = parse_commit_from_id(commit_id)
+        repo_key = str(repo_id) if repo_id else ""
+        commit_effort_by_repo[repo_key] = (
+            commit_effort_by_repo.get(repo_key, 0.0) + churn
+        )
+    if commit_total > 0:
+        return [
+            (
+                _parse_repo_id(repo_key or None),
+                repo_effort,
+                repo_effort / commit_total,
+                "commit_churn",
+            )
+            for repo_key, repo_effort in sorted(commit_effort_by_repo.items())
+        ]
+
+    pr_effort_by_repo: dict[str, float] = {}
+    pr_total = 0.0
+    for pr_id in pr_ids:
+        churn = float(pr_churn.get(pr_id, 0.0))
+        pr_total += churn
+        if churn <= 0:
+            continue
+        repo_id, _ = parse_pr_from_id(pr_id)
+        repo_key = str(repo_id) if repo_id else ""
+        pr_effort_by_repo[repo_key] = pr_effort_by_repo.get(repo_key, 0.0) + churn
+    if pr_total > 0:
+        return [
+            (
+                _parse_repo_id(repo_key or None),
+                repo_effort,
+                repo_effort / pr_total,
+                "pr_churn",
+            )
+            for repo_key, repo_effort in sorted(pr_effort_by_repo.items())
+        ]
+
+    if effort_metric == "active_hours" and effort_value > 0:
+        return [(None, effort_value, 1.0, "active_hours_unassigned")]
+
+    return [(None, 0.0, 0.0, "empty")]
+
+
 def _collect_repo_ids(edges: list[dict[str, object]]) -> list[str]:
     repo_ids = {str(edge.get("repo_id") or "") for edge in edges if edge.get("repo_id")}
     return sorted(repo_id for repo_id in repo_ids if repo_id)
@@ -1117,6 +1179,7 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
         )
 
         records: list[WorkUnitInvestmentRecord] = []
+        repo_effort_records: list[WorkUnitRepoEffortRecord] = []
         quote_records: list[WorkUnitInvestmentEvidenceQuoteRecord] = []
         run_id = config.run_id or uuid.uuid4().hex
         computed_at = config.computed_at or datetime.now(timezone.utc)
@@ -1431,6 +1494,47 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
         # Post-process: create records from outcomes
         for idx, data in preprocessed.items():
             if idx in skipped_existing:
+                # Categorization is unchanged, so skip re-writing the LLM
+                # investment record -- but repo-effort allocation is derived
+                # from structural churn (no LLM), so it MUST still be written
+                # here or unchanged units would never get repo-allocation rows,
+                # leaving the investment repo Sankey empty in steady state.
+                skipped_metric, skipped_value = _effort_from_work_unit(
+                    issue_ids=data.issue_node_ids,
+                    pr_ids=data.pr_node_ids,
+                    commit_ids=data.commit_node_ids,
+                    pr_churn=pr_churn,
+                    commit_churn=commit_churn,
+                    active_hours=active_hours,
+                )
+                repo_effort_records.extend(
+                    WorkUnitRepoEffortRecord(
+                        work_unit_id=data.unit_id,
+                        repo_id=allocated_repo_id,
+                        effort_metric=skipped_metric,
+                        effort_value=allocated_effort_value,
+                        allocation_weight=allocation_weight,
+                        allocation_source=allocation_source,
+                        categorization_run_id=run_id,
+                        computed_at=computed_at,
+                        org_id=config.org_id or "",
+                    )
+                    for (
+                        allocated_repo_id,
+                        allocated_effort_value,
+                        allocation_weight,
+                        allocation_source,
+                    ) in _allocate_repo_effort(
+                        issue_ids=data.issue_node_ids,
+                        pr_ids=data.pr_node_ids,
+                        commit_ids=data.commit_node_ids,
+                        pr_churn=pr_churn,
+                        commit_churn=commit_churn,
+                        active_hours=active_hours,
+                        effort_metric=skipped_metric,
+                        effort_value=skipped_value,
+                    )
+                )
                 continue
             outcome = llm_results.get(idx)
             if outcome is None:
@@ -1518,6 +1622,34 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
                     org_id=config.org_id or "",
                 )
             )
+            repo_effort_records.extend(
+                WorkUnitRepoEffortRecord(
+                    work_unit_id=unit_id,
+                    repo_id=allocated_repo_id,
+                    effort_metric=effort_metric,
+                    effort_value=allocated_effort_value,
+                    allocation_weight=allocation_weight,
+                    allocation_source=allocation_source,
+                    categorization_run_id=run_id,
+                    computed_at=computed_at,
+                    org_id=config.org_id or "",
+                )
+                for (
+                    allocated_repo_id,
+                    allocated_effort_value,
+                    allocation_weight,
+                    allocation_source,
+                ) in _allocate_repo_effort(
+                    issue_ids=issue_node_ids,
+                    pr_ids=pr_node_ids,
+                    commit_ids=commit_node_ids,
+                    pr_churn=pr_churn,
+                    commit_churn=commit_churn,
+                    active_hours=active_hours,
+                    effort_metric=effort_metric,
+                    effort_value=effort_value,
+                )
+            )
 
             # NOTE (CHAOS-2433 round-3 finding #2): the materializer NO LONGER
             # writes work_unit_membership rows or completion markers.  It only
@@ -1552,6 +1684,8 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
         logger.info("Finished component loop, writing %d records to sink", len(records))
         if records:
             sink.write_work_unit_investments(records)
+        if repo_effort_records:
+            sink.write_work_unit_repo_effort(repo_effort_records)
         if quote_records:
             sink.write_work_unit_investment_quotes(quote_records)
         # CHAOS-2433 round-3 finding #2: membership rows + completion markers are
@@ -1567,6 +1701,7 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
             "components": len(components),
             "total_components": total_components,
             "records": len(records),
+            "repo_effort_records": len(repo_effort_records),
             "quotes": len(quote_records),
             "skipped_existing": len(skipped_existing),
             "llm_calls": llm_calls,

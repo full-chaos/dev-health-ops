@@ -48,7 +48,12 @@ class Dimension(str, Enum):
         if use_investment:
             mapping = {
                 cls.TEAM: "ifNull(nullIf(ut.team_label, ''), 'unassigned')",
-                cls.REPO: "ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id)))",
+                # Unassigned repo emits '' (NOT the bare 'unassigned'): the web
+                # adapter renders an empty repo label as a distinct "Unassigned
+                # repo" node. Emitting 'unassigned' collides with the TEAM
+                # unassigned label at the ECharts node-name level and folds
+                # TEAM->THEME->REPO into a cycle ("Sankey is a DAG" error).
+                cls.REPO: "ifNull(nullIf(r.repo, ''), if(repo_id IS NULL, '', toString(repo_id)))",
                 cls.WORK_TYPE: "work_unit_type",
                 cls.THEME: "splitByChar('.', subcategory_kv.1)[1]",
                 cls.SUBCATEGORY: "subcategory_kv.1",
@@ -94,20 +99,26 @@ class Measure(str, Enum):
         return [m.value for m in cls]
 
     @classmethod
-    def db_expression(cls, measure: Measure, use_investment: bool = False) -> str:
+    def db_expression(
+        cls,
+        measure: Measure,
+        use_investment: bool = False,
+        use_repo_allocation: bool = False,
+    ) -> str:
         if use_investment:
+            throughput_expr = "SUM(subcategory_kv.2)"
+            cycle_time_expr = "AVG(dateDiff('hour', from_ts, to_ts))"
+            if use_repo_allocation:
+                throughput_expr = "SUM(subcategory_kv.2 * allocation_weight)"
+                cycle_time_expr = "SUM(dateDiff('hour', from_ts, to_ts) * allocation_weight) / NULLIF(SUM(allocation_weight), 0)"
             mapping: dict[Measure, str] = {
                 cls.COUNT: "SUM(subcategory_kv.2 * effort_value)",
-                # THROUGHPUT: each work unit's subcategory probabilities sum to
-                # ~1.0, so summing them gives the weighted count of work units.
-                cls.THROUGHPUT: "SUM(subcategory_kv.2)",
+                cls.THROUGHPUT: throughput_expr,
                 # CHURN_LOC: effort_value stores the actual churn LOC for work
                 # units whose effort_metric = 'churn_loc'; weight by subcategory
                 # probability to apportion across the ARRAY JOIN fan-out.
                 cls.CHURN_LOC: "SUM(if(effort_metric = 'churn_loc', subcategory_kv.2 * effort_value, 0))",
-                # CYCLE_TIME_HOURS: derived from the stored timestamps (from_ts,
-                # to_ts) as the per-work-unit cycle duration in hours.
-                cls.CYCLE_TIME_HOURS: "AVG(dateDiff('hour', from_ts, to_ts))",
+                cls.CYCLE_TIME_HOURS: cycle_time_expr,
             }
         else:
             mapping = {

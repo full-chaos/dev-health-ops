@@ -205,3 +205,81 @@ def test_fetch_work_item_active_hours_omits_org_filter_when_unscoped(monkeypatch
     query, params = captured[-1]
     assert "org_id" not in query
     assert "org_id" not in params
+
+
+REPO_A = "11111111-1111-1111-1111-111111111111"
+REPO_B = "22222222-2222-2222-2222-222222222222"
+
+
+def test_allocate_repo_effort_splits_pr_churn_across_repos():
+    from dev_health_ops.work_graph.investment.materialize import (
+        _allocate_repo_effort,
+    )
+
+    pr_a = f"{REPO_A}#pr1"
+    pr_b = f"{REPO_B}#pr2"
+    allocs = _allocate_repo_effort(
+        issue_ids=["extkey:CHAOS-1"],
+        pr_ids=[pr_a, pr_b],
+        commit_ids=[],
+        pr_churn={pr_a: 40.0, pr_b: 60.0},
+        commit_churn={},
+        active_hours={},
+        effort_metric="churn_loc",
+        effort_value=100.0,
+    )
+    by_repo = {str(repo): (effort, weight, src) for repo, effort, weight, src in allocs}
+    assert by_repo[REPO_A][0] == 40.0
+    assert by_repo[REPO_B][0] == 60.0
+    assert by_repo[REPO_A][2] == "pr_churn"
+    # allocations MUST sum back to the work unit's total effort (no loss/gain)
+    assert abs(sum(e for _, e, _, _ in allocs) - 100.0) < 1e-6
+    assert abs(sum(w for _, _, w, _ in allocs) - 1.0) < 1e-6
+
+
+def test_allocate_repo_effort_prefers_commit_churn_over_pr():
+    from dev_health_ops.work_graph.investment.materialize import (
+        _allocate_repo_effort,
+    )
+
+    commit_a = f"{REPO_A}@" + "a" * 40
+    commit_b = f"{REPO_B}@" + "b" * 40
+    pr_a = f"{REPO_A}#pr1"
+    allocs = _allocate_repo_effort(
+        issue_ids=[],
+        pr_ids=[pr_a],
+        commit_ids=[commit_a, commit_b],
+        pr_churn={pr_a: 999.0},
+        commit_churn={commit_a: 30.0, commit_b: 70.0},
+        active_hours={},
+        effort_metric="churn_loc",
+        effort_value=100.0,
+    )
+    assert {src for _, _, _, src in allocs} == {"commit_churn"}
+    by_repo = {str(repo): effort for repo, effort, _, _ in allocs}
+    assert by_repo[REPO_A] == 30.0
+    assert by_repo[REPO_B] == 70.0
+    assert abs(sum(by_repo.values()) - 100.0) < 1e-6
+
+
+def test_allocate_repo_effort_active_hours_falls_back_to_unassigned():
+    from dev_health_ops.work_graph.investment.materialize import (
+        _allocate_repo_effort,
+    )
+
+    allocs = _allocate_repo_effort(
+        issue_ids=["I-1"],
+        pr_ids=[],
+        commit_ids=[],
+        pr_churn={},
+        commit_churn={},
+        active_hours={"I-1": 12.0},
+        effort_metric="active_hours",
+        effort_value=12.0,
+    )
+    assert len(allocs) == 1
+    repo, effort, weight, src = allocs[0]
+    assert repo is None
+    assert effort == 12.0
+    assert weight == 1.0
+    assert src == "active_hours_unassigned"

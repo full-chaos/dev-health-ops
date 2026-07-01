@@ -51,6 +51,61 @@ LATEST_WORK_UNIT_INVESTMENTS_CTE = """
 """.rstrip()
 
 
+# CHAOS-2492: work_unit_investments carries NO author/developer column at all
+# (see the WorkUnitInvestmentRecord write columns in metrics/sinks/clickhouse/
+# investment.py) -- the closest thing to a developer identity is the set of
+# commit/PR node ids recorded in structural_evidence_json (written by
+# work_graph/investment/materialize.py using the canonical
+# "{repo_uuid}@{sha}" / "{repo_uuid}#pr{number}" id formats from
+# work_graph/ids.py). This companion CTE resolves those refs to the REAL
+# ClickHouse identity column -- author_email (git_commits, git_pull_requests;
+# same column chosen in CHAOS-2385) -- and collapses to one deduplicated
+# array of contributor emails per work unit.
+#
+# Must chain AFTER LATEST_WORK_UNIT_INVESTMENTS_CTE in the same WITH clause
+# (references `latest_work_unit_investments`); only pulled in by callers that
+# actually need developer filtering, to avoid the extra join cost otherwise.
+LATEST_WORK_UNIT_AUTHORS_CTE = """
+        work_unit_authors AS (
+            SELECT
+                work_unit_id,
+                groupUniqArray(author_email) AS author_emails
+            FROM (
+                SELECT
+                    wui.work_unit_id AS work_unit_id,
+                    ca.author_email AS author_email
+                FROM latest_work_unit_investments AS wui
+                ARRAY JOIN JSONExtract(wui.structural_evidence_json, 'commits', 'Array(String)') AS commit_ref
+                INNER JOIN (
+                    SELECT
+                        concat(toString(repo_id), '@', hash) AS commit_ref,
+                        argMax(author_email, last_synced) AS author_email
+                    FROM git_commits
+                    GROUP BY repo_id, hash
+                ) AS ca ON ca.commit_ref = commit_ref
+                WHERE ca.author_email IS NOT NULL AND ca.author_email != ''
+
+                UNION ALL
+
+                SELECT
+                    wui.work_unit_id AS work_unit_id,
+                    pa.author_email AS author_email
+                FROM latest_work_unit_investments AS wui
+                ARRAY JOIN JSONExtract(wui.structural_evidence_json, 'prs', 'Array(String)') AS pr_ref
+                INNER JOIN (
+                    SELECT
+                        concat(toString(repo_id), '#pr', toString(number)) AS pr_ref,
+                        argMax(author_email, last_synced) AS author_email
+                    FROM git_pull_requests
+                    GROUP BY repo_id, number
+                ) AS pa ON pa.pr_ref = pr_ref
+                WHERE pa.author_email IS NOT NULL AND pa.author_email != ''
+            )
+            GROUP BY work_unit_id
+        )
+""".rstrip()
+
+
 async def fetch_investment_breakdown(
     sink: BaseMetricsSink,
     *,

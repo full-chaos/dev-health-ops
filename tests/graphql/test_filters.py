@@ -61,12 +61,9 @@ class TestFilterTranslation:
         assert params["scope_ids"] == ["repo-1"]
 
     def test_who_filter_rejected_for_non_investment_query(self):
-        """CHAOS-2385: who.developers is rejected (not silently applied) for
-        non-investment queries -- investment_metrics_daily carries no
-        per-developer breakdown at all, so emitting a predicate against ANY
-        author column there (author_id previously, author_email now) would
-        be a runtime ClickHouse error. CHAOS-2492 adds investment-path
-        support (use_investment=True) via a companion join."""
+        """CHAOS-2385/2492: who.developers is rejected (not silently applied)
+        for non-investment queries -- investment_metrics_daily carries no
+        per-developer breakdown at all."""
         filters = FilterInput(who=WhoFilterInput(developers=["alice@example.com"]))
         request = TimeseriesRequest(
             dimension="team",
@@ -79,6 +76,24 @@ class TestFilterTranslation:
         with pytest.raises(ValidationError) as exc_info:
             compile_timeseries(request, org_id="org1", filters=filters)
         assert exc_info.value.field == "who"
+
+    def test_who_filter_uses_hasany_for_investment_query(self):
+        """CHAOS-2492: who.developers on an investment query resolves via
+        the au join's hasAny(author_emails) array-membership predicate."""
+        filters = FilterInput(who=WhoFilterInput(developers=["alice@example.com"]))
+        request = BreakdownRequest(
+            dimension="theme",
+            measure="count",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 1, 7),
+            use_investment=True,
+        )
+
+        sql, params = compile_breakdown(request, org_id="org1", filters=filters)
+
+        assert "work_unit_authors" in sql
+        assert "hasAny(au.author_emails, %(developer_ids)s)" in sql
+        assert params["developer_ids"] == ["alice@example.com"]
 
     def test_what_filter_repos(self):
         """Test what filter (repos)."""
@@ -171,9 +186,8 @@ class TestFilterTranslation:
         assert "repo_filter_ids" not in params
 
     def test_scope_filter_developer_rejected_for_non_investment_query(self):
-        """CHAOS-2385: scope.level=developer is rejected (not silently
-        applied) for non-investment queries -- same gap as who.developers
-        above. CHAOS-2492 adds investment-path support."""
+        """CHAOS-2385/2492: scope.level=developer is rejected for
+        non-investment queries -- same gap as who.developers above."""
         filters = FilterInput(
             scope=ScopeFilterInput(
                 level=ScopeLevelInput.DEVELOPER, ids=["alice@example.com"]
@@ -232,3 +246,25 @@ class TestFilterTranslation:
             compile_timeseries(request, org_id="org1", filters=filters)
         assert exc_info.value.field == "scope"
         assert "email" in str(exc_info.value).lower()
+
+    def test_scope_filter_developer_uses_hasany_for_investment_query(self):
+        """CHAOS-2492: scope.level=developer on an investment query resolves
+        via the au join's hasAny(author_emails) predicate."""
+        filters = FilterInput(
+            scope=ScopeFilterInput(
+                level=ScopeLevelInput.DEVELOPER, ids=["alice@example.com"]
+            )
+        )
+        request = BreakdownRequest(
+            dimension="theme",
+            measure="count",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 1, 7),
+            use_investment=True,
+        )
+
+        sql, params = compile_breakdown(request, org_id="org1", filters=filters)
+
+        assert "work_unit_authors" in sql
+        assert "hasAny(au.author_emails, %(scope_ids)s)" in sql
+        assert params["scope_ids"] == ["alice@example.com"]

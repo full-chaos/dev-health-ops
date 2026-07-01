@@ -9,7 +9,10 @@ from dataclasses import dataclass
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
-from dev_health_ops.api.queries.investment import LATEST_WORK_UNIT_INVESTMENTS_CTE
+from dev_health_ops.api.queries.investment import (
+    LATEST_WORK_UNIT_AUTHORS_CTE,
+    LATEST_WORK_UNIT_INVESTMENTS_CTE,
+)
 
 from ..authz import enforce_org_scope
 from ..errors import ValidationError
@@ -135,6 +138,7 @@ def _get_context_params(
     dimensions: list[Dimension],
     force_investment: bool | None = None,
     needs_team_join: bool = False,
+    needs_author_join: bool = False,
 ) -> dict[str, Any]:
     """Determine source table and extra clauses based on dimensions."""
     # WORK_TYPE belongs to the investment-side ``work_unit_investments`` table —
@@ -193,11 +197,22 @@ def _get_context_params(
         if Dimension.REPO in dimensions:
             joins.append("LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)")
 
+        # CHAOS-2492: add developer-identity join if AUTHOR dimension is used
+        # or a developer filter (who.developers / scope.level=developer) needs
+        # it. Chains LATEST_WORK_UNIT_AUTHORS_CTE onto the WITH clause -- only
+        # when actually needed, to avoid the extra join cost otherwise.
+        with_parts = [LATEST_WORK_UNIT_INVESTMENTS_CTE]
+        if Dimension.AUTHOR in dimensions or needs_author_join:
+            with_parts.append(LATEST_WORK_UNIT_AUTHORS_CTE)
+            joins.append(
+                "LEFT JOIN work_unit_authors AS au ON au.work_unit_id = work_unit_investments.work_unit_id"
+            )
+
         return {
             "source_table": "latest_work_unit_investments AS work_unit_investments",
             "date_filter": "work_unit_investments.from_ts < %(end_date)s AND work_unit_investments.to_ts >= %(start_date)s",
             "extra_clauses": "\n".join(joins),
-            "with_clause": f"WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE}",
+            "with_clause": f"WITH {', '.join(with_parts)}",
             "use_investment": True,
         }
 
@@ -214,6 +229,24 @@ def _needs_team_join(filters: FilterInput | None) -> bool:
     if not filters or not filters.scope or not filters.scope.ids:
         return False
     return filters.scope.level.value == "team"
+
+
+def _needs_author_join(filters: FilterInput | None) -> bool:
+    """CHAOS-2492: does this request need the investment developer-identity join?
+
+    True when a developer/who filter or a developer-scoped view is active, so
+    the compiler chains LATEST_WORK_UNIT_AUTHORS_CTE and the ``au`` join onto
+    the investment query (see _get_context_params).
+    """
+    if filters is None:
+        return False
+    if filters.who is not None and filters.who.developers:
+        return True
+    return bool(
+        filters.scope is not None
+        and filters.scope.level.value == "developer"
+        and filters.scope.ids
+    )
 
 
 def _has_active_filters(filters: FilterInput | None) -> bool:
@@ -265,6 +298,7 @@ def compile_timeseries(
         [dimension],
         force_investment=request.use_investment,
         needs_team_join=_needs_team_join(filters),
+        needs_author_join=_needs_author_join(filters),
     )
 
     # Translate filters to SQL clause
@@ -308,6 +342,7 @@ def compile_breakdown(
         [dimension],
         force_investment=request.use_investment,
         needs_team_join=_needs_team_join(filters),
+        needs_author_join=_needs_author_join(filters),
     )
 
     # Translate filters to SQL clause
@@ -350,6 +385,7 @@ def compile_sankey(
         dimensions,
         force_investment=request.use_investment,
         needs_team_join=_needs_team_join(filters),
+        needs_author_join=_needs_author_join(filters),
     )
 
     # Translate filters to SQL clause
@@ -427,6 +463,7 @@ def compile_flow_matrix(
         [dimension],
         force_investment=request.use_investment,
         needs_team_join=_needs_team_join(filters),
+        needs_author_join=_needs_author_join(filters),
     )
 
     filter_clause, filter_params = translate_filters(
@@ -517,6 +554,7 @@ def compile_catalog_values(
     ctx = _get_context_params(
         [dimension],
         needs_team_join=_needs_team_join(filters),
+        needs_author_join=_needs_author_join(filters),
     )
 
     params: dict[str, Any] = {

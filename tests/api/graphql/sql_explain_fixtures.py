@@ -392,6 +392,12 @@ async def _fixture_data_health(sink: CapturingSink) -> None:
 
 
 async def _fixture_analytics(sink: CapturingSink) -> None:
+    from dev_health_ops.api.graphql.models.inputs import (
+        FilterInput,
+        ScopeFilterInput,
+        ScopeLevelInput,
+        WhoFilterInput,
+    )
     from dev_health_ops.api.graphql.sql.compiler import (
         BreakdownRequest,
         CatalogValuesRequest,
@@ -459,6 +465,39 @@ async def _fixture_analytics(sink: CapturingSink) -> None:
     nodes_qs, edges_qs = compile_sankey(sankey_req, SAMPLE_ORG_ID)
     sink.calls.extend(nodes_qs)
     sink.calls.extend(edges_qs)
+
+    # CHAOS-2492: developer-filtered investment Sankey -- must chain
+    # LATEST_WORK_UNIT_AUTHORS_CTE + the `au` join and resolve
+    # hasAny(au.author_emails, ...) against the REAL git_commits /
+    # git_pull_requests schema (not just string-matched in unit tests).
+    dev_sankey_req = SankeyRequest(
+        path=["theme", "repo"],
+        measure="count",
+        start_date=start,
+        end_date=end,
+        use_investment=True,
+    )
+    who_filters = FilterInput(who=WhoFilterInput(developers=["alice@example.com"]))
+    nodes_qs, edges_qs = compile_sankey(
+        dev_sankey_req, SAMPLE_ORG_ID, filters=who_filters
+    )
+    sink.calls.extend(nodes_qs)
+    sink.calls.extend(edges_qs)
+
+    scope_filters = FilterInput(
+        scope=ScopeFilterInput(level=ScopeLevelInput.DEVELOPER, ids=["bob@example.com"])
+    )
+    dev_breakdown_req = BreakdownRequest(
+        dimension="theme",
+        measure="count",
+        start_date=start,
+        end_date=end,
+        use_investment=True,
+    )
+    sql, params = compile_breakdown(
+        dev_breakdown_req, SAMPLE_ORG_ID, filters=scope_filters
+    )
+    sink.calls.append((sql, params))
 
     for fm_dim in ("team", "repo", "work_type"):
         fm_req = FlowMatrixRequest(

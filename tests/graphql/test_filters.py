@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
+
+from dev_health_ops.api.graphql.errors import ValidationError
 from dev_health_ops.api.graphql.models.inputs import (
     FilterInput,
     ScopeFilterInput,
@@ -57,9 +60,14 @@ class TestFilterTranslation:
         assert "repo_id IN %(scope_ids)s" in sql
         assert params["scope_ids"] == ["repo-1"]
 
-    def test_who_filter(self):
-        """Test who filter (developers)."""
-        filters = FilterInput(who=WhoFilterInput(developers=["dev-1", "dev-2"]))
+    def test_who_filter_rejected_for_non_investment_query(self):
+        """CHAOS-2385: who.developers is rejected (not silently applied) for
+        non-investment queries -- investment_metrics_daily carries no
+        per-developer breakdown at all, so emitting a predicate against ANY
+        author column there (author_id previously, author_email now) would
+        be a runtime ClickHouse error. CHAOS-2492 adds investment-path
+        support (use_investment=True) via a companion join."""
+        filters = FilterInput(who=WhoFilterInput(developers=["alice@example.com"]))
         request = TimeseriesRequest(
             dimension="team",
             measure="count",
@@ -67,14 +75,10 @@ class TestFilterTranslation:
             start_date=date(2025, 1, 1),
             end_date=date(2025, 1, 7),
         )
-        sql, params = compile_timeseries(request, org_id="org1", filters=filters)
 
-        # CHAOS-2385: author_id does not exist in any ClickHouse table; the
-        # real identity column shared across git_commits/user_metrics_daily/
-        # commit_metrics/git_pull_requests is author_email.
-        assert "author_email IN %(developer_ids)s" in sql
-        assert "author_id" not in sql
-        assert params["developer_ids"] == ["dev-1", "dev-2"]
+        with pytest.raises(ValidationError) as exc_info:
+            compile_timeseries(request, org_id="org1", filters=filters)
+        assert exc_info.value.field == "who"
 
     def test_what_filter_repos(self):
         """Test what filter (repos)."""
@@ -166,11 +170,14 @@ class TestFilterTranslation:
         assert "developer_ids" not in params
         assert "repo_filter_ids" not in params
 
-    def test_scope_filter_developer_uses_author_email(self):
-        """CHAOS-2385: scope.level=developer must target the real author_email
-        column, never the nonexistent author_id."""
+    def test_scope_filter_developer_rejected_for_non_investment_query(self):
+        """CHAOS-2385: scope.level=developer is rejected (not silently
+        applied) for non-investment queries -- same gap as who.developers
+        above. CHAOS-2492 adds investment-path support."""
         filters = FilterInput(
-            scope=ScopeFilterInput(level=ScopeLevelInput.DEVELOPER, ids=["dev-1"])
+            scope=ScopeFilterInput(
+                level=ScopeLevelInput.DEVELOPER, ids=["alice@example.com"]
+            )
         )
         request = TimeseriesRequest(
             dimension="team",
@@ -179,8 +186,7 @@ class TestFilterTranslation:
             start_date=date(2025, 1, 1),
             end_date=date(2025, 1, 7),
         )
-        sql, params = compile_timeseries(request, org_id="org1", filters=filters)
 
-        assert "author_email IN %(scope_ids)s" in sql
-        assert "author_id" not in sql
-        assert params["scope_ids"] == ["dev-1"]
+        with pytest.raises(ValidationError) as exc_info:
+            compile_timeseries(request, org_id="org1", filters=filters)
+        assert exc_info.value.field == "scope"

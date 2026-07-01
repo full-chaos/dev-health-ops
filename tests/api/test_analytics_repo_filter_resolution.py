@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from dev_health_ops.api.graphql.context import GraphQLContext
+from dev_health_ops.api.graphql.errors import ValidationError
 from dev_health_ops.api.graphql.models.inputs import (
     AnalyticsRequestInput,
     BreakdownRequestInput,
@@ -171,19 +172,19 @@ async def test_sankey_coverage_respects_resolved_repo_name_filter(
 
 
 @pytest.mark.asyncio
-async def test_sankey_coverage_unavailable_for_investment_developer_filter(
+async def test_sankey_developer_filter_rejected_pending_chaos_2492(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    developer_id = "dev-1"
-    captured_sankey_params: list[dict[str, Any]] = []
-    captured_coverage_params: list[dict[str, Any]] = []
+    """CHAOS-2385: who.developers is rejected outright rather than silently
+    building a predicate against a column that doesn't exist on any table
+    reachable from this compiler yet. CHAOS-2492 (stacked on this branch)
+    adds investment-path support via a companion join, at which point this
+    scenario returns real coverage instead of raising -- see
+    test_sankey_coverage_computed_for_investment_who_developers_filter in
+    that branch."""
+    developer_id = "alice@example.com"
 
     async def fake_query_dicts(_client: object, sql: str, params: dict[str, Any]):
-        if "assigned_team" in sql:
-            captured_coverage_params.append(dict(params))
-            return [{"total": 4, "assigned_team": 4, "assigned_repo": 4}]
-        if "developer_ids" in params:
-            captured_sankey_params.append(dict(params))
         return []
 
     monkeypatch.setattr(
@@ -191,18 +192,12 @@ async def test_sankey_coverage_unavailable_for_investment_developer_filter(
         fake_query_dicts,
     )
 
-    result = await analytics_resolver.resolve_analytics(
-        GraphQLContext(org_id="org-1", db_url="clickhouse://test", client=object()),
-        _sankey_batch(FilterInput(who=WhoFilterInput(developers=[developer_id]))),
-    )
-
-    assert captured_sankey_params
-    assert all(
-        params["developer_ids"] == [developer_id] for params in captured_sankey_params
-    )
-    assert captured_coverage_params == []
-    assert result.sankey is not None
-    assert result.sankey.coverage is None
+    with pytest.raises(ValidationError) as exc_info:
+        await analytics_resolver.resolve_analytics(
+            GraphQLContext(org_id="org-1", db_url="clickhouse://test", client=object()),
+            _sankey_batch(FilterInput(who=WhoFilterInput(developers=[developer_id]))),
+        )
+    assert exc_info.value.field == "who"
 
 
 @pytest.mark.asyncio

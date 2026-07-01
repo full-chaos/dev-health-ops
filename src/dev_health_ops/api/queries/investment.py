@@ -65,6 +65,22 @@ LATEST_WORK_UNIT_INVESTMENTS_CTE = """
 # Must chain AFTER LATEST_WORK_UNIT_INVESTMENTS_CTE in the same WITH clause
 # (references `latest_work_unit_investments`); only pulled in by callers that
 # actually need developer filtering, to avoid the extra join cost otherwise.
+# Tenant isolation: git_commits / git_pull_requests carry an org_id column
+# (migration 027), and repo_id+hash / repo_id+number values CAN collide
+# across tenants -- this exact collision risk is documented at
+# work_graph/builder.py:1643 for the equivalent git_commits join. Both inner
+# dedupe subqueries below MUST be scoped to the CURRENT org: the
+# `WHERE org_id = %(org_id)s` filter (the org_id param is already supplied by
+# every consumer of this CTE, since it is only ever chained onto the WITH
+# clause alongside LATEST_WORK_UNIT_INVESTMENTS_CTE, which requires the same
+# param) plus `org_id` in the GROUP BY keeps each org's argMax(author_email, ...)
+# computed over ONLY that org's rows. The `ca.org_id = wui.org_id` /
+# `pa.org_id = wui.org_id` join predicate is a second, redundant layer of the
+# same tenant-scoping (mirrors the dual WHERE-filter + join pattern in
+# work_graph/builder.py's PR/commit edge builder). Without BOTH layers, a
+# repo_id+hash (or repo_id+number) collision across two orgs lets argMax pull
+# ANOTHER org's author_email into this org's investment developer filter --
+# a tenant-isolation leak.
 LATEST_WORK_UNIT_AUTHORS_CTE = """
         work_unit_authors AS (
             SELECT
@@ -78,11 +94,13 @@ LATEST_WORK_UNIT_AUTHORS_CTE = """
                 ARRAY JOIN JSONExtract(wui.structural_evidence_json, 'commits', 'Array(String)') AS commit_ref
                 INNER JOIN (
                     SELECT
+                        org_id,
                         concat(toString(repo_id), '@', hash) AS commit_ref,
                         argMax(author_email, last_synced) AS author_email
                     FROM git_commits
-                    GROUP BY repo_id, hash
-                ) AS ca ON ca.commit_ref = commit_ref
+                    WHERE org_id = %(org_id)s
+                    GROUP BY org_id, repo_id, hash
+                ) AS ca ON ca.commit_ref = commit_ref AND ca.org_id = wui.org_id
                 WHERE ca.author_email IS NOT NULL AND ca.author_email != ''
 
                 UNION ALL
@@ -94,11 +112,13 @@ LATEST_WORK_UNIT_AUTHORS_CTE = """
                 ARRAY JOIN JSONExtract(wui.structural_evidence_json, 'prs', 'Array(String)') AS pr_ref
                 INNER JOIN (
                     SELECT
+                        org_id,
                         concat(toString(repo_id), '#pr', toString(number)) AS pr_ref,
                         argMax(author_email, last_synced) AS author_email
                     FROM git_pull_requests
-                    GROUP BY repo_id, number
-                ) AS pa ON pa.pr_ref = pr_ref
+                    WHERE org_id = %(org_id)s
+                    GROUP BY org_id, repo_id, number
+                ) AS pa ON pa.pr_ref = pr_ref AND pa.org_id = wui.org_id
                 WHERE pa.author_email IS NOT NULL AND pa.author_email != ''
             )
             GROUP BY work_unit_id

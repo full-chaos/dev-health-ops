@@ -268,3 +268,32 @@ class TestFilterTranslation:
         assert "work_unit_authors" in sql
         assert "hasAny(au.author_emails, %(scope_ids)s)" in sql
         assert params["scope_ids"] == ["alice@example.com"]
+
+    def test_scope_filter_developer_rejects_non_email_values_for_investment_query(
+        self,
+    ):
+        """W2 (Oracle NO-GO on CHAOS-2492): the investment scope.level=developer
+        branch built the hasAny() predicate WITHOUT calling
+        _validate_developer_emails, unlike the who.developers branch -- so an
+        invalid scope.ids value silently produced an empty/no-op filter
+        instead of a rejection. Mirrors
+        test_scope_filter_developer_rejects_non_email_values above, but with
+        use_investment=True so it exercises the hasAny() branch instead of
+        the non-investment rejection branch."""
+        filters = FilterInput(
+            scope=ScopeFilterInput(
+                level=ScopeLevelInput.DEVELOPER, ids=["not-an-email"]
+            )
+        )
+        request = BreakdownRequest(
+            dimension="theme",
+            measure="count",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 1, 7),
+            use_investment=True,
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            compile_breakdown(request, org_id="org1", filters=filters)
+        assert exc_info.value.field == "scope"
+        assert "email" in str(exc_info.value).lower()

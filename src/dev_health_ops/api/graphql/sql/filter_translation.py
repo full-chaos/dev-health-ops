@@ -209,6 +209,11 @@ def translate_filters(
             # `au` join (LATEST_WORK_UNIT_AUTHORS_CTE, see compiler.py) resolves
             # an ARRAY of contributor author_emails per work unit rather than a
             # scalar column, so membership uses hasAny() instead of a flat IN.
+            # W2: validate email format BEFORE building the predicate -- same
+            # gap as who.developers below; without this, an invalid scope.ids
+            # value silently produces an empty/no-op filter instead of a
+            # rejection.
+            _validate_developer_emails(filters.scope.ids, field="scope")
             clauses.append(" AND hasAny(au.author_emails, %(scope_ids)s)")
             params["scope_ids"] = filters.scope.ids
         elif filters.scope.level.value == "developer" and filters.scope.ids:

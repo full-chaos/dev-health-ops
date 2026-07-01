@@ -41,6 +41,7 @@ from ..models.ai import (
     AIAttributionEvidenceRow,
     AIAttributionMixRow,
     AIAttributionOverviewResult,
+    AIAttributionScopeInput,
     AIComparison,
     AIComparisonDelta,
     AIComparisonSide,
@@ -99,6 +100,26 @@ def _normalize_scope(
         _parse_uuid(scope.repo_id),
         scope.team_id or None,
         scope.work_type or None,
+    )
+
+
+def _normalize_attribution_scope(
+    scope: AIAttributionScopeInput | None,
+) -> tuple[uuid.UUID | None, str | None, list[str] | None]:
+    """Normalize the narrower attribution-overview scope (no ``work_type``).
+
+    ``ai_attribution_resolved`` has no ``work_type`` column, so that
+    dimension is not exposed on :class:`AIAttributionScopeInput` at all
+    (CHAOS-2744) -- there is nothing to silently drop here. ``buckets``
+    maps 1:1 onto the resolved view's own ``kind`` column.
+    """
+    if scope is None:
+        return None, None, None
+    kinds = [bucket.value for bucket in scope.buckets] if scope.buckets else None
+    return (
+        _parse_uuid(scope.repo_id),
+        scope.team_id or None,
+        kinds,
     )
 
 
@@ -1334,7 +1355,7 @@ _MAX_AI_ATTRIBUTION_EVIDENCE_PAGE = 200
 async def resolve_ai_attribution_overview(
     context: GraphQLContext,
     date_range: AIDateRangeInput,
-    scope: AIScopeInput | None = None,
+    scope: AIAttributionScopeInput | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> AIAttributionOverviewResult:
@@ -1348,7 +1369,7 @@ async def resolve_ai_attribution_overview(
 
     org_id = require_org_id(context)
     _validate_date_range(date_range)
-    repo_id, team_id, _work_type = _normalize_scope(scope)
+    repo_id, team_id, kinds = _normalize_attribution_scope(scope)
 
     page_size = max(1, min(int(limit), _MAX_AI_ATTRIBUTION_EVIDENCE_PAGE))
     page_offset = max(0, int(offset))
@@ -1385,6 +1406,7 @@ async def resolve_ai_attribution_overview(
         end=end_dt,
         repo_id=repo_id,
         repo_ids=team_repo_ids,
+        kinds=kinds,
     )
     total_mix = sum(int(row.get("count") or 0) for row in mix_raw)
     mix = [
@@ -1402,6 +1424,7 @@ async def resolve_ai_attribution_overview(
         end=end_dt,
         repo_id=repo_id,
         repo_ids=team_repo_ids,
+        kinds=kinds,
         limit=page_size + 1,
         offset=page_offset,
     )

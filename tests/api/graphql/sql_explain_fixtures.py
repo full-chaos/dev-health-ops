@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 
 from _sql_explain_helpers import CapturingSink, FakeGraphQLContext
 
@@ -331,6 +331,45 @@ async def _fixture_bus_factor(sink: CapturingSink) -> None:
 
 
 # ---------------------------------------------------------------------------
+# ai_attribution (aiAttributionOverview via AIAttributionClickHouseLoader,
+# CHAOS-2744 -- also regression-guards the scope.buckets kind filter)
+# ---------------------------------------------------------------------------
+
+
+async def _fixture_ai_attribution(sink: CapturingSink) -> None:
+    from dev_health_ops.metrics.loaders.ai_attribution import (
+        AIAttributionClickHouseLoader,
+    )
+
+    loader = AIAttributionClickHouseLoader(sink, org_id=SAMPLE_ORG_ID)
+    start = datetime.combine(SAMPLE_DAY, time.min)
+    end = datetime.combine(SAMPLE_DAY + timedelta(days=7), time.min)
+
+    # Unscoped mix + evidence.
+    await loader.load_mix(start=start, end=end)
+    await loader.load_evidence(start=start, end=end, limit=50, offset=0)
+    # scope.buckets -> kind filter (CHAOS-2744 Oracle NO-GO regression: this
+    # must parse and bind against the real ai_attribution_resolved.kind column).
+    await loader.load_mix(start=start, end=end, kinds=["ai_assisted", "agent_created"])
+    await loader.load_evidence(
+        start=start,
+        end=end,
+        kinds=["ai_assisted", "agent_created"],
+        limit=50,
+        offset=0,
+    )
+    # repo_id / repo_ids (team-resolved) scopes.
+    await loader.load_mix(start=start, end=end, repo_id=uuid.UUID(SAMPLE_REPO_ID))
+    await loader.load_evidence(
+        start=start,
+        end=end,
+        repo_ids=[uuid.UUID(SAMPLE_REPO_ID)],
+        limit=50,
+        offset=0,
+    )
+
+
+# ---------------------------------------------------------------------------
 # data_health
 # ---------------------------------------------------------------------------
 
@@ -455,6 +494,7 @@ ALL_RESOLVER_SQL_FIXTURES: list[tuple[str, ResolverSQLFixture]] = [
     ("bus_factor", _fixture_bus_factor),
     ("data_health", _fixture_data_health),
     ("analytics", _fixture_analytics),
+    ("ai_attribution", _fixture_ai_attribution),
 ]
 """Registry of ``(resolver_name, fixture)`` pairs.
 

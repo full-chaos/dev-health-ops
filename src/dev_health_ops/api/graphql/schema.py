@@ -12,6 +12,7 @@ from .extensions import ConfiguredValidationRules, OrgIdAuthExtension
 from .models.ai import (
     AiAttributedPrsResult,
     AIAttributionOverviewResult,
+    AIAttributionScopeInput,
     AIComparison,
     AIDateRangeInput,
     AIGovernanceSummary,
@@ -799,7 +800,7 @@ class Query:
         info: Info,
         org_id: str,
         date_range: AIDateRangeInput,
-        scope: AIScopeInput | None = None,
+        scope: AIAttributionScopeInput | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> AIAttributionOverviewResult:

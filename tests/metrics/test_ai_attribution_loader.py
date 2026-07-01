@@ -104,6 +104,34 @@ async def test_load_mix_applies_repo_ids_filter():
 
 
 @pytest.mark.asyncio
+async def test_load_mix_applies_kinds_filter():
+    """CHAOS-2744: the AIAttributionScopeInput.buckets filter must reach
+    the SQL WHERE clause before GROUP BY -- not be silently dropped."""
+    queries, params, fake_qd = _capture([])
+    loader = AIAttributionClickHouseLoader(object(), org_id=ORG_ID)
+    with patch("dev_health_ops.api.queries.client.query_dicts", side_effect=fake_qd):
+        await loader.load_mix(
+            start=START, end=END, kinds=["ai_assisted", "agent_created"]
+        )
+
+    sql = queries[0]
+    assert "AND kind IN {kinds:Array(String)}" in sql
+    assert sql.index("AND kind IN") < sql.index("GROUP BY kind")
+    assert params[0]["kinds"] == ["ai_assisted", "agent_created"]
+
+
+@pytest.mark.asyncio
+async def test_load_mix_omits_kind_filter_when_no_buckets():
+    queries, params, fake_qd = _capture([])
+    loader = AIAttributionClickHouseLoader(object(), org_id=ORG_ID)
+    with patch("dev_health_ops.api.queries.client.query_dicts", side_effect=fake_qd):
+        await loader.load_mix(start=START, end=END)
+
+    assert "kind IN" not in queries[0]
+    assert "kinds" not in params[0]
+
+
+@pytest.mark.asyncio
 async def test_load_mix_returns_grouped_counts():
     rows = [{"kind": "ai_assisted", "count": 5}, {"kind": "unknown", "count": 2}]
     _queries, _params, fake_qd = _capture(rows)
@@ -141,6 +169,32 @@ async def test_load_evidence_selects_full_provenance_columns():
     ):
         assert column in sql, f"expected {column!r} to be selected"
     assert "FROM ai_attribution_resolved" in sql
+
+
+@pytest.mark.asyncio
+async def test_load_evidence_applies_kinds_filter():
+    """CHAOS-2744: the AIAttributionScopeInput.buckets filter must reach
+    the SQL WHERE clause before ORDER BY/LIMIT -- not be silently dropped."""
+    queries, params, fake_qd = _capture([])
+    loader = AIAttributionClickHouseLoader(object(), org_id=ORG_ID)
+    with patch("dev_health_ops.api.queries.client.query_dicts", side_effect=fake_qd):
+        await loader.load_evidence(start=START, end=END, kinds=["ai_review"])
+
+    sql = queries[0]
+    assert "AND kind IN {kinds:Array(String)}" in sql
+    assert sql.index("AND kind IN") < sql.index("ORDER BY observed_at")
+    assert params[0]["kinds"] == ["ai_review"]
+
+
+@pytest.mark.asyncio
+async def test_load_evidence_omits_kind_filter_when_no_buckets():
+    queries, params, fake_qd = _capture([])
+    loader = AIAttributionClickHouseLoader(object(), org_id=ORG_ID)
+    with patch("dev_health_ops.api.queries.client.query_dicts", side_effect=fake_qd):
+        await loader.load_evidence(start=START, end=END)
+
+    assert "kind IN" not in queries[0]
+    assert "kinds" not in params[0]
 
 
 @pytest.mark.asyncio

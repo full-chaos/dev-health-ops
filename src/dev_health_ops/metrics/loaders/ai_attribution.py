@@ -33,6 +33,7 @@ class AIAttributionClickHouseLoader:
         end: datetime,
         repo_id: uuid.UUID | None = None,
         repo_ids: list[uuid.UUID] | None = None,
+        kinds: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Count resolved attribution records per kind in the window.
 
@@ -48,6 +49,7 @@ class AIAttributionClickHouseLoader:
             "end": end.replace(tzinfo=None),
         }
         repo_filter = self._repo_filter(params, repo_id, repo_ids)
+        kind_filter = self._kind_filter(params, kinds)
         params = self._scope.inject(params)
         org_filter = self._scope.filter_uuid()
 
@@ -59,6 +61,7 @@ class AIAttributionClickHouseLoader:
         WHERE observed_at >= {{start:DateTime}}
           AND observed_at < {{end:DateTime}}
           {repo_filter}
+          {kind_filter}
           {org_filter}
         GROUP BY kind
         ORDER BY kind
@@ -72,6 +75,7 @@ class AIAttributionClickHouseLoader:
         end: datetime,
         repo_id: uuid.UUID | None = None,
         repo_ids: list[uuid.UUID] | None = None,
+        kinds: list[str] | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
@@ -89,6 +93,7 @@ class AIAttributionClickHouseLoader:
             "end": end.replace(tzinfo=None),
         }
         repo_filter = self._repo_filter(params, repo_id, repo_ids)
+        kind_filter = self._kind_filter(params, kinds)
         limit_clause = ""
         if limit is not None and int(limit) > 0:
             params["limit"] = int(limit)
@@ -113,6 +118,7 @@ class AIAttributionClickHouseLoader:
         WHERE observed_at >= {{start:DateTime}}
           AND observed_at < {{end:DateTime}}
           {repo_filter}
+          {kind_filter}
           {org_filter}
         ORDER BY observed_at DESC, subject_id
         {limit_clause}
@@ -150,3 +156,19 @@ class AIAttributionClickHouseLoader:
             params["repo_ids"] = [str(r) for r in repo_ids]
             clause += "\n          AND toString(repo_id) IN {repo_ids:Array(String)}"
         return clause
+
+    def _kind_filter(
+        self,
+        params: dict[str, Any],
+        kinds: list[str] | None,
+    ) -> str:
+        """AND-filter on the resolved view's ``kind`` column (CHAOS-2744).
+
+        Backs the GraphQL ``AIAttributionScopeInput.buckets`` filter -- the
+        UI's active bucket filters must reach the SQL WHERE clause, not be
+        silently dropped after the query already ran.
+        """
+        if not kinds:
+            return ""
+        params["kinds"] = list(kinds)
+        return "\n          AND kind IN {kinds:Array(String)}"

@@ -69,6 +69,24 @@ class AIScopeInput:
     buckets: list[AIAttributionBucketInput] | None = None
 
 
+@strawberry.input
+class AIAttributionScopeInput:
+    """Scope filters for the dedicated ``aiAttributionOverview`` query.
+
+    Deliberately narrower than :class:`AIScopeInput`: ``ai_attribution_resolved``
+    carries no ``work_type`` column (unlike ``ai_impact_metrics_daily``, which
+    projects it from a ``work_items`` join), so exposing a ``work_type`` filter
+    here would silently no-op against the live page's active filters (CHAOS-2744).
+    ``buckets`` filters on the resolved view's own ``kind`` column instead.
+
+    All filters are AND-combined; ``None`` means "no filter at this level".
+    """
+
+    repo_id: str | None = None
+    team_id: str | None = None
+    buckets: list[AIAttributionBucketInput] | None = None
+
+
 # =============================================================================
 # Outputs
 # =============================================================================

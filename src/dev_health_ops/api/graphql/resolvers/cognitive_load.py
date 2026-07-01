@@ -74,13 +74,19 @@ async def _fetch_user_metrics(
     Filters by ``org_id`` (always), date range, and optionally ``team_id`` /
     ``repo_id`` (the latter is valid here since ``user_metrics_daily`` carries
     a ``repo_id`` column per row; ``team_metrics_daily`` does not, so
-    ``repo_id`` is never applied to the team-metrics query). ``repo_id`` is a
-    ``UUID``-typed column, so the predicate casts it via ``toString(...)``
-    before comparing — mirroring ``resolvers/complexity.py``'s
-    ``toString(repo_id) IN {repo_ids:Array(String)}`` convention — rather than
-    comparing the column directly against the ``String`` parameter, which
-    would force ClickHouse to parse the parameter as a UUID and raise
-    ``CANNOT_PARSE_UUID`` for any non-UUID value.
+    ``repo_id`` is never applied to the team-metrics query).
+
+    The GraphQL ``repoId`` input may be EITHER the repo's UUID (``repos.id``)
+    OR its human-readable full_name/slug (``repos.repo``, e.g.
+    ``"org/repo"``) — the web repo picker's option list
+    (``/api/v1/filters/options``) is populated from ``repos.repo`` slugs, not
+    UUIDs (see CHAOS-2745 for the broader platform-wide follow-up to make
+    every repo-scoped resolver accept slugs consistently). The predicate
+    below resolves either form via an org-scoped subquery over ``repos``
+    rather than comparing ``repo_id`` (a ``UUID``-typed column) directly
+    against the ``String`` parameter, which would force ClickHouse to parse
+    the parameter as a UUID and raise ``CANNOT_PARSE_UUID`` whenever a slug
+    is supplied.
     """
     inner_where = """
             WHERE org_id = {org_id:String}
@@ -96,7 +102,12 @@ async def _fetch_user_metrics(
         inner_where += "\n              AND team_id = {team_id:String}"
         params["team_id"] = team_id
     if repo_id:
-        inner_where += "\n              AND toString(repo_id) = {repo_id:String}"
+        inner_where += """
+              AND repo_id IN (
+                  SELECT id FROM repos
+                  WHERE org_id = {org_id:String}
+                    AND (repo = {repo_id:String} OR toString(id) = {repo_id:String})
+              )"""
         params["repo_id"] = repo_id
 
     query = f"""

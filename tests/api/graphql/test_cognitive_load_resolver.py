@@ -294,9 +294,11 @@ async def test_cognitive_load_repo_id_filters_user_query_only() -> None:
     query must remain unfiltered by repo even when ``repo_id`` is supplied —
     regression test for CHAOS-2386 (the resolver previously had no repo_id
     field/predicate at all, making the UI repo control a no-op). The
-    predicate casts the UUID column via ``toString(...)`` before comparing,
-    so a non-UUID value degrades to a no-match rather than a ClickHouse
-    ``CANNOT_PARSE_UUID`` exception (mirrors ``resolvers/complexity.py``).
+    predicate resolves against an org-scoped subquery over ``repos`` (by
+    UUID or slug) rather than comparing the UUID column directly against
+    the parameter, so a non-UUID value degrades to a no-match rather than a
+    ClickHouse ``CANNOT_PARSE_UUID`` exception (mirrors
+    ``resolvers/complexity.py``'s org-scoped repo-label lookup).
     """
     ctx = _ctx()
     user_cols = [
@@ -320,8 +322,51 @@ async def test_cognitive_load_repo_id_filters_user_query_only() -> None:
     assert ctx.client.query.call_count == 2
     first_query: str = ctx.client.query.call_args_list[0].args[0]
     second_query: str = ctx.client.query.call_args_list[1].args[0]
-    assert "toString(repo_id) = {repo_id:String}" in first_query
+    assert "repo_id IN (" in first_query
+    assert "SELECT id FROM repos" in first_query
+    assert "org_id = {org_id:String}" in first_query
+    assert "repo = {repo_id:String}" in first_query
+    assert "toString(id) = {repo_id:String}" in first_query
     assert "repo_id" not in second_query
+
+
+@pytest.mark.asyncio
+async def test_cognitive_load_repo_id_accepts_slug_from_filter_options() -> None:
+    """repo_id also accepts a repos.repo full_name slug (CHAOS-2386 acceptance).
+
+    ``/api/v1/filters/options`` populates the web repo picker from
+    ``repos.repo`` slugs (e.g. "org/repo"), not UUIDs — a normal UI repo
+    selection sends a slug, not a UUID. The predicate must resolve either
+    form via the org-scoped ``repos`` subquery so a real UI selection
+    actually narrows the query, not just a UUID passed directly.
+    """
+    ctx = _ctx()
+    user_cols = [
+        "day",
+        "pr_interruption_load",
+        "context_spread_count",
+        "review_request_load",
+    ]
+    _setup_client(
+        ctx.client,
+        [
+            _qresult(user_cols, [[DAY_1, 6, 11, 3]]),
+            _qresult([], []),
+        ],
+    )
+
+    result = await resolve_cognitive_load(
+        ctx, _input(repo_id="full-chaos/dev-health-ops")
+    )
+
+    assert len(result.signals) == 1
+    first_query: str = ctx.client.query.call_args_list[0].args[0]
+    first_params: dict = ctx.client.query.call_args_list[0].kwargs["parameters"]
+    assert "repo_id IN (" in first_query
+    # The slug is passed through unmodified as the single {repo_id:String}
+    # parameter binding — the resolver does not attempt to detect/parse the
+    # input shape itself; ClickHouse's OR of repo/toString(id) resolves it.
+    assert first_params["repo_id"] == "full-chaos/dev-health-ops"
 
 
 @pytest.mark.asyncio
@@ -333,7 +378,7 @@ async def test_cognitive_load_no_repo_id_omits_predicate() -> None:
     await resolve_cognitive_load(ctx, _input())
 
     first_query: str = ctx.client.query.call_args_list[0].args[0]
-    assert "toString(repo_id) = {repo_id:String}" not in first_query
+    assert "repo_id IN (" not in first_query
 
 
 # ---------------------------------------------------------------------------

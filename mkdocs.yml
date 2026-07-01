@@ -72,6 +72,8 @@ nav:
       - Private Repos: connectors/private-repo-testing.md
       - GitHub App Auth: user-guide/github-app-auth.md
       - GitHub App Setup: user-guide/github-app-setup.md
+  - Providers:
+      - Rate-Limit Policy: providers/rate-limit-policy.md
   - Metrics:
       - Overview: metrics.md
       - Inventory: metrics-inventory.md

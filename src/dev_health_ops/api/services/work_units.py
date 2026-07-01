@@ -340,5 +340,5 @@ async def build_work_unit_investments(
             )
         )
 
-    results.sort(key=lambda item: item.effort.value, reverse=True)
+    results.sort(key=lambda item: (-item.effort.value, item.work_unit_id))
     return results[: max(1, int(limit))]

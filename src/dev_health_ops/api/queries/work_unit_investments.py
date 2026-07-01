@@ -2,11 +2,23 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import datetime
-from typing import Any
+from typing import Any, TypeVar
 
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 from .client import query_dicts
+
+_LOOKUP_CHUNK_SIZE = 250
+T = TypeVar("T")
+
+
+def _unique_non_empty(values: Iterable[str]) -> list[str]:
+    return list(dict.fromkeys(value for value in values if value))
+
+
+def _chunks(values: list[T], size: int = _LOOKUP_CHUNK_SIZE) -> Iterable[list[T]]:
+    for start in range(0, len(values), size):
+        yield values[start : start + size]
 
 
 async def fetch_work_unit_investments(
@@ -24,15 +36,15 @@ async def fetch_work_unit_investments(
     # ClickHouse may prefer alias over column names in WHERE; always qualify columns
     # to avoid accidentally referencing argMax(...) aliases.
     filters: list[str] = [
-        "work_unit_investments.from_ts < %(end_ts)s",
-        "work_unit_investments.to_ts >= %(start_ts)s",
-        "work_unit_investments.org_id = %(org_id)s",
+        "work_unit_investments.from_ts < {end_ts:DateTime}",
+        "work_unit_investments.to_ts >= {start_ts:DateTime}",
+        "work_unit_investments.org_id = {org_id:String}",
     ]
     if repo_ids:
-        filters.append("work_unit_investments.repo_id IN %(repo_ids)s")
+        filters.append("work_unit_investments.repo_id IN {repo_ids:Array(String)}")
         params["repo_ids"] = repo_ids
     if work_unit_id:
-        filters.append("work_unit_investments.work_unit_id = %(work_unit_id)s")
+        filters.append("work_unit_investments.work_unit_id = {work_unit_id:String}")
         params["work_unit_id"] = work_unit_id
     where_sql = " AND ".join(filters)
     query = f"""
@@ -58,8 +70,8 @@ async def fetch_work_unit_investments(
         FROM work_unit_investments
         WHERE {where_sql}
         GROUP BY org_id, work_unit_id
-        ORDER BY effort_value DESC
-        LIMIT %(limit)s
+        ORDER BY effort_value DESC, work_unit_id ASC
+        LIMIT {{limit:UInt32}}
     """
     return await query_dicts(sink, query, params)
 
@@ -70,7 +82,7 @@ async def fetch_repo_scopes(
     repo_ids: Iterable[str],
     org_id: str = "",
 ) -> dict[str, str]:
-    ids = [repo_id for repo_id in repo_ids if repo_id]
+    ids = _unique_non_empty(repo_ids)
     if not ids:
         return {}
     query = """
@@ -78,12 +90,14 @@ async def fetch_repo_scopes(
             toString(id) AS repo_id,
             repo
         FROM repos
-        WHERE id IN %(repo_ids)s
-          AND org_id = %(org_id)s
+        WHERE id IN {repo_ids:Array(String)}
+          AND org_id = {org_id:String}
     """
-    params: dict[str, Any] = {"repo_ids": ids}
-    params["org_id"] = org_id
-    rows = await query_dicts(sink, query, params)
+    rows: list[dict[str, Any]] = []
+    for chunk in _chunks(ids):
+        rows.extend(
+            await query_dicts(sink, query, {"repo_ids": chunk, "org_id": org_id})
+        )
     return {
         str(row.get("repo_id")): str(row.get("repo") or "")
         for row in rows
@@ -97,7 +111,7 @@ async def fetch_work_item_team_assignments(
     work_item_ids: Iterable[str],
     org_id: str = "",
 ) -> dict[str, dict[str, str]]:
-    ids = [work_item_id for work_item_id in work_item_ids if work_item_id]
+    ids = _unique_non_empty(work_item_ids)
     if not ids:
         return {}
     query = """
@@ -106,13 +120,15 @@ async def fetch_work_item_team_assignments(
             argMax(team_id, computed_at) AS team_id,
             argMax(team_name, computed_at) AS team_name
         FROM work_item_cycle_times
-        WHERE work_item_id IN %(work_item_ids)s
-          AND org_id = %(org_id)s
+        WHERE work_item_id IN {work_item_ids:Array(String)}
+          AND org_id = {org_id:String}
         GROUP BY work_item_id
     """
-    params: dict[str, Any] = {"work_item_ids": ids}
-    params["org_id"] = org_id
-    rows = await query_dicts(sink, query, params)
+    rows: list[dict[str, Any]] = []
+    for chunk in _chunks(ids):
+        rows.extend(
+            await query_dicts(sink, query, {"work_item_ids": chunk, "org_id": org_id})
+        )
     result: dict[str, dict[str, str]] = {}
     for row in rows:
         work_item_id = str(row.get("work_item_id") or "")
@@ -130,7 +146,11 @@ async def fetch_work_unit_investment_quotes(
     unit_runs: Iterable[tuple[str, str]],
     org_id: str = "",
 ) -> list[dict[str, Any]]:
-    pairs = [(unit_id, run_id) for unit_id, run_id in unit_runs if unit_id and run_id]
+    pairs = list(
+        dict.fromkeys(
+            (unit_id, run_id) for unit_id, run_id in unit_runs if unit_id and run_id
+        )
+    )
     if not pairs:
         return []
     query = """
@@ -141,9 +161,10 @@ async def fetch_work_unit_investment_quotes(
             source_id,
             categorization_run_id
         FROM work_unit_investment_quotes
-        WHERE (work_unit_id, categorization_run_id) IN %(pairs)s
-          AND org_id = %(org_id)s
+        WHERE (work_unit_id, categorization_run_id) IN {pairs:Array(Tuple(String, String))}
+          AND org_id = {org_id:String}
     """
-    params: dict[str, Any] = {"pairs": pairs}
-    params["org_id"] = org_id
-    return await query_dicts(sink, query, params)
+    rows: list[dict[str, Any]] = []
+    for chunk in _chunks(pairs):
+        rows.extend(await query_dicts(sink, query, {"pairs": chunk, "org_id": org_id}))
+    return rows

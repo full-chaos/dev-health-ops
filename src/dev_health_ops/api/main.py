@@ -127,6 +127,7 @@ from .webhooks import router as webhooks_router
 
 HOME_CACHE = create_cache(ttl_seconds=60)
 EXPLAIN_CACHE = create_cache(ttl_seconds=120)
+WORK_UNITS_MAX_LIMIT = 1000
 
 logger = logging.getLogger(__name__)
 
@@ -519,7 +520,8 @@ async def work_units_post(
             filter_payload = payload.filters.model_dump(mode="json")
         else:
             filter_payload = payload.filters.dict()
-        log_limit = str(payload.limit or 200).replace("\r", "").replace("\n", "")
+        bounded_limit = _bounded_limit_param(payload.limit or 200, WORK_UNITS_MAX_LIMIT)
+        log_limit = str(bounded_limit).replace("\r", "").replace("\n", "")
         log_include_textual = str(include_textual).replace("\r", "").replace("\n", "")
         logger.debug(
             "WorkUnits POST request include_textual=%s limit=%s filters=%s",
@@ -531,7 +533,7 @@ async def work_units_post(
             db_url=_analytics_db_url(),
             filters=payload.filters,
             org_id=current_user.org_id,
-            limit=payload.limit or 200,
+            limit=bounded_limit,
             include_text=include_textual,
         )
         logger.debug("WorkUnits POST returned count=%s", len(result))
@@ -561,7 +563,8 @@ async def work_units(
             filter_payload = filters.model_dump(mode="json")
         else:
             filter_payload = filters.dict()
-        log_limit = str(limit).replace("\r", "").replace("\n", "")
+        bounded_limit = _bounded_limit_param(limit, WORK_UNITS_MAX_LIMIT)
+        log_limit = str(bounded_limit).replace("\r", "").replace("\n", "")
         log_include_textual = str(include_textual).replace("\r", "").replace("\n", "")
         logger.debug(
             "WorkUnits GET request include_textual=%s limit=%s filters=%s",
@@ -573,7 +576,7 @@ async def work_units(
             db_url=_analytics_db_url(),
             filters=filters,
             org_id=current_user.org_id,
-            limit=limit,
+            limit=bounded_limit,
             include_text=include_textual,
         )
         logger.debug("WorkUnits GET returned count=%s", len(result))

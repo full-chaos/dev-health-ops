@@ -21,6 +21,16 @@ from dev_health_ops.models.backfill import BackfillJob
 from dev_health_ops.models.billing_audit import BillingAuditLog
 from dev_health_ops.models.checkpoints import MetricCheckpoint, SyncComputeCheckpoint
 from dev_health_ops.models.impersonation import ImpersonationSession
+from dev_health_ops.models.integrations import (
+    Integration,
+    IntegrationDataset,
+    IntegrationSource,
+    SyncDispatchOutbox,
+    SyncRun,
+    SyncRunPostDispatch,
+    SyncRunReferenceDiscovery,
+    SyncRunUnit,
+)
 from dev_health_ops.models.invoices import Invoice, InvoiceLineItem
 from dev_health_ops.models.ip_allowlist import OrgIPAllowlist
 from dev_health_ops.models.licensing import OrgFeatureOverride, OrgLicense
@@ -30,6 +40,7 @@ from dev_health_ops.models.refunds import Refund
 from dev_health_ops.models.reports import ReportRun, SavedReport
 from dev_health_ops.models.retention import OrgRetentionPolicy
 from dev_health_ops.models.settings import (
+    GithubAppInstallation,
     IntegrationCredential,
     JobRun,
     JobStatus,
@@ -220,6 +231,51 @@ def _postgres_targets() -> list[PostgresDeletionTarget]:
             "sync_configurations",
             SyncConfiguration,
             lambda _org_uuid, org_id: SyncConfiguration.org_id == org_id,
+        ),
+        PostgresDeletionTarget(
+            "sync_run_reference_discoveries",
+            SyncRunReferenceDiscovery,
+            lambda _org_uuid, org_id: SyncRunReferenceDiscovery.org_id == org_id,
+        ),
+        PostgresDeletionTarget(
+            "sync_dispatch_outbox",
+            SyncDispatchOutbox,
+            lambda _org_uuid, org_id: SyncDispatchOutbox.org_id == org_id,
+        ),
+        PostgresDeletionTarget(
+            "sync_run_post_dispatches",
+            SyncRunPostDispatch,
+            lambda _org_uuid, org_id: SyncRunPostDispatch.org_id == org_id,
+        ),
+        PostgresDeletionTarget(
+            "sync_run_units",
+            SyncRunUnit,
+            lambda _org_uuid, org_id: SyncRunUnit.org_id == org_id,
+        ),
+        PostgresDeletionTarget(
+            "sync_runs",
+            SyncRun,
+            lambda _org_uuid, org_id: SyncRun.org_id == org_id,
+        ),
+        PostgresDeletionTarget(
+            "integration_datasets",
+            IntegrationDataset,
+            lambda _org_uuid, org_id: IntegrationDataset.org_id == org_id,
+        ),
+        PostgresDeletionTarget(
+            "integration_sources",
+            IntegrationSource,
+            lambda _org_uuid, org_id: IntegrationSource.org_id == org_id,
+        ),
+        PostgresDeletionTarget(
+            "integrations",
+            Integration,
+            lambda _org_uuid, org_id: Integration.org_id == org_id,
+        ),
+        PostgresDeletionTarget(
+            "github_app_installations",
+            GithubAppInstallation,
+            lambda _org_uuid, org_id: GithubAppInstallation.org_id == org_id,
         ),
         PostgresDeletionTarget(
             "integration_credentials",

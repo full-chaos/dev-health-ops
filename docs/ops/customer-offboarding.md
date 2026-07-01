@@ -75,12 +75,13 @@ All authentication secrets are permanently destroyed:
 
 ### Phase 3: Purge Workspace-Owned Metadata (Postgres)
 All relational metadata scoped to the organization is explicitly deleted from the Postgres semantic database. The deletion respects foreign key constraints by purging tables in the following order:
-1. **Job and Sync State**: `JobRun` (linked to `ScheduledJob`), `BackfillJob` (linked to `SyncConfiguration`), `SyncWatermark`.
+1. **Job and Sync State**: `JobRun` (linked to `ScheduledJob`), `BackfillJob` (linked to `SyncConfiguration`), `SyncWatermark`, `SyncComputeCheckpoint`.
 2. **Schedules and Configurations**: `ScheduledJob` (linked to `SyncConfiguration`), `SyncConfiguration`.
-3. **Reports**: `ReportRun` (linked to `SavedReport`), `SavedReport`.
-4. **Billing and Subscriptions**: `Refund` (linked to `Invoice`/`Subscription`), `InvoiceLineItem` (linked to `Invoice`), `Invoice`, `SubscriptionEvent` (linked to `Subscription`), `Subscription`.
-5. **Access and Identity**: `Membership`, `OrgInvite`, `RefreshToken`, `ImpersonationSession` (target_org_id). *(The legacy Postgres `IdentityMapping` / `TeamMapping` tables were dropped in CHAOS-2600 CS6 (Alembic `0020`) and org_deletion no longer has Postgres purge targets for them — the team catalog and identity→team membership are ClickHouse-resolved and purged in Phase 4.)*
-6. **Core Organization**: `Organization`, `Setting`, `OrgRetentionPolicy`, `MetricCheckpoint`, `Team`, `AuditLog`, `BillingAuditLog`, `SSOProvider`, `OrgIPAllowlist`, `OrgFeatureOverride`, `OrgLicense`.
+3. **Planner Integration Graph**: `SyncRunReferenceDiscovery`, `SyncDispatchOutbox`, `SyncRunPostDispatch`, `SyncRunUnit`, `SyncRun`, `IntegrationDataset`, `IntegrationSource`, `Integration`, `GithubAppInstallation`, then `IntegrationCredential`.
+4. **Reports**: `ReportRun` (linked to `SavedReport`), `SavedReport`.
+5. **Billing and Subscriptions**: `Refund` (linked to `Invoice`/`Subscription`), `InvoiceLineItem` (linked to `Invoice`), `Invoice`, `SubscriptionEvent` (linked to `Subscription`), `Subscription`.
+6. **Access and Identity**: `Membership`, `OrgInvite`, `RefreshToken`, `ImpersonationSession` (target_org_id). *(The legacy Postgres `IdentityMapping` / `TeamMapping` tables were dropped in CHAOS-2600 CS6 (Alembic `0020`) and org_deletion no longer has Postgres purge targets for them — the team catalog and identity→team membership are ClickHouse-resolved and purged in Phase 4.)*
+7. **Core Organization**: `Organization`, `Setting`, `OrgRetentionPolicy`, `MetricCheckpoint`, `AuditLog`, `BillingAuditLog`, `SSOProvider`, `OrgIPAllowlist`, `OrgFeatureOverride`, `OrgLicense`.
 
 *Note: Certain billing and audit logs may be subject to regulatory retention requirements and are handled in accordance with the platform's compliance policies.*
 

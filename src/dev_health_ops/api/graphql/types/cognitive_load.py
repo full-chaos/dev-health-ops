@@ -24,6 +24,10 @@ class CognitiveLoadInput:
     #: Optional filter to a single team.  When absent, data across all teams
     #: is aggregated.
     team_id: str | None = strawberry.field(default=None, name="teamId")
+    #: Optional filter to a single repo (UUID string). Mirrors the ``team_id``
+    #: filter above; only ``user_metrics_daily`` carries a ``repo_id`` column,
+    #: so this has no effect on the team-level after-hours/weekend ratios.
+    repo_id: str | None = strawberry.field(default=None, name="repoId")
 
 
 @strawberry.type

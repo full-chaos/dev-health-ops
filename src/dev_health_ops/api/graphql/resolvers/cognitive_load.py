@@ -61,6 +61,7 @@ async def _fetch_user_metrics(
     since_date: str,
     until_date: str,
     team_id: str | None,
+    repo_id: str | None,
 ) -> list[dict[str, Any]]:
     """SUM of latest-per-developer cognitive load columns, grouped by day.
 
@@ -70,7 +71,16 @@ async def _fetch_user_metrics(
     ``argMax(<col>, computed_at)``; the outer query SUMs those deduplicated
     rows by day. This prevents double-counting from re-computation passes.
 
-    Filters by ``org_id`` (always), date range, and optionally ``team_id``.
+    Filters by ``org_id`` (always), date range, and optionally ``team_id`` /
+    ``repo_id`` (the latter is valid here since ``user_metrics_daily`` carries
+    a ``repo_id`` column per row; ``team_metrics_daily`` does not, so
+    ``repo_id`` is never applied to the team-metrics query). ``repo_id`` is a
+    ``UUID``-typed column, so the predicate casts it via ``toString(...)``
+    before comparing — mirroring ``resolvers/complexity.py``'s
+    ``toString(repo_id) IN {repo_ids:Array(String)}`` convention — rather than
+    comparing the column directly against the ``String`` parameter, which
+    would force ClickHouse to parse the parameter as a UUID and raise
+    ``CANNOT_PARSE_UUID`` for any non-UUID value.
     """
     inner_where = """
             WHERE org_id = {org_id:String}
@@ -85,6 +95,9 @@ async def _fetch_user_metrics(
     if team_id:
         inner_where += "\n              AND team_id = {team_id:String}"
         params["team_id"] = team_id
+    if repo_id:
+        inner_where += "\n              AND toString(repo_id) = {repo_id:String}"
+        params["repo_id"] = repo_id
 
     query = f"""
         SELECT
@@ -202,6 +215,7 @@ async def resolve_cognitive_load(
         since_date=since_date,
         until_date=until_date,
         team_id=input.team_id,
+        repo_id=input.repo_id,
     )
     team_rows = await _fetch_team_metrics(
         client,

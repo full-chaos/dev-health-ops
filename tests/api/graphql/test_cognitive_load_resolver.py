@@ -15,6 +15,8 @@ Tests exercise the resolver against a mocked ClickHouse client and verify:
 * The org-id gate raises ``AuthorizationError`` when ``context.org_id`` is
   missing.
 * The ``team_id`` filter passes through to both SQL queries.
+* The ``repo_id`` filter passes through to the user-metrics query only
+  (``team_metrics_daily`` has no ``repo_id`` column).
 
 All tests are read-only; no ClickHouse tables are modified.
 """
@@ -71,12 +73,15 @@ def _squash_ws(sql: str) -> str:
     return re.sub(r"\s+", " ", sql)
 
 
-def _input(team_id: str | None = None) -> CognitiveLoadInput:
+def _input(
+    team_id: str | None = None, repo_id: str | None = None
+) -> CognitiveLoadInput:
     return CognitiveLoadInput(
         org_id=ORG_ID,
         since_date=SINCE,
         until_date=UNTIL,
         team_id=team_id,
+        repo_id=repo_id,
     )
 
 
@@ -274,6 +279,61 @@ async def test_cognitive_load_team_id_reflected_in_result() -> None:
     second_query: str = ctx.client.query.call_args_list[1].args[0]
     assert "team_id" in first_query
     assert "team_id" in second_query
+
+
+# ---------------------------------------------------------------------------
+# repo_id filter (CHAOS-2386)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cognitive_load_repo_id_filters_user_query_only() -> None:
+    """repo_id is embedded in the user-metrics query only.
+
+    ``team_metrics_daily`` has no ``repo_id`` column, so the team-metrics
+    query must remain unfiltered by repo even when ``repo_id`` is supplied —
+    regression test for CHAOS-2386 (the resolver previously had no repo_id
+    field/predicate at all, making the UI repo control a no-op). The
+    predicate casts the UUID column via ``toString(...)`` before comparing,
+    so a non-UUID value degrades to a no-match rather than a ClickHouse
+    ``CANNOT_PARSE_UUID`` exception (mirrors ``resolvers/complexity.py``).
+    """
+    ctx = _ctx()
+    user_cols = [
+        "day",
+        "pr_interruption_load",
+        "context_spread_count",
+        "review_request_load",
+    ]
+    _setup_client(
+        ctx.client,
+        [
+            _qresult(user_cols, [[DAY_1, 4, 9, 2]]),
+            _qresult([], []),
+        ],
+    )
+
+    await resolve_cognitive_load(
+        ctx, _input(repo_id="3fa85f64-5717-4562-b3fc-2c963f66afa6")
+    )
+
+    assert ctx.client.query.call_count == 2
+    first_query: str = ctx.client.query.call_args_list[0].args[0]
+    second_query: str = ctx.client.query.call_args_list[1].args[0]
+    assert "toString(repo_id) = {repo_id:String}" in first_query
+    assert "repo_id" not in second_query
+
+
+@pytest.mark.asyncio
+async def test_cognitive_load_no_repo_id_omits_predicate() -> None:
+    """When repo_id is absent, no repo_id predicate is added to either query."""
+    ctx = _ctx()
+    _setup_client(ctx.client, [_qresult([], []), _qresult([], [])])
+
+    await resolve_cognitive_load(ctx, _input())
+
+    first_query: str = ctx.client.query.call_args_list[0].args[0]
+    assert "toString(repo_id) = {repo_id:String}" not in first_query
 
 
 # ---------------------------------------------------------------------------

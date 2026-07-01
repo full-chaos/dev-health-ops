@@ -58,6 +58,14 @@ def _setup_client(client: Any, responses: list[Any]) -> None:
     client.query.side_effect = responses
 
 
+def _assert_scope_id_slug_or_uuid_predicate(query: str) -> None:
+    assert "scope_id IN (" in query
+    assert "SELECT toString(id) FROM repos" in query
+    assert "org_id = {org_id:String}" in query
+    assert "repo IN {repo_ids:Array(String)}" in query
+    assert "toString(id) IN {repo_ids:Array(String)}" in query
+
+
 # ---------------------------------------------------------------------------
 # Day resolution
 # ---------------------------------------------------------------------------
@@ -233,6 +241,56 @@ async def test_null_score_maps_to_unknown_severity() -> None:
     result = await resolve_compounding_risk(ctx, ORG_ID)
     assert result.rows[0].score is None
     assert result.rows[0].severity == CompoundingRiskSeverity.UNKNOWN
+
+
+@pytest.mark.asyncio
+async def test_repo_ids_filter_resolves_slugs_or_uuids_in_latest_and_trend_queries() -> (
+    None
+):
+    ctx = _ctx()
+    _setup_client(
+        ctx.client,
+        [
+            _qresult([], []),
+            _qresult([], []),
+        ],
+    )
+
+    await resolve_compounding_risk(
+        ctx,
+        ORG_ID,
+        CompoundingRiskFilterInput(
+            day=DAY, repo_ids=["3fa85f64-5717-4562-b3fc-2c963f66afa6"]
+        ),
+    )
+
+    latest_query: str = ctx.client.query.call_args_list[0].args[0]
+    trend_query: str = ctx.client.query.call_args_list[1].args[0]
+    _assert_scope_id_slug_or_uuid_predicate(latest_query)
+    _assert_scope_id_slug_or_uuid_predicate(trend_query)
+
+
+@pytest.mark.asyncio
+async def test_repo_ids_filter_accepts_slug_from_filter_options() -> None:
+    ctx = _ctx()
+    slug = "full-chaos/dev-health-ops"
+    _setup_client(
+        ctx.client,
+        [
+            _qresult([], []),
+            _qresult([], []),
+        ],
+    )
+
+    await resolve_compounding_risk(
+        ctx, ORG_ID, CompoundingRiskFilterInput(day=DAY, repo_ids=[slug])
+    )
+
+    for call in ctx.client.query.call_args_list:
+        query: str = call.args[0]
+        params: dict[str, Any] = call.kwargs["parameters"]
+        _assert_scope_id_slug_or_uuid_predicate(query)
+        assert params["repo_ids"] == [slug]
 
 
 # ---------------------------------------------------------------------------

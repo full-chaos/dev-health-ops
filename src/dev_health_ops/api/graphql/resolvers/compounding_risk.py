@@ -128,8 +128,18 @@ async def _fetch_latest_rows(
     params: dict[str, Any] = {"org_id": org_id, "day": day, "scope": scope}
     if scope_ids:
         bounded = list(scope_ids)[:MAX_ROWS]
-        query += "\n  AND scope_id IN {scope_ids:Array(String)}"
-        params["scope_ids"] = bounded
+        if scope == "repo":
+            query += """
+          AND scope_id IN (
+              SELECT toString(id) FROM repos
+              WHERE org_id = {org_id:String}
+                AND (repo IN {repo_ids:Array(String)} OR toString(id) IN {repo_ids:Array(String)})
+          )
+        """
+            params["repo_ids"] = bounded
+        else:
+            query += "\n  AND scope_id IN {scope_ids:Array(String)}"
+            params["scope_ids"] = bounded
     query += f"\nGROUP BY scope_id\nORDER BY score DESC NULLS LAST\nLIMIT {MAX_ROWS}"
     return await query_dicts(client, query, params)
 
@@ -162,7 +172,12 @@ async def _fetch_repo_trend(
     }
     if repo_ids:
         bounded = list(repo_ids)[:MAX_ROWS]
-        query += "\n              AND scope_id IN {repo_ids:Array(String)}"
+        query += """
+              AND scope_id IN (
+                  SELECT toString(id) FROM repos
+                  WHERE org_id = {org_id:String}
+                    AND (repo IN {repo_ids:Array(String)} OR toString(id) IN {repo_ids:Array(String)})
+              )"""
         params["repo_ids"] = bounded
     query += """
             GROUP BY day, scope_id

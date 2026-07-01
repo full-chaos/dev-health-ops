@@ -36,6 +36,7 @@ from dev_health_ops.api.graphql.models.ai import (
     AIWorkflowRootTypeInput,
 )
 from dev_health_ops.api.graphql.resolvers.ai import (
+    _resolve_repo_ref,
     resolve_ai_attributed_prs,
     resolve_ai_attribution_overview,
     resolve_ai_comparison,
@@ -240,6 +241,25 @@ async def test_impact_summary_empty_state_returns_stable_contract():
     assert result.by_bucket == []
     assert result.daily == []
     assert result.missing_states == []
+    assert result.data_available is False
+
+
+@pytest.mark.asyncio
+async def test_impact_summary_unresolved_repo_slug_returns_empty_without_loader():
+    scope = AIScopeInput(repo_id="full-chaos/missing-repo")
+    with (
+        _patch_loader([]) as mock_load,
+        patch(
+            "dev_health_ops.api.graphql.resolvers.ai._resolve_repo_ref",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        result = await resolve_ai_impact_summary(_ctx(), _range(), scope)
+
+    mock_load.assert_not_awaited()
+    assert result.total_prs == 0
+    assert result.daily == []
     assert result.data_available is False
     assert result.computed_at is None
 
@@ -472,6 +492,53 @@ async def test_opportunities_delegates_scope_limit_and_returns_evidence():
     assert result.detector_ready is True
     assert result.recommendations == [opportunity]
     assert result.recommendations[0].evidence_refs
+
+
+@pytest.mark.asyncio
+async def test_opportunities_unresolved_repo_slug_returns_empty_without_detector():
+    detector_cls = MagicMock()
+    scope = AIScopeInput(repo_id="full-chaos/missing-repo")
+    with (
+        patch(
+            "dev_health_ops.api.graphql.resolvers.ai.AIOpportunityDetector",
+            detector_cls,
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.ai._resolve_repo_ref",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        result = await resolve_ai_opportunities(_ctx(), scope=scope)
+
+    detector_cls.assert_not_called()
+    assert result.recommendations == []
+    assert result.detector_ready is True
+
+
+@pytest.mark.asyncio
+async def test_opportunities_resolves_repo_slug_before_detector():
+    detector = MagicMock()
+    detector.detect = AsyncMock(return_value=[])
+    scope = AIScopeInput(repo_id="full-chaos/dev-health-ops", team_id=TEAM_ID)
+    with (
+        patch(
+            "dev_health_ops.api.graphql.resolvers.ai.AIOpportunityDetector",
+            return_value=detector,
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.ai._resolve_repo_ref",
+            new_callable=AsyncMock,
+            return_value=REPO_ID,
+        ) as mock_resolve,
+    ):
+        await resolve_ai_opportunities(_ctx(), scope=scope, limit=7)
+
+    mock_resolve.assert_awaited_once()
+    call_scope = detector.detect.await_args.kwargs["scope"]
+    assert call_scope.repo_id == str(REPO_ID)
+    assert call_scope.team_id == TEAM_ID
+    assert detector.detect.await_args.kwargs["limit"] == 7
 
 
 # -----------------------------------------------------------------------------
@@ -724,6 +791,99 @@ async def test_ai_attributed_prs_passes_repo_scope_to_loader():
         await resolve_ai_attributed_prs(_ctx(), _range(), scope)
 
     assert mock_load.await_args.kwargs["repo_id"] == REPO_ID
+
+
+@pytest.mark.asyncio
+async def test_resolve_repo_ref_accepts_slug_from_filter_options():
+    ctx = _ctx()
+    slug = "full-chaos/dev-health-ops"
+    with patch(
+        "dev_health_ops.api.graphql.resolvers.ai.query_dicts",
+        new_callable=AsyncMock,
+        return_value=[{"id": str(REPO_ID)}],
+    ) as mock_query:
+        resolved = await _resolve_repo_ref(ctx.client, ORG_ID, slug)
+
+    assert resolved == REPO_ID
+    await_args = mock_query.await_args
+    assert await_args is not None
+    query = await_args.args[1]
+    params = await_args.args[2]
+    assert "SELECT id" in query
+    assert "FROM repos" in query
+    assert "org_id = {org_id:String}" in query
+    assert "repo = {slug:String}" in query
+    assert "ORDER BY toString(id)" in query
+    assert params == {"org_id": ORG_ID, "slug": slug}
+
+
+@pytest.mark.asyncio
+async def test_resolve_repo_ref_duplicate_slug_rows_use_query_order():
+    ctx = _ctx()
+    slug = "full-chaos/dev-health-ops"
+    other_repo_id = UUID("22222222-2222-2222-2222-222222222222")
+    with patch(
+        "dev_health_ops.api.graphql.resolvers.ai.query_dicts",
+        new_callable=AsyncMock,
+        return_value=[{"id": str(REPO_ID)}, {"id": str(other_repo_id)}],
+    ) as mock_query:
+        resolved = await _resolve_repo_ref(ctx.client, ORG_ID, slug)
+
+    await_args = mock_query.await_args
+    assert await_args is not None
+    assert "ORDER BY toString(id)" in await_args.args[1]
+    assert resolved == REPO_ID
+
+
+@pytest.mark.asyncio
+async def test_resolve_repo_ref_uuid_bypasses_lookup():
+    ctx = _ctx()
+    with patch(
+        "dev_health_ops.api.graphql.resolvers.ai.query_dicts", new_callable=AsyncMock
+    ) as mock_query:
+        resolved = await _resolve_repo_ref(ctx.client, ORG_ID, str(REPO_ID))
+
+    assert resolved == REPO_ID
+    mock_query.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ai_attributed_prs_resolves_slug_scope_before_loader():
+    ctx = _ctx()
+    slug = "full-chaos/dev-health-ops"
+    scope = AIScopeInput(repo_id=slug)
+    with (
+        _patch_pr_loader([]) as mock_load,
+        patch(
+            "dev_health_ops.api.graphql.resolvers.ai._resolve_repo_ref",
+            new_callable=AsyncMock,
+            return_value=REPO_ID,
+        ) as mock_resolve,
+    ):
+        await resolve_ai_attributed_prs(ctx, _range(), scope)
+
+    mock_resolve.assert_awaited_once_with(ctx.client, ORG_ID, slug)
+    assert mock_load.await_args.kwargs["repo_id"] == REPO_ID
+
+
+@pytest.mark.asyncio
+async def test_ai_attributed_prs_unresolved_repo_slug_returns_empty_without_loader():
+    scope = AIScopeInput(repo_id="full-chaos/missing-repo")
+    with (
+        _patch_pr_loader([]) as mock_load,
+        patch(
+            "dev_health_ops.api.graphql.resolvers.ai._resolve_repo_ref",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        result = await resolve_ai_attributed_prs(_ctx(), _range(), scope)
+
+    mock_load.assert_not_awaited()
+    assert result.rows == []
+    assert result.total == 0
+    assert result.has_more is False
+    assert result.data_available is False
 
 
 @pytest.mark.asyncio
@@ -1534,6 +1694,50 @@ async def test_ai_attribution_overview_passes_repo_scope_to_loaders():
 
     assert mock_mix.await_args.kwargs["repo_id"] == REPO_ID
     assert mock_evidence.await_args.kwargs["repo_id"] == REPO_ID
+
+
+@pytest.mark.asyncio
+async def test_ai_attribution_overview_resolves_slug_scope_before_loaders():
+    ctx = _ctx()
+    slug = "full-chaos/dev-health-ops"
+    scope = AIAttributionScopeInput(repo_id=slug)
+    with (
+        _patch_mix_loader([]) as mock_mix,
+        _patch_evidence_loader([]) as mock_evidence,
+        patch(
+            "dev_health_ops.api.graphql.resolvers.ai._resolve_repo_ref",
+            new_callable=AsyncMock,
+            return_value=REPO_ID,
+        ) as mock_resolve,
+    ):
+        await resolve_ai_attribution_overview(ctx, _range(), scope)
+
+    mock_resolve.assert_awaited_once_with(ctx.client, ORG_ID, slug)
+    assert mock_mix.await_args.kwargs["repo_id"] == REPO_ID
+    assert mock_evidence.await_args.kwargs["repo_id"] == REPO_ID
+
+
+@pytest.mark.asyncio
+async def test_ai_attribution_overview_unresolved_repo_slug_returns_empty_without_loaders():
+    scope = AIAttributionScopeInput(repo_id="full-chaos/missing-repo")
+    with (
+        _patch_mix_loader([]) as mock_mix,
+        _patch_evidence_loader([]) as mock_evidence,
+        patch(
+            "dev_health_ops.api.graphql.resolvers.ai._resolve_repo_ref",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        result = await resolve_ai_attribution_overview(_ctx(), _range(), scope)
+
+    mock_mix.assert_not_awaited()
+    mock_evidence.assert_not_awaited()
+    assert result.mix == []
+    assert result.total_attributed == 0
+    assert result.rows == []
+    assert result.has_more is False
+    assert result.data_available is False
 
 
 @pytest.mark.asyncio

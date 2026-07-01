@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import inspect
+import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -156,3 +159,15 @@ def test_parse_pr_id_accepts_stable_work_graph_format() -> None:
     assert parsed is not None
     assert parsed.repo_id == REPO_ID
     assert parsed.number == 42
+
+
+def test_pr_resolver_sql_has_no_invalid_final_alias_ordering() -> None:
+    """Guard against regressions of the FINAL-before-alias ClickHouse bug (CHAOS-2387).
+
+    ClickHouse requires the table alias before FINAL: 'FROM t AS a FINAL', not
+    'FROM t FINAL AS a'. The latter is a parse error and previously broke every
+    live pr(id) query. Read the resolver source directly so this fails immediately
+    if the invalid ordering is ever reintroduced.
+    """
+    source = Path(inspect.getfile(resolve_pr)).read_text()
+    assert re.search(r"\bFINAL\s+AS\b", source) is None

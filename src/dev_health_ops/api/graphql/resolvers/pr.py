@@ -70,8 +70,8 @@ async def _fetch_pr_row(
             pr.changes_requested_count AS changes_requested_count,
             pr.reviews_count AS reviews_count,
             pr.comments_count AS comments_count
-        FROM git_pull_requests FINAL AS pr
-        LEFT JOIN repos FINAL AS repos
+        FROM git_pull_requests AS pr FINAL
+        LEFT JOIN repos AS repos FINAL
             ON repos.org_id = pr.org_id AND repos.id = pr.repo_id
         WHERE pr.org_id = {org_id:String}
           AND toString(pr.repo_id) = {repo_id:String}
@@ -146,8 +146,8 @@ async def _fetch_commits(
             argMax(link.confidence, link.last_synced) AS confidence,
             argMax(link.provenance, link.last_synced) AS provenance,
             argMax(link.evidence, link.last_synced) AS evidence
-        FROM work_graph_pr_commit FINAL AS link
-        LEFT JOIN git_commits FINAL AS commit
+        FROM work_graph_pr_commit AS link FINAL
+        LEFT JOIN git_commits AS commit FINAL
             ON commit.org_id = link.org_id
            AND commit.repo_id = link.repo_id
            AND commit.hash = link.commit_hash

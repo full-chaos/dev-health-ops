@@ -28,7 +28,7 @@ class Dimension(str, Enum):
             mapping = {
                 cls.TEAM: "ifNull(nullIf(ut.team_label, ''), 'unassigned')",
                 cls.REPO: "ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id)))",
-                cls.AUTHOR: "author_id",
+                cls.AUTHOR: "author_email",
                 cls.WORK_TYPE: "work_unit_type",
                 cls.THEME: "splitByChar('.', subcategory_kv.1)[1]",
                 cls.SUBCATEGORY: "subcategory_kv.1",
@@ -37,7 +37,7 @@ class Dimension(str, Enum):
             mapping = {
                 cls.TEAM: "team_id",
                 cls.REPO: "repo_id",
-                cls.AUTHOR: "author_id",
+                cls.AUTHOR: "author_email",
                 cls.WORK_TYPE: "work_item_type",
                 cls.THEME: "investment_area",
                 cls.SUBCATEGORY: "project_stream",

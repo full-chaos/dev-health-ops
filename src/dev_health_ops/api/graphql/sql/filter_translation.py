@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ..errors import ValidationError
+
 if TYPE_CHECKING:
     from ..models.inputs import FilterInput
 
@@ -23,7 +25,7 @@ def translate_scope_filter(
     ids: list[str],
     team_column: str = "team_id",
     repo_column: str = "repo_id",
-    author_column: str = "author_id",
+    author_column: str = "author_email",
 ) -> tuple[str, dict[str, Any]]:
     """Translate scope filter to SQL predicate.
 
@@ -32,7 +34,7 @@ def translate_scope_filter(
         ids: List of IDs to filter by. Empty means "All" - no filtering.
         team_column: Column name for team filtering
         repo_column: Column name for repo filtering
-        author_column: Column name for developer/author filtering
+        author_column: Column name for developer/author filtering (default: real ClickHouse column `author_email`, e.g. git_commits/user_metrics_daily; CHAOS-2385 -- `author_id` does not exist in any ClickHouse table)
 
     Returns:
         Tuple of (SQL clause string, params dict)
@@ -109,13 +111,13 @@ def translate_repo_filter(
 
 def translate_developer_filter(
     developers: list[str],
-    author_column: str = "author_id",
+    author_column: str = "author_email",
 ) -> tuple[str, dict[str, Any]]:
     """Translate developer filter to SQL predicate.
 
     Args:
         developers: List of developer IDs to filter by. Empty means "All".
-        author_column: Column name for author/developer filtering
+        author_column: Column name for author/developer filtering (default: real ClickHouse column `author_email`; CHAOS-2385)
 
     Returns:
         Tuple of (SQL clause string, params dict)
@@ -131,7 +133,7 @@ def translate_filters(
     use_investment: bool = False,
     team_column: str = "team_id",
     repo_column: str = "repo_id",
-    author_column: str = "author_id",
+    author_column: str = "author_email",
 ) -> tuple[str, dict[str, Any]]:
     """Translate a complete FilterInput to SQL predicates.
 
@@ -143,7 +145,7 @@ def translate_filters(
         use_investment: Whether using investment tables
         team_column: Column name for team filtering
         repo_column: Column name for repo filtering
-        author_column: Column name for author/developer filtering
+        author_column: Column name for author/developer filtering (default: real ClickHouse column `author_email`; CHAOS-2385 -- `author_id` does not exist in any ClickHouse table)
 
     Returns:
         Tuple of (SQL clause string, params dict)
@@ -171,6 +173,25 @@ def translate_filters(
                 " AND (ut.team_label IN %(scope_ids)s OR ut.team_id IN %(scope_ids)s)"
             )
             params["scope_ids"] = filters.scope.ids
+        elif filters.scope.level.value == "developer" and filters.scope.ids:
+            # CHAOS-2385: no ClickHouse table reachable through this generic
+            # analytics compiler carries a per-developer breakdown yet --
+            # investment_metrics_daily has no author column at all, and
+            # work_unit_investments/latest_work_unit_investments doesn't
+            # either (CHAOS-2492 adds investment-path support via a
+            # companion join, at which point this predicate becomes
+            # table-aware instead of unconditional). Reject explicitly
+            # rather than emit a predicate against a column that doesn't
+            # exist on the resolved source table (mirrors the
+            # honest-rejection precedent in compiler.py's
+            # _reject_filtered_same_dimension_flow_matrix, CHAOS-2487).
+            raise ValidationError(
+                "scope.level=developer filtering is not yet supported for "
+                "this query; remove the developer scope (CHAOS-2492 tracks "
+                "investment-path support).",
+                field="scope",
+                value="developer",
+            )
         else:
             clause, scope_params = translate_scope_filter(
                 level=filters.scope.level.value,
@@ -185,13 +206,15 @@ def translate_filters(
 
     # Who filter - developers
     if filters.who is not None and filters.who.developers:
-        clause, dev_params = translate_developer_filter(
-            developers=filters.who.developers,
-            author_column=author_column,
+        # CHAOS-2385: same gap as scope.level=developer above -- reject
+        # rather than emit a predicate against a nonexistent column.
+        raise ValidationError(
+            "who.developers filtering is not yet supported for this query; "
+            "remove the developer filter (CHAOS-2492 tracks investment-path "
+            "support).",
+            field="who",
+            value="developers",
         )
-        if clause:
-            clauses.append(clause)
-            params.update(dev_params)
 
     # What filter - repos
     if filters.what is not None and filters.what.repos:

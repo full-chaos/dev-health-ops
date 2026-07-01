@@ -11,6 +11,7 @@ from .context import GraphQLContext
 from .extensions import ConfiguredValidationRules, OrgIdAuthExtension
 from .models.ai import (
     AiAttributedPrsResult,
+    AIAttributionOverviewResult,
     AIComparison,
     AIDateRangeInput,
     AIGovernanceSummary,
@@ -64,6 +65,7 @@ from .models.recommendations import (
 )
 from .resolvers.ai import (
     resolve_ai_attributed_prs,
+    resolve_ai_attribution_overview,
     resolve_ai_comparison,
     resolve_ai_governance_summary,
     resolve_ai_impact_summary,
@@ -779,6 +781,30 @@ class Query:
     ) -> AiAttributedPrsResult:
         context = get_context(info)
         return await resolve_ai_attributed_prs(
+            context, date_range, scope, limit, offset
+        )
+
+    @strawberry.field(
+        description=(
+            "AI attribution mix and provenance evidence for the requested "
+            "window. Reads ai_attribution_resolved only - the highest-"
+            "precedence, non-superseded signal per subject - so every row "
+            "carries source, confidence, and evidence. Does not include a "
+            "synthesized human bucket; use aiImpactSummary for the full "
+            "AI-vs-human PR split."
+        )
+    )
+    async def ai_attribution_overview(
+        self,
+        info: Info,
+        org_id: str,
+        date_range: AIDateRangeInput,
+        scope: AIScopeInput | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> AIAttributionOverviewResult:
+        context = get_context(info)
+        return await resolve_ai_attribution_overview(
             context, date_range, scope, limit, offset
         )
 

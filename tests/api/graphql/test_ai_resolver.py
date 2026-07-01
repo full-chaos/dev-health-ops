@@ -36,6 +36,7 @@ from dev_health_ops.api.graphql.models.ai import (
 )
 from dev_health_ops.api.graphql.resolvers.ai import (
     resolve_ai_attributed_prs,
+    resolve_ai_attribution_overview,
     resolve_ai_comparison,
     resolve_ai_governance_summary,
     resolve_ai_impact_summary,
@@ -1282,3 +1283,235 @@ async def test_ai_attributed_prs_unresolvable_team_falls_back_to_memory_filter()
 
     assert mock_load.await_args.kwargs["repo_ids"] is None
     assert [r.number for r in result.rows] == [1]
+
+
+# -----------------------------------------------------------------------------
+# CHAOS-2744 -- aiAttributionOverview
+# -----------------------------------------------------------------------------
+
+
+def _mix_row(kind: str, count: int) -> dict[str, Any]:
+    return {"kind": kind, "count": count}
+
+
+def _evidence_row(
+    *,
+    subject_id: str,
+    subject_type: str = "pull_request",
+    kind: str = "ai_assisted",
+    source: str = "pr_label",
+    confidence: float = 0.9,
+    actor: str | None = "github-copilot",
+    evidence: str = '{"label": "ai-assisted"}',
+    observed_at: datetime | None = None,
+    repo_id: UUID | None = REPO_ID,
+    provider: str = "github",
+    team_id: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "subject_type": subject_type,
+        "subject_id": subject_id,
+        "repo_id": repo_id,
+        "provider": provider,
+        "kind": kind,
+        "source": source,
+        "confidence": confidence,
+        "actor": actor,
+        "evidence": evidence,
+        "observed_at": observed_at or COMPUTED_AT,
+        "team_id": team_id,
+    }
+
+
+def _patch_mix_loader(rows: list[dict[str, Any]]) -> Any:
+    return patch(
+        "dev_health_ops.metrics.loaders.ai_attribution"
+        ".AIAttributionClickHouseLoader.load_mix",
+        new_callable=AsyncMock,
+        return_value=rows,
+    )
+
+
+def _patch_evidence_loader(rows: list[dict[str, Any]]) -> Any:
+    return patch(
+        "dev_health_ops.metrics.loaders.ai_attribution"
+        ".AIAttributionClickHouseLoader.load_evidence",
+        new_callable=AsyncMock,
+        return_value=rows,
+    )
+
+
+@pytest.mark.asyncio
+async def test_ai_attribution_overview_empty_state():
+    with _patch_mix_loader([]), _patch_evidence_loader([]):
+        result = await resolve_ai_attribution_overview(_ctx(), _range())
+
+    assert result.org_id == ORG_ID
+    assert result.mix == []
+    assert result.rows == []
+    assert result.total_attributed == 0
+    assert result.has_more is False
+    assert result.data_available is False
+
+
+@pytest.mark.asyncio
+async def test_ai_attribution_overview_populated_maps_fields_and_provenance():
+    mix_rows = [_mix_row("ai_assisted", 3), _mix_row("agent_created", 1)]
+    evidence_rows = [
+        _evidence_row(subject_id="101", kind="ai_assisted", confidence=0.9),
+        _evidence_row(
+            subject_id="102",
+            kind="agent_created",
+            source="bot_author",
+            actor="claude-agent",
+            confidence=0.75,
+            evidence='{"bot": "claude-agent"}',
+        ),
+    ]
+    with _patch_mix_loader(mix_rows), _patch_evidence_loader(evidence_rows):
+        result = await resolve_ai_attribution_overview(_ctx(), _range())
+
+    assert result.data_available is True
+    assert result.total_attributed == 4
+    assert [m.kind for m in result.mix] == ["ai_assisted", "agent_created"]
+    assert [m.count for m in result.mix] == [3, 1]
+    assert result.mix[0].share == pytest.approx(0.75)
+    assert result.mix[1].share == pytest.approx(0.25)
+
+    assert len(result.rows) == 2
+    first = result.rows[0]
+    assert first.subject_type == "pull_request"
+    assert first.subject_id == "101"
+    assert first.repo_id == str(REPO_ID)
+    assert first.provider == "github"
+    assert first.kind == "ai_assisted"
+    # Every row must carry full provenance -- never blank source/evidence.
+    assert first.source == "pr_label"
+    assert first.confidence == 0.9
+    assert first.evidence == '{"label": "ai-assisted"}'
+
+    second = result.rows[1]
+    assert second.source == "bot_author"
+    assert second.actor == "claude-agent"
+    assert second.confidence == 0.75
+
+
+@pytest.mark.asyncio
+async def test_ai_attribution_overview_mix_has_no_synthesized_human_bucket():
+    """ai_attribution_resolved never carries an inferred human count --
+    only kinds that a detector actually emitted a signal for. A synthesized
+    'human' bucket here would silently duplicate aiImpactSummary's PR-
+    population-based methodology with a different, undocumented one.
+    """
+    mix_rows = [_mix_row("ai_assisted", 2), _mix_row("unknown", 1)]
+    with _patch_mix_loader(mix_rows), _patch_evidence_loader([]):
+        result = await resolve_ai_attribution_overview(_ctx(), _range())
+
+    assert "human" not in {m.kind for m in result.mix}
+
+
+@pytest.mark.asyncio
+async def test_ai_attribution_overview_reports_has_more_and_pages():
+    rows = [_evidence_row(subject_id=str(200 + i)) for i in range(51)]
+    with (
+        _patch_mix_loader([_mix_row("ai_assisted", 51)]),
+        _patch_evidence_loader(rows) as mock_load,
+    ):
+        result = await resolve_ai_attribution_overview(
+            _ctx(), _range(), limit=50, offset=0
+        )
+
+    assert mock_load.await_args.kwargs["limit"] == 51
+    assert mock_load.await_args.kwargs["offset"] == 0
+    assert len(result.rows) == 50
+    assert result.has_more is True
+
+
+@pytest.mark.asyncio
+async def test_ai_attribution_overview_passes_repo_scope_to_loaders():
+    scope = AIScopeInput(repo_id=str(REPO_ID))
+    with (
+        _patch_mix_loader([]) as mock_mix,
+        _patch_evidence_loader([]) as mock_evidence,
+    ):
+        await resolve_ai_attribution_overview(_ctx(), _range(), scope)
+
+    assert mock_mix.await_args.kwargs["repo_id"] == REPO_ID
+    assert mock_evidence.await_args.kwargs["repo_id"] == REPO_ID
+
+
+@pytest.mark.asyncio
+async def test_ai_attribution_overview_rejects_reversed_date_range():
+    bad_range = AIDateRangeInput(start_date=DAY_END, end_date=DAY_START)
+    with pytest.raises(ValueError, match="end_date must be >= start_date"):
+        await resolve_ai_attribution_overview(_ctx(), bad_range)
+
+
+@pytest.mark.asyncio
+async def test_ai_attribution_overview_team_with_no_repos_returns_empty():
+    scope = AIScopeInput(team_id="team-empty")
+    with (
+        _patch_mix_loader([_mix_row("ai_assisted", 1)]) as mock_mix,
+        _patch_evidence_loader([_evidence_row(subject_id="1")]) as mock_evidence,
+        _patch_team_repo_ids([]),
+    ):
+        result = await resolve_ai_attribution_overview(_ctx(), _range(), scope)
+
+    mock_mix.assert_not_awaited()
+    mock_evidence.assert_not_awaited()
+    assert result.mix == []
+    assert result.rows == []
+    assert result.data_available is False
+
+
+@pytest.mark.asyncio
+async def test_ai_attribution_overview_team_scope_filters_in_sql_before_limit():
+    """Team scope must reach both loaders as repo_ids so the SQL LIMIT
+    applies to the already-filtered universe (dense pages), mirroring
+    resolve_ai_attributed_prs (CHAOS-2180 Wave 2)."""
+    rows = [_evidence_row(subject_id="1"), _evidence_row(subject_id="2")]
+    scope = AIScopeInput(team_id="team-a")
+    repo_team_map = {str(REPO_ID): "team-a"}
+    with (
+        _patch_mix_loader([_mix_row("ai_assisted", 2)]) as mock_mix,
+        _patch_evidence_loader(rows) as mock_evidence,
+        _patch_team_repo_ids([REPO_ID]),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.ai._resolve_repo_team_map",
+            new_callable=AsyncMock,
+            return_value=repo_team_map,
+        ),
+    ):
+        result = await resolve_ai_attribution_overview(_ctx(), _range(), scope)
+
+    assert mock_mix.await_args.kwargs["repo_ids"] == [REPO_ID]
+    assert mock_evidence.await_args.kwargs["repo_ids"] == [REPO_ID]
+    assert [r.subject_id for r in result.rows] == ["1", "2"]
+    assert all(r.team_id == "team-a" for r in result.rows)
+
+
+@pytest.mark.asyncio
+async def test_ai_attribution_overview_team_scope_drops_rows_outside_team():
+    """Defense in depth: even if a row's resolved team doesn't match the
+    scope, it must be dropped rather than leaking cross-team evidence."""
+    REPO_B = UUID("22222222-2222-2222-2222-222222222222")
+    rows = [
+        _evidence_row(subject_id="1", repo_id=REPO_ID),
+        _evidence_row(subject_id="2", repo_id=REPO_B),
+    ]
+    scope = AIScopeInput(team_id="team-a")
+    repo_team_map = {str(REPO_ID): "team-a", str(REPO_B): "team-b"}
+    with (
+        _patch_mix_loader([_mix_row("ai_assisted", 2)]),
+        _patch_evidence_loader(rows),
+        _patch_team_repo_ids(None),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.ai._resolve_repo_team_map",
+            new_callable=AsyncMock,
+            return_value=repo_team_map,
+        ),
+    ):
+        result = await resolve_ai_attribution_overview(_ctx(), _range(), scope)
+
+    assert [r.subject_id for r in result.rows] == ["1"]
+    assert result.rows[0].team_id == "team-a"

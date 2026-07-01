@@ -29,6 +29,7 @@ from dev_health_ops.metrics.ai_impact import (
 from dev_health_ops.metrics.ai_impact import (
     AttributionBucket,
 )
+from dev_health_ops.metrics.loaders.ai_attribution import AIAttributionClickHouseLoader
 from dev_health_ops.metrics.loaders.ai_impact import AIImpactClickHouseLoader
 from dev_health_ops.metrics.opportunities.ai_detector import AIOpportunityDetector
 
@@ -37,6 +38,9 @@ from ..context import GraphQLContext
 from ..models.ai import (
     AiAttributedPr,
     AiAttributedPrsResult,
+    AIAttributionEvidenceRow,
+    AIAttributionMixRow,
+    AIAttributionOverviewResult,
     AIComparison,
     AIComparisonDelta,
     AIComparisonSide,
@@ -1317,4 +1321,139 @@ async def resolve_ai_attributed_prs(
         total=len(rows),
         has_more=has_more,
         data_available=bool(rows),
+    )
+
+
+# =============================================================================
+# resolve_ai_attribution_overview
+# =============================================================================
+
+_MAX_AI_ATTRIBUTION_EVIDENCE_PAGE = 200
+
+
+async def resolve_ai_attribution_overview(
+    context: GraphQLContext,
+    date_range: AIDateRangeInput,
+    scope: AIScopeInput | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> AIAttributionOverviewResult:
+    """Attribution mix + provenance evidence for the dedicated AI Attribution page.
+
+    Reads ``ai_attribution_resolved`` only — the highest-precedence,
+    non-superseded signal per subject. Every returned row corresponds to a
+    persisted signal; source/confidence/evidence are never fabricated or
+    recomputed at request time.
+    """
+
+    org_id = require_org_id(context)
+    _validate_date_range(date_range)
+    repo_id, team_id, _work_type = _normalize_scope(scope)
+
+    page_size = max(1, min(int(limit), _MAX_AI_ATTRIBUTION_EVIDENCE_PAGE))
+    page_offset = max(0, int(offset))
+
+    start_dt = datetime.combine(date_range.start_date, time.min, tzinfo=timezone.utc)
+    end_dt = datetime.combine(date_range.end_date, time.max, tzinfo=timezone.utc)
+
+    # Resolve the team scope to repo UUIDs BEFORE the SQL LIMIT, mirroring
+    # resolve_ai_attributed_prs (CHAOS-2180 Wave 2), so team-scoped pages
+    # stay dense. ``None`` means the catalogs could not be loaded; callers
+    # then fall back to in-memory filtering below.
+    team_repo_ids: list[uuid.UUID] | None = None
+    if team_id:
+        team_repo_ids = await _resolve_team_repo_ids(
+            _require_client(context), org_id=org_id, team_id=team_id
+        )
+        if team_repo_ids is not None and not team_repo_ids:
+            # The team resolves to no repos: honestly empty, not an error.
+            return AIAttributionOverviewResult(
+                org_id=org_id,
+                start_date=date_range.start_date,
+                end_date=date_range.end_date,
+                mix=[],
+                total_attributed=0,
+                rows=[],
+                has_more=False,
+                data_available=False,
+            )
+
+    loader = AIAttributionClickHouseLoader(_require_client(context), org_id=org_id)
+
+    mix_raw = await loader.load_mix(
+        start=start_dt,
+        end=end_dt,
+        repo_id=repo_id,
+        repo_ids=team_repo_ids,
+    )
+    total_mix = sum(int(row.get("count") or 0) for row in mix_raw)
+    mix = [
+        AIAttributionMixRow(
+            kind=str(row.get("kind") or "unknown"),
+            count=int(row.get("count") or 0),
+            share=(int(row.get("count") or 0) / total_mix) if total_mix else 0.0,
+        )
+        for row in mix_raw
+    ]
+
+    # Fetch one extra row so we can report has_more without a COUNT(*) round-trip.
+    raw_rows = await loader.load_evidence(
+        start=start_dt,
+        end=end_dt,
+        repo_id=repo_id,
+        repo_ids=team_repo_ids,
+        limit=page_size + 1,
+        offset=page_offset,
+    )
+    has_more = len(raw_rows) > page_size
+    page_rows = raw_rows[:page_size]
+
+    # Resolve team IDs via RepoPatternTeamResolver before filtering, mirroring
+    # resolve_ai_attributed_prs: teams.repo_patterns holds fnmatch glob
+    # patterns over repo full-names, not repo UUIDs, so a SQL JOIN never
+    # matches — team membership is resolved in app code.
+    if org_id:
+        distinct_repo_ids = list(
+            {str(row["repo_id"]) for row in page_rows if row.get("repo_id") is not None}
+        )
+        team_map = await _resolve_repo_team_map(
+            _require_client(context), org_id=org_id, repo_ids=distinct_repo_ids
+        )
+        if team_map:
+            for row in page_rows:
+                repo_id_val = row.get("repo_id")
+                row["team_id"] = (
+                    team_map.get(str(repo_id_val)) if repo_id_val is not None else None
+                )
+
+    if team_id:
+        page_rows = [row for row in page_rows if (row.get("team_id") or "") == team_id]
+
+    rows: list[AIAttributionEvidenceRow] = []
+    for row in page_rows:
+        rows.append(
+            AIAttributionEvidenceRow(
+                subject_type=str(row.get("subject_type") or ""),
+                subject_id=str(row.get("subject_id") or ""),
+                repo_id=str(row["repo_id"]) if row.get("repo_id") is not None else None,
+                provider=str(row.get("provider") or ""),
+                kind=str(row.get("kind") or "unknown"),
+                source=str(row.get("source") or ""),
+                confidence=float(row.get("confidence") or 0.0),
+                actor=row.get("actor"),
+                evidence=str(row.get("evidence") or "{}"),
+                observed_at=_to_aware(row["observed_at"]),
+                team_id=row.get("team_id") or None,
+            )
+        )
+
+    return AIAttributionOverviewResult(
+        org_id=org_id,
+        start_date=date_range.start_date,
+        end_date=date_range.end_date,
+        mix=mix,
+        total_attributed=total_mix,
+        rows=rows,
+        has_more=has_more,
+        data_available=bool(mix or rows),
     )

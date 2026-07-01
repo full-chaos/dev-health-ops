@@ -54,7 +54,7 @@ the GraphQL `AIAttributionBucketInput` enum:
 
 ## Query catalog
 
-All seven queries scope to `orgId` (enforced by `OrgIdAuthExtension`).
+All AI analytics queries scope to `orgId` (enforced by `OrgIdAuthExtension`).
 
 ### `aiImpactSummary`
 
@@ -127,6 +127,20 @@ standalone dashboard card.
 Coverage rollups (`declarationCoverage`, `humanReviewCoverage`,
 `securityScanCoverage`, `inPolicyCoverage`) plus recent violations
 (rule id + severity from the canonical AI policy registry).
+
+### `aiAttributionOverview` (CHAOS-2744)
+
+Backs the dedicated `/ai/attribution` page. Reads `ai_attribution_resolved`
+directly — the highest-precedence, non-superseded signal per subject — and
+returns two projections of the same window:
+
+- `mix`: `[{ kind, count, share }]` from a plain `GROUP BY kind`. No
+  synthesized `human` bucket — use `aiImpactSummary` for the full AI-vs-human
+  PR split, which requires the total PR population, not just detected signals.
+- `rows`: paginated `AIAttributionEvidenceRow` records with `source`,
+  `confidence`, `evidence`, and `actor` always populated (non-nullable on the
+  base table) plus `teamId` resolved via `RepoPatternTeamResolver`, the same
+  mechanism `aiAttributedPrs` uses.
 
 ### `aiWorkflowDrilldown`
 

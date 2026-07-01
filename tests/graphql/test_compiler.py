@@ -7,6 +7,12 @@ from datetime import date
 import pytest
 
 from dev_health_ops.api.graphql.errors import ValidationError
+from dev_health_ops.api.graphql.models.inputs import (
+    FilterInput,
+    ScopeFilterInput,
+    ScopeLevelInput,
+    WhoFilterInput,
+)
 from dev_health_ops.api.graphql.sql.compiler import (
     BreakdownRequest,
     CatalogValuesRequest,
@@ -207,7 +213,7 @@ class TestCompileBreakdown:
     def test_org_id_always_in_params(self):
         """Test that org_id is always included in params."""
         request = BreakdownRequest(
-            dimension="author",
+            dimension="repo",
             measure="count",
             start_date=date(2025, 1, 1),
             end_date=date(2025, 1, 31),
@@ -257,6 +263,82 @@ class TestCompileSankey:
             assert "SELECT" in edge_sql
             assert "source" in edge_sql.lower() or "target" in edge_sql.lower()
             assert edge_params["org_id"] == org_id
+
+    def test_investment_sankey_who_developers_filter_uses_author_join(self):
+        """CHAOS-2492: who.developers on an investment Sankey must chain the
+        work_unit_authors CTE/join and filter nodes+edges via
+        hasAny(au.author_emails, ...), not a nonexistent flat author column.
+        """
+        request = SankeyRequest(
+            path=["theme", "repo"],
+            measure="count",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 1, 31),
+            max_nodes=50,
+            max_edges=200,
+            use_investment=True,
+        )
+        filters = FilterInput(who=WhoFilterInput(developers=["alice@example.com"]))
+
+        nodes_queries, edges_queries = compile_sankey(
+            request, "test-org", filters=filters
+        )
+
+        nodes_sql, nodes_params = nodes_queries[0]
+        assert "work_unit_authors" in nodes_sql
+        assert "LEFT JOIN work_unit_authors AS au" in nodes_sql
+        assert "hasAny(au.author_emails, %(developer_ids)s)" in nodes_sql
+        assert nodes_params["developer_ids"] == ["alice@example.com"]
+
+        for edge_sql, edge_params in edges_queries:
+            assert "work_unit_authors" in edge_sql
+            assert "hasAny(au.author_emails, %(developer_ids)s)" in edge_sql
+            assert edge_params["developer_ids"] == ["alice@example.com"]
+
+    def test_investment_sankey_scope_level_developer_uses_author_join(self):
+        """CHAOS-2492: scope.level=developer takes the same author-join path
+        as who.developers."""
+        request = SankeyRequest(
+            path=["theme", "repo"],
+            measure="count",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 1, 31),
+            max_nodes=50,
+            max_edges=200,
+            use_investment=True,
+        )
+        filters = FilterInput(
+            scope=ScopeFilterInput(
+                level=ScopeLevelInput.DEVELOPER, ids=["bob@example.com"]
+            )
+        )
+
+        nodes_queries, _edges_queries = compile_sankey(
+            request, "test-org", filters=filters
+        )
+
+        nodes_sql, nodes_params = nodes_queries[0]
+        assert "work_unit_authors" in nodes_sql
+        assert "hasAny(au.author_emails, %(scope_ids)s)" in nodes_sql
+        assert nodes_params["scope_ids"] == ["bob@example.com"]
+
+    def test_investment_sankey_without_developer_filter_skips_author_join(self):
+        """No who.developers / scope.level=developer -> no work_unit_authors
+        join (avoid the extra query cost when it isn't needed)."""
+        request = SankeyRequest(
+            path=["theme", "repo"],
+            measure="count",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 1, 31),
+            max_nodes=50,
+            max_edges=200,
+            use_investment=True,
+        )
+
+        nodes_queries, _edges_queries = compile_sankey(request, "test-org")
+
+        nodes_sql, _nodes_params = nodes_queries[0]
+        assert "work_unit_authors" not in nodes_sql
 
     def test_invalid_path(self):
         """Test that invalid path raises ValidationError."""
@@ -330,12 +412,32 @@ class TestCompileCatalogValues:
 class TestDimensionDbColumn:
     """Tests for Dimension.db_column mapping."""
 
-    @pytest.mark.parametrize("dim", list(Dimension))
+    @pytest.mark.parametrize("dim", [d for d in Dimension if d != Dimension.AUTHOR])
     def test_all_dimensions_have_columns(self, dim):
-        """Test that all dimensions map to database columns."""
+        """Test that all GROUP-BY-capable dimensions map to database columns.
+
+        AUTHOR is excluded: CHAOS-2385/2492 -- neither ClickHouse table this
+        compiler ever selects FROM (investment_metrics_daily,
+        latest_work_unit_investments) has a scalar author identity column;
+        see test_author_dimension_rejected below.
+        """
         col = Dimension.db_column(dim)
         assert col is not None
         assert len(col) > 0
+
+    def test_author_dimension_rejected(self):
+        """CHAOS-2385/2492: AUTHOR cannot be resolved to a real column in
+        either source table this compiler selects from.
+        investment_metrics_daily and latest_work_unit_investments both lack
+        a scalar author_email column; the investment path's
+        work_unit_authors CTE only exposes an ARRAY (au.author_emails) for
+        hasAny() filtering, not a scalar GROUP BY column. Filter by
+        who.developers / scope.level=developer instead of grouping by
+        author."""
+        with pytest.raises(ValidationError):
+            Dimension.db_column(Dimension.AUTHOR)
+        with pytest.raises(ValidationError):
+            Dimension.db_column(Dimension.AUTHOR, use_investment=True)
 
     def test_specific_mappings(self):
         """Test specific dimension to database column mappings."""

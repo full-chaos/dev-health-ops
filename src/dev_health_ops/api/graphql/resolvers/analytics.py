@@ -10,6 +10,7 @@ from typing import Any, cast
 from uuid import UUID
 
 from dev_health_ops.api.queries.investment import (
+    LATEST_WORK_UNIT_AUTHORS_CTE,
     LATEST_WORK_UNIT_INVESTMENTS_CTE,
     fetch_investment_quality_stats,
 )
@@ -175,6 +176,12 @@ def _analytics_quality_window(batch: AnalyticsRequestInput) -> tuple[date, date]
 
 
 def _has_investment_author_filter(filters: FilterInput | None) -> bool:
+    """True when who.developers or scope.level=developer is active.
+
+    CHAOS-2492: used to decide whether the Sankey coverage query needs the
+    ``au`` join (LATEST_WORK_UNIT_AUTHORS_CTE) chained in -- coverage is no
+    longer forced to None for developer-filtered investment views.
+    """
     if filters is None:
         return False
     if (
@@ -710,8 +717,16 @@ async def resolve_analytics(
                         f"{assigned_repo_expr})"
                     )
 
+                has_author_filter = (
+                    request.use_investment
+                    and _has_investment_author_filter(resolved_filters)
+                )
                 with_clause = (
-                    f"WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE}"
+                    (
+                        f"WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE}, {LATEST_WORK_UNIT_AUTHORS_CTE}"
+                        if has_author_filter
+                        else f"WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE}"
+                    )
                     if request.use_investment
                     else ""
                 )
@@ -727,65 +742,66 @@ async def resolve_analytics(
                     else "org_id = %(org_id)s"
                 )
 
-                if request.use_investment and _has_investment_author_filter(
-                    resolved_filters
-                ):
-                    logger.info(
-                        "Sankey coverage unavailable for investment author filters; "
-                        "work_unit_investments does not expose author_email (CHAOS-2492)"
-                    )
-                else:
-                    if request.use_investment and _has_work_category_filter(
-                        resolved_filters
-                    ):
-                        joins += """
-                        ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
-                        """
-
-                    coverage_filter_clause, coverage_filter_params = translate_filters(
-                        resolved_filters,
-                        use_investment=bool(request.use_investment),
-                        team_column=team_col,
-                        repo_column="work_unit_investments.repo_id"
-                        if request.use_investment
-                        else repo_col,
-                        author_column="author_email",
-                    )
-
-                    coverage_sql = f"""
-                        {with_clause}
-                        SELECT
-                            {total_expr} as total,
-                            {assigned_team_count_expr} as assigned_team,
-                            {assigned_repo_count_expr} as assigned_repo
-                        FROM {base_table}
-                        {joins}
-                        WHERE {date_filter}
-                          AND {org_filter}
-                          {coverage_filter_clause}
+                if has_author_filter:
+                    # CHAOS-2492: resolve developer identity via the au join so
+                    # who.developers / scope.level=developer coverage is honored
+                    # instead of being silently excluded (previously forced
+                    # coverage=None -- see CHAOS-2488).
+                    joins += """
+                    LEFT JOIN work_unit_authors AS au ON au.work_unit_id = work_unit_investments.work_unit_id
                     """
 
-                    cov_params = {
-                        "start_date": request.start_date,
-                        "end_date": request.end_date,
-                        "org_id": org_id,
-                    }
-                    cov_params.update(coverage_filter_params)
+                if request.use_investment and _has_work_category_filter(
+                    resolved_filters
+                ):
+                    joins += """
+                    ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
+                    """
 
-                    try:
-                        c_rows = await query_dicts(client, coverage_sql, cov_params)
-                        if c_rows:
-                            total = float(c_rows[0].get("total", 0))
-                            assigned_team = float(c_rows[0].get("assigned_team", 0))
-                            assigned_repo = float(c_rows[0].get("assigned_repo", 0))
+                coverage_filter_clause, coverage_filter_params = translate_filters(
+                    resolved_filters,
+                    use_investment=bool(request.use_investment),
+                    team_column=team_col,
+                    repo_column="work_unit_investments.repo_id"
+                    if request.use_investment
+                    else repo_col,
+                    author_column="author_email",
+                )
 
-                            coverage = SankeyCoverage(
-                                team_coverage=assigned_team / total if total > 0 else 0,
-                                repo_coverage=assigned_repo / total if total > 0 else 0,
-                            )
-                    except Exception as e:
-                        logger.error("Coverage query failed: %s", e)
-                        coverage = None
+                coverage_sql = f"""
+                    {with_clause}
+                    SELECT
+                        {total_expr} as total,
+                        {assigned_team_count_expr} as assigned_team,
+                        {assigned_repo_count_expr} as assigned_repo
+                    FROM {base_table}
+                    {joins}
+                    WHERE {date_filter}
+                      AND {org_filter}
+                      {coverage_filter_clause}
+                """
+
+                cov_params = {
+                    "start_date": request.start_date,
+                    "end_date": request.end_date,
+                    "org_id": org_id,
+                }
+                cov_params.update(coverage_filter_params)
+
+                try:
+                    c_rows = await query_dicts(client, coverage_sql, cov_params)
+                    if c_rows:
+                        total = float(c_rows[0].get("total", 0))
+                        assigned_team = float(c_rows[0].get("assigned_team", 0))
+                        assigned_repo = float(c_rows[0].get("assigned_repo", 0))
+
+                        coverage = SankeyCoverage(
+                            team_coverage=assigned_team / total if total > 0 else 0,
+                            repo_coverage=assigned_repo / total if total > 0 else 0,
+                        )
+                except Exception as e:
+                    logger.error("Coverage query failed: %s", e)
+                    coverage = None
 
             sankey_result = SankeyResult(nodes=nodes, edges=edges, coverage=coverage)
 

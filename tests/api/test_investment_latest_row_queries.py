@@ -40,6 +40,40 @@ def test_latest_row_cte_does_not_shadow_argmax_ordering_column() -> None:
     assert "max(computed_at) AS latest_computed_at" in cte
 
 
+def test_work_unit_authors_cte_scopes_dedup_by_org() -> None:
+    """Regression for an Oracle NO-GO CRITICAL tenant-isolation leak on
+    CHAOS-2492: ``LATEST_WORK_UNIT_AUTHORS_CTE`` deduped ``git_commits`` by
+    (repo_id, hash) and ``git_pull_requests`` by (repo_id, number) WITHOUT
+    org_id. Those tables are keyed by (org_id, repo_id, hash/number)
+    (migration 027), and repo_id+hash / repo_id+number values CAN collide
+    across tenants -- this exact collision risk is documented at
+    work_graph/builder.py:1643 for the equivalent git_commits join. As
+    written, ``argMax(author_email, ...)`` could pull ANOTHER org's
+    author_email into this org's investment developer filter. Both inner
+    dedupe subqueries must now filter AND group by org_id, and the outer
+    join must pin ca.org_id/pa.org_id to the work unit's own org_id -- a
+    real live-ClickHouse exec proof of this lives in
+    tests/graphql/test_investment_developer_filter_tenant_isolation_live.py
+    (pytest -m clickhouse, opt-in).
+    """
+    cte = investment_queries.LATEST_WORK_UNIT_AUTHORS_CTE
+
+    # git_commits dedupe subquery: filtered AND grouped by org_id, and the
+    # outer join is additionally pinned to the work unit's own org_id.
+    assert "FROM git_commits" in cte
+    assert "GROUP BY org_id, repo_id, hash" in cte
+    assert "ca.org_id = wui.org_id" in cte
+
+    # git_pull_requests dedupe subquery: same tenant scoping.
+    assert "FROM git_pull_requests" in cte
+    assert "GROUP BY org_id, repo_id, number" in cte
+    assert "pa.org_id = wui.org_id" in cte
+
+    # Both inner subqueries filter by the query's own org_id param before
+    # aggregating -- not just after, via the join.
+    assert cte.count("WHERE org_id = %(org_id)s") == 2
+
+
 @pytest.mark.asyncio
 async def test_investment_breakdown_aggregates_only_latest_work_unit_row(
     monkeypatch: pytest.MonkeyPatch,

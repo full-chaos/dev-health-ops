@@ -732,7 +732,7 @@ async def resolve_analytics(
                 ):
                     logger.info(
                         "Sankey coverage unavailable for investment author filters; "
-                        "work_unit_investments does not expose author_id"
+                        "work_unit_investments does not expose author_email (CHAOS-2492)"
                     )
                 else:
                     if request.use_investment and _has_work_category_filter(
@@ -749,7 +749,7 @@ async def resolve_analytics(
                         repo_column="work_unit_investments.repo_id"
                         if request.use_investment
                         else repo_col,
-                        author_column="author_id",
+                        author_column="author_email",
                     )
 
                     coverage_sql = f"""

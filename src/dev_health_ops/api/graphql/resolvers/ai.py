@@ -23,6 +23,7 @@ from typing import Any
 
 import strawberry
 
+from dev_health_ops.api.queries.client import query_dicts
 from dev_health_ops.api.utils.numeric import safe_optional_float
 from dev_health_ops.metrics.ai_impact import (
     AI_BUCKETS as AI_ATTRIBUTION_BUCKETS,
@@ -92,21 +93,58 @@ def _parse_uuid(value: str | None) -> uuid.UUID | None:
         return None
 
 
-def _normalize_scope(
+async def _resolve_repo_ref(
+    client: Any, org_id: str, raw_repo_id: str | None
+) -> uuid.UUID | None:
+    if not raw_repo_id:
+        return None
+    try:
+        return uuid.UUID(raw_repo_id)
+    except (TypeError, ValueError):
+        pass
+    rows = await query_dicts(
+        client,
+        """
+        SELECT id
+        FROM repos
+        WHERE org_id = {org_id:String}
+          AND repo = {slug:String}
+        ORDER BY toString(id)
+        """,
+        {"org_id": org_id, "slug": raw_repo_id},
+    )
+    if not rows:
+        return None
+    value = rows[0].get("id")
+    if isinstance(value, uuid.UUID):
+        return value
+    try:
+        return uuid.UUID(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+async def _normalize_scope(
+    context: GraphQLContext,
+    org_id: str,
     scope: AIScopeInput | None,
-) -> tuple[uuid.UUID | None, str | None, str | None]:
+) -> tuple[uuid.UUID | None, str | None, str | None, bool]:
     if scope is None:
-        return None, None, None
+        return None, None, None, False
+    repo_id = await _resolve_repo_ref(_require_client(context), org_id, scope.repo_id)
     return (
-        _parse_uuid(scope.repo_id),
+        repo_id,
         scope.team_id or None,
         scope.work_type or None,
+        bool(scope.repo_id) and repo_id is None,
     )
 
 
-def _normalize_attribution_scope(
+async def _normalize_attribution_scope(
+    context: GraphQLContext,
+    org_id: str,
     scope: AIAttributionScopeInput | None,
-) -> tuple[uuid.UUID | None, str | None, list[str] | None]:
+) -> tuple[uuid.UUID | None, str | None, list[str] | None, bool]:
     """Normalize the narrower attribution-overview scope (no ``work_type``).
 
     ``ai_attribution_resolved`` has no ``work_type`` column, so that
@@ -115,12 +153,35 @@ def _normalize_attribution_scope(
     maps 1:1 onto the resolved view's own ``kind`` column.
     """
     if scope is None:
-        return None, None, None
+        return None, None, None, False
     kinds = [bucket.value for bucket in scope.buckets] if scope.buckets else None
+    repo_id = await _resolve_repo_ref(_require_client(context), org_id, scope.repo_id)
     return (
-        _parse_uuid(scope.repo_id),
+        repo_id,
         scope.team_id or None,
         kinds,
+        bool(scope.repo_id) and repo_id is None,
+    )
+
+
+async def _normalize_opportunity_scope(
+    context: GraphQLContext, org_id: str, scope: AIScopeInput | None
+) -> tuple[AIScopeInput | None, bool]:
+    if scope is None or not scope.repo_id:
+        return scope, False
+    repo_id = await _resolve_repo_ref(_require_client(context), org_id, scope.repo_id)
+    if repo_id is None:
+        return None, True
+    if scope.repo_id == str(repo_id):
+        return scope, False
+    return (
+        AIScopeInput(
+            repo_id=str(repo_id),
+            team_id=scope.team_id,
+            work_type=scope.work_type,
+            buckets=scope.buckets,
+        ),
+        False,
     )
 
 
@@ -142,7 +203,11 @@ async def _load_daily_records(
     """Load daily AI impact records honoring the scope filter."""
 
     _validate_date_range(date_range)
-    repo_id, team_id, work_type = _normalize_scope(scope)
+    repo_id, team_id, work_type, repo_unresolved = await _normalize_scope(
+        context, org_id, scope
+    )
+    if repo_unresolved:
+        return []
     loader = AIImpactClickHouseLoader(_require_client(context), org_id=org_id)
     return await loader.load_ai_impact_metrics(
         start_day=date_range.start_date,
@@ -552,7 +617,13 @@ async def _load_reviewer_concentration(
     date_range: AIDateRangeInput,
     scope: AIScopeInput | None,
 ) -> AIReviewerConcentrationSummary:
-    repo_id, team_id, _work_type = _normalize_scope(scope)
+    repo_id, team_id, _work_type, repo_unresolved = await _normalize_scope(
+        context, org_id, scope
+    )
+    if repo_unresolved:
+        return AIReviewerConcentrationSummary(
+            data_available=False, reviewer_count=0, reviewer_gini=None
+        )
     loader = AIImpactClickHouseLoader(_require_client(context), org_id=org_id)
     reviewer_gini, reviewer_count = await loader.load_reviewer_concentration(
         start_day=date_range.start_date,
@@ -610,7 +681,11 @@ async def _load_engagement_slices(
     unavailable rather than silently mis-scoped. Team scopes are translated
     to repo ids first; an unresolvable team also yields unavailable.
     """
-    repo_id, team_id, work_type = _normalize_scope(scope)
+    repo_id, team_id, work_type, repo_unresolved = await _normalize_scope(
+        context, org_id, scope
+    )
+    if repo_unresolved:
+        return {}, {}
     if work_type:
         return {}, {}
 
@@ -861,7 +936,11 @@ async def _load_overlap_rows(
     A ``work_type`` scope cannot be applied to the raw-PR join, so overlap
     is reported unavailable for work-type-scoped requests.
     """
-    repo_id, team_id, work_type = _normalize_scope(scope)
+    repo_id, team_id, work_type, repo_unresolved = await _normalize_scope(
+        context, org_id, scope
+    )
+    if repo_unresolved:
+        return [], []
     if work_type:
         return [], []
 
@@ -957,8 +1036,17 @@ async def resolve_ai_opportunities(
 
     org_id = require_org_id(context)
     client = _require_client(context)
+    resolved_scope, repo_unresolved = await _normalize_opportunity_scope(
+        context, org_id, scope
+    )
+    if repo_unresolved:
+        return AIOpportunitiesResult(
+            org_id=org_id, recommendations=[], detector_ready=True
+        )
     detector = AIOpportunityDetector(client)
-    recommendations = await detector.detect(org_id=org_id, scope=scope, limit=limit)
+    recommendations = await detector.detect(
+        org_id=org_id, scope=resolved_scope, limit=limit
+    )
     # detector_ready signals that the detector is wired and ran successfully,
     # NOT that it found candidates.  An empty result is valid (no opportunities
     # right now); False would mislead the frontend into showing "not connected".
@@ -984,7 +1072,18 @@ async def resolve_ai_governance_summary(
 
     org_id = require_org_id(context)
     _validate_date_range(date_range)
-    repo_id, team_id, _work_type = _normalize_scope(scope)
+    repo_id, team_id, _work_type, repo_unresolved = await _normalize_scope(
+        context, org_id, scope
+    )
+    if repo_unresolved:
+        return AIGovernanceSummary(
+            org_id=org_id,
+            start_date=date_range.start_date,
+            end_date=date_range.end_date,
+            coverage=[],
+            recent_violations=[],
+            data_available=False,
+        )
     client = _require_client(context)
 
     loader = AIGovernanceLoader(client)
@@ -1250,7 +1349,19 @@ async def resolve_ai_attributed_prs(
 
     org_id = require_org_id(context)
     _validate_date_range(date_range)
-    repo_id, team_id, work_type = _normalize_scope(scope)
+    repo_id, team_id, work_type, repo_unresolved = await _normalize_scope(
+        context, org_id, scope
+    )
+    if repo_unresolved:
+        return AiAttributedPrsResult(
+            org_id=org_id,
+            start_date=date_range.start_date,
+            end_date=date_range.end_date,
+            rows=[],
+            total=0,
+            has_more=False,
+            data_available=False,
+        )
 
     page_size = max(1, min(int(limit), _MAX_AI_ATTRIBUTED_PRS_PAGE))
     page_offset = max(0, int(offset))
@@ -1368,7 +1479,20 @@ async def resolve_ai_attribution_overview(
 
     org_id = require_org_id(context)
     _validate_date_range(date_range)
-    repo_id, team_id, kinds = _normalize_attribution_scope(scope)
+    repo_id, team_id, kinds, repo_unresolved = await _normalize_attribution_scope(
+        context, org_id, scope
+    )
+    if repo_unresolved:
+        return AIAttributionOverviewResult(
+            org_id=org_id,
+            start_date=date_range.start_date,
+            end_date=date_range.end_date,
+            mix=[],
+            total_attributed=0,
+            rows=[],
+            has_more=False,
+            data_available=False,
+        )
 
     page_size = max(1, min(int(limit), _MAX_AI_ATTRIBUTION_EVIDENCE_PAGE))
     page_offset = max(0, int(offset))

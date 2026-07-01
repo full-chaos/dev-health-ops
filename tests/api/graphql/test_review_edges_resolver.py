@@ -184,6 +184,37 @@ async def test_review_edges_repo_ids_filter_appears_in_query() -> None:
 
 
 @pytest.mark.asyncio
+async def test_review_edges_repo_ids_filter_resolves_slugs_or_uuids() -> None:
+    ctx = _ctx()
+    ctx.client.query.return_value = _qresult([], [])
+
+    await resolve_review_edges(
+        ctx, _input(repo_ids=["3fa85f64-5717-4562-b3fc-2c963f66afa6"])
+    )
+
+    query: str = ctx.client.query.call_args.args[0]
+    assert "repo_id IN (" in query
+    assert "SELECT id FROM repos" in query
+    assert "org_id = {org_id:String}" in query
+    assert "repo IN {repo_ids:Array(String)}" in query
+    assert "toString(id) IN {repo_ids:Array(String)}" in query
+
+
+@pytest.mark.asyncio
+async def test_review_edges_repo_ids_filter_accepts_slug_from_filter_options() -> None:
+    ctx = _ctx()
+    slug = "full-chaos/dev-health-ops"
+    ctx.client.query.return_value = _qresult([], [])
+
+    await resolve_review_edges(ctx, _input(repo_ids=[slug]))
+
+    query: str = ctx.client.query.call_args.args[0]
+    params: dict[str, Any] = ctx.client.query.call_args.kwargs["parameters"]
+    assert "repo_id IN (" in query
+    assert params["repo_ids"] == [slug]
+
+
+@pytest.mark.asyncio
 async def test_review_edges_no_repo_ids_filter_absent_from_query() -> None:
     """When repo_ids is None, the IN filter must NOT appear in the SQL."""
     ctx = _ctx()

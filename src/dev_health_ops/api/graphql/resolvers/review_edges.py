@@ -58,8 +58,9 @@ async def _fetch_review_edges(
     DESC`` (heaviest collaboration pairs first) and apply the row cap.
 
     An optional ``repo_ids`` filter narrows to specific repositories.
-    ``repo_id`` is stored as a UUID; we cast to String for safe comparison
-    with the input list and for the response payload.
+    ``repo_id`` is stored as a UUID; input repo refs may be UUID strings or
+    ``repos.repo`` slugs, so the predicate resolves them through the org-scoped
+    catalog before comparing UUID-to-UUID.
     """
     inner_where = """
             WHERE org_id = {org_id:String}
@@ -72,9 +73,12 @@ async def _fetch_review_edges(
         "until_date": until_date,
     }
     if repo_ids:
-        inner_where += (
-            "\n              AND toString(repo_id) IN {repo_ids:Array(String)}"
-        )
+        inner_where += """
+              AND repo_id IN (
+                  SELECT id FROM repos
+                  WHERE org_id = {org_id:String}
+                    AND (repo IN {repo_ids:Array(String)} OR toString(id) IN {repo_ids:Array(String)})
+              )"""
         params["repo_ids"] = list(repo_ids)
 
     query = f"""

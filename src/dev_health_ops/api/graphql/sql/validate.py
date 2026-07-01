@@ -24,11 +24,31 @@ class Dimension(str, Enum):
     @classmethod
     def db_column(cls, dim: Dimension, use_investment: bool = False) -> str:
         """Get the database column name for a dimension."""
+        if dim == cls.AUTHOR:
+            # CHAOS-2385/CHAOS-2492: neither ClickHouse source table this
+            # compiler ever selects FROM has a scalar per-row author identity
+            # column. investment_metrics_daily (non-investment) and
+            # latest_work_unit_investments (investment) both lack
+            # author_email; the investment path's work_unit_authors CTE (the
+            # `au` join -- see compiler.py / filter_translation.py) exposes
+            # only an ARRAY column (au.author_emails, one row per work unit)
+            # for hasAny() membership filtering, not a scalar GROUP BY column.
+            # Reject explicitly rather than emit SQL referencing a column
+            # that doesn't exist (mirrors the honest-rejection precedent in
+            # compiler.py's _reject_filtered_same_dimension_flow_matrix,
+            # CHAOS-2487). Filter by who.developers / scope.level=developer
+            # instead of grouping by author.
+            raise ValidationError(
+                "author is not a supported breakdown/grouping dimension; "
+                "filter by who.developers or scope.level=developer instead "
+                "of grouping by author.",
+                field="dimension",
+                value=dim.value,
+            )
         if use_investment:
             mapping = {
                 cls.TEAM: "ifNull(nullIf(ut.team_label, ''), 'unassigned')",
                 cls.REPO: "ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id)))",
-                cls.AUTHOR: "author_email",
                 cls.WORK_TYPE: "work_unit_type",
                 cls.THEME: "splitByChar('.', subcategory_kv.1)[1]",
                 cls.SUBCATEGORY: "subcategory_kv.1",
@@ -37,7 +57,6 @@ class Dimension(str, Enum):
             mapping = {
                 cls.TEAM: "team_id",
                 cls.REPO: "repo_id",
-                cls.AUTHOR: "author_email",
                 cls.WORK_TYPE: "work_item_type",
                 cls.THEME: "investment_area",
                 cls.SUBCATEGORY: "project_stream",

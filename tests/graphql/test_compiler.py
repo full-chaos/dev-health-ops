@@ -207,7 +207,7 @@ class TestCompileBreakdown:
     def test_org_id_always_in_params(self):
         """Test that org_id is always included in params."""
         request = BreakdownRequest(
-            dimension="author",
+            dimension="repo",
             measure="count",
             start_date=date(2025, 1, 1),
             end_date=date(2025, 1, 31),
@@ -330,12 +330,32 @@ class TestCompileCatalogValues:
 class TestDimensionDbColumn:
     """Tests for Dimension.db_column mapping."""
 
-    @pytest.mark.parametrize("dim", list(Dimension))
+    @pytest.mark.parametrize("dim", [d for d in Dimension if d != Dimension.AUTHOR])
     def test_all_dimensions_have_columns(self, dim):
-        """Test that all dimensions map to database columns."""
+        """Test that all GROUP-BY-capable dimensions map to database columns.
+
+        AUTHOR is excluded: CHAOS-2385/2492 -- neither ClickHouse table this
+        compiler ever selects FROM (investment_metrics_daily,
+        latest_work_unit_investments) has a scalar author identity column;
+        see test_author_dimension_rejected below.
+        """
         col = Dimension.db_column(dim)
         assert col is not None
         assert len(col) > 0
+
+    def test_author_dimension_rejected(self):
+        """CHAOS-2385/2492: AUTHOR cannot be resolved to a real column in
+        either source table this compiler selects from.
+        investment_metrics_daily and latest_work_unit_investments both lack
+        a scalar author_email column; the investment path's
+        work_unit_authors CTE only exposes an ARRAY (au.author_emails) for
+        hasAny() filtering, not a scalar GROUP BY column. Filter by
+        who.developers / scope.level=developer instead of grouping by
+        author."""
+        with pytest.raises(ValidationError):
+            Dimension.db_column(Dimension.AUTHOR)
+        with pytest.raises(ValidationError):
+            Dimension.db_column(Dimension.AUTHOR, use_investment=True)
 
     def test_specific_mappings(self):
         """Test specific dimension to database column mappings."""

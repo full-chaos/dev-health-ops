@@ -1,5 +1,11 @@
 # LaunchDarkly sync budgeting
 
+> See also: [Provider Rate-Limit Policy](../providers/rate-limit-policy.md) for
+> LaunchDarkly's quota dimensions, headers (`X-RateLimit-Route-Remaining`,
+> `Retry-After`), retry/deferral semantics, the frozen-connector caveat, and how
+> LD route families fit the cross-provider rate-limit and
+> credentials-are-not-capacity model.
+
 Status: implemented for CHAOS-2687 feature-flag sync budgeting. The
 `feature-flags` dataset now emits LaunchDarkly budget estimates through the
 existing `SyncRunUnit` pipeline, and `estimate_provider_budget()` dispatches to
@@ -24,7 +30,7 @@ Implemented behavior:
 - Return `BudgetEstimate` values for the supported LaunchDarkly `SyncRunUnit`: `DatasetKey.FEATURE_FLAGS`.
 - Build every bucket with `BudgetBucketKey(provider="launchdarkly", org_id=context.org_id, host=<api-host>, credential_fingerprint=<safe fingerprint>, dimension=<BudgetDimension>)`.
 - Use only the shared `BudgetDimension` vocabulary from `budget_types.py`; CHAOS-2687 introduces no new enum values.
-- Use route families from `dev_health_ops.providers.launchdarkly.budget.LAUNCHDARKLY_BUDGET_ROUTE_FAMILIES` so operators can override limits by keys such as `launchdarkly:rest_core:flags` or `launchdarkly:secondary_abuse_risk:audit_log`.
+- Use route families from `dev_health_ops.providers.launchdarkly.budget.LAUNCHDARKLY_BUDGET_ROUTE_FAMILIES` so operators can override limits by keys such as `launchdarkly:rest_core:flags` or `launchdarkly:secondary_abuse_risk:code_refs`.
 - Include no API secrets in bucket fingerprints, observations, logs, exceptions, or test snapshots.
 - Treat estimate output as a hard provider-acceptance gate: any new LaunchDarkly sync unit is incomplete until the budget estimator covers its route families and tests assert that `estimate_provider_budget(context)` returns non-empty estimates.
 

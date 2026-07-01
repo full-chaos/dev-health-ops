@@ -88,3 +88,4 @@ The ⚠️ cells are the work this epic removes. GitHub/GitLab already solved th
 
 - Epic: CHAOS-2719 (sync unit model); children CHAOS-2718 (Linear reference re-fetch), CHAOS-2720 (GitHub source fan-out), CHAOS-2721 (work-item-family fan-in), CHAOS-2722 (window-aware budget), CHAOS-2725 (scoped backfill).
 - Related: [Durable Dispatch Outbox](dispatch-outbox.md), [Data Pipeline](data-pipeline.md), [Team Attribution](team-attribution.md), [Connector Inventory](../ops/connector-inventory.md).
+- Rate limits & budget: [Provider Rate-Limit Policy](../providers/rate-limit-policy.md) — per-provider quota dimensions/headers/retry semantics, the credentials-are-not-capacity invariant, and how work-item units reserve budget by route family before dispatch.

@@ -18,6 +18,8 @@ from dev_health_ops.connectors.utils.rate_limit_queue import (
 from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.providers._ratelimit import gate_call
 from dev_health_ops.providers.utils import EnvSpec, read_env_spec
+from dev_health_ops.sync.budget_types import BudgetDimension
+from dev_health_ops.sync.rate_limit_signal import RateLimitSignal
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +41,17 @@ class LinearComplexityLimitError(LinearGraphQLError):
 
     Not retryable: the query itself must be restructured (e.g. smaller
     nested page sizes). See Linear's 10,000-complexity budget.
+
+    Carries an optional provider-neutral :class:`RateLimitSignal` (dimension
+    ``graphql_cost``) so complexity rejections surface in the same observability
+    stream as timed rate limits -- but, crucially, it stays a
+    :class:`LinearGraphQLError` (not a ``RateLimitException``) so the worker
+    deferral branch never re-drives it as retryable work.
     """
+
+    def __init__(self, *args: object, signal: RateLimitSignal | None = None) -> None:
+        super().__init__(*args)
+        self.signal = signal
 
 
 class LinearRateLimitError(RateLimitException):
@@ -478,12 +490,26 @@ class LinearClient:
             data = body if isinstance(body, dict) else {}
             return data.get("data") or {}
 
+        retry_after = (
+            last_server_retry_after
+            if last_server_retry_after is not None
+            else last_delay
+        )
         raise LinearRateLimitError(
             f"Linear API rate limited: giving up after {self.max_attempts} "
             f"attempts (last backoff {last_delay:.1f}s)",
-            retry_after_seconds=last_server_retry_after
-            if last_server_retry_after is not None
-            else last_delay,
+            retry_after_seconds=retry_after,
+            signal=RateLimitSignal(
+                provider="linear",
+                host=urlparse(LINEAR_API_URL).netloc or None,
+                dimension=BudgetDimension.GRAPHQL_COST,
+                retry_after_seconds=retry_after,
+                # Linear reports its reset window as epoch MILLISECONDS.
+                reset_at=RateLimitSignal.reset_at_from_epoch_millis(
+                    self._rate_limit.reset_ms if self._rate_limit else None
+                ),
+                reason="primary",
+            ),
         )
 
     def _last_applied_delay(self, retry_after_seconds: float | None) -> float:
@@ -521,7 +547,13 @@ class LinearClient:
         if any(LinearClient._is_complexity_error(e) for e in errors):
             raise LinearComplexityLimitError(
                 "Linear GraphQL complexity limit exceeded "
-                f"(query must be restructured, not retried): {error_msg}"
+                f"(query must be restructured, not retried): {error_msg}",
+                signal=RateLimitSignal(
+                    provider="linear",
+                    host=urlparse(LINEAR_API_URL).netloc or None,
+                    dimension=BudgetDimension.GRAPHQL_COST,
+                    reason="complexity",
+                ),
             )
         raise LinearGraphQLError(f"Linear GraphQL error: {error_msg}")
 

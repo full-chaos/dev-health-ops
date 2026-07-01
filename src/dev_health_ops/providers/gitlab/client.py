@@ -15,6 +15,8 @@ from dev_health_ops.connectors.utils.rate_limit_queue import (
 from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.providers._ratelimit import gate_call, parse_retry_after_header
 from dev_health_ops.providers.utils import EnvSpec, read_env_spec
+from dev_health_ops.sync.budget_types import BudgetDimension
+from dev_health_ops.sync.rate_limit_signal import RateLimitSignal
 
 logger = logging.getLogger(__name__)
 
@@ -68,17 +70,27 @@ def _maybe_raise_gitlab_rate_limit(exc: BaseException) -> None:
     if not is_rate_limited:
         return None
     # Prefer Retry-After; else derive from RateLimit-Reset (epoch seconds) if present.
-    if retry_after is None:
-        reset_raw = _hdr("RateLimit-Reset")
-        if reset_raw is not None:
-            try:
-                import time as _t
+    reset_raw = _hdr("RateLimit-Reset")
+    if retry_after is None and reset_raw is not None:
+        try:
+            import time as _t
 
-                retry_after = max(0.0, float(reset_raw) - _t.time())
-            except (TypeError, ValueError):
-                retry_after = None
+            retry_after = max(0.0, float(reset_raw) - _t.time())
+        except (TypeError, ValueError):
+            retry_after = None
     raise RateLimitException(
-        f"GitLab rate limited (HTTP {status})", retry_after_seconds=retry_after
+        f"GitLab rate limited (HTTP {status})",
+        retry_after_seconds=retry_after,
+        signal=RateLimitSignal(
+            provider="gitlab",
+            dimension=BudgetDimension.REST_CORE,
+            retry_after_seconds=retry_after,
+            reset_at=RateLimitSignal.reset_at_from_epoch_seconds(reset_raw),
+            # 429 is the documented quota limit; a header-qualified 403 is the
+            # softer/abuse-style signal -- mirror GitHub's primary/secondary split.
+            reason="primary" if status == 429 else "secondary",
+            request_id=_hdr("X-Request-Id"),
+        ),
     ) from exc
 
 

@@ -10,6 +10,7 @@ import logging
 import time
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 
@@ -19,6 +20,8 @@ from dev_health_ops.connectors.exceptions import (
     RateLimitException,
 )
 from dev_health_ops.connectors.utils.retry import retry_with_backoff
+from dev_health_ops.sync.budget_types import BudgetDimension
+from dev_health_ops.sync.rate_limit_signal import RateLimitSignal
 
 logger = logging.getLogger(__name__)
 
@@ -158,10 +161,22 @@ class GitHubGraphQLClient:
                 # (a) primary rate limit: remaining quota exhausted -> retry
                 # after the reset window.
                 if diag.get("x-ratelimit-remaining") == "0":
+                    reset_delay = _github_reset_delay_seconds(response)
                     raise RateLimitException(
                         f"GitHub API rate limit exceeded on POST "
                         f"{self.GRAPHQL_ENDPOINT} (headers={diag})",
-                        retry_after_seconds=_github_reset_delay_seconds(response),
+                        retry_after_seconds=reset_delay,
+                        signal=RateLimitSignal(
+                            provider="github",
+                            host=urlparse(self.GRAPHQL_ENDPOINT).netloc or None,
+                            dimension=BudgetDimension.GRAPHQL_COST,
+                            retry_after_seconds=reset_delay,
+                            reset_at=RateLimitSignal.reset_at_from_epoch_seconds(
+                                diag.get("x-ratelimit-reset")
+                            ),
+                            reason="primary",
+                            request_id=diag.get("x-github-request-id"),
+                        ),
                     )
                 # (b) secondary/abuse limit: Retry-After present, OR the body
                 # carries GitHub's documented secondary/abuse wording even with
@@ -188,6 +203,17 @@ class GitHubGraphQLClient:
                         f"GitHub secondary/abuse rate limit on POST "
                         f"{self.GRAPHQL_ENDPOINT} (headers={diag})",
                         retry_after_seconds=retry_after_seconds,
+                        signal=RateLimitSignal(
+                            provider="github",
+                            host=urlparse(self.GRAPHQL_ENDPOINT).netloc or None,
+                            dimension=BudgetDimension.SECONDARY_ABUSE_RISK,
+                            retry_after_seconds=retry_after_seconds,
+                            reset_at=RateLimitSignal.reset_at_from_epoch_seconds(
+                                diag.get("x-ratelimit-reset")
+                            ),
+                            reason="secondary",
+                            request_id=diag.get("x-github-request-id"),
+                        ),
                     )
                 # (c) permission/SSO/other 403: NOT a transient condition.
                 # Raise a non-retryable AuthenticationException so the retry

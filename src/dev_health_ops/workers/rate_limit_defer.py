@@ -1,10 +1,11 @@
-"""Rate-limit deferral helpers for Celery sync tasks.
+"""Rate-limit deferral planning for the unit sync worker.
 
 Provider rate-limit signals (HTTP 429 / ``Retry-After``) are treated as
-*deferred work*, not task failures. Instead of consuming the genuine-failure
-retry budget (Celery's single ``self.request.retries`` counter) and stamping
-the run ``FAILED``, the sync tasks re-enqueue a fresh invocation with the
-server-provided delay and explicit rate-limit budget metadata.
+*deferred work*, not task failures. When a unit hits a provider rate limit,
+:func:`plan_rate_limit_deferral` computes the next deferral -- a jittered,
+chunked countdown plus the ``attempts`` / ``first_seen_at`` / ``not_before``
+bookkeeping the worker (``workers/sync_units.py``) stamps onto the unit so it
+re-runs as ``RETRYING`` instead of consuming the genuine-failure retry budget.
 
 Two budgets bound the deferral so a permanently rate-limited provider still
 eventually surfaces as a real failure:
@@ -15,10 +16,9 @@ eventually surfaces as a real failure:
   from the first deferral.
 
 Long server delays (e.g. GitHub primary-limit resets up to ~1h) are *chunked*:
-a single Celery countdown is capped at :data:`RATE_LIMIT_MAX_COUNTDOWN_SECONDS`
-and an absolute ``not_before`` timestamp is carried forward so the task
-re-defers **without calling the provider again** until the window elapses.
-Chunk re-defers do not count against the count budget.
+a single countdown is capped at :data:`RATE_LIMIT_MAX_COUNTDOWN_SECONDS` and an
+absolute ``not_before`` timestamp is carried forward so the unit re-defers
+**without calling the provider again** until the window elapses.
 """
 
 from __future__ import annotations
@@ -27,9 +27,6 @@ import logging
 import random
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
-
-from dev_health_ops.exceptions import RateLimitException
 
 logger = logging.getLogger(__name__)
 
@@ -128,82 +125,4 @@ def plan_rate_limit_deferral(
         attempts=attempts + 1,
         first_seen_at=first_seen.isoformat(),
         not_before=datetime.fromtimestamp(not_before_ts, tz=timezone.utc).isoformat(),
-    )
-
-
-def plan_not_before_wait(
-    not_before: str | None,
-    *,
-    now: datetime | None = None,
-) -> float | None:
-    """Countdown to re-defer a chunked wait, or ``None`` to proceed now.
-
-    Called at the top of a sync task: if a carried ``not_before`` is still in
-    the future, return the (chunked, jittered) countdown so the task
-    re-enqueues itself **without calling the provider**; otherwise ``None``.
-    """
-    target = _parse_iso(not_before)
-    if target is None:
-        return None
-    remaining = (target - _now(now)).total_seconds()
-    if remaining <= 0:
-        return None
-    return _jittered(min(remaining, RATE_LIMIT_MAX_COUNTDOWN_SECONDS))
-
-
-def rate_limit_metadata(deferral: RateLimitDeferral) -> dict[str, object]:
-    """Build the ``_rate_limit_*`` kwargs to carry into the re-enqueued task."""
-    return {
-        "_rate_limit_attempts": deferral.attempts,
-        "_rate_limit_first_seen_at": deferral.first_seen_at,
-        "_rate_limit_not_before": deferral.not_before,
-    }
-
-
-def maybe_plan_rate_limit_deferral(
-    exc: BaseException,
-    *,
-    attempts: int,
-    first_seen_at: str | None,
-    now: datetime | None = None,
-) -> RateLimitDeferral | None:
-    """Plan a deferral for a caught exception, or ``None``.
-
-    Returns ``None`` when ``exc`` is not a rate-limit error OR the deferral
-    budget is exhausted; in both cases the caller must run its normal failure
-    handling. Returns a :class:`RateLimitDeferral` when the task should be
-    re-enqueued instead of failed.
-    """
-    if not isinstance(exc, RateLimitException):
-        return None
-    return plan_rate_limit_deferral(
-        retry_after_seconds=getattr(exc, "retry_after_seconds", None),
-        attempts=attempts,
-        first_seen_at=first_seen_at,
-        now=now,
-    )
-
-
-def reenqueue_after_rate_limit(task: Any, deferral: RateLimitDeferral) -> None:
-    """Re-enqueue a fresh run of ``task`` carrying updated deferral metadata."""
-    request = task.request
-    task.apply_async(
-        args=list(request.args or []),
-        kwargs={**(request.kwargs or {}), **rate_limit_metadata(deferral)},
-        countdown=deferral.countdown,
-    )
-
-
-def reenqueue_rate_limit_chunk(task: Any, countdown: float) -> None:
-    """Re-enqueue ``task`` unchanged to wait out a chunked ``not_before`` window.
-
-    Used when a carried ``not_before`` is still in the future: the provider is
-    NOT called; the task simply re-defers itself. Deferral metadata is
-    preserved as-is (the count budget is not consumed by chunk waits).
-    """
-    request = task.request
-    task.apply_async(
-        args=list(request.args or []),
-        kwargs=dict(request.kwargs or {}),
-        countdown=countdown,
     )

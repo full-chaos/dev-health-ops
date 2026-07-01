@@ -31,6 +31,8 @@ from dev_health_ops.credentials.resolver import (
 )
 from dev_health_ops.credentials.types import GitHubCredentials
 from dev_health_ops.providers._ratelimit import gate_call
+from dev_health_ops.sync.budget_types import BudgetDimension
+from dev_health_ops.sync.rate_limit_signal import RateLimitSignal
 
 logger = logging.getLogger(__name__)
 
@@ -581,9 +583,19 @@ class GitHubWorkClient:
             raise exc
         if isinstance(exc, RateLimitExceededException):
             self._record_rest_usage(operation)
+            reset_delay = self._rate_limit_reset_delay_seconds()
             raise RateLimitException(
                 f"GitHub rate limit on {operation}: {exc}",
-                retry_after_seconds=self._rate_limit_reset_delay_seconds(),
+                retry_after_seconds=reset_delay,
+                signal=RateLimitSignal(
+                    provider="github",
+                    dimension=BudgetDimension.REST_CORE,
+                    retry_after_seconds=reset_delay,
+                    reset_at=RateLimitSignal.reset_at_from_epoch_seconds(
+                        getattr(self.github, "rate_limiting_resettime", None)
+                    ),
+                    reason="primary",
+                ),
             )
         if not isinstance(exc, GithubException):
             raise APIException(f"GitHub API error on {operation}: {exc}") from exc
@@ -615,6 +627,7 @@ class GitHubWorkClient:
             )
             if is_rate_limit:
                 retry_after = _retry_after_seconds(headers)
+                is_primary = headers.get("x-ratelimit-remaining") == "0"
                 logger.warning(
                     "GitHub rate limit (403) on %s headers=%s message=%s",
                     operation,
@@ -624,6 +637,20 @@ class GitHubWorkClient:
                 raise RateLimitException(
                     f"GitHub rate limit (403) on {operation}: {message} (headers={headers})",
                     retry_after_seconds=retry_after,
+                    signal=RateLimitSignal(
+                        provider="github",
+                        dimension=(
+                            BudgetDimension.REST_CORE
+                            if is_primary
+                            else BudgetDimension.SECONDARY_ABUSE_RISK
+                        ),
+                        retry_after_seconds=retry_after,
+                        reset_at=RateLimitSignal.reset_at_from_epoch_seconds(
+                            headers.get("x-ratelimit-reset")
+                        ),
+                        reason="primary" if is_primary else "secondary",
+                        request_id=headers.get("x-github-request-id"),
+                    ),
                 ) from exc
             logger.warning(
                 "GitHub 403 on %s headers=%s message=%s",

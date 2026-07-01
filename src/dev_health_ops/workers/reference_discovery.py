@@ -358,7 +358,10 @@ def _handle_reference_discovery_failure(
             return False
         if retryable and int(ledger.attempts or 0) < _max_attempts():
             available_at = now + timedelta(
-                seconds=_reference_discovery_backoff_seconds(int(ledger.attempts or 1))
+                seconds=_reference_discovery_backoff_seconds(
+                    int(ledger.attempts or 1),
+                    getattr(exc, "retry_after_seconds", None),
+                )
             )
             result = session.execute(
                 update(SyncRunReferenceDiscovery)
@@ -580,8 +583,14 @@ def _is_retryable_discovery_error(exc: Exception) -> bool:
     return any(marker in name or marker in message for marker in retry_markers)
 
 
-def _reference_discovery_backoff_seconds(attempts: int) -> int:
+def _reference_discovery_backoff_seconds(
+    attempts: int, retry_after_seconds: float | None = None
+) -> int:
     base = min(30 * 2 ** min(max(attempts, 1) - 1, 5), 900)
+    # Honor a provider-supplied Retry-After (e.g. a rate-limit reset window):
+    # never back off for less than the server asked for, capped at the ceiling.
+    if retry_after_seconds is not None and retry_after_seconds > 0:
+        base = min(max(base, int(retry_after_seconds)), 900)
     return base + random.randint(0, max(1, min(base, 30)))
 
 

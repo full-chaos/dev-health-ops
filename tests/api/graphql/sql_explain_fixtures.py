@@ -392,12 +392,19 @@ async def _fixture_data_health(sink: CapturingSink) -> None:
 
 
 async def _fixture_analytics(sink: CapturingSink) -> None:
+    from dev_health_ops.api.graphql.context import GraphQLContext
     from dev_health_ops.api.graphql.models.inputs import (
+        AnalyticsRequestInput,
+        DateRangeInput,
+        DimensionInput,
         FilterInput,
+        MeasureInput,
+        SankeyRequestInput,
         ScopeFilterInput,
         ScopeLevelInput,
         WhoFilterInput,
     )
+    from dev_health_ops.api.graphql.resolvers.analytics import resolve_analytics
     from dev_health_ops.api.graphql.sql.compiler import (
         BreakdownRequest,
         CatalogValuesRequest,
@@ -498,6 +505,28 @@ async def _fixture_analytics(sink: CapturingSink) -> None:
         dev_breakdown_req, SAMPLE_ORG_ID, filters=scope_filters
     )
     sink.calls.append((sql, params))
+
+    # CHAOS-2492: the RESOLVER-level Sankey coverage query is built inline
+    # in resolve_analytics() and is NOT exercised by the compile_sankey()
+    # calls above -- coverage used to be forced to None for developer
+    # filters (CHAOS-2488) and now chains the same au join / hasAny()
+    # predicate. Drive it through the real resolver (not just the compiler)
+    # so EXPLAIN validates the exact SQL the resolver emits, including the
+    # `total`/`assigned_team`/`assigned_repo` coverage aggregates.
+    dev_batch = AnalyticsRequestInput(
+        sankey=SankeyRequestInput(
+            path=[DimensionInput.THEME, DimensionInput.REPO],
+            measure=MeasureInput.COUNT,
+            date_range=DateRangeInput(start_date=start, end_date=end),
+            use_investment=True,
+        ),
+        use_investment=True,
+        filters=who_filters,
+    )
+    await resolve_analytics(
+        GraphQLContext(org_id=SAMPLE_ORG_ID, db_url="clickhouse://test", client=sink),
+        dev_batch,
+    )
 
     for fm_dim in ("team", "repo", "work_type"):
         fm_req = FlowMatrixRequest(

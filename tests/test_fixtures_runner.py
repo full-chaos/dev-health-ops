@@ -404,6 +404,91 @@ def test_validate_ai_fixture_tables_rejects_unlinked_runs():
     assert runner._validate_ai_fixture_tables(client, _all_ai_tables_exist) is False
 
 
+class _CockpitLiveDataValidationClient:
+    def __init__(
+        self,
+        counts: dict[str, int],
+        *,
+        review_latency_rows: int = 3,
+        complexity_rows: int = 3,
+    ):
+        self.counts = counts
+        self.review_latency_rows = review_latency_rows
+        self.complexity_rows = complexity_rows
+
+    def query(self, sql: str):
+        normalized = " ".join(sql.split())
+        if "pr_first_review_p90_hours IS NOT NULL" in normalized:
+            return _QueryResult(self.review_latency_rows)
+        if "cyclomatic_per_kloc IS NOT NULL" in normalized:
+            return _QueryResult(self.complexity_rows)
+        for table, value in self.counts.items():
+            if f"FROM {table}" in normalized:
+                return _QueryResult(value)
+        raise AssertionError(f"Unexpected query: {normalized}")
+
+
+def _all_cockpit_live_data_tables_exist(name: str) -> bool:
+    return name in set(runner.COCKPIT_LIVE_DATA_TABLES)
+
+
+def test_validate_cockpit_live_data_fixture_tables_accepts_populated_state():
+    counts = {table: 10 for table in runner.COCKPIT_LIVE_DATA_TABLES}
+    client = _CockpitLiveDataValidationClient(counts)
+
+    assert (
+        runner._validate_cockpit_live_data_fixture_tables(
+            client, _all_cockpit_live_data_tables_exist
+        )
+        is True
+    )
+
+
+def test_validate_cockpit_live_data_fixture_tables_rejects_missing_table():
+    counts = {table: 10 for table in runner.COCKPIT_LIVE_DATA_TABLES}
+    client = _CockpitLiveDataValidationClient(counts)
+    present = set(runner.COCKPIT_LIVE_DATA_TABLES) - {"testops_test_metrics_daily"}
+
+    assert (
+        runner._validate_cockpit_live_data_fixture_tables(
+            client, lambda name: name in present
+        )
+        is False
+    )
+
+
+def test_validate_cockpit_live_data_fixture_tables_rejects_empty_table():
+    counts = {table: 10 for table in runner.COCKPIT_LIVE_DATA_TABLES}
+    counts["testops_coverage_metrics_daily"] = 0
+    client = _CockpitLiveDataValidationClient(counts)
+
+    assert (
+        runner._validate_cockpit_live_data_fixture_tables(
+            client, _all_cockpit_live_data_tables_exist
+        )
+        is False
+    )
+
+
+def test_validate_cockpit_live_data_fixture_tables_rejects_missing_compounding_inputs():
+    counts = {table: 10 for table in runner.COCKPIT_LIVE_DATA_TABLES}
+    no_review_latency = _CockpitLiveDataValidationClient(counts, review_latency_rows=0)
+    no_complexity = _CockpitLiveDataValidationClient(counts, complexity_rows=0)
+
+    assert (
+        runner._validate_cockpit_live_data_fixture_tables(
+            no_review_latency, _all_cockpit_live_data_tables_exist
+        )
+        is False
+    )
+    assert (
+        runner._validate_cockpit_live_data_fixture_tables(
+            no_complexity, _all_cockpit_live_data_tables_exist
+        )
+        is False
+    )
+
+
 class _SecurityAlertsClient:
     """Stub ClickHouse client for security_alerts validation tests."""
 

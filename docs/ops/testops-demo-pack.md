@@ -22,15 +22,27 @@ To ensure a rich demo experience, you should seed the environment with realistic
 Use the `dev-hops` CLI to generate 30 days of synthetic TestOps fixtures:
 
 ```bash
-# Generate fixtures for the last 30 days
-CLICKHOUSE_URI=clickhouse://... dev-hops fixtures generate --sink "$CLICKHOUSE_URI" --days 30
+# Generate fixtures and derived metrics for the last 30 days
+CLICKHOUSE_URI=clickhouse://... dev-hops fixtures generate \
+  --sink "$CLICKHOUSE_URI" \
+  --days 30 \
+  --with-metrics
 ```
 
-This command appears to populate the following tables:
+This command populates the raw TestOps tables and the daily rollup tables
+consumed by TestOps risk/reporting surfaces:
 - `ci_pipeline_runs`
 - `ci_job_runs`
-- `test_executions`
+- `test_suite_results`
+- `test_case_results`
 - `coverage_snapshots`
+- `testops_pipeline_metrics_daily`
+- `testops_test_metrics_daily`
+- `testops_coverage_metrics_daily`
+
+Omitting `--with-metrics` seeds only raw fixture rows; Delivery Risk and Govern
+cards remain under-ingested until `dev-hops metrics daily` computes these
+rollups.
 
 ---
 

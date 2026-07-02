@@ -457,6 +457,7 @@ def fetch_gitlab_work_items(
     max_label_events: int = 300,
     org_id: str = "",
     usage_observations: list[dict[str, Any]] | None = None,
+    id_scoped_project_ids: dict[uuid.UUID, str] | None = None,
 ) -> tuple[
     list[WorkItem],
     list[WorkItemStatusTransition],
@@ -479,6 +480,21 @@ def fetch_gitlab_work_items(
 
     Credentials (``token`` and optional ``gitlab_url``) are threaded explicitly
     by the caller; this function never reads from ``os.environ``.
+
+    ``id_scoped_project_ids`` [CHAOS-2763 codex HIGH]: maps ``repo_id`` ->
+    immutable GitLab project id, for repos whose work-item unit was matched
+    by numeric ``settings.project_id`` rather than by path (job_work_items.py
+    scoping). Those repos are fetched from the GitLab API using the numeric
+    id, NOT ``repo.full_name``. Matching a row by its immutable project_id
+    does not make its ``full_name`` safe to fetch by: if the project was
+    renamed/moved after discovery and the stale path was reused by a
+    *different* project, fetching by path would silently pull the wrong
+    project's issues/MRs and attribute them to this row's ``repo_id``. Repos
+    absent from the mapping (path-matched units, org-wide/no-source runs)
+    are unaffected and keep fetching by ``full_name`` as before.
+    ``repo.full_name`` itself is always passed to normalization
+    (``project_full_path=``) unchanged — only the API call identifier
+    changes for id-scoped repos.
     """
     from uuid import UUID
 
@@ -486,6 +502,7 @@ def fetch_gitlab_work_items(
     from dev_health_ops.providers.utils import env_flag
 
     deps = get_metrics_dependencies()
+    id_scoped_project_ids = id_scoped_project_ids or {}
 
     client = deps.gitlab_client_factory(token=token, gitlab_url=gitlab_url)
     work_items: dict[str, WorkItem] = {}
@@ -505,9 +522,13 @@ def fetch_gitlab_work_items(
     for repo in repos:
         if repo.source != "gitlab":
             continue
-        logger.debug("GitLab: project=%s", repo.full_name)
+        # Fetch by the immutable project id when this repo's unit was
+        # id-scoped; otherwise (path-matched or org-wide) fetch by the
+        # discovered path, unchanged from before this fix.
+        api_project_ref = id_scoped_project_ids.get(repo.repo_id, repo.full_name)
+        logger.debug("GitLab: project=%s (api_ref=%s)", repo.full_name, api_project_ref)
         for issue in client.iter_project_issues(
-            project_id_or_path=repo.full_name,
+            project_id_or_path=api_project_ref,
             state="all",
             updated_after=since_utc,
         ):
@@ -536,7 +557,7 @@ def fetch_gitlab_work_items(
             assert org_uuid is not None  # for type checker; guarded by scan_mrs
             try:
                 for mr in client.iter_project_merge_requests(
-                    project_id_or_path=repo.full_name,
+                    project_id_or_path=api_project_ref,
                     state="all",
                     updated_after=since_utc,
                 ):

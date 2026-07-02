@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
+import re
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -111,6 +113,28 @@ def _date_range(end_day: date, backfill_days: int) -> list[date]:
 
 def _has_text(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def _repo_settings_dict(repo: Any) -> dict[str, Any]:
+    """Return ``repo.settings`` as a dict regardless of on-disk representation.
+
+    ``discover_repos`` (job_daily.py) parses the ClickHouse ``settings`` JSON
+    string into a dict, but this stays defensive: other callers (backfill,
+    directly-constructed ``DiscoveredRepo`` instances, tests) may still hand
+    back a raw JSON string, ``None``, or an already-parsed dict. Malformed
+    JSON or an unexpected type yields ``{}`` — the CHAOS-2763 gitlab numeric-id
+    match then fails closed rather than raising.
+    """
+    settings = getattr(repo, "settings", None)
+    if isinstance(settings, dict):
+        return settings
+    if isinstance(settings, str):
+        try:
+            parsed = json.loads(settings)
+        except (TypeError, ValueError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
 
 
 def _require_work_item_unit_source(
@@ -493,22 +517,32 @@ def run_work_items_sync_job(
             before,
         )
 
-        # CHAOS-2720: A config-aware work-item unit carries exactly one source
-        # repo in ``repo_name``. ``_discover_repos`` only short-circuits on
-        # ``repo_id`` and otherwise returns every repo for the org, so without
-        # scoping the GitHub ingest loop below runs a full ``iter_ingest`` per
-        # org repo — one unit fanning out into N-repo API amplification. Scope
-        # the discovered GitHub repos to the unit's source so a GitHub unit
-        # ingests only its own repo. Matching is case-insensitive on
-        # ``full_name`` because both the source ``external_id`` and
-        # ``repos.repo`` are the GitHub ``owner/repo`` slug (admin sync planner,
-        # api/admin/routers/sync.py). GitLab is intentionally left org-wide
-        # here: its ``repo_name`` is a numeric project id that does not match
-        # ``repos.repo`` (``path_with_namespace``), so a ``full_name`` filter
-        # would empty GitLab discovery and trip the require_source guard below
-        # (CHAOS-2737). Only GitHub-source repos are touched; every other
-        # source passes through unchanged. When ``repo_name`` is absent
-        # (CLI/org-wide), discovery stays org-wide as before.
+        # CHAOS-2720 / CHAOS-2763: A config-aware work-item unit carries exactly
+        # one source repo/project in ``repo_name``. ``_discover_repos`` only
+        # short-circuits on ``repo_id`` and otherwise returns every repo for the
+        # org, so without scoping the GitHub/GitLab ingest loops below run a
+        # full ingest per org repo — one unit fanning out into N-repo API
+        # amplification. Scope the discovered repos to the unit's source so a
+        # unit ingests only its own repo/project.
+        #
+        # GitHub: matching is case-insensitive on ``full_name`` because both
+        # the source ``external_id`` and ``repos.repo`` are the GitHub
+        # ``owner/repo`` slug (admin sync planner, api/admin/routers/sync.py).
+        #
+        # GitLab (below, after this block): the unit's ``repo_name`` is the
+        # numeric GitLab project id (``IntegrationSource.external_id``), which
+        # never matches ``repos.repo`` (``path_with_namespace``) — so
+        # ASCII-decimal inputs match instead against the immutable
+        # ``settings.project_id`` captured at code-dataset sync time. Only
+        # path-shaped (non-numeric) inputs — e.g. CLI ``--repo-name
+        # grp/proj`` — fall back to the case-insensitive ``full_name`` match; a
+        # numeric id never falls back to ``full_name`` (a stale row's mutable
+        # path could otherwise coincidentally equal the id string).
+        #
+        # Only GitHub/GitLab-source repos are touched by their respective
+        # blocks; every other source passes through unchanged. When
+        # ``repo_name`` is absent (CLI/org-wide), discovery stays org-wide as
+        # before.
         if repo_name and "github" in provider_set:
             wanted = repo_name.strip().lower()
             scoped: list[Any] = []
@@ -529,6 +563,65 @@ def run_work_items_sync_job(
                     dropped,
                 )
             discovered_repos = scoped
+
+        # CHAOS-2763: gitlab twin of the GitHub scoping block above. See the
+        # comment there for the full rationale; summary: ASCII-decimal
+        # ``repo_name`` (the unit's canonical source-id shape) matches ONLY
+        # ``settings.project_id`` (never falls back to ``full_name`` —
+        # str.isdigit()-style non-ASCII digits are deliberately excluded via
+        # re.fullmatch so they fall into the path-shaped branch instead).
+        # Path-shaped ``repo_name`` (e.g. CLI ``--repo-name grp/proj``) matches
+        # ``full_name`` case-insensitively, same as GitHub.
+        #
+        # gitlab_id_scoped_project_ids [codex HIGH]: matching a row by its
+        # immutable project_id does NOT make ``repo.full_name`` safe to fetch
+        # by. If project 123 is renamed/moved after discovery and its old
+        # path is later reused by a *different* project, a unit for id "123"
+        # still matches this row by project_id, but fetching by the stale
+        # ``full_name`` would silently pull the wrong project's issues/MRs
+        # and write them under this row's repo_id — defeating the isolation
+        # the id match exists to provide. So every numeric-id-matched repo's
+        # immutable project id is recorded here and threaded into
+        # ``fetch_gitlab_work_items`` to use for the actual GitLab API calls;
+        # ``full_name`` is kept on the (unmodified) ``DiscoveredRepo`` for
+        # display/normalization only. Path-matched and org-wide (no-source)
+        # repos are NOT added here, so they keep fetching by ``full_name`` —
+        # unchanged, existing behavior; only an id-matched unit's identifier
+        # resolution changes.
+        gitlab_id_scoped_project_ids: dict[uuid.UUID, str] = {}
+        if repo_name and "gitlab" in provider_set:
+            wanted_gl = repo_name.strip()
+            is_numeric_id = re.fullmatch(r"[0-9]+", wanted_gl) is not None
+            scoped_gl: list[Any] = []
+            dropped_gl = 0
+            for repo in discovered_repos:
+                if repo.source != "gitlab":
+                    scoped_gl.append(repo)
+                    continue
+                if is_numeric_id:
+                    settings = _repo_settings_dict(repo)
+                    project_id = settings.get("project_id")
+                    matched = (
+                        project_id is not None and str(project_id).strip() == wanted_gl
+                    )
+                else:
+                    matched = (
+                        repo.full_name or ""
+                    ).strip().lower() == wanted_gl.lower()
+                if not matched:
+                    dropped_gl += 1
+                    continue
+                if is_numeric_id:
+                    gitlab_id_scoped_project_ids[repo.repo_id] = str(project_id).strip()
+                scoped_gl.append(repo)
+            if dropped_gl:
+                logger.info(
+                    "Scoped GitLab work-item unit to source project '%s': "
+                    "dropped %d off-source repo(s)",
+                    repo_name,
+                    dropped_gl,
+                )
+            discovered_repos = scoped_gl
 
         if require_source:
             if repo_name and {"github", "gitlab"}.intersection(provider_set):
@@ -688,6 +781,7 @@ def run_work_items_sync_job(
                 include_label_events=True,
                 org_id=org_id,
                 usage_observations=provider_usage_observations,
+                id_scoped_project_ids=gitlab_id_scoped_project_ids,
             )
             work_items.extend(items)
             transitions.extend(tr)

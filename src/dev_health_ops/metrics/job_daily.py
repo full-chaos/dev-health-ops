@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import uuid
@@ -173,13 +174,35 @@ def discover_repos(
                 repo_id=uuid.UUID(str(r[0])),
                 full_name=r[1],
                 source=r[3] if len(r) > 3 and r[3] != "unknown" else provider,
-                settings=r[2] or {},
+                settings=_parse_repo_settings(r[2]),
             )
             for r in rows
         ]
     except Exception as exc:
         logger.warning("Repo discovery failed: %s", exc)
         return []
+
+
+def _parse_repo_settings(raw: object) -> dict[str, Any]:
+    """Parse the ClickHouse ``repos.settings`` column into a dict.
+
+    ``settings`` is stored as a JSON string (Nullable(String)); the
+    ``DiscoveredRepo.settings: dict[str, object]`` annotation was previously
+    lying — this returned the raw string unparsed, so any per-provider match
+    on a settings key (e.g. CHAOS-2763's gitlab ``project_id`` scoping) would
+    always miss on production data. ``None``/malformed JSON/a non-dict JSON
+    value all yield ``{}`` so downstream numeric-id matching fails closed
+    instead of raising.
+    """
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw:
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
 
 
 # Backward-compat alias used by job_dora and job_work_items

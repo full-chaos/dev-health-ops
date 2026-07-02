@@ -210,6 +210,103 @@ spec:
             periodSeconds: 30
             timeoutSeconds: 15
 ---
+# External-ingest worker (CHAOS-2693 D8/master-spec CC11): isolated single
+# slot for the customer-push durable-stream consumer, dedicated queue (not
+# shared with the internal `worker-ingest` pool) so a slow external customer
+# can't starve internal ingest/telemetry, nor vice versa. DEPLOYMENT
+# INVARIANT: exactly ONE replica (fixed, no HPA) at --concurrency 1 -- the
+# reclaim/redelivery design (StreamConsumer.enable_reclaim,
+# reclaim_idle_ms=900_000) assumes a single logical consumer identity
+# draining the PEL; scaling replicas requires revisiting reclaim semantics.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dev-health-worker-external-ingest
+  namespace: dev-health
+  labels:
+    app.kubernetes.io/name: dev-health-worker-external-ingest
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: dev-health-ops
+spec:
+  progressDeadlineSeconds: 7600
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dev-health-worker-external-ingest
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dev-health-worker-external-ingest
+    spec:
+      terminationGracePeriodSeconds: 3700
+      securityContext:
+        runAsNonRoot: true
+      initContainers:
+        - name: wait-for-migrations
+          image: ghcr.io/your-org/dev-health-ops:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+          command:
+            - sh
+            - -c
+            - |
+              attempts=0
+              until dev-hops migrate clickhouse status --check; do
+                attempts=$((attempts + 1))
+                if [ "$attempts" -ge 60 ]; then
+                  echo "ClickHouse migrations still pending after $attempts checks; exiting for restart backoff" >&2
+                  exit 1
+                fi
+                echo "ClickHouse migrations pending; re-checking in 5s (attempt $attempts/60)"
+                sleep 5
+              done
+          envFrom:
+            - configMapRef:
+                name: dev-health-config
+            - secretRef:
+                name: dev-health-secrets
+      containers:
+        - name: worker-external-ingest
+          image: ghcr.io/your-org/dev-health-ops:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+          command:
+            - celery
+            - -A
+            - dev_health_ops.workers.celery_app
+            - worker
+            - --loglevel=info
+            - --disable-prefetch
+            - -Q
+            - external-ingest
+            - --concurrency
+            - "1"
+          envFrom:
+            - configMapRef:
+                name: dev-health-config
+            - secretRef:
+                name: dev-health-secrets
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          livenessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - dev_health_ops.workers.celery_app
+                - inspect
+                - ping
+                - --timeout
+                - "10"
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 15
+---
 # Heavy worker (CHAOS-2278): batch compute (metrics, backfill) + heavy
 # cost-class sync sub-queues (CHAOS-2517) isolated from latency-sensitive work.
 apiVersion: apps/v1

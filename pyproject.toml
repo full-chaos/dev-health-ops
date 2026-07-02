@@ -169,6 +169,12 @@ per-file-ignores = { "__init__.py" = [
   "E402",
 ], "tests/test_ingest_streams.py" = [
   "E402",
+], "tests/api/test_external_ingest_streams.py" = [
+  "E402",
+], "tests/api/test_external_ingest_consumer.py" = [
+  "E402",
+], "tests/api/test_external_ingest_stream_health.py" = [
+  "E402",
 ] }
 
 [tool.ruff.format]

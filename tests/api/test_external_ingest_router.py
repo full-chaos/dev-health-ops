@@ -55,8 +55,25 @@ TEST_CTX = IngestAuthContext(
 )
 
 
+async def _default_fake_enqueue(**kwargs) -> str:
+    return "stream-x"
+
+
+async def _default_fake_upsert_payload(*args, **kwargs) -> None:
+    return None
+
+
+async def _fake_postgres_session_dep():
+    # Router-contract tests don't need a database (module docstring) --
+    # upsert_payload is mocked by default (see _default_fake_upsert_payload)
+    # so this session object is never actually used for real I/O; only the
+    # payload-persistence integration tests (test_external_ingest_router_
+    # payload_persistence.py) exercise a real session.
+    yield None
+
+
 @pytest_asyncio.fixture
-async def client():
+async def client(monkeypatch):
     # Overriding require_ingest_scope (the factory) would not intercept
     # anything: router.py binds each scope's closure once at import time via
     # Depends(_require_schema_read)/Depends(_require_ingest_write), and
@@ -65,6 +82,17 @@ async def client():
     # unit tests never exercise D7's real (WARN-logging) interim auth body.
     app.dependency_overrides[router_mod._require_schema_read] = lambda: TEST_CTX
     app.dependency_overrides[router_mod._require_ingest_write] = lambda: TEST_CTX
+    app.dependency_overrides[router_mod.get_postgres_session_dep] = (
+        _fake_postgres_session_dep
+    )
+    # Amendment (team-lead-authorized router touch, see PR): accept_batch now
+    # persists the payload before enqueueing. Default both to working
+    # async no-ops so every existing contract-level test (envelope/kind/size
+    # validation, schema discovery, etc.) keeps not needing a database;
+    # individual tests below still override enqueue_batch for their own
+    # success/failure scenarios.
+    monkeypatch.setattr(router_mod, "enqueue_batch", _default_fake_enqueue)
+    monkeypatch.setattr(router_mod, "upsert_payload", _default_fake_upsert_payload)
     # raise_app_exceptions=False: Starlette's ServerErrorMiddleware sends the
     # sanitized 500 response *then* re-raises so ASGI-server-level logging
     # still sees it; without this, httpx's ASGITransport re-raises instead of
@@ -76,6 +104,7 @@ async def client():
     finally:
         app.dependency_overrides.pop(router_mod._require_schema_read, None)
         app.dependency_overrides.pop(router_mod._require_ingest_write, None)
+        app.dependency_overrides.pop(router_mod.get_postgres_session_dep, None)
 
 
 def _record(kind: str, external_id: str, payload: dict) -> dict:
@@ -149,7 +178,7 @@ def _envelope(records: list[dict], idempotency_key: str = "test-key-1") -> dict:
 async def test_accept_minimal_valid_batch(client, monkeypatch):
     calls = []
 
-    def fake_enqueue(**kwargs):
+    async def fake_enqueue(**kwargs):
         calls.append(kwargs)
         return "external-ingest:test-org:batches"
 
@@ -171,8 +200,7 @@ async def test_accept_minimal_valid_batch(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_accept_batch_with_all_nine_kinds(client, monkeypatch):
-    monkeypatch.setattr(router_mod, "enqueue_batch", lambda **kwargs: "stream-x")
+async def test_accept_batch_with_all_nine_kinds(client):
     records = [
         _record(kind, f"ext-{kind}", payload)
         for kind, payload in VALID_PAYLOADS.items()

@@ -45,6 +45,13 @@ class MixedOrgError(RuntimeError):
     """Refusal to write synthetic fixtures into an org holding synced data."""
 
 
+# Server messages that mean the scanned table simply is not there yet (fresh
+# database, migrations not run). ONLY these disarm the scan for that table —
+# any other failure (connectivity, auth, syntax) must fail CLOSED, or a
+# transient outage would silently let fixtures pollute a live org.
+_MISSING_TABLE_MARKERS = ("UNKNOWN_TABLE", "does not exist", "doesn't exist")
+
+
 async def _detect_live_providers(store: Any, org_id: str) -> set[str]:
     """Best-effort scan for live (connector-synced) providers in ``org_id``.
 
@@ -69,9 +76,12 @@ async def _detect_live_providers(store: Any, org_id: str) -> set[str]:
                 query,
                 parameters={"org_id": org_id, "live": list(LIVE_PROVIDERS)},
             )
-        except Exception as exc:  # fresh DB / missing table: nothing synced yet
-            logging.debug("mixed-org guard skipped table %s: %s", table, exc)
-            continue
+        except Exception as exc:
+            if any(marker in str(exc) for marker in _MISSING_TABLE_MARKERS):
+                # Fresh DB / missing table: nothing synced yet.
+                logging.debug("mixed-org guard skipped table %s: %s", table, exc)
+                continue
+            raise
         found.update(str(row[0]) for row in getattr(result, "result_rows", []) or [])
     return found
 

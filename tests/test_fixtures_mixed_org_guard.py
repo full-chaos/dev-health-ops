@@ -107,6 +107,20 @@ async def test_detect_live_providers_tolerates_missing_tables() -> None:
 
 
 @pytest.mark.asyncio
+async def test_detect_live_providers_fails_closed_on_connectivity_error() -> None:
+    """A transient outage must NOT silently disarm the guard (codex HIGH)."""
+
+    class _DownClient:
+        def query(self, query: str, parameters: dict[str, Any]) -> _StubResult:
+            raise RuntimeError("Connection refused: clickhouse:8123")
+
+    store = ClickHouseStore("clickhouse://stub:8123/stub")
+    store.client = _DownClient()
+    with pytest.raises(RuntimeError, match="Connection refused"):
+        await _detect_live_providers(store, _ORG)
+
+
+@pytest.mark.asyncio
 async def test_ensure_org_unpolluted_raises_with_provider_names() -> None:
     store, _ = _stub_store({"work_items": [("linear",)], "repos": [("github",)]})
     with pytest.raises(MixedOrgError) as excinfo:

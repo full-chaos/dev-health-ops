@@ -76,6 +76,23 @@ class OperationResolver:
     When no family matches, the transport's entry in ``defaults`` is used; if
     the transport itself is unknown the observation collapses onto
     :data:`UNCLASSIFIED_ROUTE_FAMILY` (still bounded, never per-operation).
+
+    **Explicit-prefix short-circuit (CHAOS-2773 CS1).** Before the substring
+    marker scan runs, an operation label of the form ``"<route_family>:..."``
+    resolves DIRECTLY to that family (still transport-filtered), bypassing
+    the marker scan entirely. This exists because broad legacy substring
+    markers are ambiguous by construction -- e.g. GitLab's ``project`` family
+    registers ``"/projects/:id"`` / ``"/projects/"`` as markers, so a
+    self-authored label like ``"pipelines:GET /projects/:id/pipelines"``
+    would otherwise be swallowed by ``project`` (listed first) before
+    ``pipelines`` is ever consulted. Canonical code clients author both the
+    label and the family prefix themselves, so resolution for THOSE labels is
+    deterministic and unambiguous by construction rather than by marker
+    tuning. Unprefixed labels (every existing work-client operation label
+    today) never hit this branch and take the marker-scan path UNCHANGED --
+    pinned by ``tests/providers/test_usage_resolver_prefix.py``, which also
+    asserts no existing work-client label accidentally starts with a
+    registered ``"<family>:"`` prefix (the false-trigger regression guard).
     """
 
     families: tuple[UsageRouteFamily, ...] = ()
@@ -86,6 +103,11 @@ class OperationResolver:
 
     def resolve(self, *, transport: str, operation: str) -> tuple[str, BudgetDimension]:
         lowered = operation.lower()
+        prefix_match = self._resolve_explicit_prefix(
+            transport=transport, lowered=lowered
+        )
+        if prefix_match is not None:
+            return prefix_match
         for family in self.families:
             if family.transport is not None and family.transport != transport:
                 continue
@@ -97,6 +119,20 @@ class OperationResolver:
             if default_transport == transport:
                 return (route_family, dimension)
         return (UNCLASSIFIED_ROUTE_FAMILY, _default_dimension_for_transport(transport))
+
+    def _resolve_explicit_prefix(
+        self, *, transport: str, lowered: str
+    ) -> tuple[str, BudgetDimension] | None:
+        """Return the first registered family whose ``"<family>:"`` prefix
+        matches ``lowered``, respecting the same per-family transport filter
+        the marker scan uses, or ``None`` when no registered family prefixes
+        the label (the common case for every unprefixed/legacy label)."""
+        for family in self.families:
+            if family.transport is not None and family.transport != transport:
+                continue
+            if lowered.startswith(f"{family.route_family}:"):
+                return (family.route_family, family.dimension)
+        return None
 
 
 def _default_dimension_for_transport(transport: str) -> BudgetDimension:

@@ -695,6 +695,133 @@ candidate — an expired cooldown does not cause every sibling to dispatch at
 once beyond what DispatchGuard's concurrency cap already allows
 (`test_cooldown_expiry_drains_bounded_by_concurrency_cap`).
 
+## Instrumented transport core (CHAOS-2773 CS1)
+
+[CHAOS-2773](https://linear.app/fullchaos/issue/CHAOS-2773) migrates the
+frozen GitHub/GitLab code-dataset fetch paths (`git`, `commit_stats`,
+`files`, `blame`, `cicd`, `tests`, `deployments`, `security` and their
+GitLab equivalents — see the "Frozen `connectors/` path" entry under
+[Known gaps](#known-gaps)) off `connectors/` onto canonical, instrumented
+`providers/github/` / `providers/gitlab/` clients. **CS1 lands the shared
+foundation every per-family changeset (CS3+) builds on; it does NOT itself
+migrate any dataset** — the frozen connector path is unchanged and remains
+the live fetch path for every code-dataset family until its own changeset
+cuts over.
+
+**`providers/_http.py::InstrumentedRESTCore`** is the one httpx transport
+primitive every canonical code client composes (never inherits) — mirroring
+`providers/launchdarkly/client.py` (the sanctioned template) and the
+"will be folded into the shared core once it lands" precedent already noted
+on `providers/gitlab/feature_flags.py`:
+
+- `request(method, path, *, operation, params, headers)` records ONE
+  `UsageRecorder.record` per PHYSICAL HTTP round trip, including retried
+  429/5xx attempts — never one record per logical call. The recorded
+  diagnostic-header set is **provider-configurable**
+  (`diagnostic_header_names` constructor param): code clients pass
+  `GITHUB_DIAGNOSTIC_HEADER_NAMES` / `GITLAB_DIAGNOSTIC_HEADER_NAMES`, which
+  are pinned by parity tests
+  (`tests/providers/test_http_core.py::TestDiagnosticHeaderParity`) to match
+  the existing work-client recorders' header sets EXACTLY (request IDs,
+  `x-ratelimit-used`/`-resource`, `x-accepted-github-permissions`,
+  `x-request-id`/`x-runtime` — never the token), so observations from the
+  core are shape-compatible with today's `latest_headers` diagnostics.
+- Retry/backoff and terminal-429 delay resolution go through the EXISTING
+  shared `providers/_ratelimit.py` helpers — `Retry-After` first
+  (delta-seconds or HTTP-date), **falling back to the provider's
+  epoch-seconds reset header** (`reset_header_name`:
+  `X-RateLimit-Reset`/`RateLimit-Reset`) via
+  `resolve_retry_after_seconds(...)`, the provider-parameterized
+  generalization of #1142's `gitlab_resolve_retry_after_seconds` (which now
+  delegates to it — still exactly one implementation). This matters at the
+  worker boundary: `workers/sync_units.py` plans a deferral's `not_before`
+  from `exc.retry_after_seconds`, not `signal.reset_at`, so a reset-only
+  429 must carry the derived delay rather than `None` (which would wake the
+  unit on the 60s default instead of the provider's real reset window). On
+  retry exhaustion of a 429 the core raises the canonical
+  `dev_health_ops.exceptions.RateLimitException` carrying a CHAOS-2753
+  `RateLimitSignal` built via `RateLimitSignal.reset_at_from_epoch_seconds`
+  (GitHub/GitLab both report epoch SECONDS, unlike LaunchDarkly's epoch
+  milliseconds) — `integration_id`/`route_family` are left `None`
+  (worker-boundary enrichment, unchanged).
+- **Explicit redirect policy + unauthenticated follow-up hop.** The
+  underlying httpx client never follows redirects, so the core refuses to
+  let a 3xx masquerade as success: by default any 3xx is a terminal
+  `APIException` naming the redirect target (the physical attempt is still
+  recorded — no unaccounted hops). The two-hop pattern for GitHub's
+  artifact-zip download (`connectors/github.py::download_artifact_zip`;
+  ports in CS5): (1) a per-call `raw_redirect=True` opt-in returns the 3xx
+  response itself (recorded, never retried); (2)
+  `request_unauthenticated(location, operation=...)` follows the absolute
+  `Location` through a SECOND, headerless client owned by the core — httpx
+  sends a client's default headers even on absolute-URL requests and
+  rejects `Authorization: None`, so a separate no-default-headers client is
+  the only clean way to keep the provider token off the pre-signed
+  blob/CDN URL. The hop is still recorded through the same `UsageRecorder`,
+  and the response comes back unclassified (the pre-signed host is a
+  different error domain — the artifact contract's 404/410 →
+  convenience-empty decision belongs to the CS5 code client, not the
+  transport). Pinned end-to-end by
+  `tests/providers/test_http_core.py::TestUnauthenticatedFollow` (second
+  hop carries no `Authorization`, both hops recorded one apiece).
+- `paginate_link_header` (GitHub's RFC 5988 `Link` header) and
+  `paginate_page_param` (GitLab's `page`/`per_page` + `X-Next-Page`) both
+  carry hard page caps as a defensive backstop against a misbehaving/looping
+  cursor.
+- Base-URL joining reuses the existing `GitHubAuth.base_url` /
+  `GitLabAuth.base_url` string fields (`github_rest_base_url` /
+  `gitlab_rest_base_url`) — GHE (`https://ghe.example.com/api/v3`, joined
+  as-is) and self-hosted GitLab (`GITLAB_URL` + `/api/v4`) both preserved.
+- Credential resolution stays entirely ABOVE this module — it never touches
+  auth, only the headers a caller already resolved.
+- **Composition, not inheritance.** The core's own status-code
+  classification is intentionally generic (429/5xx retry; 401/403/404/other
+  4xx map to the obvious exception). GitHub's 403 triage and GitLab's
+  header-qualified-403 semantics are NOT baked in here — a future code
+  client wires them in via the `is_retryable_status` / `classify_error`
+  extension points, reusing the shared classifiers below.
+
+**Shared 403/429 classifiers** (extracted so a REST work client and its
+future httpx code-client twin never carry a second copy of the same
+triage):
+
+- `providers/github/ratelimit.py::classify_github_403` — primary
+  (`x-ratelimit-remaining: 0`) vs. secondary/abuse (`Retry-After` header or
+  documented body wording) vs. permission/SSO (not a rate limit).
+  `providers/github/client.py::GitHubWorkClient._raise_github_exception` now
+  delegates to it for the 403 branch; behavior is pinned by porting the
+  relevant cases from `tests/test_github_403_observability.py` into
+  `tests/providers/test_github_ratelimit_classifier.py`.
+- `providers/gitlab/ratelimit.py::classify_gitlab_status` — 429-primary /
+  header-qualified-403-secondary, built directly on the
+  `providers/_ratelimit.py` primitives (`gitlab_403_is_rate_limited` /
+  `gitlab_resolve_retry_after_seconds`, #1142).
+  `providers/gitlab/client.py::_maybe_raise_gitlab_rate_limit` now delegates
+  to it, so exactly one predicate/delay implementation exists for GitLab
+  (the #1142 feature-flags client already called the `_ratelimit.py`
+  primitives directly; this closes the remaining gap in the work client).
+
+**Resolver explicit-prefix short-circuit**
+(`providers/usage.py::OperationResolver.resolve`). The substring marker scan
+alone cannot carry a family-prefixed operation-label scheme: families are
+scanned in order and the FIRST marker hit wins, and GitLab's `project`
+family already registers broad markers (`"/projects/:id"`, `"/projects/"`)
+that would swallow, e.g., a `pipelines:GET /projects/:id/pipelines` label
+before `pipelines` is ever consulted. Fixed structurally: before the marker
+scan runs, an operation label of the form `"<registered-family>:..."`
+resolves DIRECTLY to that family. Unprefixed labels — every existing
+work-client label today — take the marker-scan path completely UNCHANGED,
+pinned by an exhaustive label→family resolver test
+(`tests/providers/test_usage_resolver_prefix.py`) that (a) asserts every
+current GitHub/GitLab work-client operation label resolves EXACTLY as it did
+before this change, (b) asserts representative prefixed labels per
+registered family resolve directly to that family, and (c) asserts no
+existing work-client label accidentally starts with a registered
+`"<family>:"` prefix (the false-trigger regression guard). Code clients
+built on this core (CS3+) are expected to author both the label and its
+family prefix themselves, so resolution for their traffic is deterministic
+by construction rather than by marker tuning.
+
 ## Per-provider policy
 
 ### GitHub

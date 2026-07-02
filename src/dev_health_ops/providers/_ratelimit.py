@@ -151,26 +151,29 @@ def gitlab_403_is_rate_limited(headers: Any) -> bool:
     )
 
 
-def gitlab_resolve_retry_after_seconds(headers: Any) -> float | None:
-    """Resolve the effective retry delay for a rate-limited GitLab response.
+def resolve_retry_after_seconds(
+    headers: Any, *, reset_header_name: str
+) -> float | None:
+    """Resolve the effective retry delay from rate-limit response headers.
 
     Prefers ``Retry-After`` via :func:`parse_retry_after_header` (handles
     both delta-seconds and HTTP-date forms). When that header is absent or
-    unparseable, derives the delay from ``RateLimit-Reset`` (an absolute
-    epoch-seconds timestamp) instead of leaving the caller with ``None`` --
-    a caller that treats "no Retry-After" as "no signal at all" and falls
-    back to its own short default backoff ends up re-hammering a
-    still-throttled self-hosted instance sooner than the server intends.
-
-    Mirrors ``providers/gitlab/client.py::_maybe_raise_gitlab_rate_limit``'s
-    ``Retry-After`` / ``RateLimit-Reset`` fallback byte-for-byte; extracted
-    here so GitLab provider clients other than ``GitLabWorkClient`` derive
-    the SAME delay from the SAME headers instead of reimplementing (or
-    worse, silently omitting) the ``RateLimit-Reset`` fallback.
+    unparseable, derives the delay from ``reset_header_name`` (an absolute
+    epoch-seconds timestamp -- ``X-RateLimit-Reset`` for GitHub,
+    ``RateLimit-Reset`` for GitLab) instead of leaving the caller with
+    ``None`` -- a caller that treats "no Retry-After" as "no signal at all"
+    and falls back to its own short default backoff ends up re-hammering a
+    still-throttled instance sooner than the server intends. Provider-
+    parameterized generalization of the GitLab-specific delay resolution
+    shipped in #1142 (see :func:`gitlab_resolve_retry_after_seconds`, which
+    now delegates here) so the CHAOS-2773 CS1 shared REST core reuses ONE
+    implementation instead of growing a second copy.
 
     :param headers: any object exposing a ``.get(name)`` mapping interface --
         an ``httpx.Headers``, a plain ``dict``, or python-gitlab's
         ``response_headers``.
+    :param reset_header_name: header carrying the provider's epoch-seconds
+        rate-limit reset timestamp.
     """
     retry_after = parse_retry_after_header(headers)
     if retry_after is not None:
@@ -178,7 +181,7 @@ def gitlab_resolve_retry_after_seconds(headers: Any) -> float | None:
     if headers is None:
         return None
     try:
-        reset_raw = headers.get("RateLimit-Reset")
+        reset_raw = headers.get(reset_header_name)
     except AttributeError:
         return None
     if reset_raw is None:
@@ -187,3 +190,25 @@ def gitlab_resolve_retry_after_seconds(headers: Any) -> float | None:
         return max(0.0, float(reset_raw) - time.time())
     except (TypeError, ValueError):
         return None
+
+
+def gitlab_resolve_retry_after_seconds(headers: Any) -> float | None:
+    """Resolve the effective retry delay for a rate-limited GitLab response.
+
+    Prefers ``Retry-After`` via :func:`parse_retry_after_header` (handles
+    both delta-seconds and HTTP-date forms). When that header is absent or
+    unparseable, derives the delay from ``RateLimit-Reset`` (an absolute
+    epoch-seconds timestamp) instead of leaving the caller with ``None``.
+
+    Mirrors ``providers/gitlab/client.py::_maybe_raise_gitlab_rate_limit``'s
+    ``Retry-After`` / ``RateLimit-Reset`` fallback byte-for-byte; extracted
+    here so GitLab provider clients other than ``GitLabWorkClient`` derive
+    the SAME delay from the SAME headers instead of reimplementing (or
+    worse, silently omitting) the ``RateLimit-Reset`` fallback. Thin
+    GitLab-pinned wrapper over :func:`resolve_retry_after_seconds`.
+
+    :param headers: any object exposing a ``.get(name)`` mapping interface --
+        an ``httpx.Headers``, a plain ``dict``, or python-gitlab's
+        ``response_headers``.
+    """
+    return resolve_retry_after_seconds(headers, reset_header_name="RateLimit-Reset")

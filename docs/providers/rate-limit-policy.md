@@ -323,10 +323,227 @@ value outside this vocabulary) — never `str(exception)`.
 once daily. This is an observation log, not an audit trail — expired rows are
 deleted outright, no archival path.
 
-**Not yet wired: cooldown gating.** Nothing reads this table back before
-dispatch yet — see [Known gaps](#known-gaps) /
-[CHAOS-2760](https://linear.app/fullchaos/issue/CHAOS-2760). Any such
-consumer must honor the `route_family_attribution` fallback contract above.
+**Cooldown gating reads this table back before dispatch** — see the next
+section.
+
+## Cooldown gating
+
+Shipped in [CHAOS-2760](https://linear.app/fullchaos/issue/CHAOS-2760). A 429
+observed by one unit today only defers *that* unit
+(`workers/sync_units.py:731-836`, the `RateLimitException` handler above) —
+siblings of the same provider/integration/route-family would otherwise
+dispatch anyway and rediscover the same limit in-worker, each burning a
+worker slot and a provider round-trip the observation store already knows is
+futile. `BudgetGuard.enforce_run` (`sync/budget_guard.py`) closes that gap:
+before admitting this dispatch pass's candidates against budget, it consults
+`provider_rate_limit_observations` for an ACTIVE cooldown and defers (or, on
+deferral-budget exhaustion, terminally fails) any candidate that matches.
+
+**Match key: `(org_id, provider, integration_id, route_family)` — org-scoped,
+and deliberately excluding `credential_fingerprint`/`host`.** This is the
+credentials-are-not-capacity invariant applied to gating: rotating an
+integration's credential between the observation write and the next dispatch
+pass must never let a sibling unit slip past a cooldown that is still active
+(`tests/test_budget_guard_cooldown.py::test_credential_rotation_does_not_bypass_cooldown`).
+`host` is diagnostic-only on the observation row (multi-host GitHub
+Enterprise, etc.) and is never part of the match. A cooldown observed under
+one `org_id` never gates another org's units, even if `(provider,
+integration_id, route_family)` coincide
+(`test_cooldown_never_crosses_org_boundary`).
+
+**Ambiguous-attribution fallback.** Per the [observation store's confidence
+gate](#observation-store), a row with `route_family=NULL` and
+`route_family_attribution='ambiguous_dimension'` carries a populated
+`dimension` instead. The gate never treats that NULL family as matching
+every candidate (over-defer) or none (silent under-defer): it falls back to
+matching on `(org_id, provider, integration_id, dimension)`, gating every
+candidate estimate whose dimension matches, regardless of which specific
+family within that dimension actually hit the limit
+(`test_ambiguous_attribution_falls_back_to_dimension_gating`).
+
+**Cooldown window.** `coalesce(reset_at, observed_at + retry_after_seconds)`,
+falling back to a fixed conservative window
+(`RATE_LIMIT_DEFAULT_COUNTDOWN_SECONDS`, 60s) when an observation carried
+neither — never treated as "already expired" (under-defer) nor "cooldown
+forever" (stuck run). `available_at` for a gated unit is derived from
+`plan_rate_limit_deferral`'s own `not_before` (plus the same jitter,
+`SYNC_BUDGET_DEFERRAL_JITTER_SECONDS`, the budget-defer path already uses),
+**not** the raw cooldown expiry — `not_before` already clamps to the
+remaining `RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS` wall-clock budget, so a
+far-future `reset_at` cannot park a unit past the point the shared
+rate-limit-deferral budget says to terminalize instead
+(`test_cooldown_available_at_respects_wall_clock_clamp`,
+`test_cooldown_wall_clock_budget_exhausted_terminalizes_rather_than_sleeping_past_clamp`).
+The jitter itself is added AFTER `not_before`, so it is clamped a second
+time against the wall-clock deadline
+(`first_seen_at + RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS`) — jitter stacked on an
+already-clamped `not_before` must not itself push `available_at` past the
+deadline (review finding, round 2). A unit whose estimates span multiple
+route families is deferred if **any** one is cooling down (mirrors the
+existing would-defer-any-estimate budget semantics) and, when more than one
+matches, waits for the last one to clear.
+
+**One indexed query per dispatch pass, never per unit — plus one cheap
+re-check immediately before the claim, which fully defers/terminalizes any
+match it catches.** `enforce_run` issues a single
+`provider_rate_limit_observations` query, scoped to the dispatch pass's
+candidate `(org_id, provider, integration_id)` tuples and a bounded recency
+window (`SYNC_RATE_LIMIT_COOLDOWN_LOOKBACK_SECONDS`, default
+`RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS` plus the max configured jitter plus a
+300s skew margin — deliberately NOT equal to the wall-clock budget alone;
+see the termination note below), using the `ws-d`
+`(provider, integration_id, route_family, observed_at)` index
+(`test_single_observation_query_per_dispatch_pass`). Because `enforce_run`
+itself does further DB work after that read (budget admission,
+active-consumption re-estimation), a sibling unit's 429 can commit a
+brand-new observation in that window — one the snapshot never saw — and
+without a second look `_claim_units` would dispatch straight into it. Review
+finding, closed: `dispatch_sync_run` calls `BudgetGuard.reconfirm_cooldowns`
+— the SAME cheap query and matching logic, reusing the estimates
+`enforce_run` already computed (no re-estimation, no credential decryption)
+— as the LAST read before the atomic claim. A match here is NOT a bare
+exclusion: it goes through the exact same `_apply_cooldown_deferral` /
+`_terminalize_rate_limit_exhausted` write path `enforce_run`'s own cooldown
+loop uses — full `RETRYING` + `available_at` + `rate_limit_deferrals`
+bookkeeping, or termination on budget exhaustion — folding the result into
+the claim's excluded-id set AND `next_deferred_at` for the redispatch
+re-arm. A bare PLANNED exclusion (the original CHAOS-2760 review-round-1
+shape) left the unit with zero deferral-budget bookkeeping and livelocked
+the run redispatching on a bare ~60s countdown forever, re-triggering the
+same exclusion indefinitely without ever counting toward termination
+(review finding, round 2) —
+(`test_concurrent_observation_between_enforce_run_and_claim_still_defers_sibling`,
+`test_late_reconfirm_match_short_reset_window_defers_with_full_bookkeeping`,
+`test_late_reconfirm_match_long_reset_window_clamps_to_wall_clock_deadline`,
+`test_reconfirm_cooldowns_terminalizes_exhausted_match_directly`). This is
+not full serializability — a commit landing in the residual microsecond gap
+between that re-check and the claim's own `UPDATE` could still slip through
+— but it collapses the exposure window from "however long budget admission
+takes" down to back-to-back statements, consistent with how the rest of the
+dispatch path tolerates narrow races via CAS predicates rather than
+`SERIALIZABLE` transactions.
+
+**Termination does not depend on re-reading the observation.** A unit
+deferred by this gate gets `available_at` clamped to the wall-clock budget,
+so it becomes due again at roughly the SAME age its causing observation's
+`observed_at` has reached — a lookback window equal to
+`RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS` would age the row out of visibility at
+almost exactly the instant termination should fire instead, making the
+observation invisible right when it matters most (review finding, round 2).
+Two-part fix: (a) the lookback window carries slack beyond the bare
+wall-clock budget (jitter max + a generous skew margin — see above), so a
+row that is merely a little older than the budget stays visible
+(`test_cooldown_lookback_window_has_slack_beyond_wall_clock_budget`); (b) as
+a belt-and-suspenders backstop that does not depend on that window at all,
+every candidate with rate-limit-deferral history is ALSO checked directly
+against its own persisted `rate_limit_deferrals`/`rate_limit_first_seen_at`
+(`_rate_limit_deferral_exhausted`) — if the shared budget is already spent,
+it terminalizes from that state alone, with or without a currently-visible
+cooldown observation
+(`test_cooldown_observation_aged_past_lookback_terminalizes_from_unit_state`).
+
+**`rate_limit_deferrals`/`rate_limit_first_seen_at` are cleared at episode
+boundaries — not left to go stale.** Checking a unit's own persisted
+deferral state directly (the belt-and-suspenders backstop above) only works
+if that state actually reflects the CURRENT episode. Review finding, round
+3: these columns were never cleared once a unit left a rate-limit episode —
+a successful claim of a due `RETRYING` unit doesn't touch them, and neither
+did any non-rate-limit retry path (expired lease, soft timeout, generic
+worker-lost retry). Sequence that broke: a unit takes one rate-limit
+deferral, is later claimed fine (the provider recovers), then loses its
+worker (lease expiry) or soft-times-out for a totally unrelated reason; once
+the stale `first_seen_at` from the OLD episode is more than
+`RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS` old, `_rate_limit_deferral_exhausted`
+would fire against it and wrongly terminalize healthy, unrelated work — a
+silent data gap. Fixed at the root: every transition to `SUCCESS` and every
+`RETRYING` stamp for a reason OTHER than a rate limit now explicitly clears
+both columns to `0`/`NULL`; only a rate-limit-caused deferral (the in-worker
+429 path, or this gate's own cooldown deferral) keeps/accumulates them,
+because that is the episode continuing. Defense in depth on top:
+`_rate_limit_deferral_exhausted` ALSO requires the unit's own
+most-recently-recorded `result.error_category` to be rate-limit-related
+(`rate_limit` or `rate_limit_cooldown_deferred`) before it can fire at all —
+a stale row that somehow survives a missed clear site still cannot
+terminalize healthy work, because its last recorded cause would show
+something else
+(`test_stale_rate_limit_columns_without_rate_limit_error_category_do_not_terminalize`).
+Gating alone would not have been sufficient as the root fix, though: a
+genuinely NEW rate-limit episode starting while a stale `first_seen_at`
+persists would still terminalize prematurely against the old clock, which
+is exactly why the clear-at-episode-boundary fix is the primary mechanism
+and the `error_category` check is the backstop, not the other way around.
+
+Every `SyncRunUnit` transition to `RETRYING` or a terminal state across
+`workers/sync_units.py`, `sync/budget_guard.py`, and
+`workers/sync_reconciler.py` was swept for an explicit keep-or-clear
+decision:
+
+| Site | Transition | Cause | Decision |
+| --- | --- | --- | --- |
+| `run_sync_unit` success stamp (`sync_units.py`) | `RUNNING`→`SUCCESS` | episode resolved | **clear** |
+| In-worker `RateLimitException` deferral (`sync_units.py`) | `RUNNING`→`RETRYING` | rate limit | **keep/accumulate** |
+| Soft-timeout retry (`_stamp_sync_unit_soft_timeout`, `sync_units.py`) | `RUNNING`→`RETRYING` | unrelated | **clear** |
+| Soft-timeout exhausted (`sync_units.py`) | `RUNNING`→`FAILED` | unrelated, terminal | leave (informational) |
+| Generic failure (`_stamp_sync_unit_failed`, `sync_units.py`) | `RUNNING`→`FAILED` | unrelated/terminal | leave (informational) |
+| Total-cap stale-dispatch fail (`sync_units.py`) | `DISPATCHING`→`FAILED` | unrelated, terminal | leave (informational) |
+| `PLANNED` claim (`_claim_units`, `sync_units.py`) | `PLANNED`→`DISPATCHING` | n/a (always fresh) | no change needed |
+| Due-`RETRYING` claim (`_claim_units`, `sync_units.py`) | `RETRYING`→`DISPATCHING` | unknown (batch claim, any prior reason) | **no change** — must NOT clear here: this fires before the attempt's outcome is known, so clearing would prematurely reset an ONGOING rate-limit episode's counter before the redispatch even runs; the correct clear point is the transition AFTER this attempt resolves (`SUCCESS`, or a specific non-rate-limit retry stamp) |
+| Lease acquire (`DISPATCHING`→`RUNNING`, `sync_units.py`) | transient | n/a | no change needed (outcome still unknown) |
+| Expired-lease retry (`sync_reconciler.py`) | `RUNNING`→`RETRYING` | unrelated | **clear** |
+| Expired-lease exhausted (`sync_reconciler.py`) | `RUNNING`→`FAILED` | unrelated, terminal | leave (informational) |
+| Budget-guard deferral (`_defer_unit_for_budget`, `budget_guard.py`) | any→`RETRYING` | unrelated (budget capacity, not a provider rate limit) | **clear** |
+| Cooldown-gate deferral (`_apply_cooldown_deferral`, `budget_guard.py`) | any→`RETRYING` | rate limit | **keep/accumulate** |
+| Wall-clock/cooldown exhaustion terminalize (`_terminalize_rate_limit_exhausted`, `budget_guard.py`) | any→`FAILED` | rate limit, terminal | leave (informational — the count that caused termination) |
+
+**Fail-open on a broken read, including a single malformed row.** Any error
+querying the observation store (migration not yet applied on a rolling
+node, transient DB error, etc.) is logged and treated as "no active
+cooldown" — a diagnostic store must never block dispatch
+(`test_cooldown_read_failure_fails_open`). Per-row parsing is fail-open too:
+a single malformed row (e.g. a non-finite `retry_after_seconds`, where
+`timedelta(seconds=...)` raises `OverflowError`) is skipped and logged
+rather than aborting the whole pass and blocking dispatch org-wide
+(`test_cooldown_read_survives_malformed_observation_row`). The writer
+(`workers/sync_units.py` `_build_rate_limit_observation`) also sanitizes
+`retry_after_seconds` before it is ever persisted — rejecting non-finite/
+negative values and clamping to `RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS` — so a
+corrupt value should never reach the store in the first place; the reader's
+guard is defense in depth, not the only line of defense
+(`test_observation_sanitizes_non_finite_retry_after_seconds`,
+`test_observation_clamps_excessive_retry_after_seconds` in
+`tests/test_rate_limit_observations.py`).
+
+**Deferral mechanics reuse the existing budget-guard vocabulary, not a new
+unit status.** A gated unit is stamped `RETRYING` with the computed
+`available_at`, exactly like `_defer_unit_for_budget`, but with a
+**distinct** `result.error_category`: `rate_limit_cooldown_deferred` — so
+operators can tell a shared-cooldown hit apart from `budget_deferred`
+(budget admission) and `rate_limit` (the in-worker per-unit 429 path).
+`BudgetGuardResult.next_deferred_at` folds in the earliest cooldown-deferred
+`available_at` exactly like a budget deferral, so the existing
+`_schedule_redispatch` re-arm (`workers/sync_units.py`) fires and the run
+does not strand until the periodic reconciler scan
+(`test_next_deferred_at_rearms_redispatch`).
+
+**Cooldown deferrals count against the existing per-unit rate-limit-deferral
+budget.** `plan_rate_limit_deferral`
+(`workers/rate_limit_defer.py`, `RATE_LIMIT_MAX_DEFERRALS=10` /
+`RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS=2h`) is reused for the
+`rate_limit_deferrals`/`rate_limit_first_seen_at` bookkeeping — the SAME
+columns and budget the in-worker 429 path already uses. This was a deliberate
+CHAOS-2742 recon decision: run-liveness beats optimism, so a chronically
+rate-limited provider **terminalizes** (stamped `FAILED`,
+`error_category=rate_limit_cooldown_exhausted`) once the shared budget is
+spent, rather than holding the run open indefinitely on gate hits that never
+even reach the provider
+(`test_cooldown_deferral_consumes_rate_limit_budget_and_terminalizes`).
+
+**Herd-on-expiry is naturally paced.** `RETRYING` units never consume
+concurrency capacity, and due-`RETRYING` claims are still bounded by
+`SYNC_UNIT_CONCURRENCY_PER_BUCKET` per dispatch pass exactly like any other
+candidate — an expired cooldown does not cause every sibling to dispatch at
+once beyond what DispatchGuard's concurrency cap already allows
+(`test_cooldown_expiry_drains_bounded_by_concurrency_cap`).
 
 ## Per-provider policy
 
@@ -527,12 +744,6 @@ These are the instrumentation/coverage gaps the [CHAOS-2742](https://linear.app/
 epic exists to close. They are documented as **current reality**, not defects to
 paper over:
 
-- **No cross-unit cooldown gating.** Provider rate-limit observations are now
-  durably persisted (see [Observation store](#observation-store), shipped in
-  [CHAOS-2758](https://linear.app/fullchaos/issue/CHAOS-2758)), but nothing
-  reads them back yet: when one unit discovers a real cooldown, sibling units
-  still call the provider and re-discover it independently. (Target:
-  [CHAOS-2760](https://linear.app/fullchaos/issue/CHAOS-2760).)
 - **Calibration only covers instrumented route families.** [CHAOS-2759](https://linear.app/fullchaos/issue/CHAOS-2759)
   attaches a `budget_comparison` (see
   [Actual-vs-estimated calibration](#actual-vs-estimated-calibration-chaos-2759)
@@ -574,10 +785,6 @@ append its section here in the same changeset (per `AGENTS.md`
   Stamp `credential_id`/version onto `SyncRun` at plan time; bootstrap uses the
   run-stamped auth context, not mutable integration state. Determinism only —
   **never** unit-level credential selection for capacity.
-- **Cooldown gating — [CHAOS-2760](https://linear.app/fullchaos/issue/CHAOS-2760).**
-  Consult recent observations before dispatch and defer sibling units into a
-  known provider/integration/route-family cooldown window.
-
 ## References
 
 - Epic: [CHAOS-2742](https://linear.app/fullchaos/issue/CHAOS-2742) — Harden sync

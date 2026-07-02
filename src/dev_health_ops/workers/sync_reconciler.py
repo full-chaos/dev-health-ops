@@ -194,6 +194,15 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
                         ),
                         last_retry_reason="expired_lease",
                         retry_exhausted_at=None,
+                        # Review finding (round 3, CHAOS-2760): an
+                        # expired-lease retry is NOT a rate-limit episode --
+                        # clear any stale rate_limit_deferrals/first_seen_at
+                        # carried over from an earlier, resolved rate-limit
+                        # episode, so BudgetGuard's wall-clock-exhaustion
+                        # check (sync/budget_guard.py) never mistakes it for
+                        # an ongoing one.
+                        rate_limit_deferrals=0,
+                        rate_limit_first_seen_at=None,
                         updated_at=now,
                         lease_owner=None,
                         lease_expires_at=None,

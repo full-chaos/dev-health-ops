@@ -5,9 +5,10 @@
 ``POST /validate`` and durably in the CHAOS-2697 worker, so a customer's
 momentary schema drift on a handful of records doesn't drop an entire batch
 (see docs/architecture/external-ingest-rest-contract.md). ``GET /schemas*``
-is a minimal, real implementation straight off the Pydantic models in
-``schemas.py`` (brief D8) — CHAOS-2692 layers a registry/examples/ETag on
-top without redeclaring these models.
+(CHAOS-2692) is generated from the same ``schemas.py`` Pydantic models via
+``schema_registry.py`` — a versioned bundle with ``$defs``, per-record-kind
+``$ref``s + examples, and an ETag; this module never redeclares those
+models. See docs/architecture/adr-005-external-ingest-schema-discovery.md.
 """
 
 from __future__ import annotations
@@ -16,13 +17,14 @@ import logging
 import os
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, Request, Response
 from pydantic import ValidationError
 
 from dev_health_ops.api.middleware.rate_limit import (
     INGEST_BATCH_LIMIT,
     INGEST_READ_LIMIT,
     INGEST_VALIDATE_LIMIT,
+    get_forwarded_ip,
     get_ingest_token_key,
     limiter,
 )
@@ -30,6 +32,7 @@ from dev_health_ops.external_ingest.validate import validate_records
 
 from .auth import IngestAuthContext, require_ingest_scope
 from .errors import ExternalIngestError
+from .schema_registry import compute_etag, get_bundle, list_versions
 from .schemas import (
     MAX_BODY_BYTES_DEFAULT,
     MAX_RECORDS_DEFAULT,
@@ -155,34 +158,67 @@ def _check_all_kinds_known_or_400(envelope: BatchEnvelope) -> None:
             )
 
 
+# Force schema generation (models_json_schema + example loading) to run at
+# import time, not lazily on a customer's first request — a bad example
+# fixture or a models_json_schema regression should fail app startup, not a
+# random GET (schema_registry D6).
+get_bundle(SCHEMA_VERSION)
+
+
+def _schema_discovery_rate_limit_key(request: Request) -> str:
+    """IP-only rate-limit key for the public GET /schemas* routes.
+
+    Deliberately does NOT reuse ``get_ingest_token_key``: that function
+    hashes any ``Authorization: Bearer <value>`` header into a distinct
+    limiter bucket, which is correct once a real bearer token is validated
+    (POST /batches, POST /validate) but wrong here — these two routes never
+    validate the bearer value at all (D2, public discovery), so a caller
+    could rotate an arbitrary string per request and get a fresh bucket
+    every time, defeating INGEST_READ_LIMIT (adversarial-review finding).
+    The forwarded IP is the only real identity available for an
+    unauthenticated route.
+    """
+    return f"ingest-ip:{get_forwarded_ip(request)}"
+
+
 @router.get("/schemas")
-@limiter.limit(INGEST_READ_LIMIT, key_func=get_ingest_token_key)
+@limiter.limit(INGEST_READ_LIMIT, key_func=_schema_discovery_rate_limit_key)
 async def list_schemas(request: Request) -> dict[str, object]:
     return {
-        "schemaVersions": [SCHEMA_VERSION],
+        "schemaVersions": [version["schemaVersion"] for version in list_versions()],
         "recordKinds": sorted(RECORD_KIND_MODELS),
         "limits": _limits_payload(),
     }
 
 
 @router.get("/schemas/{schema_version}")
-@limiter.limit(INGEST_READ_LIMIT, key_func=get_ingest_token_key)
-async def get_schema(schema_version: str, request: Request) -> dict[str, object]:
-    if schema_version != SCHEMA_VERSION:
+@limiter.limit(INGEST_READ_LIMIT, key_func=_schema_discovery_rate_limit_key)
+async def get_schema(
+    schema_version: str, request: Request, response: Response
+) -> dict[str, object]:
+    bundle = get_bundle(schema_version)
+    if bundle is None:
         raise ExternalIngestError(
             404,
             "unsupported_schema_version",
             f"Unknown schema version: {schema_version!r}",
         )
-    return {
-        "schemaVersion": SCHEMA_VERSION,
-        "envelope": BatchEnvelope.model_json_schema(by_alias=True),
-        "recordKinds": {
-            kind: model.model_json_schema(by_alias=True)
-            for kind, model in RECORD_KIND_MODELS.items()
-        },
-        "limits": _limits_payload(),
-    }
+
+    # ETag over the full served representation (schema + live limits), not
+    # just bundle.etag's schema-only hash — otherwise a limits change could
+    # be masked behind a 304 for a client holding the old ETag
+    # (adversarial-review finding; see schema_registry.compute_etag).
+    body = {**bundle.document, "limits": _limits_payload()}
+    etag = compute_etag(body)
+
+    if request.headers.get("if-none-match") == etag:
+        response.status_code = 304
+        response.headers["ETag"] = etag
+        return {}
+
+    response.headers["ETag"] = etag
+    response.headers["Cache-Control"] = "public, max-age=3600, must-revalidate"
+    return body
 
 
 @router.post("/validate", response_model=ValidationResponse)

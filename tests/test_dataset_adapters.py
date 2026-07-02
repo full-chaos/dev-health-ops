@@ -263,6 +263,32 @@ def test_github_work_item_unit_threads_source_scope_contract() -> None:
     assert kwargs["require_source"] is True
 
 
+def test_gitlab_work_item_unit_threads_source_scope_contract() -> None:
+    """CHAOS-2763: gitlab twin of the GitHub contract above. The adapter must
+    hand ``run_work_items_sync_job`` the unit's numeric GitLab project id (the
+    dataset-adapter layer already threads ``context.source_external_id``
+    through for provider in {github, gitlab, linear} — this pins that gitlab
+    is not silently excluded) AND ``require_source=True``, so
+    ``run_work_items_sync_job`` can scope the unit to its own project (call-
+    count proof in tests/test_work_item_source_scope.py).
+    """
+    ctx = _context(
+        provider="gitlab",
+        dataset_key="work-items",
+        source_external_id="123",
+    )
+
+    with patch(
+        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job"
+    ) as work_items:
+        run_dataset_unit(ctx, _runtime())
+
+    work_items.assert_called_once()
+    kwargs = work_items.call_args.kwargs
+    assert kwargs["repo_name"] == "123"
+    assert kwargs["require_source"] is True
+
+
 def test_linear_org_wide_provider_name_placeholder_routes_to_no_source() -> None:
     ctx = _context(
         provider="linear",

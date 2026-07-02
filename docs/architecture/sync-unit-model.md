@@ -63,7 +63,7 @@ Legend: **once/run** = fetched once per sync run (correct); **per-unit** = re-fe
 | Provider | teams / orgs | members | projects / boards | cycles / sprints | issues / PRs |
 | -------- | ------------ | ------- | ----------------- | ---------------- | ------------ |
 | **GitHub** | discovery (once/run) | discovery | discovery | n/a | per source/window (work-item) |
-| **GitLab** | discovery (once/run) | discovery | discovery | n/a | per source/window (work-item) |
+| **GitLab** | discovery (once/run) | discovery | discovery | n/a | per source/window (work-item, scoped via `settings.project_id` — CHAOS-2763) |
 | **Jira** | once/run (resolver) | n/a here | per-unit JQL scope ✅ | **per-unit** ⚠️ (`get_sprint` in issue loop) | per source/window (work-item) |
 | **Linear** | **per-unit** ⚠️ (`iter_teams()` all teams) | discovery | discovery | **per-unit** ⚠️ (`iter_cycles()` per team) | per source/window (work-item) |
 
@@ -73,7 +73,7 @@ The ⚠️ cells are the work this epic removes. GitHub/GitLab already solved th
 
 1. **Per-unit reference re-fetch** (Linear teams+cycles; Jira sprints). The dominant fixed overhead. **Fix (P2):** read teams/cycles/sprints from the persisted store via a once-per-run resolver; add a `get_all_sprints` loader and a cycle/sprint producer; bounded source-scoped API fallback on a store miss.
 2. **Work-item-family redundancy.** The 5 family datasets (`work-items`, `work-item-labels`, `work-item-projects`, `work-item-history`, `work-item-comments`) each re-run the *full* ingest, so enabling the family multiplies cost ×5 per source/window. **Fix (P3, target-state):** plan-time collapse to **one** composite ingest per `(source, window)`, writing per-dataset watermarks for each enabled family key.
-3. **Source fan-out.** Work-item units that ignore their own source — Linear `IngestionContext(repo=None)` → all teams; GitHub `discover_repos` without a repo filter → all org repos. **Fix (P1, shipped on the source-scoping branch):** thread the unit's `source_external_id` so a unit syncs only its one source; preserve the no-source CLI/org-wide path.
+3. **Source fan-out.** Work-item units that ignore their own source — Linear `IngestionContext(repo=None)` → all teams; GitHub `discover_repos` without a repo filter → all org repos; GitLab likewise (its `repo_name` is a numeric project id, not the `path_with_namespace` on `repos.repo`, so a naive filter can't reuse the GitHub match). **Fix (P1, shipped on the source-scoping branch):** thread the unit's `source_external_id` so a unit syncs only its one source; preserve the no-source CLI/org-wide path. GitHub shipped first (CHAOS-2720); GitLab shipped via a separate match branch keyed on the discovered repo's `settings.project_id` (CHAOS-2763), since the id spaces don't overlap.
 
 **Target acceptance:** total provider API requests for a backfill scale `O(issues + teams + cycles/projects)`, not `O(windows × datasets × sources)`, across all four providers.
 

@@ -66,6 +66,65 @@ def test_discover_repos_sets_source_from_provider():
     assert result_db[1].source == "github"
 
 
+def test_discover_repos_parses_json_string_settings():
+    """CHAOS-2763: ``repos.settings`` comes back from ClickHouse as a raw JSON
+    *string*, not a pre-parsed dict — the ``DiscoveredRepo.settings: dict[str,
+    object]`` annotation was previously lying (the query result was passed
+    through with ``r[2] or {}``, no ``json.loads``). Any per-provider match on
+    a settings key (e.g. gitlab ``project_id`` scoping) always missed on real
+    data before this fix."""
+    from dev_health_ops.metrics.job_daily import discover_repos
+
+    repo_id = uuid.uuid4()
+    mock_sink = SimpleNamespace(client=MagicMock())
+    mock_sink.client.query.return_value = SimpleNamespace(
+        result_rows=[
+            (str(repo_id), "grp/proj-a", '{"project_id": 123}', "gitlab"),
+        ]
+    )
+
+    result = discover_repos(backend="clickhouse", primary_sink=mock_sink)
+
+    assert result[0].settings == {"project_id": 123}
+
+
+def test_discover_repos_malformed_json_settings_yields_empty_dict():
+    """A malformed/legacy ``settings`` string must not raise — it degrades to
+    ``{}`` so numeric-id gitlab matching fails closed instead of crashing
+    discovery for the whole org."""
+    from dev_health_ops.metrics.job_daily import discover_repos
+
+    repo_id = uuid.uuid4()
+    mock_sink = SimpleNamespace(client=MagicMock())
+    mock_sink.client.query.return_value = SimpleNamespace(
+        result_rows=[
+            (str(repo_id), "grp/proj-a", "{not json", "gitlab"),
+        ]
+    )
+
+    result = discover_repos(backend="clickhouse", primary_sink=mock_sink)
+
+    assert result[0].settings == {}
+
+
+def test_discover_repos_null_settings_yields_empty_dict():
+    """A NULL ``settings`` column (Nullable(String)) must also degrade to
+    ``{}`` rather than raising."""
+    from dev_health_ops.metrics.job_daily import discover_repos
+
+    repo_id = uuid.uuid4()
+    mock_sink = SimpleNamespace(client=MagicMock())
+    mock_sink.client.query.return_value = SimpleNamespace(
+        result_rows=[
+            (str(repo_id), "grp/proj-a", None, "gitlab"),
+        ]
+    )
+
+    result = discover_repos(backend="clickhouse", primary_sink=mock_sink)
+
+    assert result[0].settings == {}
+
+
 class TestSourceFilteringInWorkItemFetchers:
     """Verify that work-item fetcher functions correctly filter repos by source.
 

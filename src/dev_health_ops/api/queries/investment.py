@@ -79,6 +79,14 @@ LATEST_WORK_UNIT_INVESTMENTS_CTE = f"""
 # computed_at -- because the skipped path legitimately writes allocation rows
 # newer than the investments row. ``has_allocation = 1`` is an explicit
 # match flag so consumers never depend on a non-empty work_unit_id sentinel.
+#
+# KNOWN THEORETICAL EDGE (accepted, not fixed): two DIFFERENT generations of a
+# unit's allocation sharing an IDENTICAL millisecond ``computed_at`` cannot be
+# told apart by this clock — a stale repo row from the tied older generation
+# would survive. Reaching it requires a retried chunk within one
+# frozen-``computed_at`` run to compute a DIFFERENT repo set mid-run; there is
+# no per-row version column beyond ``computed_at`` to break such a tie, and a
+# schema change is not warranted for it (codex round-3 on CHAOS-2777).
 LATEST_WORK_UNIT_REPO_EFFORT_CTE = """
         latest_work_unit_repo_effort AS (
             SELECT

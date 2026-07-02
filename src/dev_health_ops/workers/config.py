@@ -243,6 +243,15 @@ beat_schedule = {
         "schedule": crontab(hour=5, minute=0),
         "options": {"queue": "sync"},
     },
+    # Retention for the external-ingest status store (CHAOS-2694). Env-tunable
+    # via EXTERNAL_INGEST_STATUS_RETENTION_DAYS (default 90, see
+    # workers/external_ingest_reconciler.py). Scheduled immediately after
+    # prune-rate-limit-observations (5:00), clear of the other nightly jobs.
+    "prune-external-ingest-batches": {
+        "task": "dev_health_ops.workers.tasks.prune_external_ingest_batches",
+        "schedule": crontab(hour=5, minute=15),
+        "options": {"queue": "sync"},
+    },
 }
 
 # Result settings

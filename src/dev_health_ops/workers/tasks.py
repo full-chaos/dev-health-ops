@@ -1,3 +1,6 @@
+from dev_health_ops.workers.external_ingest_reconciler import (
+    prune_external_ingest_batches,
+)
 from dev_health_ops.workers.metrics_tasks import (
     dispatch_complexity_job,
     dispatch_daily_metrics_for_all_orgs,
@@ -74,6 +77,7 @@ __all__ = [
     "monitor_queue_depths",
     "phone_home_heartbeat",
     "process_webhook_event",
+    "prune_external_ingest_batches",
     "prune_rate_limit_observations",
     "reconcile_sync_dispatch",
     "dispatch_membership_backfill",

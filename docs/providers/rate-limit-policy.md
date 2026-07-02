@@ -25,6 +25,20 @@ The concrete shape that enforces this today:
   `workers/sync_bootstrap.py`. There is no credential pool, no round-robin, and
   no unit-level credential selection. A sync unit uses exactly the integration's
   one active credential (or the env fallback when `credential_id is None`).
+- **Exactly one place a credential attaches to sync work.**
+  `SyncConfiguration` (the admin API's sync-config row) used to carry its own
+  `credential_id` column — a second, *unfrozen* copy of the same selection,
+  writable independently of `Integration.credential_id` and never read by
+  planning, budgeting, or auth resolution. It was removed
+  ([CHAOS-2762](https://linear.app/fullchaos/issue/CHAOS-2762)); the admin API
+  still accepts/returns `credential_id` on sync-config payloads, but it is now
+  resolved live from the linked `Integration.credential_id` on every read (see
+  `api/admin/routers/sync.py`), so it can never drift from the surface auth
+  resolution actually uses. **`SyncConfigResponse.credential_id` is a
+  compatibility read-through alias, not a design target** — it exists only
+  because the web admin UI still reads a sync config's credential off the
+  sync-config response. It is a candidate for removal once web reads
+  credentials at the `Integration` level directly instead.
 - **Runtime cache is credential-scoped for isolation, not capacity.** The
   provider runtime reuse cache keys on
   `RuntimeCacheKey(org_id, integration_id, credential_id, credential_fingerprint,
@@ -44,9 +58,15 @@ The concrete shape that enforces this today:
   credential identity/version onto a `SyncRun` at plan time (so a mid-run
   credential edit cannot produce a mixed-auth run) is a *determinism* mechanism.
   It selects **one** auth context for the whole run and must never be used to
-  pick different credentials per unit for throughput. **Target contract, landing
-  in [CHAOS-2755](https://linear.app/fullchaos/issue/CHAOS-2755):** the `SyncRun`
-  model does not yet carry a credential stamp column.
+  pick different credentials per unit for throughput. **Shipped**
+  ([CHAOS-2755](https://linear.app/fullchaos/issue/CHAOS-2755), migration
+  `0030`): `sync_runs` carries `credential_id` / `credential_fingerprint` /
+  `auth_source`, stamped once at plan time by `sync/planner.py`'s
+  `_resolve_credential_stamp` and never re-resolved mid-run —
+  `workers/sync_bootstrap.py` reads the frozen stamp, falling back to the
+  mutable `Integration.credential_id` path only for legacy/in-flight-at-deploy
+  runs whose stamp is `NULL`. Enforced by `tests/test_sync_run_auth_freeze.py`
+  and `tests/test_sync_planner.py`.
 
 **Out of scope, permanently:** credential pools, credential round-robin,
 unit-level credential assignment for throughput, and any UI/API language
@@ -811,12 +831,7 @@ append its section here in the same changeset (per `AGENTS.md`
   and the deferral machinery consumes, preserving GitHub's
   primary/secondary/permission distinction and extending comparable handling to
   Linear, Jira, GitLab, and LaunchDarkly.
-- **Shared actuals recorder — [CHAOS-2754](https://linear.app/fullchaos/issue/CHAOS-2754).**
-  A shared usage recorder with route-family keying and GitLab/Jira/Linear drains.
-- **Run-auth freeze — [CHAOS-2755](https://linear.app/fullchaos/issue/CHAOS-2755).**
-  Stamp `credential_id`/version onto `SyncRun` at plan time; bootstrap uses the
-  run-stamped auth context, not mutable integration state. Determinism only —
-  **never** unit-level credential selection for capacity.
+
 ## References
 
 - Epic: [CHAOS-2742](https://linear.app/fullchaos/issue/CHAOS-2742) — Harden sync

@@ -679,6 +679,244 @@ async def test_get_sync_config_nonexistent_returns_404(client):
 
 
 @pytest.mark.asyncio
+async def test_sync_config_credential_id_reflects_linked_integration(
+    client, session_maker
+):
+    """CHAOS-2762 regression: ``SyncConfiguration`` stores no credential of
+    its own -- the API's ``credential_id`` is derived live from the linked
+    ``Integration`` (the single sanctioned surface), so it can never carry a
+    second, unfrozen copy that drifts from what auth resolution actually uses.
+    """
+    ac, seeded_state = client
+    org_id = seeded_state["org_id"]
+
+    async with session_maker() as session:
+        cred_a = IntegrationCredential(
+            provider="github",
+            name="cred-a",
+            org_id=org_id,
+            credentials_encrypted="enc-a",
+            is_active=True,
+        )
+        cred_b = IntegrationCredential(
+            provider="github",
+            name="cred-b",
+            org_id=org_id,
+            credentials_encrypted="enc-b",
+            is_active=True,
+        )
+        session.add_all([cred_a, cred_b])
+        await session.commit()
+        cred_a_id, cred_b_id = str(cred_a.id), str(cred_b.id)
+
+    create_resp = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": "credential-mirror-test",
+            "provider": "github",
+            "credential_id": cred_a_id,
+            "sync_targets": [],
+            "sync_options": {"all_repos": True},
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    created = create_resp.json()
+    assert created["credential_id"] == cred_a_id
+    config_id = created["id"]
+
+    async with session_maker() as session:
+        config = (
+            await session.execute(
+                select(SyncConfiguration).where(
+                    SyncConfiguration.id == uuid.UUID(config_id)
+                )
+            )
+        ).scalar_one()
+        # The legacy column is gone: the model no longer even exposes it.
+        assert not hasattr(config, "credential_id")
+
+        integration = (
+            await session.execute(
+                select(Integration).where(Integration.id == config.integration_id)
+            )
+        ).scalar_one()
+        assert integration.credential_id == uuid.UUID(cred_a_id)
+
+        # Rotate the credential on the Integration directly -- the same
+        # surface an admin PATCH /integrations/{id} would touch.
+        integration.credential_id = uuid.UUID(cred_b_id)
+        await session.commit()
+
+    get_resp = await ac.get(f"/api/v1/admin/sync-configs/{config_id}")
+    assert get_resp.status_code == 200
+    # No stale mirror to go out of sync: the response tracks the rotation.
+    assert get_resp.json()["credential_id"] == cred_b_id
+
+    list_resp = await ac.get("/api/v1/admin/sync-configs")
+    assert list_resp.status_code == 200
+    [listed] = [c for c in list_resp.json() if c["id"] == config_id]
+    assert listed["credential_id"] == cred_b_id
+
+
+@pytest.mark.asyncio
+async def test_sync_configs_sharing_integration_read_consistent_credential_id(
+    client, session_maker
+):
+    """CHAOS-2762 regression: configs sharing one ``integration_id`` (a
+    planner-managed parent plus a pre-planner legacy child, both still linked
+    to the same ``Integration`` per the ``0016``/``0023`` migration links)
+    must report the SAME ``credential_id`` -- and stay consistent after a
+    rotation -- because both now derive it from the one shared ``Integration``
+    row instead of each carrying its own, independently-writable copy.
+    """
+    ac, seeded_state = client
+    org_id = seeded_state["org_id"]
+
+    async with session_maker() as session:
+        cred_a = IntegrationCredential(
+            provider="github",
+            name="cred-a",
+            org_id=org_id,
+            credentials_encrypted="enc-a",
+            is_active=True,
+        )
+        cred_b = IntegrationCredential(
+            provider="github",
+            name="cred-b",
+            org_id=org_id,
+            credentials_encrypted="enc-b",
+            is_active=True,
+        )
+        session.add_all([cred_a, cred_b])
+        await session.commit()
+        cred_a_id, cred_b_id = str(cred_a.id), str(cred_b.id)
+
+    create_resp = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": "shared-integration-parent",
+            "provider": "github",
+            "credential_id": cred_a_id,
+            "sync_targets": [],
+            "sync_options": {"all_repos": True},
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    parent_id = create_resp.json()["id"]
+
+    async with session_maker() as session:
+        parent = (
+            await session.execute(
+                select(SyncConfiguration).where(
+                    SyncConfiguration.id == uuid.UUID(parent_id)
+                )
+            )
+        ).scalar_one()
+        integration_id = parent.integration_id
+
+        # A pre-planner legacy child sharing the parent's Integration (see
+        # migrations 0016/0023): its OWN row never carried credential_id
+        # independently even before this change -- children were created
+        # without one -- so this pins that both rows read the parent
+        # Integration's credential consistently, not just the parent alone.
+        child = SyncConfiguration(
+            org_id=org_id,
+            name="shared-integration-child",
+            provider="github",
+            sync_targets=["git"],
+            sync_options={},
+            parent_id=parent.id,
+            integration_id=integration_id,
+        )
+        session.add(child)
+        await session.commit()
+        child_id = str(child.id)
+
+    for config_id in (parent_id, child_id):
+        resp = await ac.get(f"/api/v1/admin/sync-configs/{config_id}")
+        assert resp.status_code == 200
+        assert resp.json()["credential_id"] == cred_a_id
+
+    async with session_maker() as session:
+        integration = await session.get(Integration, integration_id)
+        integration.credential_id = uuid.UUID(cred_b_id)
+        await session.commit()
+
+    for config_id in (parent_id, child_id):
+        resp = await ac.get(f"/api/v1/admin/sync-configs/{config_id}")
+        assert resp.status_code == 200
+        assert resp.json()["credential_id"] == cred_b_id, (
+            f"config {config_id} did not observe the rotated credential"
+        )
+
+
+@pytest.mark.asyncio
+async def test_sync_config_credential_id_is_null_for_out_of_org_integration_link(
+    client, session_maker
+):
+    """CHAOS-2762 regression (codex finding #3): a ``SyncConfiguration`` whose
+    ``integration_id`` points at an ``Integration`` belonging to a DIFFERENT
+    org (corrupt data / manual tampering -- there is no org constraint on
+    that FK) must never leak that other org's ``credential_id`` into this
+    org's API response. The read-through helpers are org-scoped, so an
+    out-of-org link resolves to null exactly like "no linked integration"
+    rather than exposing another tenant's credential UUID.
+    """
+    ac, seeded_state = client
+    org_id = seeded_state["org_id"]
+    other_org_id = str(uuid.uuid4())
+
+    async with session_maker() as session:
+        other_org_credential = IntegrationCredential(
+            provider="github",
+            name="other-org-cred",
+            org_id=other_org_id,
+            credentials_encrypted="enc-other-org",
+            is_active=True,
+        )
+        session.add(other_org_credential)
+        await session.flush()
+
+        other_org_integration = Integration(
+            org_id=other_org_id,
+            provider="github",
+            name="other-org-integration",
+            config={},
+            is_active=True,
+        )
+        other_org_integration.credential_id = other_org_credential.id
+        session.add(other_org_integration)
+        await session.flush()
+
+        # Corrupt/tampered link: a config that belongs to THIS org but whose
+        # integration_id points at ANOTHER org's Integration.
+        config = SyncConfiguration(
+            org_id=org_id,
+            name="cross-org-link",
+            provider="github",
+            sync_targets=["git"],
+            sync_options={},
+            integration_id=other_org_integration.id,
+        )
+        session.add(config)
+        await session.commit()
+        config_id = str(config.id)
+
+    get_resp = await ac.get(f"/api/v1/admin/sync-configs/{config_id}")
+    assert get_resp.status_code == 200
+    assert get_resp.json()["credential_id"] is None, (
+        "an out-of-org integration_id must never leak another org's credential_id"
+    )
+
+    list_resp = await ac.get("/api/v1/admin/sync-configs")
+    assert list_resp.status_code == 200
+    [listed] = [c for c in list_resp.json() if c["id"] == config_id]
+    assert listed["credential_id"] is None, (
+        "the list endpoint's batched read-through must be org-scoped too"
+    )
+
+
+@pytest.mark.asyncio
 async def test_update_sync_config_changes_is_active(client):
     ac, _ = client
 

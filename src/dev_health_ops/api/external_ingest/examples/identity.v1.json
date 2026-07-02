@@ -1,0 +1,9 @@
+{
+  "canonicalId": "acme-user-42",
+  "displayName": "Alice Doe",
+  "email": "alice@acme.example",
+  "providerIdentities": {"github": ["alicedoe"], "jira": ["alice.doe"]},
+  "teamIds": ["team-platform"],
+  "isActive": true,
+  "updatedAt": "2026-06-25T00:00:00Z"
+}

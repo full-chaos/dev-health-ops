@@ -1,0 +1,12 @@
+{
+  "repositoryExternalId": "acme/api",
+  "hash": "9fceb02d0ae598e95dc970b74767f19372d61af8",
+  "message": "fix: resolve login redirect loop",
+  "authorName": "Alice Doe",
+  "authorEmail": "alice@acme.example",
+  "authorWhen": "2026-06-21T09:55:00Z",
+  "committerName": "Alice Doe",
+  "committerEmail": "alice@acme.example",
+  "committerWhen": "2026-06-21T09:55:00Z",
+  "parents": 1
+}

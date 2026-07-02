@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 # stale bookmarked URLs created before the email-only picker contract; keep
 # those values loadable and let the author_email predicate honestly match no
 # rows instead of rejecting the page load.
-_EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+_EMAIL_PATTERN = re.compile(r"^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$")
 
 
 def _validate_developer_emails(values: list[str], field: str) -> None:

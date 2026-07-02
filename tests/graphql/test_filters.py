@@ -246,6 +246,31 @@ class TestFilterTranslation:
         assert exc_info.value.field == "scope"
         assert "email" in str(exc_info.value).lower()
 
+    def test_scope_filter_developer_rejects_angle_bracket_email_values(self):
+        """CHAOS-2746: the GraphQL _EMAIL_PATTERN previously lacked the
+        <> exclusion present in the REST picker regex (_EMAIL_VALUE_RE in
+        api/queries/filters.py), so a raw GraphQL request could sneak
+        'alice@example.com>' past strict scope.level=developer validation
+        even though the picker/REST/web stack would never emit or accept
+        such a value. Pins the stricter, REST-aligned shape."""
+        filters = FilterInput(
+            scope=ScopeFilterInput(
+                level=ScopeLevelInput.DEVELOPER, ids=["alice@example.com>"]
+            )
+        )
+        request = TimeseriesRequest(
+            dimension="team",
+            measure="count",
+            interval="day",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 1, 7),
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            compile_timeseries(request, org_id="org1", filters=filters)
+        assert exc_info.value.field == "scope"
+        assert "email" in str(exc_info.value).lower()
+
     def test_scope_filter_developer_uses_hasany_for_investment_query(self):
         """CHAOS-2492: scope.level=developer on an investment query resolves
         via the au join's hasAny(author_emails) predicate."""

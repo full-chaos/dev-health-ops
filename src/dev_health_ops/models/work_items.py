@@ -146,6 +146,9 @@ class WorkItemDependency:
     relationship_type_raw: str
     last_synced: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     org_id: str = ""
+    # Nullable — NULL for native sync, stamped by external-ingest sink writes
+    # (CHAOS-2698 D1).
+    source_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)

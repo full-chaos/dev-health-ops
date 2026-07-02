@@ -63,7 +63,7 @@ Legend: **once/run** = fetched once per sync run (correct); **per-unit** = re-fe
 | Provider | teams / orgs | members | projects / boards | cycles / sprints | issues / PRs |
 | -------- | ------------ | ------- | ----------------- | ---------------- | ------------ |
 | **GitHub** | discovery (once/run) | discovery | discovery | n/a | per source/window (work-item) |
-| **GitLab** | discovery (once/run) | discovery | discovery | n/a | per source/window (work-item, scoped via `settings.project_id` — CHAOS-2763) |
+| **GitLab** | discovery (once/run) | discovery | discovery | n/a | per source/window (work-item, scoped via `settings.project_id`, instance-scoped via `settings.gitlab_instance_url` — CHAOS-2763 / CHAOS-2801) |
 | **Jira** | once/run (resolver) | n/a here | per-unit JQL scope ✅ | **per-unit** ⚠️ (`get_sprint` in issue loop) | per source/window (work-item) |
 | **Linear** | **per-unit** ⚠️ (`iter_teams()` all teams) | discovery | discovery | **per-unit** ⚠️ (`iter_cycles()` per team) | per source/window (work-item) |
 
@@ -76,6 +76,75 @@ The ⚠️ cells are the work this epic removes. GitHub/GitLab already solved th
 3. **Source fan-out.** Work-item units that ignore their own source — Linear `IngestionContext(repo=None)` → all teams; GitHub `discover_repos` without a repo filter → all org repos; GitLab likewise (its `repo_name` is a numeric project id, not the `path_with_namespace` on `repos.repo`, so a naive filter can't reuse the GitHub match). **Fix (P1, shipped on the source-scoping branch):** thread the unit's `source_external_id` so a unit syncs only its one source; preserve the no-source CLI/org-wide path. GitHub shipped first (CHAOS-2720); GitLab shipped via a separate match branch keyed on the discovered repo's `settings.project_id` (CHAOS-2763), since the id spaces don't overlap.
 
 **Target acceptance:** total provider API requests for a backfill scale `O(issues + teams + cycles/projects)`, not `O(windows × datasets × sources)`, across all four providers.
+
+### GitLab numeric-id scoping is instance-scoped (CHAOS-2801)
+
+GitLab `project_id` is only unique **within one GitLab instance** — it is not a
+global identifier. An org with two GitLab integrations (two self-hosted
+instances, or one self-hosted instance + gitlab.com) can have both discover a
+project with the same numeric id. The CHAOS-2763 id-match alone (`repo_name ==
+str(settings.project_id)`) cannot tell those two rows apart; a unit
+authenticated to instance A could match instance B's same-id row, fetch
+project `123` from instance A, and write the result under instance B's
+`repo_id` (codex HIGH finding on PR #1143, round 3).
+
+**Fix:** both GitLab repo write sites (`process_gitlab_project` and
+`process_gitlab_projects_batch` in `processors/gitlab.py`) now persist the
+connector's configured base URL as `settings.gitlab_instance_url` alongside
+`settings.project_id`. The work-item scoping loop
+(`metrics/job_work_items.py`) resolves this unit's own authenticated GitLab
+host up front (reusing the same credential resolution the fetch call already
+performs — no new credential path) and compares it against each numeric-id
+match's `settings.gitlab_instance_url`.
+
+Both the persist path and the comparison use the **single shared normalizer**
+`normalize_gitlab_instance` (`providers/gitlab/instance.py`): lowercased
+`scheme://host[:port]`, userinfo/path ignored, and the scheme's **default
+port stripped** (http:80, https:443) while non-default ports are preserved.
+Never fork a second copy — equivalent spellings of the same endpoint
+(`https://host` vs `https://host:443` vs `HTTPS://Host/api/v4/`) must never
+false-mismatch, or a harmless credential formatting change would flip every
+row of a healthy integration to mismatch-reject and trip the CHAOS-2737
+fail-closed path org-wide.
+
+The write sites persist the **normalizer result directly**: when it returns
+`None` (blank/malformed input) the key is **omitted** — never the raw URL,
+which could retain path/query/userinfo from a malformed value at rest (the
+CHAOS-2766/2780 credential-retention leak class) and would violate the
+"unknown" semantic the scoping site relies on. An absent key reads exactly
+like a pre-CHAOS-2801 row.
+
+**Semantic — the three-case instance rule** (when the unit's instance is
+known, per `project_id`; a row with a known *differing* discriminator is
+always rejected):
+
+| Same-`project_id` discriminated rows | Legacy (no-discriminator) rows | Outcome |
+| --- | --- | --- |
+| (a) at least one **matches** the unit's instance | dropped (shadowed) | scope to the discriminated match(es) only |
+| (b) **none exist** | **accepted** | absent-accept — pure-legacy orgs unchanged (zero blast radius) |
+| (c) only **mismatching** ones exist | dropped | **fail closed** — nothing matches; `require_source` raises with its audit log |
+
+Case (c) rationale (codex HIGH, PR #1148 round-2): a known mismatching
+discriminator *proves* cross-instance ambiguity exists for that numeric id —
+the legacy row is plausibly the other instance's pre-discriminator row, so
+accepting it risks the exact wrong-`repo_id` write this fix closes. Cases
+(a)+(c) collapse to one predicate: a legacy row is accepted **only when no
+same-`project_id` row carries any known discriminator**. Remediation for a
+case-(c) failure is re-running discovery, which now stamps
+`gitlab_instance_url` on every row.
+
+Compatibility: an existing pure-legacy single-GitLab-instance org sees
+**zero** behavior change (case b). An org that later adds a second instance
+gains the full safety once its repos are re-discovered/re-synced and pick up
+the discriminator. When the unit's own instance is **unknown** (e.g. a bare
+CLI/env-only run with no resolvable base URL) the check never engages;
+behavior matches pre-CHAOS-2801.
+
+A rejected row is simply not "discovered" for that unit — the existing
+CHAOS-2737 `require_source` fail-closed path (raise when a unit's source
+never matched any repo) applies unchanged if no other row matches. This
+supersedes the "Known limitation (deferred: CHAOS-2801)" note carried by
+PR #1143. GitHub-path behavior is unaffected.
 
 ## Invariants this model must preserve
 

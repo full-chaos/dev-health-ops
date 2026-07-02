@@ -284,15 +284,25 @@ def _run_gitlab(
     require_source: bool,
     repos: list[DiscoveredRepo],
     provider: str = "gitlab",
+    gitlab_url: str | None = None,
 ) -> list[list[DiscoveredRepo]]:
     """Run the gitlab work-item sync job with a faked fetcher; returns the list
     of ``repos`` kwargs the fetcher was invoked with (one entry per call, so
     ``len(...)`` is the invocation count and an empty list means never called).
+
+    ``gitlab_url`` stands in for this unit's resolved/authenticated GitLab
+    instance (what ``_build_gitlab_work_client`` would normally return
+    alongside the token). Defaults to ``None`` — "instance unknown" — which
+    keeps every pre-CHAOS-2801 test in this module exercising the
+    instance-check as a no-op (see ``normalize_gitlab_instance``,
+    providers/gitlab/instance.py).
     """
     _patch_common(monkeypatch)
     monkeypatch.setattr(job, "_discover_repos", lambda **_kwargs: list(repos))
     monkeypatch.setattr(
-        job, "_build_gitlab_work_client", lambda **_kwargs: ("gl-token", None)
+        job,
+        "_build_gitlab_work_client",
+        lambda **_kwargs: ("gl-token", gitlab_url),
     )
 
     calls: list[list[DiscoveredRepo]] = []
@@ -663,3 +673,480 @@ def test_gitlab_cli_org_wide_path_still_fetches_by_full_name(
     assert not any(
         ref in {"123", "456", "789"} for ref in _RecordingGitLabAPIClient.calls
     )
+
+
+# --- CHAOS-2801: instance-scoped GitLab unit matching ------------------------
+#
+# [codex HIGH, PR #1143 round-3] Numeric ``project_id`` is only unique WITHIN
+# one GitLab instance. Two GitLab integrations in the same org (two
+# self-hosted instances, or one self-hosted + gitlab.com) can each discover a
+# project with the SAME numeric id. Before this fix, a unit authenticated to
+# instance A could match instance B's same-id row, fetch project 123 from A,
+# and write/normalize the result under B's ``repo_id`` — silently mixing two
+# tenants' GitLab data under the wrong row.
+#
+# Design semantic — the three-case instance rule (see job_work_items.py's
+# scoping-block comment and docs/architecture/sync-unit-model.md). When the
+# unit's instance is known, per project_id:
+#   (a) a same-project_id row with a MATCHING discriminator exists -> scope
+#       to the discriminated match ONLY; mismatching AND undiscriminated
+#       (legacy) rows are dropped. Without the legacy drop, absent-accept
+#       would act as a CO-MATCH (codex HIGH, PR #1148 round-1): both
+#       repo_ids would enter gitlab_id_scoped_project_ids and one fetch
+#       against instance A's client would also be written under the legacy
+#       (possibly instance-B) row's repo_id.
+#   (b) NO discriminated row exists at all -> ACCEPT legacy rows (zero
+#       blast radius for today's pure-legacy single-instance orgs).
+#   (c) only MISMATCHING discriminated row(s) exist -> FAIL CLOSED: the
+#       mismatch rows are rejected and the legacy rows are dropped too
+#       (codex HIGH, PR #1148 round-2) — a known mismatching discriminator
+#       PROVES cross-instance ambiguity for that numeric id, and the legacy
+#       row is plausibly the other instance's pre-discriminator row.
+#       Nothing matches, so the CHAOS-2737 require_source path raises;
+#       remediation is re-discovery (which now stamps discriminators).
+# When the unit's instance is unknown, the check never engages
+# (pre-CHAOS-2801 behavior, pinned separately below).
+#
+# ``normalize_gitlab_instance`` (providers/gitlab/instance.py) is the single
+# shared normalizer for both the persisted discriminator and the comparison,
+# so equivalent URL spellings (case, trailing slash, /api/v4 suffix,
+# explicit default :443/:80 port) never false-mismatch (codex MED, PR #1148).
+
+_INSTANCE_A = "https://gitlab-a.example.com"
+_INSTANCE_B = "https://gitlab-b.example.com"
+
+
+def _gitlab_repos_with_instance(
+    *, entries: list[tuple[str, int, str | None]]
+) -> list[DiscoveredRepo]:
+    """Build GitLab ``DiscoveredRepo`` rows with an explicit
+    ``gitlab_instance_url`` discriminator. ``entries`` is
+    ``(full_name, project_id, instance_url_or_None)`` — ``None`` means "no
+    discriminator" (a pre-CHAOS-2801 row)."""
+    repos: list[DiscoveredRepo] = []
+    for full_name, project_id, instance_url in entries:
+        settings: dict[str, object] = {"project_id": project_id}
+        if instance_url is not None:
+            settings["gitlab_instance_url"] = instance_url
+        repos.append(
+            DiscoveredRepo(
+                repo_id=uuid.uuid4(),
+                full_name=full_name,
+                source="gitlab",
+                settings=settings,
+            )
+        )
+    return repos
+
+
+def test_gitlab_unit_instance_scope_rejects_cross_instance_project_id_collision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[CHAOS-2801 regression] A unit authenticated to instance A must match
+    only instance A's row when two GitLab integrations both discover a
+    project with the same numeric id."""
+    repos = _gitlab_repos_with_instance(
+        entries=[
+            ("grp/proj-a", 123, _INSTANCE_A),
+            ("other-grp/proj-x", 123, _INSTANCE_B),
+        ]
+    )
+    calls = _run_gitlab(
+        monkeypatch,
+        repo_name="123",
+        require_source=True,
+        repos=repos,
+        gitlab_url=_INSTANCE_A,
+    )
+    # Invocation-count assertion: the fetcher runs exactly once, for
+    # instance A's row only — instance B's same-id row never reaches it.
+    assert len(calls) == 1
+    assert {r.full_name for r in calls[0]} == {"grp/proj-a"}
+
+
+def test_gitlab_unit_instance_scope_real_fetch_invoked_once_for_matched_instance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[CHAOS-2801 regression] Exercises the REAL ``fetch_gitlab_work_items``
+    (recording GitLab API client, not the mocked fetcher used above). Each
+    matched project makes exactly 2 API calls (issues + MRs, ``org_id`` is
+    set so MR-attribution scanning runs). If the cross-instance row or the
+    legacy no-discriminator row were not filtered, they would ALSO reach the
+    fetcher and the count would rise to 4 or 6 — the count is the signal,
+    since every row carries the identical project id string and the calls
+    can't be told apart by identifier alone. The legacy row here pins the
+    codex-HIGH (PR #1148) shadow rule at the API level: one fetch, one
+    write-target repo, even in a mixed legacy/discriminated org."""
+    _patch_common(monkeypatch)
+    _patch_gitlab_client_factory(monkeypatch)
+    _RecordingGitLabAPIClient.calls = []
+    repos = _gitlab_repos_with_instance(
+        entries=[
+            ("grp/proj-a", 123, _INSTANCE_A),
+            ("other-grp/proj-x", 123, _INSTANCE_B),
+            ("legacy-grp/proj-y", 123, None),
+        ]
+    )
+    monkeypatch.setattr(job, "_discover_repos", lambda **_kwargs: list(repos))
+    monkeypatch.setattr(
+        job,
+        "_build_gitlab_work_client",
+        lambda **_kwargs: ("gl-token", _INSTANCE_A),
+    )
+
+    run_job: Any = job.run_work_items_sync_job
+    run_job(
+        db_url="clickhouse://test",
+        day=date(2026, 5, 2),
+        backfill_days=1,
+        provider="gitlab",
+        org_id=str(uuid.uuid4()),
+        repo_name="123",
+        require_source=True,
+    )
+
+    assert len(_RecordingGitLabAPIClient.calls) == 2, _RecordingGitLabAPIClient.calls
+    assert set(_RecordingGitLabAPIClient.calls) == {"123"}
+
+
+def test_gitlab_unit_instance_scope_accepts_row_with_no_discriminator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[CHAOS-2801 compat pin] A row with no ``gitlab_instance_url`` (every
+    row written before this change) still matches when the unit's own
+    instance IS known and NO discriminated same-id match exists — zero blast
+    radius for today's pure-legacy single-GitLab-instance orgs."""
+    repos = _gitlab_repos_with_instance(entries=[("grp/proj-a", 123, None)])
+    calls = _run_gitlab(
+        monkeypatch,
+        repo_name="123",
+        require_source=True,
+        repos=repos,
+        gitlab_url=_INSTANCE_A,
+    )
+    assert len(calls) == 1
+    assert {r.full_name for r in calls[0]} == {"grp/proj-a"}
+
+
+def test_gitlab_unit_instance_scope_discriminated_match_shadows_legacy_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[CHAOS-2801 codex HIGH, PR #1148 regression] Absent-accept must NOT
+    act as a co-match. With instance A's discriminated row matched AND a
+    legacy no-discriminator row sharing the same project_id, only the
+    discriminated row may be scoped: if both entered
+    ``gitlab_id_scoped_project_ids``, the single fetch against A's client
+    would also be written under the legacy row's repo_id — the exact
+    cross-instance corruption this PR closes (the legacy row may well be
+    instance B's project 123, just discovered before discriminators
+    existed). Asserts the fetch is invoked once and the write targets ONLY
+    the discriminated row's repo_id."""
+    repos = _gitlab_repos_with_instance(
+        entries=[
+            ("grp/proj-a", 123, _INSTANCE_A),
+            ("legacy-grp/proj-y", 123, None),
+        ]
+    )
+    discriminated_repo_id = repos[0].repo_id
+    calls = _run_gitlab(
+        monkeypatch,
+        repo_name="123",
+        require_source=True,
+        repos=repos,
+        gitlab_url=_INSTANCE_A,
+    )
+    assert len(calls) == 1
+    assert {r.full_name for r in calls[0]} == {"grp/proj-a"}
+    # Write-target pin: the repos handed to the fetcher determine which
+    # repo_id the fetched data is written/normalized under.
+    assert {r.repo_id for r in calls[0]} == {discriminated_repo_id}
+
+
+def test_gitlab_unit_instance_scope_mismatch_plus_legacy_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[CHAOS-2801 codex HIGH, PR #1148 round-2, case (c)] A known
+    MISMATCHING discriminator for the same project_id PROVES cross-instance
+    ambiguity exists for that numeric id — the legacy no-discriminator row
+    is plausibly that other instance's pre-discriminator row. Accepting it
+    (as the round-1 shadow rule did — the previous version of this very
+    test pinned that wrong call) risks fetching from instance A and writing
+    under B's repo_id. New rule: legacy rows are accepted ONLY when NO
+    same-project_id row carries ANY known discriminator; here one does
+    (mismatching), so BOTH rows drop and the CHAOS-2737 ``require_source``
+    fail-closed path raises. Remediation is re-discovery, which now stamps
+    discriminators on every row."""
+    repos = _gitlab_repos_with_instance(
+        entries=[
+            ("other-grp/proj-x", 123, _INSTANCE_B),
+            ("legacy-grp/proj-y", 123, None),
+        ]
+    )
+    calls: list[list[DiscoveredRepo]] = []
+    with pytest.raises(ValueError, match="source was not discovered"):
+        calls = _run_gitlab(
+            monkeypatch,
+            repo_name="123",
+            require_source=True,
+            repos=repos,
+            gitlab_url=_INSTANCE_A,
+        )
+    assert calls == []
+
+
+def test_gitlab_unit_instance_scope_three_row_mismatch_ambiguity_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[CHAOS-2801 codex HIGH, PR #1148 round-2 — explicit three-row case]
+    Unit on instance A; project_id=123 rows: known-B (mismatch), known-C
+    (mismatch), and a legacy no-discriminator row. Every row is dropped —
+    both mismatches rejected outright, the legacy row dropped for
+    cross-instance ambiguity (two other instances demonstrably share this
+    numeric id) — and the unit fails closed with ZERO fetch invocations."""
+    repos = _gitlab_repos_with_instance(
+        entries=[
+            ("other-grp/proj-x", 123, _INSTANCE_B),
+            ("third-grp/proj-z", 123, "https://gitlab-c.example.com"),
+            ("legacy-grp/proj-y", 123, None),
+        ]
+    )
+    calls: list[list[DiscoveredRepo]] = []
+    with pytest.raises(ValueError, match="source was not discovered"):
+        calls = _run_gitlab(
+            monkeypatch,
+            repo_name="123",
+            require_source=True,
+            repos=repos,
+            gitlab_url=_INSTANCE_A,
+        )
+    assert calls == []
+
+
+def test_gitlab_unit_instance_scope_noop_when_unit_instance_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[CHAOS-2801] When THIS unit's own instance can't be resolved, the
+    instance check never engages — a row that DOES carry a (different)
+    discriminator is still matched, exactly as pre-CHAOS-2801."""
+    repos = _gitlab_repos_with_instance(entries=[("grp/proj-a", 123, _INSTANCE_B)])
+    calls = _run_gitlab(
+        monkeypatch,
+        repo_name="123",
+        require_source=True,
+        repos=repos,
+        gitlab_url=None,
+    )
+    assert len(calls) == 1
+    assert {r.full_name for r in calls[0]} == {"grp/proj-a"}
+
+
+def test_gitlab_unit_instance_scope_mismatch_fails_closed_when_no_other_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[CHAOS-2801] When the only project_id match is on a DIFFERENT known
+    instance, the row is dropped and — since nothing else matches — the
+    existing CHAOS-2737 ``require_source`` fail-closed path raises, exactly
+    as if the project had never been discovered at all. The fetcher is never
+    invoked."""
+    repos = _gitlab_repos_with_instance(
+        entries=[("other-grp/proj-x", 123, _INSTANCE_B)]
+    )
+    calls: list[list[DiscoveredRepo]] = []
+    with pytest.raises(ValueError, match="source was not discovered"):
+        calls = _run_gitlab(
+            monkeypatch,
+            repo_name="123",
+            require_source=True,
+            repos=repos,
+            gitlab_url=_INSTANCE_A,
+        )
+    assert calls == []
+
+
+def test_gitlab_unit_instance_scope_equivalent_url_spellings_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[CHAOS-2801 codex MED, PR #1148] Equivalent spellings of the SAME
+    endpoint must never false-mismatch: the persisted discriminator carries
+    an explicit default :443 port + trailing slash while the unit's
+    credential URL is uppercase with no port. A false mismatch here would
+    reject every row of a healthy integration and trip the CHAOS-2737
+    fail-closed path org-wide on a harmless credential formatting change."""
+    repos = _gitlab_repos_with_instance(
+        entries=[("grp/proj-a", 123, "https://gitlab-a.example.com:443/")]
+    )
+    calls = _run_gitlab(
+        monkeypatch,
+        repo_name="123",
+        require_source=True,
+        repos=repos,
+        gitlab_url="https://GITLAB-A.example.com",
+    )
+    assert len(calls) == 1
+    assert {r.full_name for r in calls[0]} == {"grp/proj-a"}
+
+
+# --- normalize_gitlab_instance unit pins (codex MED, PR #1148) ---------------
+#
+# The single shared normalizer (providers/gitlab/instance.py) used at BOTH
+# the write sites' persist path and the scoping comparison.
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        # Explicit default port is stripped (https:443, http:80).
+        ("https://gitlab.example.com", "https://gitlab.example.com:443"),
+        ("http://gitlab.example.com", "http://gitlab.example.com:80"),
+        # Host + scheme casing.
+        ("https://gitlab.example.com", "HTTPS://GITLAB.EXAMPLE.COM"),
+        # Trailing slash and API path suffix.
+        ("https://gitlab.example.com", "https://gitlab.example.com/"),
+        ("https://gitlab.example.com", "https://gitlab.example.com/api/v4"),
+        # Userinfo is discarded.
+        ("https://gitlab.example.com", "https://user@gitlab.example.com"),
+        # Scheme-less input defaults to https.
+        ("https://gitlab.example.com", "gitlab.example.com"),
+        # All of it at once.
+        (
+            "https://gitlab.example.com",
+            "HTTPS://GitLab.Example.com:443/api/v4/",
+        ),
+    ],
+)
+def test_normalize_gitlab_instance_equivalent_spellings(left: str, right: str) -> None:
+    from dev_health_ops.providers.gitlab.instance import normalize_gitlab_instance
+
+    assert normalize_gitlab_instance(left) == normalize_gitlab_instance(right)
+    # ``left`` is already in canonical form in every pair — normalization
+    # must be a fixed point on it (scheme-specific: http rows stay http).
+    assert normalize_gitlab_instance(left) == left
+
+
+def test_normalize_gitlab_instance_non_default_port_still_distinct() -> None:
+    """Two GitLab instances CAN legitimately run on different ports of one
+    host — a non-default port must remain part of the discriminator."""
+    from dev_health_ops.providers.gitlab.instance import normalize_gitlab_instance
+
+    assert (
+        normalize_gitlab_instance("https://gitlab.example.com:8443")
+        == "https://gitlab.example.com:8443"
+    )
+    assert normalize_gitlab_instance(
+        "https://gitlab.example.com:8443"
+    ) != normalize_gitlab_instance("https://gitlab.example.com")
+    # http on 443 is NOT http's default — preserved, and distinct from https.
+    assert (
+        normalize_gitlab_instance("http://gitlab.example.com:443")
+        == "http://gitlab.example.com:443"
+    )
+
+
+def test_normalize_gitlab_instance_unknown_inputs() -> None:
+    """Missing/blank/unparseable inputs are ``None`` — "unknown", never a
+    distinct instance."""
+    from dev_health_ops.providers.gitlab.instance import normalize_gitlab_instance
+
+    assert normalize_gitlab_instance(None) is None
+    assert normalize_gitlab_instance("") is None
+    assert normalize_gitlab_instance("   ") is None
+    assert normalize_gitlab_instance(123) is None
+    assert normalize_gitlab_instance("https://gitlab.example.com:notaport") is None
+
+
+# --- insert_repo -> discover_repos JSON round-trip (codex MED, PR #1148) -----
+#
+# ``ClickHouseStore.insert_repo`` encodes ``repos.settings`` via
+# ``_json_or_none`` (json.dumps) and ``discover_repos`` (job_daily.py)
+# decodes it via ``_parse_repo_settings`` (json.loads). These round-trip
+# tests exercise the REAL encode + decode pair — not a hand-rolled stand-in
+# — and then run the real scoping loop on the round-tripped settings, for
+# both the canonical (discriminator present) and unknown (key omitted at
+# the write site) shapes.
+
+
+def _roundtrip_settings(settings: dict[str, object]) -> dict[str, object]:
+    from dev_health_ops.metrics.job_daily import _parse_repo_settings
+    from dev_health_ops.storage.clickhouse import ClickHouseStore
+
+    encoded = ClickHouseStore._json_or_none(settings)
+    assert isinstance(encoded, str)
+    return _parse_repo_settings(encoded)
+
+
+def test_gitlab_instance_discriminator_survives_settings_json_roundtrip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Canonical case: a write-site settings dict carrying the normalized
+    discriminator survives the real insert_repo/discover_repos JSON
+    round-trip, and the scoping loop then (a) matches it for a same-instance
+    unit and (b) rejects it fail-closed for a different-instance unit."""
+    roundtripped = _roundtrip_settings(
+        {
+            "source": "gitlab",
+            "project_id": 123,
+            "gitlab_instance_url": _INSTANCE_A,
+            "default_branch": "main",
+        }
+    )
+    assert roundtripped["gitlab_instance_url"] == _INSTANCE_A
+    repo = DiscoveredRepo(
+        repo_id=uuid.uuid4(),
+        full_name="grp/proj-a",
+        source="gitlab",
+        settings=roundtripped,
+    )
+
+    calls = _run_gitlab(
+        monkeypatch,
+        repo_name="123",
+        require_source=True,
+        repos=[repo],
+        gitlab_url=_INSTANCE_A,
+    )
+    assert len(calls) == 1
+    assert {r.full_name for r in calls[0]} == {"grp/proj-a"}
+
+    with pytest.raises(ValueError, match="source was not discovered"):
+        _run_gitlab(
+            monkeypatch,
+            repo_name="123",
+            require_source=True,
+            repos=[repo],
+            gitlab_url=_INSTANCE_B,
+        )
+
+
+def test_gitlab_unknown_discriminator_survives_settings_json_roundtrip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unknown case: the write site OMITS ``gitlab_instance_url`` when the
+    normalizer returns None; the omitted key survives the real JSON
+    round-trip as an absent key (never a raw/None placeholder that could be
+    mistaken for a distinct instance) and the scoping loop treats the row
+    as legacy-unknown — accepted when no discriminated row exists (case b).
+    """
+    roundtripped = _roundtrip_settings(
+        {
+            "source": "gitlab",
+            "project_id": 123,
+            "default_branch": "main",
+        }
+    )
+    assert "gitlab_instance_url" not in roundtripped
+    repo = DiscoveredRepo(
+        repo_id=uuid.uuid4(),
+        full_name="legacy-grp/proj-y",
+        source="gitlab",
+        settings=roundtripped,
+    )
+
+    calls = _run_gitlab(
+        monkeypatch,
+        repo_name="123",
+        require_source=True,
+        repos=[repo],
+        gitlab_url=_INSTANCE_A,
+    )
+    assert len(calls) == 1
+    assert {r.full_name for r in calls[0]} == {"legacy-grp/proj-y"}

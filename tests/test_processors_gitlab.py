@@ -174,6 +174,127 @@ async def test_process_gitlab_project_no_sync_flags(monkeypatch):
         mock_store.insert_incidents.assert_not_called()
 
 
+async def _run_process_gitlab_project_capture_repo(monkeypatch, *, gitlab_url):
+    """Run ``process_gitlab_project`` against a fully-stubbed connector and
+    return the ``Repo`` handed to ``store.insert_repo`` (CHAOS-2801 write-site
+    harness)."""
+    monkeypatch.setattr("dev_health_ops.processors.gitlab.CONNECTORS_AVAILABLE", True)
+
+    mock_store = AsyncMock()
+    mock_gl_project = Mock()
+    mock_gl_project.id = 123
+    mock_gl_project.name = "test-project"
+    mock_gl_project.path_with_namespace = "group/test-project"
+    mock_gl_project.web_url = "https://gitlab.com/group/test-project"
+    mock_gl_project.default_branch = "main"
+
+    with (
+        patch("dev_health_ops.processors.gitlab.GitLabConnector") as _MockConnector,  # noqa: F841
+        patch(
+            "dev_health_ops.processors.gitlab._fetch_gitlab_project_info_sync",
+            return_value=mock_gl_project,
+        ),
+        patch(
+            "dev_health_ops.processors.gitlab._fetch_gitlab_commits_sync",
+            return_value=([], []),
+        ),
+        patch(
+            "dev_health_ops.processors.gitlab._fetch_gitlab_commit_stats_sync",
+            return_value=[],
+        ),
+        patch(
+            "dev_health_ops.processors.gitlab._sync_gitlab_mrs_to_store", return_value=0
+        ),
+        patch("dev_health_ops.processors.gitlab._fetch_gitlab_pipelines_sync"),
+        patch("dev_health_ops.processors.gitlab._fetch_gitlab_deployments_sync"),
+        patch("dev_health_ops.processors.gitlab._fetch_gitlab_incidents_sync"),
+        patch(
+            "dev_health_ops.processors.gitlab._backfill_gitlab_missing_data",
+            new_callable=AsyncMock,
+        ),
+    ):
+        await process_gitlab_project(
+            store=mock_store,
+            project_id=123,
+            token="test-token",
+            gitlab_url=gitlab_url,
+            sync_cicd=False,
+            sync_deployments=False,
+            sync_incidents=False,
+        )
+
+    mock_store.insert_repo.assert_called_once()
+    return mock_store.insert_repo.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_process_gitlab_project_persists_instance_discriminator(monkeypatch):
+    """[CHAOS-2801] process_gitlab_project must persist the connector's
+    configured base URL as ``settings.gitlab_instance_url`` on the written
+    ``Repo`` row -- the discriminator job_work_items.py's numeric-id scoping
+    uses to reject a same-``project_id`` row from a DIFFERENT GitLab
+    instance. Persisted in NORMALIZED form via the shared
+    ``normalize_gitlab_instance`` (the input below deliberately carries
+    mixed case, an explicit default :443 port, and a path suffix -- all of
+    which must be normalized away at persist time, codex MED PR #1148).
+    Independent of the project's own (optional) ``web_url`` (kept unchanged
+    in ``settings.url``)."""
+    written_repo = await _run_process_gitlab_project_capture_repo(
+        monkeypatch, gitlab_url="https://GitLab-A.example.com:443/api/v4/"
+    )
+    assert (
+        written_repo.settings["gitlab_instance_url"] == "https://gitlab-a.example.com"
+    )
+    # The project's own web_url stays untouched under its existing key.
+    assert written_repo.settings["url"] == "https://gitlab.com/group/test-project"
+    assert written_repo.settings["project_id"] == 123
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_gitlab_url",
+    [
+        "",
+        "   ",
+        "https://gitlab.example.com:notaport",
+    ],
+)
+async def test_process_gitlab_project_unknown_instance_url_omits_discriminator(
+    monkeypatch, bad_gitlab_url
+):
+    """[CHAOS-2801 codex MED, PR #1148 round-2] When the normalizer cannot
+    parse the connector URL (blank/malformed), the discriminator key must be
+    OMITTED -- never the raw value. Persisting the raw string would defeat
+    the documented "unknown" semantic AND retain path/query/userinfo from a
+    malformed URL at rest (the CHAOS-2766/2780 credential-retention leak
+    class). An absent key reads back as "unknown", identical to a
+    pre-CHAOS-2801 row."""
+    written_repo = await _run_process_gitlab_project_capture_repo(
+        monkeypatch, gitlab_url=bad_gitlab_url
+    )
+    assert "gitlab_instance_url" not in written_repo.settings
+    # The raw value must not appear under any other settings key either.
+    if bad_gitlab_url.strip():
+        assert bad_gitlab_url not in list(written_repo.settings.values())
+
+
+@pytest.mark.asyncio
+async def test_process_gitlab_project_userinfo_stripped_from_discriminator(monkeypatch):
+    """[CHAOS-2801 codex MED, PR #1148 round-2] A parseable URL carrying
+    userinfo persists the canonical host-only discriminator; the userinfo
+    component (credential-in-URL shape) never reaches the settings JSON at
+    rest."""
+    account_label = "svc-" + "sync-account"  # neutral, runtime-joined
+    written_repo = await _run_process_gitlab_project_capture_repo(
+        monkeypatch,
+        gitlab_url=f"https://{account_label}@GitLab-A.example.com/",
+    )
+    assert (
+        written_repo.settings["gitlab_instance_url"] == "https://gitlab-a.example.com"
+    )
+    assert account_label not in written_repo.settings["gitlab_instance_url"]
+
+
 def test_fetch_gitlab_pipelines_sync():
     mock_pipeline = Mock()
     mock_pipeline.id = 1

@@ -48,6 +48,7 @@ from dev_health_ops.models.work_items import (
     WorkItem,
     WorkItemType,
 )
+from dev_health_ops.providers.gitlab.instance import normalize_gitlab_instance
 from dev_health_ops.providers.identity import load_identity_resolver
 from dev_health_ops.providers.status_mapping import load_status_mapping
 from dev_health_ops.providers.teams import (
@@ -588,22 +589,140 @@ def run_work_items_sync_job(
         # repos are NOT added here, so they keep fetching by ``full_name`` —
         # unchanged, existing behavior; only an id-matched unit's identifier
         # resolution changes.
+        #
+        # CHAOS-2801 [codex HIGH, PR #1143 round-3]: numeric ``project_id``
+        # is only unique WITHIN one GitLab instance — two GitLab integrations
+        # in the same org (different self-hosted instances, or one self-hosted
+        # + gitlab.com) can both expose ``project_id=123``. Without an
+        # instance check, a unit authenticated to instance A could match
+        # instance B's row purely on the numeric id, then fetch project 123
+        # from A and persist/write the result under B's ``repo_id``.
+        #
+        # Resolve this unit's authenticated GitLab client (token + base URL)
+        # up front — *before* the id-matching loop, not after it as before —
+        # so ``gitlab_unit_instance`` is available at match time. This is a
+        # reordering only: ``_build_gitlab_work_client`` was already called
+        # unconditionally whenever "gitlab" is in ``provider_set`` (previously
+        # just after this block, at the ``fetch_gitlab_work_items`` call
+        # site); moving it earlier does not change whether/when it can raise.
+        #
+        # Design semantic — the three-case instance rule (documented in
+        # docs/architecture/sync-unit-model.md and the CHAOS-2801 PR body).
+        # ``normalize_gitlab_instance`` (providers/gitlab/instance.py) is the
+        # SINGLE normalizer, shared with the write sites that persist
+        # ``settings.gitlab_instance_url`` — never fork a second copy
+        # (default-port/case/path spelling differences would otherwise
+        # false-mismatch, codex MED PR #1148 round-1).
+        #
+        # When the unit's instance is KNOWN, per project_id:
+        #   (a) a same-project_id row with a MATCHING discriminator exists
+        #       -> scope to the discriminated match(es) ONLY; mismatching
+        #       and undiscriminated (legacy) rows are dropped. Without the
+        #       legacy drop, absent-accept would act as a CO-MATCH (codex
+        #       HIGH, PR #1148 round-1): both repo_ids would enter
+        #       ``gitlab_id_scoped_project_ids`` and the single fetch
+        #       against this unit's client would also be written under the
+        #       legacy (possibly other-instance) row's ``repo_id``.
+        #   (b) NO discriminated row exists at all for this project_id ->
+        #       ACCEPT legacy rows. This is the compatibility pin: a
+        #       pure-legacy org (every row written before this change) sees
+        #       zero behavior change.
+        #   (c) only MISMATCHING discriminated row(s) exist -> FAIL CLOSED
+        #       for this project_id: the mismatch rows are rejected AND the
+        #       legacy rows are dropped too (codex HIGH, PR #1148 round-2).
+        #       A known mismatching discriminator PROVES cross-instance
+        #       ambiguity exists for this numeric id — the legacy row is
+        #       plausibly that other instance's pre-discriminator row, so
+        #       accepting it risks the exact wrong-repo_id write this fix
+        #       closes. Nothing matches, so the existing CHAOS-2737
+        #       ``require_source`` path below raises with its audit log;
+        #       remediation is re-discovery, which now stamps
+        #       discriminators on every row.
+        # Cases (a)+(c) collapse to one predicate: a legacy row is accepted
+        # ONLY when no same-project_id row carries ANY known discriminator.
+        # When the unit's instance is UNKNOWN (e.g. a bare CLI run with no
+        # resolvable base URL), the check never engages; behavior matches
+        # pre-CHAOS-2801.
+        #
+        # This never changes GitHub-path behavior and never weakens the
+        # existing CHAOS-2737 fail-closed ``require_source`` path below — a
+        # rejected row simply does not count as "discovered", so a unit with
+        # no other matching row still raises exactly as before.
+        gl_token: str = ""
+        gl_url: str | None = None
+        gitlab_unit_instance: str | None = None
+        if "gitlab" in provider_set:
+            gl_token, gl_url = _build_gitlab_work_client(
+                org_id=org_id, credentials=credentials
+            )
+            gitlab_unit_instance = normalize_gitlab_instance(gl_url)
+
         gitlab_id_scoped_project_ids: dict[uuid.UUID, str] = {}
         if repo_name and "gitlab" in provider_set:
             wanted_gl = repo_name.strip()
             is_numeric_id = re.fullmatch(r"[0-9]+", wanted_gl) is not None
+
+            def _gl_id_match(settings: dict[str, Any]) -> bool:
+                project_id = settings.get("project_id")
+                return project_id is not None and str(project_id).strip() == wanted_gl
+
+            # Pre-pass (codex HIGH, PR #1148 rounds 1+2): does ANY
+            # same-project_id row carry a KNOWN discriminator, and does any
+            # of those MATCH this unit's instance? A legacy
+            # (no-discriminator) row is accepted below ONLY when no known
+            # discriminator exists at all for this project_id — a matching
+            # one shadows it (case a), and a mismatching-only one proves
+            # cross-instance ambiguity and fails closed (case c).
+            has_discriminated_row = False
+            has_discriminated_match = False
+            if is_numeric_id and gitlab_unit_instance is not None:
+                for repo in discovered_repos:
+                    if repo.source != "gitlab":
+                        continue
+                    settings = _repo_settings_dict(repo)
+                    if not _gl_id_match(settings):
+                        continue
+                    row_instance = normalize_gitlab_instance(
+                        settings.get("gitlab_instance_url")
+                    )
+                    if row_instance is not None:
+                        has_discriminated_row = True
+                        if row_instance == gitlab_unit_instance:
+                            has_discriminated_match = True
+                            break
+
             scoped_gl: list[Any] = []
             dropped_gl = 0
+            dropped_gl_instance_mismatch = 0
+            dropped_gl_shadowed_legacy = 0
+            dropped_gl_ambiguous_legacy = 0
             for repo in discovered_repos:
                 if repo.source != "gitlab":
                     scoped_gl.append(repo)
                     continue
+                settings = _repo_settings_dict(repo)
                 if is_numeric_id:
-                    settings = _repo_settings_dict(repo)
-                    project_id = settings.get("project_id")
-                    matched = (
-                        project_id is not None and str(project_id).strip() == wanted_gl
-                    )
+                    matched = _gl_id_match(settings)
+                    if matched and gitlab_unit_instance is not None:
+                        row_instance = normalize_gitlab_instance(
+                            settings.get("gitlab_instance_url")
+                        )
+                        if row_instance is not None and row_instance != (
+                            gitlab_unit_instance
+                        ):
+                            matched = False
+                            dropped_gl_instance_mismatch += 1
+                        elif row_instance is None and has_discriminated_row:
+                            # Some same-project_id row has a KNOWN
+                            # discriminator, so this legacy row must not
+                            # match: shadowed by a matching row (case a) or
+                            # fail-closed on cross-instance ambiguity when
+                            # only mismatching rows exist (case c).
+                            matched = False
+                            if has_discriminated_match:
+                                dropped_gl_shadowed_legacy += 1
+                            else:
+                                dropped_gl_ambiguous_legacy += 1
                 else:
                     matched = (
                         repo.full_name or ""
@@ -612,7 +731,7 @@ def run_work_items_sync_job(
                     dropped_gl += 1
                     continue
                 if is_numeric_id:
-                    gitlab_id_scoped_project_ids[repo.repo_id] = str(project_id).strip()
+                    gitlab_id_scoped_project_ids[repo.repo_id] = wanted_gl
                 scoped_gl.append(repo)
             if dropped_gl:
                 logger.info(
@@ -620,6 +739,38 @@ def run_work_items_sync_job(
                     "dropped %d off-source repo(s)",
                     repo_name,
                     dropped_gl,
+                )
+            if dropped_gl_instance_mismatch:
+                logger.warning(
+                    "CHAOS-2801: dropped %d GitLab repo(s) matching project_id "
+                    "'%s' but a different instance than this unit's "
+                    "authenticated GitLab host — cross-instance numeric-id "
+                    "collision, not this unit's project",
+                    dropped_gl_instance_mismatch,
+                    repo_name,
+                )
+            if dropped_gl_shadowed_legacy:
+                logger.warning(
+                    "CHAOS-2801: dropped %d legacy GitLab repo row(s) with no "
+                    "instance discriminator for project_id '%s' — a row "
+                    "discriminated to this unit's instance already matched, "
+                    "so the undiscriminated row(s) must not co-match (they "
+                    "may belong to a different instance); re-discovery will "
+                    "stamp them",
+                    dropped_gl_shadowed_legacy,
+                    repo_name,
+                )
+            if dropped_gl_ambiguous_legacy:
+                logger.warning(
+                    "CHAOS-2801: dropped %d legacy GitLab repo row(s) with no "
+                    "instance discriminator for project_id '%s' — another "
+                    "row carries a KNOWN, MISMATCHING instance discriminator "
+                    "for the same project_id, proving cross-instance "
+                    "ambiguity; failing closed rather than risking a "
+                    "wrong-instance write. Remediation: re-run discovery "
+                    "(it now stamps gitlab_instance_url on every row)",
+                    dropped_gl_ambiguous_legacy,
+                    repo_name,
                 )
             discovered_repos = scoped_gl
 
@@ -768,9 +919,10 @@ def run_work_items_sync_job(
                 transitions.extend(list(proj_tr or []))
 
         if "gitlab" in provider_set:
-            gl_token, gl_url = _build_gitlab_work_client(
-                org_id=org_id, credentials=credentials
-            )
+            # gl_token/gl_url were already resolved above (before the
+            # CHAOS-2801 instance-scoping block) so the unit's authenticated
+            # instance is known at match time; reused here rather than
+            # re-resolved.
             items, tr, gl_ai_attributions = fetch_gitlab_work_items(
                 repos=discovered_repos,
                 since=since_dt,

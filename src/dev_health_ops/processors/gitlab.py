@@ -47,6 +47,7 @@ from dev_health_ops.processors.testops_ingest import (
     ingest_report_members,
 )
 from dev_health_ops.processors.testops_tests import process_gitlab_test_report
+from dev_health_ops.providers.gitlab.instance import normalize_gitlab_instance
 from dev_health_ops.providers.pr_state import normalize_pr_state
 from dev_health_ops.utils import (
     AGGREGATE_STATS_MARKER,
@@ -1812,20 +1813,41 @@ async def process_gitlab_project(
             else gl_project.name
         )
 
+        repo_settings: dict[str, Any] = {
+            "source": "gitlab",
+            "project_id": gl_project.id,
+            "url": gl_project.web_url if hasattr(gl_project, "web_url") else None,
+            "default_branch": (
+                gl_project.default_branch
+                if hasattr(gl_project, "default_branch")
+                else "main"
+            ),
+        }
+        # CHAOS-2801: the *instance* this project id was resolved against —
+        # the connector's configured base URL, not the project's own
+        # (optional) web_url above. Numeric ``project_id`` values are only
+        # unique within one GitLab instance, so a work-item unit scoping by
+        # id (job_work_items.py) uses this to reject a same-id row from a
+        # DIFFERENT instance. Persisted through the SAME shared normalizer
+        # the comparison site uses (single function, no second copy) so
+        # equivalent URL spellings — case, trailing slash, /api/v4 suffix,
+        # explicit default :443/:80, userinfo — can never false-mismatch.
+        # The normalizer result is persisted DIRECTLY: when it is None
+        # (blank/malformed input) the key is OMITTED — never the raw URL,
+        # which could retain path/query/userinfo from a malformed value
+        # (credential-in-URL retention, the CHAOS-2766/2780 leak class) and
+        # would violate the documented "unknown" semantic the scoping site
+        # relies on. An absent key reads as "unknown", exactly like rows
+        # written before this field existed.
+        gitlab_instance_url = normalize_gitlab_instance(gitlab_url)
+        if gitlab_instance_url is not None:
+            repo_settings["gitlab_instance_url"] = gitlab_instance_url
+
         db_repo = Repo(
             repo_path=None,  # Not a local repo
             repo=full_name,
             provider="gitlab",
-            settings={
-                "source": "gitlab",
-                "project_id": gl_project.id,
-                "url": gl_project.web_url if hasattr(gl_project, "web_url") else None,
-                "default_branch": (
-                    gl_project.default_branch
-                    if hasattr(gl_project, "default_branch")
-                    else "main"
-                ),
-            },
+            settings=repo_settings,
             tags=["gitlab"],
         )
 
@@ -2093,17 +2115,28 @@ async def process_gitlab_projects_batch(
             return
 
         project_info = result.repository
+        batch_repo_settings: dict[str, Any] = {
+            "source": "gitlab",
+            "project_id": project_info.id,
+            "url": project_info.url,
+            "default_branch": project_info.default_branch,
+            "batch_processed": True,
+        }
+        # CHAOS-2801: instance discriminator — see the twin write site's
+        # comment in process_gitlab_project above (same shared normalizer,
+        # same normalized-or-omitted rule: never persist the raw URL when
+        # the normalizer returns None). ``gitlab_url`` here is the
+        # connector's configured base URL for the whole batch (this
+        # function's own parameter), not per-project.
+        batch_instance_url = normalize_gitlab_instance(gitlab_url)
+        if batch_instance_url is not None:
+            batch_repo_settings["gitlab_instance_url"] = batch_instance_url
+
         db_repo = Repo(
             repo_path=None,  # Not a local repo
             repo=project_info.full_name,
             provider="gitlab",
-            settings={
-                "source": "gitlab",
-                "project_id": project_info.id,
-                "url": project_info.url,
-                "default_branch": project_info.default_branch,
-                "batch_processed": True,
-            },
+            settings=batch_repo_settings,
             tags=["gitlab"],
         )
 

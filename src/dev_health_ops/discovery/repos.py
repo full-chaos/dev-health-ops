@@ -44,7 +44,8 @@ def _github_token_from_credentials(credentials: dict[str, Any]) -> str:
     """Resolve a usable GitHub token from a credentials mapping.
 
     Supports both PAT (``token``) and GitHub App auth; for App auth an
-    installation token is minted via the GitHub connector.
+    installation token is minted via ``providers.github.app_auth`` (no
+    dependency on the ``connectors`` package).
     """
     from dev_health_ops.credentials.resolver import github_credentials_from_mapping
 
@@ -56,9 +57,14 @@ def _github_token_from_resolved_credentials(gh_credentials: Any | None) -> str:
     if gh_credentials is None:
         return ""
     if gh_credentials.is_app_auth:
-        from dev_health_ops.connectors.github import GitHubConnector
+        from dev_health_ops.providers.github.app_auth import mint_installation_token
 
-        return GitHubConnector(credentials=gh_credentials).token
+        return mint_installation_token(
+            app_id=gh_credentials.app_id,
+            private_key=gh_credentials.private_key,
+            installation_id=gh_credentials.installation_id,
+            base_url=gh_credentials.base_url,
+        )
     return gh_credentials.token or ""
 
 
@@ -143,7 +149,7 @@ def _discover_github_app_installation_repos(
 ) -> list[tuple[str, ...]]:
     import requests
 
-    from dev_health_ops.connectors.utils.github_app import GitHubAppTokenProvider
+    from dev_health_ops.providers.github.app_auth import mint_installation_token
 
     app_id = getattr(github_credentials, "app_id", None)
     private_key = getattr(github_credentials, "private_key", None)
@@ -156,12 +162,12 @@ def _discover_github_app_installation_repos(
     base_url = str(
         getattr(github_credentials, "base_url", None) or "https://api.github.com"
     ).rstrip("/")
-    token = GitHubAppTokenProvider(
+    token = mint_installation_token(
         app_id=str(app_id),
         private_key=str(private_key),
         installation_id=str(installation_id),
-        api_base_url=base_url,
-    ).get_token()
+        base_url=base_url,
+    )
 
     result: list[tuple[str, ...]] = []
     page = 1

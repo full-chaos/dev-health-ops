@@ -61,6 +61,15 @@ class ProviderRateLimitObservation(Base):
     sync_run_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
     sync_run_unit_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
     route_family: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # NULL exactly when route_family could not be confidently attributed --
+    # e.g. "ambiguous_dimension" when the signal's dimension matches more than
+    # one distinct route family for this unit (dimension alone does not
+    # disambiguate: Linear's work-items estimator emits teams/issues/cycles/
+    # comments/attachments/history all under graphql_cost). A future
+    # cooldown-gating consumer (CHAOS-2760) falls back to
+    # provider+integration+dimension gating whenever this is set, never a
+    # guessed family. See workers/sync_units.py:_route_family_and_attribution.
+    route_family_attribution: Mapped[str | None] = mapped_column(Text, nullable=True)
     dimension: Mapped[str | None] = mapped_column(Text, nullable=True)
     retry_after_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     reset_at: Mapped[datetime | None] = mapped_column(

@@ -538,41 +538,97 @@ def _merge_partial_observations_into_result(
     _promote_result_observation_fields(result)
 
 
-def _route_family_for_rate_limit(
+_AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION = "ambiguous_dimension"
+
+# Allow-listed, normalized rate-limit reason categories (CHAOS-2758 review):
+# the observation store must never persist raw exception text -- legacy
+# no-signal raise sites build messages from provider response bodies, which
+# can embed header/body-shaped diagnostic content. Every provider client's
+# ``RateLimitSignal.reason`` value is already drawn from this vocabulary
+# (`primary`/`secondary` for GitHub/GitLab/LaunchDarkly/Jira,
+# `complexity` for Linear); `permission` is reserved for a future
+# classification site. Anything else -- including no signal at all --
+# normalizes to `unknown`.
+_RATE_LIMIT_REASON_CATEGORIES = frozenset(
+    {"primary", "secondary", "permission", "complexity", "unknown"}
+)
+_UNKNOWN_RATE_LIMIT_REASON = "unknown"
+
+
+def _route_family_and_attribution(
     budget_audit: list[dict[str, Any]] | None, dimension: str | None
-) -> str | None:
+) -> tuple[str | None, str | None]:
     """Resolve the route family a rate-limit observation attributes to.
 
-    A unit's budget estimate can carry multiple (route_family, dimension)
-    pairs -- e.g. GitHub PR datasets emit ``prs``/``rest_core`` alongside
-    ``pr_social``/``graphql_cost`` and ``pr_social``/``secondary_abuse_risk``
-    (``providers/github/budget.py``). The rate-limit signal's ``dimension`` --
-    populated by the provider client at the classification site, i.e. which
-    kind of call actually hit the limit -- picks the matching estimate.
+    Returns ``(route_family, attribution)``. ``attribution`` is ``None`` when
+    ``route_family`` was confidently resolved, or
+    :data:`_AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION` when it could not be -- in
+    which case ``route_family`` is always ``None`` too. Never guesses: a
+    future cooldown-gating consumer (CHAOS-2760) falls back to
+    provider+integration+dimension gating whenever attribution is set,
+    documented in ``docs/providers/rate-limit-policy.md``.
 
-    One unit can therefore map to multiple route families; this picks the
-    single *primary* one rather than writing one row per matched family
-    (CHAOS-2758 decision). When the dimension is absent or matches nothing in
-    the audit, fall back to the first estimate: every provider estimator
-    emits its dataset-primary family first (see
-    ``providers/<provider>/budget.py``), so first-emitted approximates
-    "primary" for that fallback case.
+    A unit's budget estimate can carry multiple (route_family, dimension)
+    pairs, and **dimension alone does not disambiguate them**: e.g. Linear's
+    ``work-items`` estimator (``providers/linear/budget.py``) emits ``teams``,
+    ``issues``, ``cycles``, ``comments``, ``attachments``, and ``history`` --
+    all under ``graphql_cost`` -- and Jira's issue-comment datasets
+    (``providers/jira/budget.py``) can emit both ``jira_issue_enrichment`` and
+    ``jira_comments`` under ``rest_core``. Picking the first match in that
+    case would be a guess, not an attribution.
+
+    The rate-limit signal's ``dimension`` (populated by the provider client at
+    the classification site, i.e. which kind of call actually hit the limit)
+    narrows the candidate estimates when present. If the surviving candidate
+    set names exactly one **distinct** route family, that family is the
+    confident answer (this also covers the common single-estimate unit, e.g.
+    GitHub's ``commits`` dataset, and estimates that share one family across
+    multiple dimensions, e.g. GitHub's ``commit_stats``). Any other outcome --
+    no budget audit, no dimension match, or more than one distinct family --
+    is ambiguous and is NOT guessed at.
     """
     if not budget_audit:
-        return None
+        return None, _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION
+
+    candidates = budget_audit
     if dimension is not None:
-        for entry in budget_audit:
-            bucket = entry.get("bucket") if isinstance(entry, Mapping) else None
-            if isinstance(bucket, Mapping) and bucket.get("dimension") == dimension:
-                route_family = entry.get("route_family")
-                if route_family:
-                    return str(route_family)
-    first = budget_audit[0]
-    if isinstance(first, Mapping):
-        route_family = first.get("route_family")
-        if route_family:
-            return str(route_family)
-    return None
+        dimension_matches = [
+            entry
+            for entry in budget_audit
+            if isinstance(entry, Mapping)
+            and isinstance(entry.get("bucket"), Mapping)
+            and entry["bucket"].get("dimension") == dimension
+        ]
+        if dimension_matches:
+            candidates = dimension_matches
+
+    route_families = {
+        str(entry.get("route_family"))
+        for entry in candidates
+        if isinstance(entry, Mapping) and entry.get("route_family")
+    }
+    if len(route_families) == 1:
+        return next(iter(route_families)), None
+    return None, _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION
+
+
+def _normalized_rate_limit_reason(exc: BaseException) -> str:
+    """Return an allow-listed rate-limit reason category, never raw text.
+
+    ``signal.reason`` is already a short normalized category at every
+    provider classification site (see :data:`_RATE_LIMIT_REASON_CATEGORIES`),
+    but this defensively re-validates it rather than trusting it blindly, and
+    NEVER falls back to ``str(exc)``: legacy no-signal raise sites build their
+    message from the raw provider response body, which can embed
+    header/body-shaped diagnostic content this store must not retain for its
+    14-day (default) retention window.
+    """
+    signal = getattr(exc, "signal", None)
+    if signal is not None and signal.reason:
+        candidate = str(signal.reason).strip().lower()
+        if candidate in _RATE_LIMIT_REASON_CATEGORIES:
+            return candidate
+    return _UNKNOWN_RATE_LIMIT_REASON
 
 
 def _build_rate_limit_observation(
@@ -585,15 +641,15 @@ def _build_rate_limit_observation(
 ) -> ProviderRateLimitObservation:
     """Build the durable observation row for a rate-limit deferral (CHAOS-2758).
 
-    Only normalized fields are persisted -- never raw provider headers (leak /
-    bloat risk). ``integration_id``/``sync_run_id``/``sync_run_unit_id`` come
-    from the unit row already loaded in this task (never re-resolved from
-    mutable ``Integration`` state); ``route_family``/``dimension`` come from
-    the budget estimate ALREADY computed for this unit at dispatch time --
-    never re-estimated (estimators require credential decryption). The
-    ``RateLimitSignal`` (CHAOS-2753) may be absent on legacy-connector
-    exceptions raised without one; every field degrades gracefully to the
-    unit/exception context in that case.
+    Only normalized fields are persisted -- never raw provider headers or
+    exception text (leak / bloat risk). ``integration_id``/``sync_run_id``/
+    ``sync_run_unit_id`` come from the unit row already loaded in this task
+    (never re-resolved from mutable ``Integration`` state); ``route_family``/
+    ``dimension`` come from the budget estimate ALREADY computed for this
+    unit at dispatch time -- never re-estimated (estimators require
+    credential decryption). The ``RateLimitSignal`` (CHAOS-2753) may be absent
+    on legacy-connector exceptions raised without one; every field degrades
+    gracefully to the unit/exception context in that case.
     """
     signal = getattr(exc, "signal", None)
     dimension = (
@@ -604,11 +660,9 @@ def _build_rate_limit_observation(
     retry_after_seconds = getattr(exc, "retry_after_seconds", None)
     if retry_after_seconds is None and signal is not None:
         retry_after_seconds = signal.retry_after_seconds
-    reason = None
-    if signal is not None and signal.reason:
-        reason = signal.reason
-    if reason is None:
-        reason = str(exc) or None
+    route_family, route_family_attribution = _route_family_and_attribution(
+        budget_audit, dimension
+    )
     return ProviderRateLimitObservation(
         org_id=str(unit.org_id),
         provider=(
@@ -618,11 +672,12 @@ def _build_rate_limit_observation(
         integration_id=unit.integration_id,
         sync_run_id=unit.sync_run_id,
         sync_run_unit_id=unit.id,
-        route_family=_route_family_for_rate_limit(budget_audit, dimension),
+        route_family=route_family,
+        route_family_attribution=route_family_attribution,
         dimension=dimension,
         retry_after_seconds=retry_after_seconds,
         reset_at=signal.reset_at if signal is not None else None,
-        reason=reason,
+        reason=_normalized_rate_limit_reason(exc),
         request_id=signal.request_id if signal is not None else None,
         observed_at=observed_at,
     )
@@ -1169,20 +1224,38 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     "unit_id": unit_id,
                     "reason": "lease_lost",
                 }
-            # Durable observation store (CHAOS-2758): inserted only after the
-            # CAS above confirms the RETRYING stamp actually landed, and in
-            # the SAME session/transaction as that stamp, so the observation
-            # and the deferral commit together or not at all (never an
-            # orphan row for a deferral that didn't happen, and vice versa).
-            session.add(
-                _build_rate_limit_observation(
-                    unit=unit,
-                    provider=ctx.provider,
-                    exc=exc,
-                    budget_audit=budget_audit,
-                    observed_at=now,
+            # Durable observation store (CHAOS-2758): attempted only after the
+            # CAS above confirms the RETRYING stamp actually landed, so it
+            # never runs for a deferral that didn't happen. It is
+            # deliberately isolated in its own SAVEPOINT rather than sharing
+            # the outer transaction outright: the observation store is
+            # diagnostic, not load-bearing, and a DB-level failure writing it
+            # (e.g. migration 0031 not yet applied during a rolling deploy,
+            # or schema drift) must never roll back the RETRYING stamp / turn
+            # a recoverable rate-limit deferral into a lost unit. On success
+            # the two still commit together (nested.commit() only stages the
+            # savepoint into the still-open outer transaction); on failure
+            # only the observation attempt rolls back and is logged.
+            observation_nested = session.begin_nested()
+            try:
+                session.add(
+                    _build_rate_limit_observation(
+                        unit=unit,
+                        provider=ctx.provider,
+                        exc=exc,
+                        budget_audit=budget_audit,
+                        observed_at=now,
+                    )
                 )
-            )
+                session.flush()
+            except SQLAlchemyError as observation_exc:
+                observation_nested.rollback()
+                logger.warning(
+                    "run_sync_unit.rate_limit_observation_persist_failed",
+                    extra={**_log_ctx, "error": str(observation_exc)},
+                )
+            else:
+                observation_nested.commit()
             if sync_run_id is not None:
                 # Earlier-wins upsert (CHAOS-2647): we deliberately do NOT
                 # force-set available_at=not_before here. A revived past dispatch

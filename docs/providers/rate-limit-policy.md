@@ -240,22 +240,30 @@ CHAOS-2754's normalized `provider_usage` actuals, one row per
 
 Shipped in [CHAOS-2758](https://linear.app/fullchaos/issue/CHAOS-2758). Every
 `RateLimitException` that defers a sync unit (the worker-level deferral path
-above) now writes one durable, normalized row to the
+above) now attempts one durable, normalized row into the
 `provider_rate_limit_observations` Postgres table, in the **same
-session/transaction** as the unit's `RETRYING` stamp
+session** as the unit's `RETRYING` stamp
 (`workers/sync_units.py`, the `except RateLimitException` branch of
-`run_sync_unit`) — the observation and the deferral commit together or not at
-all, so the table never holds an orphan row for a deferral that didn't
-actually happen.
+`run_sync_unit`), attempted only after the CAS confirming that stamp landed
+succeeds — so the write never fires for a deferral that didn't actually
+happen. The write itself is isolated in its own `SAVEPOINT`
+(`session.begin_nested()`), not folded into the outer transaction outright:
+the observation store is diagnostic, not load-bearing, so a DB-level failure
+persisting it (a rolling deploy where migration `0031` isn't applied to every
+node yet, schema drift, or any other insert-time error) rolls back only the
+observation attempt and is logged — it must never turn a recoverable
+rate-limit deferral into a lost/failed unit.
 
 **Schema:** `id`, `org_id` (indexed), `provider`, `host`, `integration_id`,
-`sync_run_id`, `sync_run_unit_id`, `route_family`, `dimension`,
-`retry_after_seconds`, `reset_at`, `reason`, `request_id`, `observed_at`, plus
-a composite index `(provider, integration_id, route_family, observed_at)` for
-the cooldown lookup a future consumer needs (migration `0031`,
-`models/rate_limit_observations.py`). Only normalized fields are persisted —
-**never raw provider headers** (leak/bloat risk); header capture stays
-best-effort and provider-local exactly as documented per-provider above.
+`sync_run_id`, `sync_run_unit_id`, `route_family`, `route_family_attribution`,
+`dimension`, `retry_after_seconds`, `reset_at`, `reason`, `request_id`,
+`observed_at`, plus a composite index `(provider, integration_id,
+route_family, observed_at)` for the cooldown lookup a future consumer needs
+(migration `0031`, `models/rate_limit_observations.py`). Only normalized
+fields are persisted — **never raw provider headers or exception text**
+(leak/bloat risk); header capture stays best-effort and provider-local
+exactly as documented per-provider above, and `reason` is one of a fixed,
+allow-listed category vocabulary (below), never free text.
 
 **Why Postgres, not ClickHouse.** This answers the open question the earlier
 CHAOS-2742 budget plan left unresolved ("no new persistence table unless
@@ -280,15 +288,34 @@ both before persisting: `integration_id` comes from the unit row already
 loaded for the deferral (`SyncRunUnit.integration_id` — never re-resolved from
 mutable `Integration` state), and `route_family` is picked from the
 `BudgetEstimate` list **already computed for this unit's dispatch** (never
-re-estimated — estimators require credential decryption). A unit's estimate
-can carry multiple `(route_family, dimension)` pairs (e.g. GitHub PR datasets
-emit `prs`/`rest_core` alongside `pr_social`/`graphql_cost` +
-`pr_social`/`secondary_abuse_risk`); rather than fan out one row per matched
-family, the observation writer picks a single **primary** family: it matches
-the signal's `dimension` (populated by the client at the classification site,
-i.e. which kind of call actually hit the limit) against the estimate list,
-falling back to the first-emitted estimate when the dimension is absent or
-unmatched (every provider estimator emits its dataset-primary family first).
+re-estimated — estimators require credential decryption).
+
+**Route-family attribution is confidence-gated, never guessed.** A unit's
+estimate can carry multiple `(route_family, dimension)` pairs, and dimension
+alone frequently does **not** disambiguate them: Linear's `work-items`
+estimator emits `teams`/`issues`/`cycles`/`comments`/`attachments`/`history`
+**all** under `graphql_cost`, and Jira's comment-bearing datasets can emit
+both `jira_issue_enrichment` and `jira_comments` under `rest_core`. The
+observation writer (`_route_family_and_attribution` in `workers/sync_units.py`)
+narrows the unit's estimates by the signal's `dimension` (which call kind
+actually hit the limit) and only commits to a `route_family` when the
+surviving candidates name exactly **one distinct** family — this also covers
+the common case of a single-estimate unit, and estimates that share one
+family across dimensions (e.g. GitHub's `commit_stats`). Whenever that check
+can't produce a unique family — no budget audit, no dimension match, or more
+than one distinct family — `route_family` is `NULL` and
+`route_family_attribution` is set to `ambiguous_dimension`; `dimension`
+itself is still populated. **The CHAOS-2760 cooldown-gating consumer must
+fall back to provider+integration+dimension gating whenever
+`route_family_attribution` is set**, rather than trusting a guessed family.
+
+**`reason` is a normalized category, never raw exception text.** Legacy
+no-signal raise sites build their message from the provider's raw response
+body, which can embed header/body-shaped diagnostic content; persisting that
+verbatim for the retention window would be a leak risk. `reason` is always
+one of a fixed vocabulary — `primary`, `secondary`, `permission` (reserved for
+a future classification site), `complexity`, or `unknown` (no signal, or a
+value outside this vocabulary) — never `str(exception)`.
 
 **Retention.** A beat-scheduled task (`prune_rate_limit_observations`,
 `workers/sync_reconciler.py`, `workers/config.py`) deletes rows older than
@@ -298,7 +325,8 @@ deleted outright, no archival path.
 
 **Not yet wired: cooldown gating.** Nothing reads this table back before
 dispatch yet — see [Known gaps](#known-gaps) /
-[CHAOS-2760](https://linear.app/fullchaos/issue/CHAOS-2760).
+[CHAOS-2760](https://linear.app/fullchaos/issue/CHAOS-2760). Any such
+consumer must honor the `route_family_attribution` fallback contract above.
 
 ## Per-provider policy
 

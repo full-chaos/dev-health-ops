@@ -55,6 +55,7 @@ def upgrade() -> None:
             sa.Column("sync_run_id", UUID(as_uuid=True), nullable=False),
             sa.Column("sync_run_unit_id", UUID(as_uuid=True), nullable=False),
             sa.Column("route_family", sa.Text(), nullable=True),
+            sa.Column("route_family_attribution", sa.Text(), nullable=True),
             sa.Column("dimension", sa.Text(), nullable=True),
             sa.Column("retry_after_seconds", sa.Float(), nullable=True),
             sa.Column("reset_at", sa.DateTime(timezone=True), nullable=True),
@@ -63,6 +64,13 @@ def upgrade() -> None:
             sa.Column("observed_at", sa.DateTime(timezone=True), nullable=False),
             sa.PrimaryKeyConstraint("id"),
         )
+    # Guarded individually (per revision 0022/0030 convention) so a rerun
+    # against a DB that already has the table -- but predates the
+    # route_family_attribution column added during review -- resumes cleanly
+    # instead of failing on a duplicate/missing column.
+    _add_column_if_missing(
+        _TABLE_NAME, sa.Column("route_family_attribution", sa.Text(), nullable=True)
+    )
     _create_index_if_missing(_ORG_INDEX_NAME, _TABLE_NAME, ["org_id"])
     _create_index_if_missing(
         _COOLDOWN_INDEX_NAME,
@@ -79,6 +87,16 @@ def downgrade() -> None:
 def _table_exists(table_name: str) -> bool:
     bind = op.get_bind()
     return table_name in sa.inspect(bind).get_table_names()
+
+
+def _column_names(table_name: str) -> set[str]:
+    bind = op.get_bind()
+    return {column["name"] for column in sa.inspect(bind).get_columns(table_name)}
+
+
+def _add_column_if_missing(table_name: str, column: sa.Column) -> None:
+    if column.name not in _column_names(table_name):
+        op.add_column(table_name, column)
 
 
 def _create_index_if_missing(

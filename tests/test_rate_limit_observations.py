@@ -1,11 +1,15 @@
 """Tests for the durable rate-limit observation store (CHAOS-2758).
 
 Covers:
-  * the observation row commits atomically with the unit's RETRYING stamp --
-    same session/transaction, never an orphan when the deferral CAS loses.
+  * the observation write is attempted only after the RETRYING CAS succeeds,
+    and is best-effort/non-blocking (its own SAVEPOINT): a DB-level failure
+    persisting it must never roll back the deferral or block dispatch.
   * integration_id / route_family / dimension enrichment from the unit row +
-    the budget estimate already computed for dispatch (never re-estimated).
-  * only normalized fields are persisted -- never raw headers/secrets.
+    the budget estimate already computed for dispatch (never re-estimated),
+    with route-family attribution confidence-gated (never guessed when
+    dimension alone cannot disambiguate multiple candidate families).
+  * only normalized fields are persisted -- never raw headers, secrets, or
+    raw exception text (``reason`` is an allow-listed category).
   * the ws-a exception-unification fix (CHAOS-2753) means
     ``connectors.base.RateLimitException`` (no signal) also produces a row.
   * the beat-scheduled retention prune task.
@@ -23,14 +27,17 @@ import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from dev_health_ops.models import (
     Base,
     ProviderRateLimitObservation,
+    SyncDispatchOutbox,
     SyncRunUnitStatus,
 )
 from dev_health_ops.sync.budget_types import BudgetDimension
+from dev_health_ops.sync.dispatch_outbox import OUTBOX_KIND_DISPATCH
 from dev_health_ops.sync.rate_limit_signal import RateLimitSignal
 from tests.test_sync_units import (
     _mark_dispatching,
@@ -117,6 +124,7 @@ def test_observation_persisted_atomically_with_deferral(db_session, monkeypatch)
     assert observation.sync_run_id == run.id
     assert observation.sync_run_unit_id == unit.id
     assert observation.route_family == "git"  # github "commits" estimator family
+    assert observation.route_family_attribution is None  # confidently attributed
     assert observation.dimension == "rest_core"
     assert observation.retry_after_seconds == 45.0
     assert _aware(observation.reset_at) == reset_at
@@ -170,6 +178,72 @@ def test_observation_not_orphaned_when_deferral_cas_loses_lease(
         "unit_id": str(unit.id),
         "reason": "lease_lost",
     }
+    assert db_session.query(ProviderRateLimitObservation).count() == 0
+
+
+# ---------------------------------------------------------------------------
+# Best-effort, non-blocking persistence (HIGH finding, CHAOS-2758 review)
+# ---------------------------------------------------------------------------
+
+
+def test_observation_persist_failure_does_not_block_deferral(db_session, monkeypatch):
+    """A DB-level failure writing the observation (e.g. migration 0031 not
+    yet applied to every node during a rolling deploy, or schema drift) must
+    NOT roll back the RETRYING stamp or the dispatch wakeup -- the
+    observation store is diagnostic, not load-bearing.
+
+    Forces the flush the observation-persistence SAVEPOINT performs to raise
+    a real ``SQLAlchemyError`` (rather than just making the builder function
+    raise), so this exercises the actual ``session.begin_nested()`` /
+    rollback path, not merely a Python-level guard.
+    """
+    from dev_health_ops.exceptions import RateLimitException
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    _clean_env(monkeypatch)
+
+    real_flush = db_session.flush
+
+    def guarded_flush(*args, **kwargs):
+        # Only the observation-persistence SAVEPOINT flushes while a nested
+        # transaction is active; every other flush in run_sync_unit (the
+        # RETRYING CAS, the outbox wakeup) happens outside one.
+        if db_session.in_nested_transaction():
+            raise SQLAlchemyError(
+                'relation "provider_rate_limit_observations" does not exist'
+            )
+        return real_flush(*args, **kwargs)
+
+    monkeypatch.setattr(db_session, "flush", guarded_flush)
+
+    def rate_limited(ctx, runtime):
+        raise RateLimitException(
+            "GitHub primary rate limit exceeded", retry_after_seconds=30.0
+        )
+
+    monkeypatch.setattr(dataset_adapters, "run_dataset_unit", rate_limited)
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    db_session.refresh(unit)
+    # The deferral itself must succeed exactly as if the observation write
+    # had never been attempted.
+    assert result["status"] == "rate_limited_deferred"
+    assert unit.status == SyncRunUnitStatus.RETRYING.value
+    assert unit.rate_limit_deferrals == 1
+    dispatch_wakeup = (
+        db_session.query(SyncDispatchOutbox)
+        .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_DISPATCH)
+        .one()
+    )
+    assert dispatch_wakeup is not None
+    # No observation row -- the SAVEPOINT rolled back the failed insert.
     assert db_session.query(ProviderRateLimitObservation).count() == 0
 
 
@@ -230,34 +304,164 @@ def test_observation_enriched_with_integration_and_route_family(
     observation = db_session.query(ProviderRateLimitObservation).one()
     assert observation.integration_id == unit.integration_id
     assert observation.route_family == "pr_social"
+    assert observation.route_family_attribution is None  # unique dimension match
     assert observation.dimension == "graphql_cost"
 
 
-def test_route_family_resolution_falls_back_to_primary_estimate():
-    """Unit test of the pick-one-primary-family decision (CHAOS-2758).
+def test_observation_route_family_ambiguous_for_linear_work_items(
+    db_session, monkeypatch
+):
+    """End-to-end regression for the false-precision fix (CHAOS-2758 review).
 
-    When the signal's dimension is absent or matches nothing in the budget
-    audit, the first-emitted estimate (each provider estimator emits its
-    dataset-primary family first) is used as the fallback "primary".
+    Linear's ``work-items`` unit estimates teams/issues/cycles/comments/
+    attachments/history ALL under ``graphql_cost`` -- a rate limit tagged
+    ``graphql_cost`` cannot disambiguate which one actually failed, so the
+    observation must record ``route_family=NULL`` +
+    ``route_family_attribution="ambiguous_dimension"`` rather than guessing
+    the first-listed family. ``dimension`` itself is still populated so a
+    cooldown-gating consumer can fall back to provider+integration+dimension.
     """
-    from dev_health_ops.workers.sync_units import _route_family_for_rate_limit
+    from dev_health_ops.exceptions import RateLimitException
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import (
+        _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION,
+        run_sync_unit,
+    )
 
-    budget_audit = [
+    run, unit = _seed_run(
+        db_session,
+        provider="linear",
+        source_type="team",
+        external_id="TEAM",
+        name="TEAM",
+        full_name="TEAM",
+        dataset_key="work-items",
+        processor_flags={},
+    )
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    _clean_env(monkeypatch)
+
+    def rate_limited(ctx, runtime):
+        raise RateLimitException(
+            "Linear rate limited",
+            retry_after_seconds=20.0,
+            signal=RateLimitSignal(
+                provider="linear",
+                dimension=BudgetDimension.GRAPHQL_COST,
+                retry_after_seconds=20.0,
+                reason="primary",
+            ),
+        )
+
+    monkeypatch.setattr(dataset_adapters, "run_dataset_unit", rate_limited)
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    assert result["status"] == "rate_limited_deferred"
+    observation = db_session.query(ProviderRateLimitObservation).one()
+    assert observation.route_family is None
+    assert observation.route_family_attribution == _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION
+    assert observation.dimension == "graphql_cost"
+
+
+def test_route_family_resolution_keeps_unique_match_and_refuses_to_guess():
+    """Unit test of the confidence-gated route-family attribution (CHAOS-2758
+    review fix): dimension alone does not disambiguate multi-family units, so
+    a match is only trusted when it names exactly one distinct family.
+    """
+    from dev_health_ops.workers.sync_units import (
+        _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION,
+        _route_family_and_attribution,
+    )
+
+    # GitHub "prs": dimension is unique per family here.
+    github_prs_audit = [
         {"bucket": {"dimension": "rest_core"}, "route_family": "prs"},
         {"bucket": {"dimension": "graphql_cost"}, "route_family": "pr_social"},
         {"bucket": {"dimension": "secondary_abuse_risk"}, "route_family": "pr_social"},
     ]
-
-    assert (
-        _route_family_for_rate_limit(budget_audit, "secondary_abuse_risk")
-        == "pr_social"
+    assert _route_family_and_attribution(github_prs_audit, "secondary_abuse_risk") == (
+        "pr_social",
+        None,
     )
-    assert _route_family_for_rate_limit(budget_audit, "rest_core") == "prs"
-    # No match / no signal dimension -> first-emitted (documented "primary").
-    assert _route_family_for_rate_limit(budget_audit, None) == "prs"
-    assert _route_family_for_rate_limit(budget_audit, "search") == "prs"
-    assert _route_family_for_rate_limit(None, "rest_core") is None
-    assert _route_family_for_rate_limit([], "rest_core") is None
+    assert _route_family_and_attribution(github_prs_audit, "rest_core") == (
+        "prs",
+        None,
+    )
+    # A dimension that matches nothing falls back to the full candidate set --
+    # still ambiguous here since it names two distinct families.
+    assert _route_family_and_attribution(github_prs_audit, "search") == (
+        None,
+        _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION,
+    )
+    # No dimension at all -> same full-candidate-set ambiguity.
+    assert _route_family_and_attribution(github_prs_audit, None) == (
+        None,
+        _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION,
+    )
+
+    # GitHub "commit_stats": two dimensions, but they share ONE family --
+    # still confidently attributable even without a dimension match.
+    github_commit_stats_audit = [
+        {"bucket": {"dimension": "rest_core"}, "route_family": "commit_stats"},
+        {"bucket": {"dimension": "contents_blob"}, "route_family": "commit_stats"},
+    ]
+    assert _route_family_and_attribution(github_commit_stats_audit, None) == (
+        "commit_stats",
+        None,
+    )
+    assert _route_family_and_attribution(
+        github_commit_stats_audit, "contents_blob"
+    ) == ("commit_stats", None)
+
+    # Linear "work-items": teams/issues/cycles/comments/attachments/history are
+    # ALL graphql_cost -- dimension is genuinely uninformative here. Must NOT
+    # guess a family.
+    linear_work_items_audit = [
+        {"bucket": {"dimension": "graphql_cost"}, "route_family": "teams"},
+        {"bucket": {"dimension": "graphql_cost"}, "route_family": "issues"},
+        {"bucket": {"dimension": "graphql_cost"}, "route_family": "cycles"},
+        {"bucket": {"dimension": "graphql_cost"}, "route_family": "comments"},
+        {"bucket": {"dimension": "graphql_cost"}, "route_family": "attachments"},
+        {"bucket": {"dimension": "graphql_cost"}, "route_family": "history"},
+    ]
+    assert _route_family_and_attribution(linear_work_items_audit, "graphql_cost") == (
+        None,
+        _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION,
+    )
+    assert _route_family_and_attribution(linear_work_items_audit, None) == (
+        None,
+        _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION,
+    )
+
+    # Jira comments dataset: jira_issue_enrichment + jira_comments both
+    # rest_core -- ambiguous under that dimension.
+    jira_comments_audit = [
+        {"bucket": {"dimension": "search"}, "route_family": "jira_jql"},
+        {"bucket": {"dimension": "rest_core"}, "route_family": "jira_issue_enrichment"},
+        {"bucket": {"dimension": "rest_core"}, "route_family": "jira_comments"},
+    ]
+    assert _route_family_and_attribution(jira_comments_audit, "search") == (
+        "jira_jql",
+        None,
+    )
+    assert _route_family_and_attribution(jira_comments_audit, "rest_core") == (
+        None,
+        _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION,
+    )
+
+    # No budget audit at all -> ambiguous, never a guess.
+    assert _route_family_and_attribution(None, "rest_core") == (
+        None,
+        _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION,
+    )
+    assert _route_family_and_attribution([], "rest_core") == (
+        None,
+        _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -319,6 +523,54 @@ def test_observation_contains_no_raw_headers_or_secrets(db_session, monkeypatch)
             assert "Authorization" not in value
 
 
+def test_observation_no_signal_reason_never_persists_raw_exception_text(
+    db_session, monkeypatch
+):
+    """Regression for the MEDIUM finding (CHAOS-2758 review): a no-signal
+    exception's message can embed a provider's raw response body (legacy
+    connectors build their message from ``response.text``). ``reason`` must
+    normalize to the fixed ``unknown`` category, never ``str(exc)``.
+    """
+    from dev_health_ops.connectors.base import (
+        RateLimitException as LegacyRateLimitException,
+    )
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    _clean_env(monkeypatch)
+
+    secret_bearing_body = (
+        'Rate limited: {"message": "API rate limit exceeded", '
+        '"token": "ghp_SUPERSECRETTOKEN1234567890", '
+        '"Authorization": "Bearer super-secret-token"}'
+    )
+
+    def rate_limited(ctx, runtime):
+        # No `signal=` -- the message embeds header/body-shaped content, as a
+        # real legacy no-signal raise site's `str(response_body)` would.
+        raise LegacyRateLimitException(secret_bearing_body, retry_after_seconds=5.0)
+
+    monkeypatch.setattr(dataset_adapters, "run_dataset_unit", rate_limited)
+
+    getattr(run_sync_unit, "run")(str(unit.id))
+
+    observation = db_session.query(ProviderRateLimitObservation).one()
+    assert observation.reason == "unknown"
+    mapper = sa.inspect(ProviderRateLimitObservation)
+    for column_name in {col.key for col in mapper.columns}:
+        value = getattr(observation, column_name)
+        if isinstance(value, str):
+            assert "SUPERSECRETTOKEN" not in value
+            assert "super-secret-token" not in value
+            assert "Authorization" not in value
+            assert "API rate limit exceeded" not in value
+
+
 # ---------------------------------------------------------------------------
 # Legacy connector exceptions (post CHAOS-2753 unification) also persist
 # ---------------------------------------------------------------------------
@@ -358,8 +610,14 @@ def test_legacy_connector_exception_also_persists_observation(db_session, monkey
     assert observation.sync_run_unit_id == unit.id
     assert observation.retry_after_seconds == 30.0
     assert observation.dimension is None  # no signal -> no client-known dimension
-    assert observation.route_family == "git"  # falls back to first estimate
-    assert observation.reason == "GitLab rate limited (HTTP 429)"
+    # Single-estimate unit ("commits" -> "git" only) is still confidently
+    # attributable even with no dimension signal at all.
+    assert observation.route_family == "git"
+    assert observation.route_family_attribution is None
+    # No signal -> normalized to the "unknown" reason category, NEVER the raw
+    # exception message (which for a real legacy connector could embed the
+    # provider's raw response body).
+    assert observation.reason == "unknown"
     assert observation.host is None
     assert observation.request_id is None
 
@@ -461,6 +719,11 @@ def test_migration_0031_idempotent_upgrade():
                 migration.upgrade()
                 inspector = sa.inspect(conn)
                 assert "provider_rate_limit_observations" in inspector.get_table_names()
+                column_names = {
+                    col["name"]
+                    for col in inspector.get_columns("provider_rate_limit_observations")
+                }
+                assert "route_family_attribution" in column_names
                 index_names = {
                     ix["name"]
                     for ix in inspector.get_indexes("provider_rate_limit_observations")

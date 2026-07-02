@@ -142,6 +142,68 @@ source of truth and
 `tests/test_rate_limit_policy_doc.py::test_documented_route_families_match_estimators`
 fails if code emits a family this page does not document.
 
+### Actual-vs-estimated calibration (CHAOS-2759)
+
+Every successful `run_sync_unit` result carries a `budget_comparison` under
+`result['observations']`, joining the unit's run-time budget audit
+(`estimate_provider_budget`, same call `budget_estimate` is built from) to
+CHAOS-2754's normalized `provider_usage` actuals, one row per
+`(route_family, dimension)` present in **both**:
+
+```json
+{
+  "route_family": "git",
+  "dimension": "rest_core",
+  "estimated_units": 2,
+  "actual_requests": 5,
+  "ratio": 2.5,
+  "underestimated": true,
+  "incomplete": false,
+  "bucket": {"provider": "github", "org_id": "...", "host": "api.github.com",
+             "credential_fingerprint": "...", "dimension": "rest_core"},
+  "budget_key": "github:...:api.github.com:...:rest_core:git"
+}
+```
+
+- **Raw numbers only.** `estimated_units` are abstract reservation units
+  (see `SYNC_BUDGET_BUCKET_LIMITS` above), never converted against
+  `actual_requests`; the two are reported side by side, not blended into one
+  number.
+- **`underestimated`** is `actual_requests > estimated_units`. No row is
+  emitted for a `route_family`/`dimension` with an estimate but no drained
+  actuals this run (code datasets, an unwired LaunchDarkly family, …) — never
+  a fabricated 100% over-estimation.
+- **`incomplete`** is `true` for every row on a unit whose CHAOS-2754
+  recorder hit its 50-key overflow cap. Dropped operations aren't attributed
+  to a specific family (the recorder never learns which family they'd have
+  joined), so an `incomplete` row's `ratio <= 1` must **not** be read as a
+  confirmed over-estimation. A visible `underestimated: true` stays valid even
+  when `incomplete`: a capped (undercounted) actual that already exceeds the
+  estimate only understates the true overage.
+- **Underestimation is surfaced, never auto-tuned.** Each underestimated row
+  logs `run_sync_unit.budget_underestimated` with the same structured field
+  vocabulary BudgetGuard's own admission logs use (`bucket`, `budget_key`,
+  `estimated_units`, `route_family` — see `_observe_estimate` above) so an
+  operator can correlate a calibration warning with the run's actual
+  admission decision. The comparison never changes an estimator's output or
+  `SYNC_BUDGET_*` consumption — it is a pure, read-only join
+  (`tests/test_budget_calibration.py::test_estimates_never_mutated_by_comparison`).
+- **Drift caveat.** This compares against the **run-time** budget audit —
+  recomputed just before the unit's dataset fetch — not the estimate
+  BudgetGuard admitted at dispatch time. Env-flag-dependent estimators (e.g.
+  Jira's `JIRA_FETCH_WORKLOGS` / `ATLASSIAN_GQL_ENABLED` gating) can in
+  principle disagree between admission and execution; `observations`'s
+  sibling `budget_comparison_computed_at` records when the run-time audit
+  ran so that drift is inspectable. Persisting the admit-time estimate onto
+  the unit for a drift-free comparison is a deliberately **deferred**
+  follow-up (open decision) — it would add an extra UPDATE per admitted unit
+  per dispatch pass, and isn't worth it until calibration data shows material
+  drift.
+- **Out of scope.** The CLI and backfill runner discard job/task returns
+  (`metrics/job_work_items.py`, `backfill/runner.py`), so this comparison only
+  surfaces through the unitized sync path (unit result / structured logs /
+  the admin API's `result` passthrough) — not CLI or backfill output.
+
 ## Per-provider policy
 
 ### GitHub
@@ -343,13 +405,16 @@ paper over:
 - **No cross-unit cooldown gating.** When one unit discovers a real cooldown,
   sibling units still call the provider and re-discover it. (Target:
   [CHAOS-2760](https://linear.app/fullchaos/issue/CHAOS-2760).)
-- **Estimates are not calibrated against actuals.** Budget estimates are static;
-  actual request/page counts by provider/dataset/route-family/dimension are not
-  recorded, so underestimation is invisible. GitHub `pr_social`/`work_item_prs`
-  secondary pressure, Linear request/complexity actuals, and LaunchDarkly
-  route-remaining are all **uninstrumented**. (Target:
-  [CHAOS-2754](https://linear.app/fullchaos/issue/CHAOS-2754) /
-  [CHAOS-2759](https://linear.app/fullchaos/issue/CHAOS-2759).)
+- **Calibration only covers instrumented route families.** [CHAOS-2759](https://linear.app/fullchaos/issue/CHAOS-2759)
+  attaches a `budget_comparison` (see
+  [Actual-vs-estimated calibration](#actual-vs-estimated-calibration-chaos-2759)
+  above) wherever CHAOS-2754's recorder actually drained actuals for a
+  route_family, but the recorder only records where a client calls it.
+  GitHub `pr_social`/`work_item_prs` secondary pressure, Linear
+  request/complexity actuals, and LaunchDarkly route-remaining are still
+  **uninstrumented**, so those families never produce a comparison row.
+  There is also no cross-run aggregation/dashboard yet — calibration today is
+  visible per-unit (result + structured log), not rolled up over time.
 - **Signal handling is not yet provider-neutral.** There are two unrelated
   `RateLimitException` classes — `dev_health_ops.exceptions.RateLimitException`
   (canonical providers, caught by the worker deferral) and
@@ -383,9 +448,6 @@ append its section here in the same changeset (per `AGENTS.md`
   **never** unit-level credential selection for capacity.
 - **Observation store — [CHAOS-2758](https://linear.app/fullchaos/issue/CHAOS-2758).**
   A durable Postgres table / event stream for provider rate-limit observations.
-- **Calibration — [CHAOS-2759](https://linear.app/fullchaos/issue/CHAOS-2759).**
-  Actual-vs-estimated comparison attached to unit results/logs, surfacing
-  underestimation before any auto-tuning.
 - **Cooldown gating — [CHAOS-2760](https://linear.app/fullchaos/issue/CHAOS-2760).**
   Consult recent observations before dispatch and defer sibling units into a
   known provider/integration/route-family cooldown window.

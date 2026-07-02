@@ -44,6 +44,7 @@ import logging
 import os
 import threading
 import uuid
+from collections import defaultdict
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any, TypedDict
@@ -69,6 +70,7 @@ from dev_health_ops.models import (
     SyncRunUnit,
     SyncRunUnitStatus,
 )
+from dev_health_ops.providers.usage import PROVIDER_USAGE_OBSERVATION_KEY
 from dev_health_ops.sync.budget import estimate_provider_budget
 from dev_health_ops.sync.budget_guard import BudgetGuard
 from dev_health_ops.sync.datasets import DatasetKey
@@ -257,6 +259,175 @@ def _attach_budget_observation(
     )
     observations["budget_estimate"] = budget_audit
     result_payload["observations"] = observations
+    return result_payload
+
+
+def _comparison_budget_key(bucket: Mapping[str, Any], *, route_family: str) -> str:
+    """Mirror ``BudgetGuard._budget_key``'s format (``sync/budget_guard.py``)
+    so a calibration warning's ``budget_key`` correlates 1:1 with the
+    ``budget_key`` BudgetGuard's own admission logs emit for the same bucket.
+    Duplicated rather than imported to avoid reaching into BudgetGuard's
+    private helpers from the calibration join (CHAOS-2759).
+    """
+    return ":".join(
+        (
+            str(bucket.get("provider", "")),
+            str(bucket.get("org_id", "")),
+            str(bucket.get("host", "")),
+            str(bucket.get("credential_fingerprint", "")),
+            str(bucket.get("dimension", "")),
+            route_family,
+        )
+    )
+
+
+def _join_budget_estimates_with_actuals(
+    budget_audit: list[dict[str, Any]],
+    provider_usage: list[Any],
+) -> list[dict[str, Any]]:
+    """Pure join of admit-time-adjacent budget estimates to CHAOS-2754's
+    normalized actuals, per ``(route_family, dimension)`` (CHAOS-2759).
+
+    Read-only: never mutates ``budget_audit`` / ``provider_usage`` and never
+    re-estimates or touches ``SYNC_BUDGET_*`` consumption -- estimator outputs
+    and budget enforcement live entirely in ``sync/budget.py`` /
+    ``sync/budget_guard.py`` and are untouched by this function
+    (``test_estimates_never_mutated_by_comparison``).
+
+    Reports both numbers RAW: ``estimated_units`` are abstract reservation
+    units (docs/ops/deployment-guide.md), never converted against
+    ``actual_requests``. A unit with no drained actuals for a route_family
+    (e.g. code datasets, LaunchDarkly) or no estimate for one produces no row
+    for that family -- never a fabricated 100% over/under-estimation.
+
+    When the CHAOS-2754 recorder's 50-key overflow marker is present, dropped
+    operations could belong to any route_family (the recorder never learns
+    which family a dropped operation would have joined), so every row for this
+    unit is marked ``incomplete`` and no over-estimation conclusion should be
+    drawn from a row where ``actual_requests <= estimated_units``.
+    Underestimation remains a valid signal even when incomplete: a capped
+    (undercounted) actual that already exceeds the estimate only understates
+    the true overage.
+    """
+
+    incomplete = any(
+        isinstance(entry, Mapping) and "dropped_operation_count" in entry
+        for entry in provider_usage
+    )
+
+    actual_requests_by_key: dict[tuple[str, str], int] = defaultdict(int)
+    for entry in provider_usage:
+        if not isinstance(entry, Mapping) or "dropped_operation_count" in entry:
+            continue
+        route_family = entry.get("route_family")
+        dimension = entry.get("dimension")
+        if not route_family or not dimension:
+            continue
+        actual_requests_by_key[(route_family, dimension)] += int(
+            entry.get("request_count") or 0
+        )
+
+    if not actual_requests_by_key:
+        return []
+
+    estimated_units_by_key: dict[tuple[str, str], int] = defaultdict(int)
+    bucket_by_key: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for estimate in budget_audit:
+        if not isinstance(estimate, Mapping):
+            continue
+        route_family = estimate.get("route_family")
+        bucket = estimate.get("bucket")
+        if not isinstance(bucket, Mapping):
+            continue
+        dimension = bucket.get("dimension")
+        if not route_family or not dimension:
+            continue
+        key = (route_family, dimension)
+        estimated_units_by_key[key] += int(estimate.get("estimated_units") or 0)
+        bucket_by_key.setdefault(key, bucket)
+
+    comparisons: list[dict[str, Any]] = []
+    for key in sorted(estimated_units_by_key.keys() & actual_requests_by_key.keys()):
+        route_family, dimension = key
+        estimated_units = estimated_units_by_key[key]
+        actual_requests = actual_requests_by_key[key]
+        bucket = bucket_by_key[key]
+        comparisons.append(
+            {
+                "route_family": route_family,
+                "dimension": dimension,
+                "estimated_units": estimated_units,
+                "actual_requests": actual_requests,
+                "ratio": (
+                    actual_requests / estimated_units if estimated_units else None
+                ),
+                "underestimated": actual_requests > estimated_units,
+                "incomplete": incomplete,
+                "bucket": dict(bucket),
+                "budget_key": _comparison_budget_key(bucket, route_family=route_family),
+            }
+        )
+    return comparisons
+
+
+def _attach_budget_comparison(
+    result: dict[str, Any],
+    budget_audit: list[dict[str, Any]] | None,
+    *,
+    log_ctx: dict[str, Any],
+    computed_at: datetime,
+) -> dict[str, Any]:
+    """Attach ``observations.budget_comparison`` and log underestimation
+    (CHAOS-2759). OBSERVE-ONLY: does not change ``result`` when there is
+    nothing to compare, and never mutates ``budget_audit`` or the estimator
+    inputs it was built from.
+
+    Compares against the RUN-TIME budget audit computed just before this unit
+    dispatched its dataset fetch, not the estimate BudgetGuard admitted at
+    plan/dispatch time -- env-flag-dependent estimators (e.g. Jira's
+    ``JIRA_FETCH_WORKLOGS`` / ``ATLASSIAN_GQL_ENABLED`` gating) can in
+    principle disagree between admission and execution. ``computed_at`` is
+    recorded precisely so this drift is inspectable; persisting the
+    admit-time estimate onto the unit for a drift-free comparison is a
+    deliberately deferred follow-up (open decision), not added speculatively.
+    """
+
+    if not budget_audit:
+        return result
+    observations = result.get("observations")
+    if not isinstance(observations, Mapping):
+        return result
+    provider_usage = observations.get(PROVIDER_USAGE_OBSERVATION_KEY)
+    if not isinstance(provider_usage, list) or not provider_usage:
+        return result
+
+    comparisons = _join_budget_estimates_with_actuals(budget_audit, provider_usage)
+    if not comparisons:
+        return result
+
+    result_payload = dict(result)
+    new_observations = dict(observations)
+    new_observations["budget_comparison"] = comparisons
+    new_observations["budget_comparison_computed_at"] = computed_at.isoformat()
+    result_payload["observations"] = new_observations
+
+    for comparison in comparisons:
+        if not comparison["underestimated"]:
+            continue
+        logger.warning(
+            "run_sync_unit.budget_underestimated",
+            extra={
+                **log_ctx,
+                "bucket": comparison["bucket"],
+                "budget_key": comparison["budget_key"],
+                "estimated_units": comparison["estimated_units"],
+                "actual_requests": comparison["actual_requests"],
+                "route_family": comparison["route_family"],
+                "dimension": comparison["dimension"],
+                "ratio": comparison["ratio"],
+                "incomplete": comparison["incomplete"],
+            },
+        )
     return result_payload
 
 
@@ -645,6 +816,7 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                 }
 
         budget_audit = _budget_estimate_audit(ctx, _log_ctx)
+        budget_audit_computed_at = datetime.now(timezone.utc)
         started_extra = dict(_log_ctx)
         if budget_audit is not None:
             started_extra["budget_estimate"] = budget_audit
@@ -685,7 +857,12 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                 "surface": exc.surface,
             }
         result_payload = _promote_result_observation_fields(
-            _attach_budget_observation(dict(result or {}), budget_audit)
+            _attach_budget_comparison(
+                _attach_budget_observation(dict(result or {}), budget_audit),
+                budget_audit,
+                log_ctx=_log_ctx,
+                computed_at=budget_audit_computed_at,
+            )
         )
 
         completed_at = datetime.now(timezone.utc)

@@ -18,7 +18,12 @@ from dev_health_ops.connectors import (
     match_repo_pattern,
 )
 from dev_health_ops.exceptions import RateLimitException
-from dev_health_ops.models.git import GitCommit, GitCommitStat, get_repo_uuid_from_repo
+from dev_health_ops.models.git import (
+    GitCommit,
+    GitCommitStat,
+    Repo,
+    get_repo_uuid_from_repo,
+)
 from dev_health_ops.processors import github as _github_processor
 from dev_health_ops.processors import gitlab as _gitlab_processor
 
@@ -223,6 +228,107 @@ async def test_process_gitlab_projects_batch_upserts_during_sync_processing(
         rate_limit_delay=0,
         use_async=False,
     )
+
+
+@pytest.mark.asyncio
+async def test_process_gitlab_projects_batch_persists_instance_discriminator(
+    monkeypatch,
+):
+    """[CHAOS-2801] process_gitlab_projects_batch must persist the batch's
+    configured base URL (this call's own ``gitlab_url`` argument) as
+    ``settings.gitlab_instance_url`` on every written ``Repo`` row — same
+    discriminator, same shared ``normalize_gitlab_instance``, as the
+    single-project write site (process_gitlab_project), so
+    job_work_items.py's numeric-id scoping can reject a same-``project_id``
+    row discovered from a DIFFERENT GitLab instance. The input below carries
+    an explicit default :443 port and a trailing slash that must be
+    normalized away at persist time (codex MED PR #1148)."""
+    _enable_connector_stubs(monkeypatch)
+
+    monkeypatch.setattr(
+        processors.gitlab, "_fetch_gitlab_commits_sync", lambda *a, **k: ([], [])
+    )
+    monkeypatch.setattr(
+        processors.gitlab, "_fetch_gitlab_commit_stats_sync", lambda *a, **k: []
+    )
+
+    inserted_repos: list[Repo] = []
+    inserted = threading.Event()
+
+    class DummyStore:
+        async def insert_repo(self, repo: Repo) -> None:
+            inserted_repos.append(repo)
+            inserted.set()
+
+        async def insert_git_commit_data(self, commit_data):
+            return
+
+        async def insert_git_commit_stats(self, commit_stats):
+            return
+
+        async def insert_git_pull_requests(self, pr_data):
+            return
+
+    store = DummyStore()
+
+    project = Mock()
+    project.id = 456
+    project.full_name = "group/proj"
+    project.url = "https://example.com/group/proj"
+    project.default_branch = "main"
+
+    result = BatchResult(repository=project, stats=None, success=True)
+
+    class DummyConnector:
+        def __init__(self, url: str, private_token: str):
+            self.url = url
+            self.private_token = private_token
+            self.rest_client = Mock(get_merge_requests=lambda **kwargs: [])
+            self.gitlab = Mock()
+            self.gitlab.projects = Mock(get=lambda project_id: None)
+
+        def get_projects_with_stats(self, **kwargs):
+            on_project_complete = kwargs.get("on_project_complete")
+            if on_project_complete:
+                on_project_complete(result)
+
+            # Runs in the executor's worker thread (this whole method does,
+            # since ``use_async=False``): give the main loop's thread time to
+            # process the call_soon_threadsafe-scheduled enqueue and run
+            # store_result before this method returns and unblocks
+            # ``results_queue.join()`` — mirrors the sibling upsert-during-
+            # sync-processing test above, same race.
+            deadline = time.time() + 2
+            while time.time() < deadline and not inserted.is_set():
+                time.sleep(0.01)
+            assert inserted.is_set(), "Expected upsert during sync processing"
+            return [result]
+
+        def close(self):
+            return
+
+    monkeypatch.setattr(processors.gitlab, "GitLabConnector", DummyConnector)
+
+    await processors.gitlab.process_gitlab_projects_batch(
+        store=store,
+        token="test_token",
+        gitlab_url="https://gitlab-self-hosted.example.com:443/",
+        group_name="group",
+        pattern="group/*",
+        batch_size=1,
+        max_concurrent=1,
+        rate_limit_delay=0,
+        use_async=False,
+    )
+
+    assert len(inserted_repos) == 1
+    assert (
+        inserted_repos[0].settings["gitlab_instance_url"]
+        == "https://gitlab-self-hosted.example.com"
+    )
+    # The per-project url (BatchResult.repository.url) stays untouched.
+    assert inserted_repos[0].settings["url"] == "https://example.com/group/proj"
+    assert inserted_repos[0].settings["project_id"] == 456
 
 
 @pytest.mark.asyncio

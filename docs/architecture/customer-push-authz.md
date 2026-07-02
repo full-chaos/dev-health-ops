@@ -201,9 +201,84 @@ This mirrors the confirmed pattern in `api/auth/routers/login.py`.
 fullchaos_hosted`, default `disabled`) and `webhook_secret_id` (nullable
 UUID) are added in migration `0032` now, ahead of CHAOS-2715's
 webhook-assisted ingestion work, so that feature doesn't need a follow-up
-migration to add columns to a table this feature already owns. v1 only
-accepts `disabled`/`customer_relay` at the admin API layer -- `fullchaos_hosted`
-400s (`webhook_secret_id` is unused until Option B webhook support lands).
+migration to add columns to a table this feature already owns.
+
+Two-layer contract (adr-004's must-not-foreclose section, implemented by
+CHAOS-2712): the admin Pydantic schemas (`IngestSourceCreate`/
+`IngestSourcePatch` in `api/admin/schemas/customer_push.py`) accept the
+*full* 3-value enum -- a request body containing `fullchaos_hosted` passes
+schema validation, no `422` -- so the field never needs a breaking schema
+change to add real support for it later. The admin router
+(`_reject_fullchaos_hosted_webhook_mode` in
+`api/admin/routers/customer_push.py`) is the layer that actually rejects it,
+with a `400`, before it is persisted or acted on. Do not collapse this back
+to a 2-value schema enum (`webhook_secret_id` stays unused until Option B
+webhook support lands).
+
+## Data-plane enforcement added by CHAOS-2712 (auth.py real body)
+
+Two checks closing gaps an adversarial review found in the initial
+`require_ingest_scope` implementation, beyond token validity/scope:
+
+- **Source binding (`require_matching_source`,
+  `api/external_ingest/auth.py`)**: `require_ingest_scope` resolves before
+  the request body is available, so it cannot itself compare a
+  source-bound token's `IngestSource` against the batch envelope's declared
+  `source.system`/`source.instance`. `POST /batches`
+  (`api/external_ingest/router.py::accept_batch`) calls
+  `require_matching_source(ctx, envelope.source.system,
+  envelope.source.instance)` explicitly, right after envelope parsing and
+  before `enqueue_batch`. Without this, a source-bound `ingest:write` token
+  could push data for a *different* source instance in the same org --
+  `ctx.org_id` alone does not prevent that. Mismatch -> `403
+  source_mismatch`; source resolved but disabled or not `customer_push` ->
+  `403 source_disabled`; an unbound (org-wide) token presented against a
+  write endpoint is treated the same as a mismatch (token-creation time
+  already forbids `ingest:write` on an unbound token, Design Decision 7 --
+  this is defense-in-depth, not the primary enforcement point).
+- **Pre-auth, IP-keyed throttles (two layers)**: the router's existing
+  per-token rate limit (`@limiter.limit(..., key_func=get_ingest_token_key)`)
+  never sees a request that fails inside `require_ingest_scope` -- FastAPI
+  resolves a route's `Depends()` before the `@limiter.limit(...)` decorator
+  body runs, so an auth failure raises and aborts the request before the
+  decorated endpoint (and its rate check) is ever reached. Without a
+  separate guard, missing/unknown/revoked/expired-token and wrong-scope
+  requests from one IP were completely unthrottled, each still paying for a
+  DB hash lookup and a failure-audit write. `require_ingest_scope` now calls
+  into the shared `limiter` backend directly, via two independent buckets
+  (`api/middleware/rate_limit.py`):
+  1. **`INGEST_AUTH_ATTEMPT_IP_LIMIT = "100/minute"`** -- an atomic,
+     unconditional ceiling consumed via `hit()` as the *first* thing the
+     dependency does, before the token-hash DB lookup and before any
+     `await`. This is the actual DB/app-load protection: a synchronous
+     `hit()` call with no `await` inside it cannot be interleaved with
+     other concurrently-scheduled requests in the same asyncio event loop,
+     so it closes a race a `test()`-then-`hit()` split cannot -- the DB
+     lookup between those two calls is itself an `await` point, so a burst
+     of *concurrent* invalid-token requests could previously all observe
+     the bucket as available and all reach Postgres before any of them
+     were counted (2nd-round adversarial-review finding). Applies to every
+     attempt regardless of outcome, and is deliberately generous so
+     legitimate high-volume traffic sharing an IP (e.g. several CI runners
+     behind one NAT gateway, each with its own valid token) stays well
+     under it in practice.
+  2. **`INGEST_AUTH_FAILURE_IP_LIMIT = "30/minute"`** -- a stricter,
+     failure-only signal layered *behind* the attempt ceiling above. A
+     read-only `test()` rejects with `429 rate_limited` if the IP is
+     already over budget; each failure branch then calls `hit()` to
+     consume from it. A request that succeeds never consumes it. Its own
+     `test()`-then-`hit()` gap is no longer a DB-load concern (bucket 1
+     already bounds that unconditionally); this bucket exists purely to
+     penalize repeated *wrong credentials* specifically, independent of
+     raw request volume.
+
+`get_ingest_token_key` (`api/middleware/rate_limit.py`, the *post-auth*
+per-token key func used by the route decorators) keys on
+`request.state.ingest_token_id`, set only once `require_ingest_scope`
+resolves a token successfully -- never on raw bearer text, which would let
+a caller rotate arbitrary strings to mint a fresh bucket on every request.
+Requests without a validated token (including the public `GET /schemas*`
+endpoints, which carry no auth dependency at all) always key on IP.
 
 ## Admin REST surface
 

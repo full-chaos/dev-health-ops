@@ -176,6 +176,15 @@ class IngestToken(Base):
     def is_valid(self, now: datetime) -> bool:
         if self.revoked_at is not None:
             return False
-        if self.expires_at is not None and now > self.expires_at:
-            return False
+        if self.expires_at is not None:
+            expires_at = self.expires_at
+            if expires_at.tzinfo is None:
+                # SQLite (test fixtures, per AGENTS.md) round-trips
+                # DateTime(timezone=True) values as naive; Postgres (prod)
+                # preserves tzinfo. Values are always written as UTC (see
+                # generate_ingest_token/rotate call sites), so a naive value
+                # read back is UTC, never local time.
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if now > expires_at:
+                return False
         return True

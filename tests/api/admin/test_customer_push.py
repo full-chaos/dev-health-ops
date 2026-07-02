@@ -212,10 +212,35 @@ async def test_create_source_invalid_mode_400(client):
 
 
 @pytest.mark.asyncio
-async def test_create_source_invalid_webhook_mode_422(client):
+async def test_create_source_fullchaos_hosted_webhook_mode_rejected_400(client):
+    # adr-004 two-layer contract: the schema TYPE accepts fullchaos_hosted
+    # (no 422 -- see test_create_source_fullchaos_hosted_webhook_mode_passes_schema_validation
+    # below), but the router's business-logic layer 400s it before persisting.
     ac, _ = client
     resp = await _create_source(ac, webhook_mode="fullchaos_hosted")
+    assert resp.status_code == 400
+    assert "fullchaos_hosted" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_create_source_unknown_webhook_mode_422(client):
+    ac, _ = client
+    resp = await _create_source(ac, webhook_mode="not_a_real_mode")
     assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_patch_source_fullchaos_hosted_webhook_mode_rejected_400(client):
+    ac, _ = client
+    created = await _create_source(ac, system="github", instance="acme/api")
+    source_id = created.json()["id"]
+
+    resp = await ac.patch(
+        f"/api/v1/admin/customer-push/sources/{source_id}",
+        json={"webhook_mode": "fullchaos_hosted"},
+    )
+    assert resp.status_code == 400
+    assert "fullchaos_hosted" in resp.json()["detail"]
 
 
 @pytest.mark.asyncio

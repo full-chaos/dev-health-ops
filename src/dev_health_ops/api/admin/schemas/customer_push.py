@@ -13,22 +13,25 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from dev_health_ops.models.ingest_auth import IngestTokenScope, IngestWebhookMode
 
-_VALID_ADMIN_WEBHOOK_MODES = {
-    IngestWebhookMode.DISABLED.value,
-    IngestWebhookMode.CUSTOMER_RELAY.value,
-}
+_ALL_WEBHOOK_MODES = {mode.value for mode in IngestWebhookMode}
 _VALID_SCOPES = {scope.value for scope in IngestTokenScope}
 
 
 def _validate_webhook_mode(value: str | None) -> str | None:
+    """Schema/type-layer check ONLY -- accepts the full 3-value enum.
+
+    adr-004's must-not-foreclose contract is a deliberate two-layer design:
+    the Pydantic type here must accept ``fullchaos_hosted`` (no 422) so the
+    field never needs a breaking schema change to add it back later; the
+    admin router's business-logic layer (``_reject_fullchaos_hosted_webhook_mode``
+    in ``api/admin/routers/customer_push.py``) is what actually 400s that
+    value before it's persisted or acted on. Do not narrow this to the
+    2-value v1-supported subset.
+    """
     if value is None:
         return value
-    if value not in _VALID_ADMIN_WEBHOOK_MODES:
-        raise ValueError(
-            "webhook_mode must be one of "
-            f"{sorted(_VALID_ADMIN_WEBHOOK_MODES)} (fullchaos_hosted is reserved, "
-            "not available in v1)"
-        )
+    if value not in _ALL_WEBHOOK_MODES:
+        raise ValueError(f"webhook_mode must be one of {sorted(_ALL_WEBHOOK_MODES)}")
     return value
 
 

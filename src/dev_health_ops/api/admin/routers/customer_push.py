@@ -36,6 +36,7 @@ from dev_health_ops.models.ingest_auth import (
     IngestSourceMode,
     IngestToken,
     IngestTokenScope,
+    IngestWebhookMode,
     generate_ingest_token,
     hash_ingest_token,
 )
@@ -83,6 +84,23 @@ def _validate_mode(mode: str) -> IngestSourceMode:
                 f"Invalid mode '{mode}'; must be one of "
                 f"{[m.value for m in IngestSourceMode]}"
             ),
+        )
+
+
+def _reject_fullchaos_hosted_webhook_mode(webhook_mode: str) -> None:
+    """Router business-logic layer of adr-004's two-layer webhookMode contract.
+
+    The Pydantic schema (``api/admin/schemas/customer_push.py``) accepts the
+    full 3-value enum -- including ``fullchaos_hosted`` -- so a request body
+    containing it passes schema validation (no 422); this is what actually
+    rejects it, with a 400, before it is persisted or acted on (Option B /
+    FullChaos-hosted webhooks are not built yet, see
+    docs/architecture/adr-004-webhook-assisted-customer-push-ingestion.md).
+    """
+    if webhook_mode == IngestWebhookMode.FULLCHAOS_HOSTED.value:
+        raise HTTPException(
+            status_code=400,
+            detail="fullchaos_hosted webhook mode is not available yet",
         )
 
 
@@ -342,6 +360,7 @@ async def create_source(
     org_id = current_user.org_id
     system = _validate_system(payload.system)
     mode = _validate_mode(payload.mode)
+    _reject_fullchaos_hosted_webhook_mode(payload.webhook_mode)
 
     matched_id: uuid.UUID | None = None
     warnings: list[str] = []
@@ -440,6 +459,7 @@ async def patch_source(
         }
         source.display_name = payload.display_name
     if payload.webhook_mode is not None and payload.webhook_mode != source.webhook_mode:
+        _reject_fullchaos_hosted_webhook_mode(payload.webhook_mode)
         changes["webhook_mode"] = {
             "old": source.webhook_mode,
             "new": payload.webhook_mode,

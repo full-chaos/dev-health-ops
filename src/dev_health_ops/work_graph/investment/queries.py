@@ -20,19 +20,33 @@ def fetch_work_graph_edges(
     *,
     repo_ids: list[str] | None = None,
     org_id: str = "",
+    exclude_heuristic: bool = True,
 ) -> list[dict[str, Any]]:
+    """Fetch work-graph edges for investment work-unit component building.
+
+    ``exclude_heuristic`` (default ON, CHAOS-2775) drops ``provenance='heuristic'``
+    edges — low-confidence, rule-inferred links (e.g. same repo + time window)
+    that percolate thousands of unrelated issues/PRs/commits into a single giant
+    "work unit". Heuristic edges remain in ``work_graph_edges`` for display and
+    other consumers; only work-unit grouping excludes them. This is the single
+    choke point shared by the materializer, the dispatch enumerator, and the
+    membership backfill, so the default-on filter keeps all three consistent
+    without any call-site changes.
+    """
+    conditions: list[str] = []
     params: dict[str, Any] = {}
-    where_sql = ""
     if repo_ids:
         params["repo_ids"] = repo_ids
-        where_sql = "WHERE repo_id IN %(repo_ids)s"
+        conditions.append("repo_id IN %(repo_ids)s")
     # Optional org_id filtering
     if org_id:
         params["org_id"] = org_id
-        if where_sql:
-            where_sql += " AND org_id = %(org_id)s"
-        else:
-            where_sql = "WHERE org_id = %(org_id)s"
+        conditions.append("org_id = %(org_id)s")
+    if exclude_heuristic:
+        # Parameterized (no value interpolation): exclude rule-inferred edges.
+        params["heuristic_provenance"] = "heuristic"
+        conditions.append("provenance != %(heuristic_provenance)s")
+    where_sql = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     query = f"""
         SELECT
             edge_id,

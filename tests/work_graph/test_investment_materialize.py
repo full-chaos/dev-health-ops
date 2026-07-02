@@ -1478,7 +1478,14 @@ async def test_materialize_passes_configured_llm_credentials(monkeypatch):
 
     stats = await materialize_investments(config)
 
-    assert stats == {"components": 0, "records": 0, "quotes": 0}
+    assert stats == {
+        "components": 0,
+        "records": 0,
+        "quotes": 0,
+        "oversized_components": 0,
+        "dropped_edges": 0,
+        "dropped_nodes": 0,
+    }
     assert captured == {
         "name": "openai",
         "model": "gpt-4o-mini",

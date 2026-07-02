@@ -209,3 +209,23 @@ class AdminBatchListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class AdminValidateResponse(BaseModel):
+    """POST .../sources/{id}/validate (CHAOS-2695, master-spec CC25).
+
+    snake_case to match the admin-plane convention and the web client's
+    ``CustomerPushValidateResponse`` (dev-health-web ``lib/admin/types.ts``)
+    -- the data-plane ``ValidationResponse`` is the camelCase twin.
+    Envelope-level failures (malformed JSON/envelope, wrong schemaVersion,
+    oversized batch) are ALSO reported through this 200 shape (``valid:
+    false`` + synthetic error rows), never as 4xx: the console panel renders
+    these rows as results, and the web mock contract
+    (dev-health-web tests/mocks/handlers.ts) pinned that behavior before
+    this endpoint landed.
+    """
+
+    valid: bool
+    items_accepted: int
+    items_rejected: int
+    errors: list[AdminRejectedRecordResponse]

@@ -29,6 +29,40 @@ AUTH_REFRESH_LIMIT = "10/15minutes"
 AUTH_VALIDATE_LIMIT = "30/15minutes"
 ADMIN_PASSWORD_LIMIT = "5/hour"
 
+# External-ingest (CHAOS-2690 epic, added by CHAOS-2691 per master-spec CC15):
+# shared limiter singleton, no second Limiter instance. INGEST_READ_LIMIT
+# applies to the public GET /schemas* endpoints (IP-keyed via
+# get_ingest_token_key's fallback) and to CHAOS-2694's GET /batches* (token-
+# keyed once real tokens exist).
+INGEST_BATCH_LIMIT = "60/minute"
+INGEST_VALIDATE_LIMIT = "60/minute"
+INGEST_READ_LIMIT = "120/minute"
+
+
+def get_ingest_token_key(request: Request) -> str:
+    """Rate-limit key for external-ingest endpoints: per-token, IP fallback.
+
+    Keys on a truncated hash of the bearer token (never the raw token, which
+    must not appear in limiter storage) so distinct ingest tokens get
+    independent buckets. Falls back to the forwarded IP for unauthenticated
+    requests (the public GET /schemas* endpoints) and, while
+    EXTERNAL_INGEST_INSECURE_AUTH=1's interim auth is active, for ALL
+    requests: interim auth does not validate the bearer value at all, so
+    keying on it would let a caller rotate arbitrary strings for a fresh
+    limiter bucket on every request (adversarial review finding) — IP is the
+    only real identity available until CHAOS-2696/2712 issue validated
+    per-token credentials; see brief-2691 Risks.
+    """
+    if os.environ.get("EXTERNAL_INGEST_INSECURE_AUTH") == "1":
+        return f"ingest-ip:{get_forwarded_ip(request)}"
+    auth_header = request.headers.get("authorization") or ""
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header[7:].strip()
+        if token:
+            digest = hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
+            return f"ingest-token:{digest}"
+    return f"ingest-ip:{get_forwarded_ip(request)}"
+
 
 def _normalize_email(value: str | None) -> str:
     if not value:

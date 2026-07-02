@@ -329,6 +329,123 @@ deleted outright, no archival path.
 **Cooldown gating reads this table back before dispatch** — see the next
 section.
 
+## Legacy error-text columns (`sync_run_units.error` and siblings)
+
+Shipped in [CHAOS-2766](https://linear.app/fullchaos/issue/CHAOS-2766). Live
+verification of CHAOS-2758 above (evidence comment on CHAOS-2742) found that
+the *observation store*'s `reason` allow-list did its job, but a
+provider exception whose message embeds an `Authorization` header (e.g.
+`403 rate limited -- Authorization: Bearer ghp_FAKE...`) still landed
+**verbatim** in the pre-existing, free-form `sync_run_units.error` column —
+these legacy columns predate CHAOS-2742 and were never brought under the same
+discipline.
+
+**Redaction, not an allow-list — deliberately.** `reason` above is a closed,
+normalized enum with no diagnostic-text mandate, so allow-listing a fixed
+vocabulary is correct there. `sync_run_units.error` and its siblings
+(`sync_runs.error`, `sync_run_reference_discovery.error`,
+`sync_dispatch_outbox.last_error`) are free-form, operator-facing
+diagnostics — the entire point of persisting them is to help debug a failed
+sync without re-running it. Collapsing them to a category string would defeat
+that purpose. Instead, `dev_health_ops.sync.error_sanitize.sanitize_error_text`
+(one shared helper, imported at every persistence site — no per-site regexes)
+strips/masks only the specific credential-shaped substrings that must never
+reach the database:
+
+- `Authorization` / `Proxy-Authorization` headers, any scheme
+- Bearer tokens, with or without a leading header name
+- HTTP Basic auth base64 blobs
+- Provider PAT/bot-token prefixes: `ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`,
+  `github_pat_`, `glpat-`, `xoxb-`/`xoxp-`/`xoxa-`/`xoxr-`
+- `token=`/`private_token=`/`api_key=`/`access_token=`/`secret=`-style
+  key/value pairs
+- A credential embedded in a URL's userinfo component
+  (`scheme://user:pass@host`, e.g. `redis://:password@host:6379/0`,
+  `amqp://user:pass@host`) — added for a codex review finding on this PR: a
+  Celery/broker enqueue-failure exception can embed the configured
+  broker/result-backend connection string, and that shape evades every
+  pattern above
+
+Everything else in the message — status codes, provider names, retry
+context — passes through unchanged. A redacted match is replaced with the
+`REDACTION_MARKER` sentinel (`"[REDACTED]"`), and when the input is an
+exception object (the common case) the output is prefixed with the exception
+**class name** (`"RateLimitException: 403 rate limited -- [REDACTED]"`), so
+even a bare `raise SomeError()` with no message still persists something
+diagnostically useful. Redaction always runs *before* the length cap
+(`DEFAULT_MAX_ERROR_TEXT_LENGTH`, 4000 chars — `sync_dispatch_outbox.last_error`
+keeps its pre-existing, tighter 2000-char cap) so truncation can never split a
+credential in half and leave a partial value exposed.
+
+**Enforced by a source-level guard, not review discipline.** There is no
+type-system way to require "this exception must be sanitized before it
+reaches a DB column." `tests/test_error_sanitize_guard.py` AST-walks the
+worker/sync modules that own these columns and fails if any raw
+`str(exc)`-shaped call or bare `f"...{exc}"` interpolation exists outside a
+`logger.*(...)` call (diagnostic logs are a separate risk surface, out of
+this ticket's scope) — mirroring the doc-drift-guard precedent in
+`tests/test_rate_limit_policy_doc.py` (CHAOS-2757). Two internal
+classification helpers (`_classify_error` in `workers/sync_units.py`,
+`_is_retryable_discovery_error` in `workers/reference_discovery.py`) are
+exempted: they lowercase `str(exc)` only to pattern-match it against a fixed,
+curated vocabulary and return a category — the raw text itself is discarded,
+never persisted, the same shape as the `reason` allow-list above.
+
+**Out of scope.** Diagnostic *logs* (`logger.warning(..., extra={"error":
+str(exc)})`) are not touched — they are a different risk surface (a log
+aggregator, not this Postgres table) and were not part of the live-verified
+case. `MetricCheckpoint.error` (`metrics/checkpoints.py`) and
+`InvestmentBatchJob.error` (`work_graph/investment/batch_store.py`) are also
+out of scope: they belong to the LLM-categorization and metrics-checkpoint
+subsystems, not the sync-run/unit execution ledger this epic hardens, and
+their exception provenance (classification/LLM-batch errors, not raw
+provider-client HTTP exceptions) differs from the live-verified case.
+
+**`JobRun.error` / `BackfillJob.error_message` (manual-trigger enqueue
+path).** Added for a codex review finding on this PR: `sync/execution_trigger.py`
+`mark_job_run_failed` and `api/admin/routers/sync.py` `_mark_backfill_job_failed`
+sanitize **at the sink**, not their callers — a Celery/broker enqueue-failure
+exception raised from `dispatch_sync_run.apply_async(...)` in the manual-trigger
+and backfill admin endpoints can embed the broker/result-backend URL
+(credentials included), and both columns surface through admin job-history
+responses. Both functions now accept `BaseException | str` and call
+`sanitize_error_text` internally, so a future caller cannot bypass it by
+passing an already-formatted string; the corresponding `HTTPException`
+`detail` on the same enqueue-failure path is sanitized the same way. The
+CHAOS-2766 guard test (`tests/test_error_sanitize_guard.py`) covers this file
+too, scoped to only the functions that touch these columns — the router file
+has many unrelated `except ... str(exc)` sites for ordinary HTTP validation
+errors that are out of this guard's scope.
+
+**Copied-column propagation (`sync_observers_for_terminal_sync_run`,
+`finalize_sync_run`'s `stamp_sync_run_canonical_config` call).** Added for a
+codex review finding on this PR, round 2: two sites in `workers/sync_units.py`
+read `SyncRun.error` and assign it VERBATIM into another durable column via a
+plain variable (`error = ... (run.error or "...")`, `run_error = ... (run.error
+or "...")`) rather than a `str(exc)`/`f"...{exc}"` expression -- a shape the
+AST guard, which only recognizes exception-stringification forms, cannot see.
+`sync_observers_for_terminal_sync_run` copies it into both
+`BackfillJob.error_message` and `JobRun.error`; `finalize_sync_run` copies it
+into `SyncConfiguration.last_sync_error` via `stamp_sync_run_canonical_config`.
+Both now wrap the copied value in `sanitize_error_text` too (idempotent and
+cheap on already-sanitized text) -- this matters even with every write site
+above already covered, because `sync_observers_for_terminal_sync_run` also
+runs from the reconciler's stale-observer repair path
+(`reconcile_sync_dispatch`), which can touch a `SyncRun.error` value written
+by an OLDER code path or before this ticket shipped. Since AST-detecting
+arbitrary variable-to-column flows (as opposed to a fixed `str(exc)` shape)
+is not a tractable static check, this is covered by a targeted regression
+test instead
+(`test_finalize_sync_run_sanitizes_copied_run_error_into_observer_columns` in
+`tests/test_sync_units.py`) rather than an AST guard extension.
+
+**Pre-existing rows.** Any `sync_run_units.error`/`sync_runs.error`/etc. row
+written before this column was brought under `sanitize_error_text` keeps its
+raw text at rest until the row is next overwritten by a sanitizing write path
+(or copied through one of the sinks above, which now re-sanitizes on the way
+through). A scrub/backfill of already-persisted rows is a deliberately
+separate decision, out of scope for this PR.
+
 ## Cooldown gating
 
 Shipped in [CHAOS-2760](https://linear.app/fullchaos/issue/CHAOS-2760). A 429

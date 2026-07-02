@@ -84,6 +84,30 @@ jobs:
       - name: Run Semgrep
         run: semgrep scan --config auto --sarif --output semgrep.sarif
 
+      - name: Drop nosemgrep-suppressed findings from the SARIF
+        # Semgrep honors `# nosemgrep: <rule-id>` in its own reporting but
+        # still emits the finding into SARIF with suppressions[inSource];
+        # GitHub code scanning keeps those as OPEN alerts (verified: the
+        # long-suppressed bcrypt/jwt lines in api/auth were open on PR
+        # #1145). Strip ONLY results whose every suppression is an accepted
+        # in-source one (adversarial-review: an external or
+        # rejected/under-review suppression must NOT hide a finding), and if
+        # the filter itself fails, upload the RAW SARIF rather than losing
+        # scanner output.
+        run: |
+          if jq '.runs[].results |= map(select(
+                   ((.suppressions // []) | length == 0)
+                   or ((.suppressions // []) | any(
+                        .kind != "inSource"
+                        or ((.status // "accepted") != "accepted")
+                      ))
+                 ))' semgrep.sarif > semgrep.filtered.sarif \
+             && jq -e '.runs' semgrep.filtered.sarif > /dev/null; then
+            mv semgrep.filtered.sarif semgrep.sarif
+          else
+            echo "::warning::SARIF suppression filter failed; uploading unfiltered results"
+          fi
+
       - name: Upload Semgrep results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

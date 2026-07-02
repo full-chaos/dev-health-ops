@@ -41,6 +41,7 @@ Observability (CHAOS-2519):
 from __future__ import annotations
 
 import logging
+import math
 import os
 import threading
 import uuid
@@ -91,7 +92,10 @@ from dev_health_ops.sync.watermarks import set_watermark
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.post_sync_dispatch import build_post_sync_dispatch_payload
 from dev_health_ops.workers.queues import _cost_class_queues_enabled
-from dev_health_ops.workers.rate_limit_defer import plan_rate_limit_deferral
+from dev_health_ops.workers.rate_limit_defer import (
+    RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS,
+    plan_rate_limit_deferral,
+)
 from dev_health_ops.workers.sync_bootstrap import (
     ProviderRuntimeCache,
     SyncTaskBootstrap,
@@ -637,6 +641,30 @@ def _normalized_rate_limit_reason(exc: BaseException) -> str:
     return _UNKNOWN_RATE_LIMIT_REASON
 
 
+def _sanitize_retry_after_seconds(value: float | None) -> float | None:
+    """Validate a provider-supplied retry-after value before persisting it
+    (CHAOS-2760 review finding). A malformed value here -- a provider bug, a
+    header-parsing edge case, or a literal inf/NaN -- would otherwise flow
+    straight into the durable observation store, where the cooldown-gating
+    consumer's ``timedelta(seconds=...)`` arithmetic raises on a non-finite
+    value; the reader has its own fail-open guard for that
+    (``sync/budget_guard.py``), but a corrupt value should never be written
+    in the first place. Never NaN/inf, never negative, and capped at the
+    same wall-clock budget (``RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS``) the
+    deferral planner enforces -- a provider asking for a longer wait than
+    the run would ever honor is not worth persisting verbatim either.
+    """
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric) or numeric < 0:
+        return None
+    return min(numeric, float(RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS))
+
+
 def _build_rate_limit_observation(
     *,
     unit: SyncRunUnit,
@@ -666,6 +694,7 @@ def _build_rate_limit_observation(
     retry_after_seconds = getattr(exc, "retry_after_seconds", None)
     if retry_after_seconds is None and signal is not None:
         retry_after_seconds = signal.retry_after_seconds
+    retry_after_seconds = _sanitize_retry_after_seconds(retry_after_seconds)
     route_family, route_family_attribution = _route_family_and_attribution(
         budget_audit, dimension
     )
@@ -795,6 +824,27 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
             session, sync_run_id, capped_unit_ids=capped_ids
         )
         capped_ids = frozenset((*capped_ids, *budget_result.deferred_unit_ids))
+
+        # CHAOS-2760 TOCTOU closure (review finding): enforce_run's cooldown
+        # snapshot can go stale by the time we reach the claim below —
+        # budget admission does real DB work (re-estimating every active
+        # unit in the bucket) in between, during which a sibling unit's 429
+        # can commit a brand-new observation this pass never saw. Re-check
+        # once more, right here, as the LAST read before the atomic claim —
+        # reusing the estimates enforce_run already computed, no
+        # re-estimation / credential decryption.
+        capped_ids = frozenset(
+            (
+                *capped_ids,
+                *BudgetGuard.reconfirm_cooldowns(
+                    session,
+                    sync_run_id,
+                    units=budget_result.candidate_units,
+                    estimates_by_unit=budget_result.estimates_by_unit,
+                    already_excluded_ids=capped_ids,
+                ),
+            )
+        )
 
         units = _claim_units(session, run_uuid, capped_ids=capped_ids)
         signatures = []

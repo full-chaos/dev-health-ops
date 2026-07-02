@@ -31,6 +31,16 @@ Covers:
     pass, regardless of candidate count.
   * BudgetGuardResult.next_deferred_at (from a cooldown deferral) re-arms
     _schedule_redispatch's outbox wakeup.
+  * TOCTOU closure (review finding): a sibling's 429 committing a brand-new
+    observation between enforce_run's snapshot and the atomic claim is still
+    caught by the late reconfirm_cooldowns check, immediately before
+    _claim_units.
+  * available_at respects plan_rate_limit_deferral's wall-clock clamp
+    (RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS), not the raw cooldown expiry, and a
+    unit whose wall-clock budget is already spent terminalizes rather than
+    sleeping past the clamp (review finding).
+  * a malformed observation row (non-finite retry_after_seconds) is skipped,
+    not fatal to the whole dispatch pass (review finding).
 """
 
 from __future__ import annotations
@@ -671,3 +681,238 @@ def test_next_deferred_at_rearms_redispatch(db_session, monkeypatch):
         .one()
     )
     assert abs((_aware(outbox.available_at) - reset_at).total_seconds()) < 0.5
+
+
+# ---------------------------------------------------------------------------
+# Codex adversarial review round 1 findings
+# ---------------------------------------------------------------------------
+
+
+def test_concurrent_observation_between_enforce_run_and_claim_still_defers_sibling(
+    db_session, monkeypatch
+):
+    """HIGH finding: BudgetGuard.enforce_run reads
+    provider_rate_limit_observations once, early in its pass, then does more
+    real DB work of its own (budget admission / active-consumption
+    re-estimation) before returning. Under READ COMMITTED, a sibling unit's
+    429 can commit a brand-new observation in exactly that window -- one
+    enforce_run's snapshot never saw -- and without a second look,
+    _claim_units would dispatch straight into it.
+
+    Simulates that race deterministically: NO observation exists when
+    enforce_run runs (so its own snapshot is clean), then a fresh row is
+    inserted+flushed the instant BudgetGuard.reconfirm_cooldowns is invoked
+    (the seam dispatch_sync_run calls immediately before _claim_units) --
+    mirroring a concurrent transaction's commit landing in that gap. The
+    fresh row must still be caught before the atomic claim.
+    """
+    from dev_health_ops.sync.budget_guard import BudgetGuard
+    from dev_health_ops.workers import sync_units
+
+    run, first = _seed_run(db_session)
+    first.status = SyncRunUnitStatus.SUCCESS.value
+    second = _sibling_unit(
+        run, first, dataset_key="commits", processor_flags={"sync_git": True}
+    )
+    run.total_units = 2
+    db_session.add(second)
+    db_session.flush()
+    # Deliberately no observation seeded yet -- enforce_run's own read must
+    # see nothing active, proving the race window is real (not just "the
+    # gate never ran").
+
+    _patch_db_session(monkeypatch, db_session)
+    _patch_worker_enqueues(monkeypatch)
+
+    reset_at = datetime.now(timezone.utc) + timedelta(seconds=180)
+    real_reconfirm = BudgetGuard.reconfirm_cooldowns
+
+    def _reconfirm_after_concurrent_commit(*args, **kwargs):
+        # The "concurrent commit" -- lands strictly AFTER enforce_run's own
+        # cooldown snapshot, strictly BEFORE the late re-check.
+        db_session.add(
+            _observation(
+                run,
+                first,
+                route_family="git",
+                dimension="rest_core",
+                reset_at=reset_at,
+                observed_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+            )
+        )
+        db_session.flush()
+        return real_reconfirm(*args, **kwargs)
+
+    monkeypatch.setattr(
+        BudgetGuard,
+        "reconfirm_cooldowns",
+        staticmethod(_reconfirm_after_concurrent_commit),
+    )
+
+    result = sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(second)
+    assert result["queued_units"] == 0
+    # Left exactly as enforce_run's own pass found it -- reconfirm_cooldowns
+    # only EXCLUDES from this pass's claim, it does not stamp RETRYING
+    # itself (the next enforce_run pass formally defers it with full
+    # bookkeeping).
+    assert second.status == SyncRunUnitStatus.PLANNED.value
+
+
+def test_cooldown_available_at_respects_wall_clock_clamp(db_session, monkeypatch):
+    """HIGH finding: _apply_cooldown_deferral must not stamp
+    available_at=cooldown_expiry+jitter when cooldown_expiry is beyond the
+    remaining RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS wall-clock budget --
+    plan_rate_limit_deferral's own not_before clamp must be authoritative,
+    or a far-future reset_at parks the unit for hours past the point the
+    policy promises terminalization.
+    """
+    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers.rate_limit_defer import (
+        RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS,
+    )
+
+    run, first = _seed_run(db_session)
+    first.status = SyncRunUnitStatus.SUCCESS.value
+    second = _sibling_unit(
+        run, first, dataset_key="commits", processor_flags={"sync_git": True}
+    )
+    run.total_units = 2
+    db_session.add(second)
+    db_session.flush()
+
+    now = datetime.now(timezone.utc)
+    # Reset_at is 5x the wall-clock budget out -- must NOT be honored as-is.
+    reset_at = now + timedelta(seconds=RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS * 5)
+    db_session.add(
+        _observation(
+            run,
+            first,
+            route_family="git",
+            dimension="rest_core",
+            reset_at=reset_at,
+            observed_at=now - timedelta(seconds=5),
+        )
+    )
+    db_session.flush()
+
+    _patch_db_session(monkeypatch, db_session)
+    _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
+
+    sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(second)
+    assert second.status == SyncRunUnitStatus.RETRYING.value
+    assert second.available_at is not None
+    clamp_boundary = now + timedelta(seconds=RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS)
+    # Lands at the wall-clock clamp boundary, nowhere near the raw reset_at.
+    assert abs((_aware(second.available_at) - clamp_boundary).total_seconds()) < 2
+    assert (reset_at - _aware(second.available_at)).total_seconds() > 3600
+
+
+def test_cooldown_wall_clock_budget_exhausted_terminalizes_rather_than_sleeping_past_clamp(  # noqa: E501
+    db_session, monkeypatch
+):
+    """HIGH finding, second half: once the wall-clock deferral budget is
+    already spent (simulating "the following pass" via a pre-seeded
+    first_seen_at), a unit gated by a still-active cooldown must terminalize
+    -- not get re-deferred past the clamp plan_rate_limit_deferral already
+    said was the limit.
+    """
+    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers.rate_limit_defer import (
+        RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS,
+    )
+
+    run, first = _seed_run(db_session)
+    first.status = SyncRunUnitStatus.SUCCESS.value
+    now = datetime.now(timezone.utc)
+    second = _sibling_unit(
+        run,
+        first,
+        dataset_key="commits",
+        processor_flags={"sync_git": True},
+        rate_limit_deferrals=1,
+        rate_limit_first_seen_at=now
+        - timedelta(seconds=RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS + 60),
+    )
+    run.total_units = 2
+    db_session.add(second)
+    db_session.flush()
+
+    # Still an active (future) cooldown per the observation itself --
+    # exhaustion must come from the wall-clock budget, not an expired row.
+    db_session.add(
+        _observation(
+            run,
+            first,
+            route_family="git",
+            dimension="rest_core",
+            reset_at=now + timedelta(hours=5),
+            observed_at=now - timedelta(seconds=5),
+        )
+    )
+    db_session.flush()
+
+    _patch_db_session(monkeypatch, db_session)
+    _patch_worker_enqueues(monkeypatch)
+
+    sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(second)
+    assert second.status == SyncRunUnitStatus.FAILED.value
+    assert second.result is not None
+    assert second.result["error_category"] == "rate_limit_cooldown_exhausted"
+
+
+def test_cooldown_read_survives_malformed_observation_row(
+    db_session, monkeypatch, caplog
+):
+    """MEDIUM finding: a malformed row (non-finite retry_after_seconds, no
+    usable reset_at) must not abort the whole cooldown read and block
+    dispatch org-wide -- it is skipped, logged, and treated as no signal.
+    """
+    import logging
+
+    from dev_health_ops.workers import sync_units
+
+    run, first = _seed_run(db_session)
+    first.status = SyncRunUnitStatus.SUCCESS.value
+    second = _sibling_unit(
+        run, first, dataset_key="commits", processor_flags={"sync_git": True}
+    )
+    run.total_units = 2
+    db_session.add(second)
+    db_session.flush()
+
+    now = datetime.now(timezone.utc)
+    # No reset_at, an infinite retry_after_seconds -- timedelta(seconds=inf)
+    # raises OverflowError if unguarded.
+    db_session.add(
+        _observation(
+            run,
+            first,
+            route_family="git",
+            dimension="rest_core",
+            reset_at=None,
+            retry_after_seconds=float("inf"),
+            observed_at=now - timedelta(seconds=5),
+        )
+    )
+    db_session.flush()
+
+    _patch_db_session(monkeypatch, db_session)
+    _patch_worker_enqueues(monkeypatch)
+
+    with caplog.at_level(logging.WARNING, logger="dev_health_ops.sync.budget_guard"):
+        result = sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(second)
+    assert result == {"status": "dispatched", "queued_units": 1}
+    assert second.status == SyncRunUnitStatus.DISPATCHING.value
+    assert any(
+        record.getMessage() == "dispatch_sync_run.cooldown_observation_row_malformed"
+        for record in caplog.records
+    )

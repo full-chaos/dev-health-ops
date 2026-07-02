@@ -365,26 +365,61 @@ family within that dimension actually hit the limit
 falling back to a fixed conservative window
 (`RATE_LIMIT_DEFAULT_COUNTDOWN_SECONDS`, 60s) when an observation carried
 neither — never treated as "already expired" (under-defer) nor "cooldown
-forever" (stuck run). `available_at` for a gated unit is the cooldown expiry
-plus the same jitter (`SYNC_BUDGET_DEFERRAL_JITTER_SECONDS`) the budget-defer
-path already uses, not a fixed 60s. A unit whose estimates span multiple
-route families is deferred if **any** one is cooling down (mirrors the
-existing would-defer-any-estimate budget semantics) and, when more than one
-matches, waits for the last one to clear.
+forever" (stuck run). `available_at` for a gated unit is derived from
+`plan_rate_limit_deferral`'s own `not_before` (plus the same jitter,
+`SYNC_BUDGET_DEFERRAL_JITTER_SECONDS`, the budget-defer path already uses),
+**not** the raw cooldown expiry — `not_before` already clamps to the
+remaining `RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS` wall-clock budget, so a
+far-future `reset_at` cannot park a unit past the point the shared
+rate-limit-deferral budget says to terminalize instead
+(`test_cooldown_available_at_respects_wall_clock_clamp`,
+`test_cooldown_wall_clock_budget_exhausted_terminalizes_rather_than_sleeping_past_clamp`).
+A unit whose estimates span multiple route families is deferred if **any**
+one is cooling down (mirrors the existing would-defer-any-estimate budget
+semantics) and, when more than one matches, waits for the last one to clear.
 
-**One indexed query per dispatch pass, never per unit.** The gate issues a
-single `provider_rate_limit_observations` query per `enforce_run` call,
-scoped to the dispatch pass's candidate `(org_id, provider, integration_id)`
-tuples and a bounded recency window
-(`SYNC_RATE_LIMIT_COOLDOWN_LOOKBACK_SECONDS`, default 2h — long enough to
-cover a chunked GitHub primary-limit reset), using the `ws-d`
+**One indexed query per dispatch pass, never per unit — plus one cheap
+re-check immediately before the claim.** `enforce_run` issues a single
+`provider_rate_limit_observations` query, scoped to the dispatch pass's
+candidate `(org_id, provider, integration_id)` tuples and a bounded recency
+window (`SYNC_RATE_LIMIT_COOLDOWN_LOOKBACK_SECONDS`, default 2h — long
+enough to cover a chunked GitHub primary-limit reset), using the `ws-d`
 `(provider, integration_id, route_family, observed_at)` index
-(`test_single_observation_query_per_dispatch_pass`).
+(`test_single_observation_query_per_dispatch_pass`). Because `enforce_run`
+itself does further DB work after that read (budget admission,
+active-consumption re-estimation), a sibling unit's 429 can commit a
+brand-new observation in that window — one the snapshot never saw — and
+without a second look `_claim_units` would dispatch straight into it. Review
+finding, closed: `dispatch_sync_run` calls `BudgetGuard.reconfirm_cooldowns`
+— the SAME cheap query and matching logic, reusing the estimates
+`enforce_run` already computed (no re-estimation, no credential decryption)
+— as the LAST read before the atomic claim, folding any newly-caught unit
+into the claim's excluded-id set
+(`test_concurrent_observation_between_enforce_run_and_claim_still_defers_sibling`).
+This is not full serializability — a commit landing in the residual
+microsecond gap between that re-check and the claim's own `UPDATE` could
+still slip through — but it collapses the exposure window from "however
+long budget admission takes" down to back-to-back statements, consistent
+with how the rest of the dispatch path tolerates narrow races via CAS
+predicates rather than `SERIALIZABLE` transactions.
 
-**Fail-open on a broken read.** Any error querying the observation store
-(migration not yet applied on a rolling node, transient DB error, etc.) is
-logged and treated as "no active cooldown" — a diagnostic store must never
-block dispatch (`test_cooldown_read_failure_fails_open`).
+**Fail-open on a broken read, including a single malformed row.** Any error
+querying the observation store (migration not yet applied on a rolling
+node, transient DB error, etc.) is logged and treated as "no active
+cooldown" — a diagnostic store must never block dispatch
+(`test_cooldown_read_failure_fails_open`). Per-row parsing is fail-open too:
+a single malformed row (e.g. a non-finite `retry_after_seconds`, where
+`timedelta(seconds=...)` raises `OverflowError`) is skipped and logged
+rather than aborting the whole pass and blocking dispatch org-wide
+(`test_cooldown_read_survives_malformed_observation_row`). The writer
+(`workers/sync_units.py` `_build_rate_limit_observation`) also sanitizes
+`retry_after_seconds` before it is ever persisted — rejecting non-finite/
+negative values and clamping to `RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS` — so a
+corrupt value should never reach the store in the first place; the reader's
+guard is defense in depth, not the only line of defense
+(`test_observation_sanitizes_non_finite_retry_after_seconds`,
+`test_observation_clamps_excessive_retry_after_seconds` in
+`tests/test_rate_limit_observations.py`).
 
 **Deferral mechanics reuse the existing budget-guard vocabulary, not a new
 unit status.** A gated unit is stamped `RETRYING` with the computed

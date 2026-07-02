@@ -47,6 +47,15 @@ class BudgetGuardResult:
     observations: list[dict[str, Any]] = field(default_factory=list)
     deferred_unit_ids: frozenset[str] = frozenset()
     next_deferred_at: datetime | None = None
+    # CHAOS-2760 TOCTOU closure: the candidate units and their (already
+    # loaded, credential-decryption-free-to-reuse) estimates from THIS pass,
+    # so the caller can run one more cheap cooldown re-check
+    # (``reconfirm_cooldowns``) immediately before the atomic claim, without
+    # re-loading estimates. See ``reconfirm_cooldowns`` docstring.
+    candidate_units: tuple[SyncRunUnit, ...] = ()
+    estimates_by_unit: dict[str, tuple[BudgetEstimate, ...]] = field(
+        default_factory=dict
+    )
 
 
 class BudgetGuard:
@@ -278,7 +287,89 @@ class BudgetGuard:
             observations=observations,
             deferred_unit_ids=frozenset(deferred_unit_ids),
             next_deferred_at=next_deferred_at,
+            candidate_units=tuple(units),
+            estimates_by_unit=estimates_by_unit,
         )
+
+    @staticmethod
+    def reconfirm_cooldowns(
+        session: Any,
+        sync_run_id: str,
+        *,
+        units: Iterable[SyncRunUnit],
+        estimates_by_unit: Mapping[str, tuple[BudgetEstimate, ...]],
+        already_excluded_ids: frozenset[str],
+        now: datetime | None = None,
+    ) -> frozenset[str]:
+        """Close the TOCTOU window between ``enforce_run``'s cooldown
+        snapshot and the atomic claim (CHAOS-2760 review finding).
+
+        ``enforce_run`` reads ``provider_rate_limit_observations`` once,
+        early in its pass, then goes on to do real DB work of its own
+        (``_active_budget_consumption`` re-estimates every active unit
+        across the bucket) before returning. Under READ COMMITTED, a
+        sibling unit's 429 can commit a brand-new observation row in that
+        window -- one this pass's ``enforce_run`` snapshot never saw -- and
+        without a second look, ``_claim_units`` would dispatch straight into
+        it, defeating the whole point of the gate.
+
+        This re-runs the SAME cheap, single indexed query
+        (``_active_cooldowns``) and the SAME per-unit matching
+        (``_matching_cooldown_expiry`` -- byte-identical semantics,
+        including the ambiguous-dimension fallback) against the estimates
+        ``enforce_run`` already computed (no re-estimation, no credential
+        decryption), as the LAST read before the claim. It does not
+        re-stamp RETRYING/FAILED here -- it only returns the unit ids to
+        additionally exclude from this pass's claim; a unit caught only by
+        this late check is simply left PLANNED/RETRYING-due for the next
+        ``enforce_run`` pass, which will formally defer/terminalize it with
+        full budget bookkeeping. This does not achieve full serializability
+        (a commit landing in the few-microsecond gap between this query and
+        the claim's own UPDATE could still slip through), but it collapses
+        the window from "however long budget admission takes" down to
+        "back-to-back statements", consistent with how the rest of this
+        module tolerates narrow races via CAS predicates rather than
+        SERIALIZABLE transactions.
+        """
+        checked_at = now or datetime.now(timezone.utc)
+        candidates = [
+            unit for unit in units if str(unit.id) not in already_excluded_ids
+        ]
+        if not candidates:
+            return frozenset()
+
+        cooldown_by_family, cooldown_by_dimension = _active_cooldowns(
+            session,
+            sync_run_id=sync_run_id,
+            candidates=candidates,
+            now=checked_at,
+        )
+        if not cooldown_by_family and not cooldown_by_dimension:
+            return frozenset()
+
+        matched: set[str] = set()
+        for unit in candidates:
+            estimates = estimates_by_unit.get(str(unit.id), ())
+            if not estimates:
+                continue
+            expiry = _matching_cooldown_expiry(
+                estimates,
+                org_id=str(unit.org_id),
+                provider=str(unit.provider),
+                integration_id=unit.integration_id,
+                cooldown_by_family=cooldown_by_family,
+                cooldown_by_dimension=cooldown_by_dimension,
+            )
+            if expiry is not None:
+                matched.add(str(unit.id))
+                logger.info(
+                    "dispatch_sync_run.rate_limit_cooldown_reconfirmed_exclusion",
+                    extra={
+                        "sync_run_id": sync_run_id,
+                        "unit_id": str(unit.id),
+                    },
+                )
+        return frozenset(matched)
 
 
 def _dispatch_candidate_units(
@@ -518,7 +609,23 @@ def _active_cooldowns(
         return family_cooldowns, dimension_cooldowns
 
     for row in rows:
-        expiry = _cooldown_expiry(row)
+        # Per-row parsing is fail-open too, not just the SQL read above: a
+        # single malformed row (e.g. a non-finite retry_after_seconds --
+        # timedelta(seconds=inf) raises OverflowError) must not abort the
+        # whole pass and block dispatch org-wide (review finding). Skip and
+        # log; treat the row as "no cooldown signal" rather than crashing.
+        try:
+            expiry = _cooldown_expiry(row)
+        except (OverflowError, ValueError, TypeError) as exc:
+            logger.warning(
+                "dispatch_sync_run.cooldown_observation_row_malformed",
+                extra={
+                    "sync_run_id": sync_run_id,
+                    "observation_id": str(getattr(row, "id", None)),
+                    "error": str(exc),
+                },
+            )
+            continue
         if expiry <= now:
             continue
         key_prefix = (str(row.org_id), str(row.provider), row.integration_id)
@@ -648,7 +755,14 @@ def _apply_cooldown_deferral(
         )
         return now, True
 
-    available_at = cooldown_expiry + timedelta(
+    # Use plan_rate_limit_deferral's OWN not_before, not cooldown_expiry
+    # directly: not_before already clamps to the remaining
+    # RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS wall-clock budget (review finding --
+    # a far-future reset_at must not park a unit past the point the shared
+    # deferral budget says to terminalize instead). Add the SAME jitter the
+    # budget-defer path uses, since not_before itself carries none.
+    not_before = datetime.fromisoformat(deferral.not_before)
+    available_at = not_before + timedelta(
         seconds=random.uniform(0, float(jitter_seconds))  # noqa: S311
     )
     first_seen_at = datetime.fromisoformat(deferral.first_seen_at)

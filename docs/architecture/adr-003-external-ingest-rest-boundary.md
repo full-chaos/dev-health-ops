@@ -114,21 +114,30 @@ matching rule alone to prevent a Linear collision.
 
 ## Decision 4: Interim auth is a mechanically-gated stopgap, not a real credential system
 
-CHAOS-2691 ships `api/external_ingest/auth.py::require_ingest_scope` with a
-body that accepts **any** bearer token + `X-Org-Id` header combination —
-solely so the REST contract is end-to-end testable before CHAOS-2696/2712
-land real token issuance and validation. This is gated, not silently
-insecure:
+**RESOLVED by CHAOS-2712** — `require_ingest_scope` now resolves real,
+DB-backed `IngestToken` rows (sha256-hashed `fcpush_` bearer tokens against
+`external_ingest_tokens`); the `EXTERNAL_INGEST_INSECURE_AUTH` flag and the
+`X-Org-Id` header path described below no longer exist in any form. This
+section is kept as the historical record of the interim state CHAOS-2691
+shipped and the release-blocker rationale that gated it; see
+[docs/architecture/customer-push-authz.md](customer-push-authz.md) for the
+real auth model.
 
-- The dependency **hard-fails `503 auth_not_configured`** unless the
-  deployment sets `EXTERNAL_INGEST_INSECURE_AUTH=1` — a flag intended only
+CHAOS-2691 originally shipped `api/external_ingest/auth.py::require_ingest_scope`
+with a body that accepted **any** bearer token + `X-Org-Id` header
+combination — solely so the REST contract was end-to-end testable before
+CHAOS-2696/2712 landed real token issuance and validation. This was gated,
+not silently insecure:
+
+- The dependency **hard-failed `503 auth_not_configured`** unless the
+  deployment set `EXTERNAL_INGEST_INSECURE_AUTH=1` — a flag intended only
   for local compose/CI, never a deployed environment.
-- Every request accepted under the flag logs a WARNING naming the org_id,
-  so interim-mode traffic is visible in ops before CHAOS-2696/2712 land.
-- **CHAOS-2696/2712 landing (real DB-backed `IngestToken` validation) is a
+- Every request accepted under the flag logged a WARNING naming the org_id,
+  so interim-mode traffic was visible in ops before CHAOS-2696/2712 landed.
+- **CHAOS-2696/2712 landing (real DB-backed `IngestToken` validation) was a
   hard pre-GA blocker** for this epic, not routine follow-up work. Merging
-  the `chaos-2690-external-ingest` integration branch to `main` remains
-  additionally gated on CHAOS-2712.
+  the `chaos-2690-external-ingest` integration branch to `main` was
+  additionally gated on CHAOS-2712 — now satisfied.
 
 ## Consequences
 

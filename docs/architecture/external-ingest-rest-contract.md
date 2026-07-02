@@ -182,20 +182,23 @@ naming (`external-ingest:{org_id}:batches`, DLQ
 per master-spec CC9) are a pinned contract CHAOS-2693 extends in place
 without changing.
 
-`require_ingest_scope()`'s interim body accepts any bearer token + valid
-`X-Org-Id` header **only** when `EXTERNAL_INGEST_INSECURE_AUTH=1` is set;
-otherwise it hard-fails `503 auth_not_configured`. See
+**Updated by CHAOS-2712**: `require_ingest_scope()`'s body now resolves a
+real, DB-backed `IngestToken` row (sha256-hashed `fcpush_` bearer against
+`external_ingest_tokens`) — the `EXTERNAL_INGEST_INSECURE_AUTH` flag and
+`X-Org-Id` header path described in this section's original (CHAOS-2691
+interim) form are deleted entirely. See
 [ADR-003](adr-003-external-ingest-rest-boundary.md#decision-4-interim-auth-is-a-mechanically-gated-stopgap-not-a-real-credential-system)
-for the full rationale and the CHAOS-2696/2712 replacement plan — this is a
-release blocker for the epic, not a routine follow-up.
+for the interim-era history and
+[docs/architecture/customer-push-authz.md](customer-push-authz.md) for the
+real auth/token model.
 
-Because interim auth does not validate the bearer value at all, keying the
-rate limiter on it would let a caller rotate arbitrary strings for a fresh
-60/minute bucket on every request (adversarial-review finding).
-`get_ingest_token_key` (`api/middleware/rate_limit.py`) checks
-`EXTERNAL_INGEST_INSECURE_AUTH` itself and keys on IP instead of the bearer
-digest whenever the flag is set — the only real, uncontrolled identity
-available until CHAOS-2696/2712 issue validated per-token credentials.
+`get_ingest_token_key` (`api/middleware/rate_limit.py`) now keys the
+limiter on `request.state.ingest_token_id` — set by `require_ingest_scope`
+only once a bearer has been resolved against a real token row — falling
+back to IP for public/unauthenticated requests. This closes the
+adversarial-review finding against the old interim design (keying on a hash
+of the raw, unvalidated bearer text would have let a caller rotate
+arbitrary strings for a fresh 60/minute bucket on every request).
 
 ## `GET /schemas` / `GET /schemas/{version}`: minimal, real, off the Pydantic models directly
 

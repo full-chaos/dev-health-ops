@@ -38,29 +38,59 @@ INGEST_BATCH_LIMIT = "60/minute"
 INGEST_VALIDATE_LIMIT = "60/minute"
 INGEST_READ_LIMIT = "120/minute"
 
+# CHAOS-2712 (adversarial-review finding): the post-auth, per-token buckets
+# above never see a request that fails auth -- FastAPI resolves Depends()
+# (require_ingest_scope) before slowapi's @limiter.limit(...) decorator body
+# runs, so a request that 401s/403s inside the auth dependency never reaches
+# the decorated route at all. Without a separate guard, token-guessing /
+# revoked-token / wrong-scope floods from one IP are completely unthrottled.
+# require_ingest_scope (api/external_ingest/auth.py) applies two IP-keyed
+# limits itself, directly against the shared `limiter` backend below:
+#
+# INGEST_AUTH_ATTEMPT_IP_LIMIT: an atomic, unconditional ceiling on ingest-auth
+# attempts (success AND failure), consumed via hit() BEFORE any DB work --
+# this is what actually bounds worst-case DB/app load per IP under a
+# concurrent flood (a test()-then-hit() split is not atomic: the DB lookup
+# between the two calls is an await point, so a burst of concurrent
+# requests can all observe spare capacity and all reach Postgres before any
+# of them are counted -- 2nd-round adversarial-review finding). Deliberately
+# generous so legitimate high-volume traffic sharing an IP (e.g. several CI
+# runners behind one NAT gateway, each with its own valid token) stays well
+# under it in practice.
+INGEST_AUTH_ATTEMPT_IP_LIMIT = "100/minute"
+#
+# INGEST_AUTH_FAILURE_IP_LIMIT: a stricter, failure-only signal layered
+# behind the attempt ceiling above -- a client whose requests all succeed
+# never touches it. Its own test()-then-hit() gap is no longer a DB-load
+# concern (the attempt ceiling already bounds that unconditionally); it
+# exists purely to penalize repeated *wrong credentials* specifically.
+INGEST_AUTH_FAILURE_IP_LIMIT = "30/minute"
+
 
 def get_ingest_token_key(request: Request) -> str:
-    """Rate-limit key for external-ingest endpoints: per-token, IP fallback.
+    """Rate-limit key for external-ingest endpoints: per-VALIDATED-token, IP fallback.
 
-    Keys on a truncated hash of the bearer token (never the raw token, which
-    must not appear in limiter storage) so distinct ingest tokens get
-    independent buckets. Falls back to the forwarded IP for unauthenticated
-    requests (the public GET /schemas* endpoints) and, while
-    EXTERNAL_INGEST_INSECURE_AUTH=1's interim auth is active, for ALL
-    requests: interim auth does not validate the bearer value at all, so
-    keying on it would let a caller rotate arbitrary strings for a fresh
-    limiter bucket on every request (adversarial review finding) — IP is the
-    only real identity available until CHAOS-2696/2712 issue validated
-    per-token credentials; see brief-2691 Risks.
+    Keys on a truncated hash of ``request.state.ingest_token_id`` -- set by
+    ``require_ingest_scope`` (``api/external_ingest/auth.py``, CHAOS-2712)
+    only once a bearer token has been resolved against a real, DB-backed
+    ``IngestToken`` row -- never on the raw, unvalidated bearer text. FastAPI
+    resolves a route's ``Depends()`` (including the auth dependency) before
+    slowapi's ``@limiter.limit(...)`` decorator body runs, so by the time
+    this key_func executes for an authenticated route, auth has already
+    succeeded (and set ``request.state.ingest_token_id``) or the request has
+    already been aborted with a 401/403 and never reaches here. Keying on raw
+    bearer text instead would let a caller rotate arbitrary strings to mint a
+    fresh limiter bucket on every request for any route this key_func is
+    applied to without a preceding auth dependency -- concretely the public
+    GET /schemas* endpoints, which carry no auth dependency at all and so
+    would see attacker-controlled ``Authorization`` headers directly
+    (adversarial-review finding). Those, and any other request without a
+    validated token, always key on IP.
     """
-    if os.environ.get("EXTERNAL_INGEST_INSECURE_AUTH") == "1":
-        return f"ingest-ip:{get_forwarded_ip(request)}"
-    auth_header = request.headers.get("authorization") or ""
-    if auth_header.lower().startswith("bearer "):
-        token = auth_header[7:].strip()
-        if token:
-            digest = hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
-            return f"ingest-token:{digest}"
+    token_id = getattr(request.state, "ingest_token_id", None)
+    if token_id:
+        digest = hashlib.sha256(str(token_id).encode("utf-8")).hexdigest()[:16]
+        return f"ingest-token:{digest}"
     return f"ingest-ip:{get_forwarded_ip(request)}"
 
 

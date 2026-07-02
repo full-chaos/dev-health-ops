@@ -1,0 +1,1518 @@
+{
+  "$defs": {
+    "BatchEnvelope": {
+      "additionalProperties": false,
+      "properties": {
+        "idempotencyKey": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Idempotencykey",
+          "type": "string"
+        },
+        "records": {
+          "items": {
+            "$ref": "#/$defs/RecordEnvelope"
+          },
+          "minItems": 1,
+          "title": "Records",
+          "type": "array"
+        },
+        "schemaVersion": {
+          "const": "external-ingest.v1",
+          "title": "Schemaversion",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/SourceDescriptor"
+        },
+        "window": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IngestWindow"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "idempotencyKey",
+        "source",
+        "records"
+      ],
+      "title": "BatchEnvelope",
+      "type": "object"
+    },
+    "CommitV1": {
+      "additionalProperties": false,
+      "properties": {
+        "authorEmail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Authoremail"
+        },
+        "authorName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Authorname"
+        },
+        "authorWhen": {
+          "format": "date-time",
+          "title": "Authorwhen",
+          "type": "string"
+        },
+        "committerEmail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Committeremail"
+        },
+        "committerName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Committername"
+        },
+        "committerWhen": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Committerwhen"
+        },
+        "hash": {
+          "maxLength": 64,
+          "minLength": 7,
+          "title": "Hash",
+          "type": "string"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Message"
+        },
+        "parents": {
+          "default": 1,
+          "minimum": 0,
+          "title": "Parents",
+          "type": "integer"
+        },
+        "repositoryExternalId": {
+          "title": "Repositoryexternalid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repositoryExternalId",
+        "hash",
+        "authorWhen"
+      ],
+      "title": "CommitV1",
+      "type": "object"
+    },
+    "IdentityV1": {
+      "additionalProperties": false,
+      "properties": {
+        "canonicalId": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Canonicalid",
+          "type": "string"
+        },
+        "displayName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Displayname"
+        },
+        "email": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Email"
+        },
+        "isActive": {
+          "default": true,
+          "title": "Isactive",
+          "type": "boolean"
+        },
+        "providerIdentities": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Provideridentities",
+          "type": "object"
+        },
+        "teamIds": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Teamids",
+          "type": "array"
+        },
+        "updatedAt": {
+          "format": "date-time",
+          "title": "Updatedat",
+          "type": "string"
+        }
+      },
+      "required": [
+        "canonicalId",
+        "updatedAt"
+      ],
+      "title": "IdentityV1",
+      "type": "object"
+    },
+    "IngestWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "endedAt": {
+          "format": "date-time",
+          "title": "Endedat",
+          "type": "string"
+        },
+        "startedAt": {
+          "format": "date-time",
+          "title": "Startedat",
+          "type": "string"
+        }
+      },
+      "required": [
+        "startedAt",
+        "endedAt"
+      ],
+      "title": "IngestWindow",
+      "type": "object"
+    },
+    "PullRequestV1": {
+      "additionalProperties": false,
+      "properties": {
+        "additions": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Additions"
+        },
+        "authorEmail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Authoremail"
+        },
+        "authorName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Authorname"
+        },
+        "baseBranch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Basebranch"
+        },
+        "body": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body"
+        },
+        "changedFiles": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Changedfiles"
+        },
+        "changesRequestedCount": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": 0,
+          "title": "Changesrequestedcount"
+        },
+        "closedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Closedat"
+        },
+        "commentsCount": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": 0,
+          "title": "Commentscount"
+        },
+        "createdAt": {
+          "format": "date-time",
+          "title": "Createdat",
+          "type": "string"
+        },
+        "deletions": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Deletions"
+        },
+        "firstCommentAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Firstcommentat"
+        },
+        "firstReviewAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Firstreviewat"
+        },
+        "headBranch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Headbranch"
+        },
+        "mergedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mergedat"
+        },
+        "number": {
+          "minimum": 1,
+          "title": "Number",
+          "type": "integer"
+        },
+        "repositoryExternalId": {
+          "title": "Repositoryexternalid",
+          "type": "string"
+        },
+        "reviewsCount": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": 0,
+          "title": "Reviewscount"
+        },
+        "state": {
+          "enum": [
+            "open",
+            "closed",
+            "merged"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        }
+      },
+      "required": [
+        "repositoryExternalId",
+        "number",
+        "state",
+        "createdAt"
+      ],
+      "title": "PullRequestV1",
+      "type": "object"
+    },
+    "RecordEnvelope": {
+      "additionalProperties": false,
+      "description": "Generic wrapper: kind + externalId (for error correlation) + payload.\n\n``payload`` is validated per-kind against ``RECORD_KIND_MODELS`` in\n``router.py``/``validate.py``, not here \u2014 a discriminated union at this\nlevel would abort parsing the whole batch on one bad record (see\ndocs/architecture/external-ingest-rest-contract.md D-payload-shape).",
+      "properties": {
+        "externalId": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Externalid",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "commit.v1",
+            "identity.v1",
+            "pull_request.v1",
+            "repository.v1",
+            "review.v1",
+            "team.v1",
+            "work_item.v1",
+            "work_item_dependency.v1",
+            "work_item_transition.v1"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind",
+        "externalId",
+        "payload"
+      ],
+      "title": "RecordEnvelope",
+      "type": "object"
+    },
+    "RepositoryV1": {
+      "additionalProperties": false,
+      "properties": {
+        "defaultRef": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Defaultref"
+        },
+        "externalId": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Externalid",
+          "type": "string"
+        },
+        "settings": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "title": "Settings",
+          "type": "object"
+        },
+        "sourceSystem": {
+          "enum": [
+            "github",
+            "gitlab",
+            "custom"
+          ],
+          "title": "Sourcesystem",
+          "type": "string"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 50,
+          "title": "Tags",
+          "type": "array"
+        }
+      },
+      "required": [
+        "externalId",
+        "sourceSystem"
+      ],
+      "title": "RepositoryV1",
+      "type": "object"
+    },
+    "ReviewV1": {
+      "additionalProperties": false,
+      "properties": {
+        "pullRequestNumber": {
+          "minimum": 1,
+          "title": "Pullrequestnumber",
+          "type": "integer"
+        },
+        "repositoryExternalId": {
+          "title": "Repositoryexternalid",
+          "type": "string"
+        },
+        "reviewId": {
+          "minLength": 1,
+          "title": "Reviewid",
+          "type": "string"
+        },
+        "reviewer": {
+          "title": "Reviewer",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "APPROVED",
+            "CHANGES_REQUESTED",
+            "COMMENTED",
+            "DISMISSED",
+            "PENDING"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "submittedAt": {
+          "format": "date-time",
+          "title": "Submittedat",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repositoryExternalId",
+        "pullRequestNumber",
+        "reviewId",
+        "reviewer",
+        "state",
+        "submittedAt"
+      ],
+      "title": "ReviewV1",
+      "type": "object"
+    },
+    "SourceDescriptor": {
+      "additionalProperties": false,
+      "properties": {
+        "instance": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Instance",
+          "type": "string"
+        },
+        "producer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Producer"
+        },
+        "producerVersion": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Producerversion"
+        },
+        "system": {
+          "enum": [
+            "github",
+            "gitlab",
+            "jira",
+            "linear",
+            "custom"
+          ],
+          "title": "System",
+          "type": "string"
+        },
+        "type": {
+          "const": "customer_push",
+          "default": "customer_push",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "system",
+        "instance"
+      ],
+      "title": "SourceDescriptor",
+      "type": "object"
+    },
+    "TeamV1": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "id": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "isActive": {
+          "default": true,
+          "title": "Isactive",
+          "type": "boolean"
+        },
+        "members": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Members",
+          "type": "array"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "nativeTeamKey": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nativeteamkey"
+        },
+        "parentTeamId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parentteamid"
+        },
+        "projectKeys": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Projectkeys",
+          "type": "array"
+        },
+        "repoPatterns": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Repopatterns",
+          "type": "array"
+        },
+        "updatedAt": {
+          "format": "date-time",
+          "title": "Updatedat",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "updatedAt"
+      ],
+      "title": "TeamV1",
+      "type": "object"
+    },
+    "WorkItemDependencyV1": {
+      "additionalProperties": false,
+      "description": "Master-spec header item 2: source/target take ``externalKey`` pairs\n(not internal namespaced work-item IDs) + optional per-side\n``workItemType`` since source and target may be different namespaces\n(e.g. an issue blocked by a PR).",
+      "properties": {
+        "relationshipType": {
+          "enum": [
+            "blocks",
+            "blocked_by",
+            "relates_to",
+            "duplicates",
+            "parent_of",
+            "child_of"
+          ],
+          "title": "Relationshiptype",
+          "type": "string"
+        },
+        "relationshipTypeRaw": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationshiptyperaw"
+        },
+        "sourceExternalKey": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Sourceexternalkey",
+          "type": "string"
+        },
+        "sourceWorkItemType": {
+          "anyOf": [
+            {
+              "enum": [
+                "issue",
+                "pr",
+                "merge_request"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceworkitemtype"
+        },
+        "targetExternalKey": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Targetexternalkey",
+          "type": "string"
+        },
+        "targetWorkItemType": {
+          "anyOf": [
+            {
+              "enum": [
+                "issue",
+                "pr",
+                "merge_request"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Targetworkitemtype"
+        }
+      },
+      "required": [
+        "sourceExternalKey",
+        "targetExternalKey",
+        "relationshipType"
+      ],
+      "title": "WorkItemDependencyV1",
+      "type": "object"
+    },
+    "WorkItemTransitionV1": {
+      "additionalProperties": false,
+      "description": "Master-spec header item 2: takes ``externalKey`` (not the internal\nnamespaced ``work_item_id``) + optional ``workItemType`` to disambiguate\nthe issue vs. pr/merge_request namespace for github/gitlab.",
+      "properties": {
+        "actor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actor"
+        },
+        "externalKey": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Externalkey",
+          "type": "string"
+        },
+        "fromStatus": {
+          "enum": [
+            "backlog",
+            "todo",
+            "in_progress",
+            "in_review",
+            "blocked",
+            "done",
+            "canceled",
+            "unknown"
+          ],
+          "title": "Fromstatus",
+          "type": "string"
+        },
+        "fromStatusRaw": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fromstatusraw"
+        },
+        "occurredAt": {
+          "format": "date-time",
+          "title": "Occurredat",
+          "type": "string"
+        },
+        "provider": {
+          "enum": [
+            "jira",
+            "github",
+            "gitlab",
+            "linear"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "toStatus": {
+          "enum": [
+            "backlog",
+            "todo",
+            "in_progress",
+            "in_review",
+            "blocked",
+            "done",
+            "canceled",
+            "unknown"
+          ],
+          "title": "Tostatus",
+          "type": "string"
+        },
+        "toStatusRaw": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tostatusraw"
+        },
+        "workItemType": {
+          "anyOf": [
+            {
+              "enum": [
+                "issue",
+                "pr",
+                "merge_request"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workitemtype"
+        }
+      },
+      "required": [
+        "externalKey",
+        "provider",
+        "occurredAt",
+        "fromStatus",
+        "toStatus"
+      ],
+      "title": "WorkItemTransitionV1",
+      "type": "object"
+    },
+    "WorkItemV1": {
+      "additionalProperties": false,
+      "properties": {
+        "assignees": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Assignees",
+          "type": "array"
+        },
+        "closedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Closedat"
+        },
+        "completedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completedat"
+        },
+        "createdAt": {
+          "format": "date-time",
+          "title": "Createdat",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "dueAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dueat"
+        },
+        "epicId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Epicid"
+        },
+        "externalKey": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Externalkey",
+          "type": "string"
+        },
+        "labels": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Labels",
+          "type": "array"
+        },
+        "nativeTeamKey": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nativeteamkey"
+        },
+        "parentId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parentid"
+        },
+        "priorityRaw": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Priorityraw"
+        },
+        "projectId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Projectid"
+        },
+        "projectKey": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Projectkey"
+        },
+        "projectName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Projectname"
+        },
+        "provider": {
+          "enum": [
+            "jira",
+            "github",
+            "gitlab",
+            "linear"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "reporter": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reporter"
+        },
+        "repositoryExternalId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repositoryexternalid"
+        },
+        "serviceClass": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Serviceclass"
+        },
+        "sprintId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sprintid"
+        },
+        "sprintName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sprintname"
+        },
+        "startedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Startedat"
+        },
+        "status": {
+          "enum": [
+            "backlog",
+            "todo",
+            "in_progress",
+            "in_review",
+            "blocked",
+            "done",
+            "canceled",
+            "unknown"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "statusRaw": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Statusraw"
+        },
+        "storyPoints": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Storypoints"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "type": {
+          "default": "unknown",
+          "enum": [
+            "story",
+            "task",
+            "bug",
+            "epic",
+            "pr",
+            "merge_request",
+            "issue",
+            "incident",
+            "chore",
+            "unknown"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "updatedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Updatedat"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        }
+      },
+      "required": [
+        "externalKey",
+        "provider",
+        "title",
+        "status",
+        "createdAt"
+      ],
+      "title": "WorkItemV1",
+      "type": "object"
+    }
+  },
+  "$id": "https://api.fullchaos.dev/api/v1/external-ingest/schemas/external-ingest.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "FullChaos external customer-push ingestion contract, v1. 'envelope' validates batch shape only \u2014 records[].payload is intentionally unconstrained there (see $defs.RecordEnvelope); validate each record's payload against recordKinds[kind].$ref for kind-specific field requirements (adversarial-review finding: envelope-only validation can pass a payload the server's POST /validate rejects).",
+  "envelope": {
+    "$ref": "#/$defs/BatchEnvelope"
+  },
+  "recordKinds": {
+    "commit.v1": {
+      "$ref": "#/$defs/CommitV1",
+      "examples": [
+        {
+          "authorEmail": "alice@acme.example",
+          "authorName": "Alice Doe",
+          "authorWhen": "2026-06-21T09:55:00Z",
+          "committerEmail": "alice@acme.example",
+          "committerName": "Alice Doe",
+          "committerWhen": "2026-06-21T09:55:00Z",
+          "hash": "9fceb02d0ae598e95dc970b74767f19372d61af8",
+          "message": "fix: resolve login redirect loop",
+          "parents": 1,
+          "repositoryExternalId": "acme/api"
+        }
+      ]
+    },
+    "identity.v1": {
+      "$ref": "#/$defs/IdentityV1",
+      "examples": [
+        {
+          "canonicalId": "acme-user-42",
+          "displayName": "Alice Doe",
+          "email": "alice@acme.example",
+          "isActive": true,
+          "providerIdentities": {
+            "github": [
+              "alicedoe"
+            ],
+            "jira": [
+              "alice.doe"
+            ]
+          },
+          "teamIds": [
+            "team-platform"
+          ],
+          "updatedAt": "2026-06-25T00:00:00Z"
+        }
+      ]
+    },
+    "pull_request.v1": {
+      "$ref": "#/$defs/PullRequestV1",
+      "examples": [
+        {
+          "additions": 42,
+          "authorEmail": "alice@acme.example",
+          "authorName": "Alice Doe",
+          "baseBranch": "main",
+          "changedFiles": 3,
+          "commentsCount": 4,
+          "createdAt": "2026-06-21T10:00:00Z",
+          "deletions": 10,
+          "headBranch": "fix/login-redirect",
+          "mergedAt": "2026-06-22T15:30:00Z",
+          "number": 482,
+          "repositoryExternalId": "acme/api",
+          "reviewsCount": 2,
+          "state": "merged",
+          "title": "Fix login redirect loop",
+          "url": "https://github.com/acme/api/pull/482"
+        }
+      ]
+    },
+    "repository.v1": {
+      "$ref": "#/$defs/RepositoryV1",
+      "examples": [
+        {
+          "defaultRef": "main",
+          "externalId": "acme/api",
+          "settings": {
+            "visibility": "private"
+          },
+          "sourceSystem": "github",
+          "tags": [
+            "backend",
+            "core"
+          ]
+        }
+      ]
+    },
+    "review.v1": {
+      "$ref": "#/$defs/ReviewV1",
+      "examples": [
+        {
+          "pullRequestNumber": 482,
+          "repositoryExternalId": "acme/api",
+          "reviewId": "rev-9001",
+          "reviewer": "bob@acme.example",
+          "state": "APPROVED",
+          "submittedAt": "2026-06-22T14:00:00Z"
+        }
+      ]
+    },
+    "team.v1": {
+      "$ref": "#/$defs/TeamV1",
+      "examples": [
+        {
+          "description": "Core platform engineering team",
+          "id": "team-platform",
+          "isActive": true,
+          "members": [
+            "acme-user-42"
+          ],
+          "name": "Platform",
+          "nativeTeamKey": "PLAT",
+          "projectKeys": [
+            "ABC"
+          ],
+          "repoPatterns": [
+            "acme/*"
+          ],
+          "updatedAt": "2026-06-25T00:00:00Z"
+        }
+      ]
+    },
+    "work_item.v1": {
+      "$ref": "#/$defs/WorkItemV1",
+      "examples": [
+        {
+          "assignees": [
+            "alice@acme.example"
+          ],
+          "createdAt": "2026-06-20T14:00:00Z",
+          "description": "Users are redirected in a loop after SSO login.",
+          "externalKey": "ABC-123",
+          "labels": [
+            "bug",
+            "auth"
+          ],
+          "priorityRaw": "High",
+          "projectKey": "ABC",
+          "projectName": "Acme Platform",
+          "provider": "jira",
+          "reporter": "bob@acme.example",
+          "startedAt": "2026-06-21T09:00:00Z",
+          "status": "in_progress",
+          "statusRaw": "In Progress",
+          "storyPoints": 3,
+          "title": "Fix login redirect loop",
+          "type": "bug",
+          "updatedAt": "2026-06-25T09:30:00Z",
+          "url": "https://acme.atlassian.net/browse/ABC-123"
+        }
+      ]
+    },
+    "work_item_dependency.v1": {
+      "$ref": "#/$defs/WorkItemDependencyV1",
+      "examples": [
+        {
+          "relationshipType": "blocks",
+          "relationshipTypeRaw": "blocks",
+          "sourceExternalKey": "ABC-123",
+          "targetExternalKey": "ABC-124"
+        }
+      ]
+    },
+    "work_item_transition.v1": {
+      "$ref": "#/$defs/WorkItemTransitionV1",
+      "examples": [
+        {
+          "actor": "alice@acme.example",
+          "externalKey": "ABC-123",
+          "fromStatus": "todo",
+          "fromStatusRaw": "To Do",
+          "occurredAt": "2026-06-21T09:00:00Z",
+          "provider": "jira",
+          "toStatus": "in_progress",
+          "toStatusRaw": "In Progress"
+        }
+      ]
+    }
+  },
+  "schemaVersion": "external-ingest.v1",
+  "title": "external-ingest.v1"
+}

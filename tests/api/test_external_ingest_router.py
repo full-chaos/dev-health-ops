@@ -413,9 +413,14 @@ async def test_get_schema_returns_json_schema_per_kind(client):
     body = resp.json()
     assert body["schemaVersion"] == SCHEMA_VERSION
     assert set(body["recordKinds"]) == set(RECORD_KIND_MODELS)
+    # CHAOS-2692: recordKinds/envelope are $ref-indexed into $defs (built via
+    # pydantic's models_json_schema), not full inlined per-kind schemas — see
+    # tests/api/external_ingest/test_schemas_api.py for the full contract
+    # (ETag, examples, 304 round-trip).
     commit_schema = body["recordKinds"]["commit.v1"]
-    assert "properties" in commit_schema
-    assert "properties" in body["envelope"]
+    assert commit_schema["$ref"].startswith("#/$defs/")
+    assert "properties" in body["$defs"][commit_schema["$ref"].rsplit("/", 1)[-1]]
+    assert body["envelope"]["$ref"].startswith("#/$defs/")
 
 
 @pytest.mark.asyncio

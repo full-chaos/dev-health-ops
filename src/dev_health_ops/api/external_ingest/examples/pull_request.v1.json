@@ -1,0 +1,18 @@
+{
+  "repositoryExternalId": "acme/api",
+  "number": 482,
+  "title": "Fix login redirect loop",
+  "state": "merged",
+  "authorName": "Alice Doe",
+  "authorEmail": "alice@acme.example",
+  "createdAt": "2026-06-21T10:00:00Z",
+  "mergedAt": "2026-06-22T15:30:00Z",
+  "headBranch": "fix/login-redirect",
+  "baseBranch": "main",
+  "additions": 42,
+  "deletions": 10,
+  "changedFiles": 3,
+  "reviewsCount": 2,
+  "commentsCount": 4,
+  "url": "https://github.com/acme/api/pull/482"
+}

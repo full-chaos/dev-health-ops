@@ -18,12 +18,14 @@ from dev_health_ops.connectors.launchdarkly import (
     _parse_retry_after,
     _raise_for_status,
 )
+from dev_health_ops.exceptions import RateLimitException as RootRateLimitException
 from dev_health_ops.processors.launchdarkly import (
     _EVENT_KIND_MAP,
     _parse_iso,
     normalize_audit_events,
     normalize_flags,
 )
+from dev_health_ops.providers.launchdarkly.client import LaunchDarklyClient
 from dev_health_ops.providers.launchdarkly.code_refs import (
     LD_CODE_REFERENCE_CONFIDENCE,
     LaunchDarklyCodeReference,
@@ -249,6 +251,145 @@ class TestLaunchDarklyConnector:
             assert conn.api_key == "key"
 
 
+class TestLaunchDarklyClientUsageRecording:
+    """CHAOS-2761: providers/launchdarkly/client.py is the canonical migration
+    target for the frozen connector's flag/audit-log fetch logic. It must
+    record REAL per-request counts (not abstract per-call units -- the
+    codex-flagged CHAOS-2759 contract) through the shared CHAOS-2754 recorder,
+    while keeping identical retry/429 behavior to the connector it replaces.
+    """
+
+    @pytest.fixture
+    def client(self):
+        return LaunchDarklyClient(api_key="test-api-key", project_key="default")
+
+    @pytest.mark.asyncio
+    async def test_get_flags_records_one_request_per_page(self, client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"X-RateLimit-Route-Remaining": "100"}
+        mock_response.json.return_value = {
+            "totalCount": 2,
+            "items": [
+                {"key": "flag-1", "name": "Flag One", "kind": "boolean"},
+                {"key": "flag-2", "name": "Flag Two", "kind": "multivariate"},
+            ],
+        }
+
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.is_closed = False
+        mock_client.request = AsyncMock(return_value=mock_response)
+        client._client = mock_client
+
+        flags = await client.get_flags()
+
+        assert len(flags) == 2
+        observations = client.drain_usage_observations()
+        assert len(observations) == 1
+        assert observations[0]["route_family"] == "flags"
+        assert observations[0]["dimension"] == "rest_core"
+        assert observations[0]["request_count"] == 1
+        assert observations[0]["rate_limit"]["remaining"] == "100"
+
+    @pytest.mark.asyncio
+    async def test_get_audit_log_pagination_counts_each_page_as_a_real_request(
+        self, client
+    ):
+        # Mirrors TestLaunchDarklyConnector.test_get_audit_log_paginates_via_
+        # next_link: 3 pages -> 3 real HTTP requests, all keyed under the SAME
+        # audit_log route family (never one "logical fetch" unit).
+        def _page(items: list[dict], next_href: str | None = None) -> MagicMock:
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.headers = {}
+            body: dict[str, object] = {"items": items}
+            if next_href is not None:
+                body["_links"] = {"next": {"href": next_href}}
+            resp.json.return_value = body
+            return resp
+
+        page1 = _page(
+            [{"_id": f"a{i}"} for i in range(20)],
+            "/api/v2/auditlog?limit=20&before=2000",
+        )
+        page2 = _page(
+            [{"_id": f"b{i}"} for i in range(20)],
+            "/api/v2/auditlog?limit=20&before=1000",
+        )
+        page3 = _page([{"_id": f"c{i}"} for i in range(5)])
+
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.is_closed = False
+        mock_client.request = AsyncMock(side_effect=[page1, page2, page3])
+        client._client = mock_client
+
+        events = await client.get_audit_log(limit=1000)
+
+        assert len(events) == 45
+        observations = client.drain_usage_observations()
+        assert len(observations) == 1
+        assert observations[0]["route_family"] == "audit_log"
+        assert observations[0]["request_count"] == 3, (
+            "three real HTTP requests were made (one per page); this must "
+            "reflect a REAL request count, not an abstract per-call unit"
+        )
+
+    @pytest.mark.asyncio
+    async def test_retried_429_counts_every_attempt_as_a_real_request(self, client):
+        throttled = MagicMock()
+        throttled.status_code = 429
+        throttled.headers = {"Retry-After": "0"}
+        throttled.text = ""
+
+        ok = MagicMock()
+        ok.status_code = 200
+        ok.headers = {}
+        ok.json.return_value = {"totalCount": 0, "items": []}
+
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.is_closed = False
+        mock_client.request = AsyncMock(side_effect=[throttled, ok])
+        client._client = mock_client
+
+        await client.get_flags()
+
+        observations = client.drain_usage_observations()
+        assert len(observations) == 1
+        assert observations[0]["request_count"] == 2, (
+            "the retried 429 attempt AND the eventual success are both real "
+            "requests against the provider -- neither is free"
+        )
+        assert observations[0]["latest_status"] == 200
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_exception_carries_canonical_signal(self, client):
+        # CHAOS-2761 requirement: the same canonical exception + RateLimitSignal
+        # the frozen connector already raised (CHAOS-2753 normalization) --
+        # this is a migration, not a new signal shape.
+        throttled = MagicMock()
+        throttled.status_code = 429
+        throttled.headers = {"Retry-After": "7", "X-RateLimit-Reset": "0"}
+        throttled.text = ""
+        throttled.url = None
+
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.is_closed = False
+        mock_client.request = AsyncMock(return_value=throttled)
+        client._client = mock_client
+        client.max_retries = 1
+
+        with pytest.raises(RootRateLimitException) as excinfo:
+            await client.get_flags()
+
+        assert excinfo.value.signal is not None
+        assert excinfo.value.signal.provider == "launchdarkly"
+        assert excinfo.value.signal.reason == "primary"
+        assert excinfo.value.retry_after_seconds == 7.0
+        # Exactly one real request was recorded before giving up.
+        observations = client.drain_usage_observations()
+        assert observations[0]["request_count"] == 1
+
+
 class TestLaunchDarklyCodeReferences:
     @pytest.mark.asyncio
     async def test_list_default_branch_references_uses_project_filter(self):
@@ -272,6 +413,31 @@ class TestLaunchDarklyCodeReferences:
             "/code-refs/repositories",
             params={"withReferencesForDefaultBranch": "1", "projKey": "web"},
         )
+
+    @pytest.mark.asyncio
+    async def test_list_default_branch_references_records_usage(self):
+        """CHAOS-2761: code_refs was already canonical but never wired to the
+        shared CHAOS-2754 recorder -- close that gap."""
+        response = MagicMock()
+        response.status_code = 200
+        response.headers = {"X-RateLimit-Route-Remaining": "50"}
+        response.json.return_value = {"items": []}
+
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.is_closed = False
+        mock_client.request = AsyncMock(return_value=response)
+
+        client = LaunchDarklyCodeReferencesClient(api_key="key")
+        client._client = mock_client
+
+        await client.list_default_branch_references(project_key="web")
+
+        observations = client.drain_usage_observations()
+        assert len(observations) == 1
+        assert observations[0]["route_family"] == "code_refs"
+        assert observations[0]["dimension"] == "rest_core"
+        assert observations[0]["request_count"] == 1
+        assert observations[0]["rate_limit"]["remaining"] == "50"
 
     def test_parse_code_reference_repositories_flattens_hunks(self):
         refs = parse_code_reference_repositories(

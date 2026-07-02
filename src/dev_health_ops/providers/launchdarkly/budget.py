@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+from dev_health_ops.providers.usage import OperationResolver, UsageRouteFamily
 from dev_health_ops.sync.budget_types import (
     BudgetBucketKey,
     BudgetDimension,
@@ -234,3 +235,63 @@ def _safe_credential_scope(
     if base_url is not None:
         scope["base_url"] = base_url
     return scope
+
+
+# ---------------------------------------------------------------------------
+# Actuals recorder route-family registry (CHAOS-2754 / CHAOS-2761)
+# ---------------------------------------------------------------------------
+# Declares the full budget vocabulary the LaunchDarkly estimator(s) emit so
+# recorded actuals key by the same (route_family, dimension) an estimate is
+# keyed by. Unlike GitHub's registry, every family the *current*
+# feature-flags estimator emits (flags, audit_log, code_refs) now has a live,
+# instrumented call site: `providers/launchdarkly/client.py::LaunchDarklyClient`
+# (flags, audit_log) and `providers/launchdarkly/code_refs.py::
+# LaunchDarklyCodeReferencesClient` (code_refs) both record through this
+# resolver (CHAOS-2761 -- the "frozen connectors/ path" gap documented in
+# docs/providers/rate-limit-policy.md is closed for LaunchDarkly).
+#
+# `code_refs` reserves both `rest_core` and `secondary_abuse_risk` for the
+# SAME single REST call (see `LaunchDarklyBudgetEstimator.estimate` above); a
+# real REST response can only resolve to one dimension per the shared
+# resolver, so only the `rest_core` entry ever matches a live operation --
+# `secondary_abuse_risk` is declared with no markers purely for
+# estimator-coverage parity (mirrors GitHub's `commit_stats`/`files`/`blame`
+# `contents_blob` entries, which have the same one-call/two-dimension shape).
+#
+# `projects`, `segments`, and `members` are *modeled* route families
+# (`LAUNCHDARKLY_BUDGET_ROUTE_FAMILIES` above) the feature-flags estimator
+# does not yet reserve against and no client fetches yet; declared with no
+# markers so they never match a live operation, same as the estimator not
+# yet emitting them.
+LAUNCHDARKLY_USAGE_ROUTE_FAMILIES: tuple[UsageRouteFamily, ...] = (
+    UsageRouteFamily(
+        "flags",
+        BudgetDimension.REST_CORE,
+        transport="rest",
+        operation_markers=("/flags/",),
+    ),
+    UsageRouteFamily(
+        "audit_log",
+        BudgetDimension.REST_CORE,
+        transport="rest",
+        operation_markers=("/auditlog",),
+    ),
+    UsageRouteFamily(
+        "code_refs",
+        BudgetDimension.REST_CORE,
+        transport="rest",
+        operation_markers=("/code-refs/",),
+    ),
+    UsageRouteFamily("code_refs", BudgetDimension.SECONDARY_ABUSE_RISK),
+    UsageRouteFamily("projects", BudgetDimension.REST_CORE),
+    UsageRouteFamily("segments", BudgetDimension.REST_CORE),
+    UsageRouteFamily("members", BudgetDimension.REST_CORE),
+)
+
+LAUNCHDARKLY_USAGE_ROUTE_FAMILY_KEYS = frozenset(
+    family.route_family for family in LAUNCHDARKLY_USAGE_ROUTE_FAMILIES
+)
+
+LAUNCHDARKLY_USAGE_RESOLVER = OperationResolver(
+    families=LAUNCHDARKLY_USAGE_ROUTE_FAMILIES,
+)

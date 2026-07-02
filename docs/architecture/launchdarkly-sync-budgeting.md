@@ -2,9 +2,9 @@
 
 > See also: [Provider Rate-Limit Policy](../providers/rate-limit-policy.md) for
 > LaunchDarkly's quota dimensions, headers (`X-RateLimit-Route-Remaining`,
-> `Retry-After`), retry/deferral semantics, the frozen-connector caveat, and how
-> LD route families fit the cross-provider rate-limit and
-> credentials-are-not-capacity model.
+> `Retry-After`), retry/deferral semantics, the canonical-provider-migration
+> and actuals-instrumentation history, and how LD route families fit the
+> cross-provider rate-limit and credentials-are-not-capacity model.
 
 Status: implemented for CHAOS-2687 feature-flag sync budgeting. The
 `feature-flags` dataset now emits LaunchDarkly budget estimates through the
@@ -13,7 +13,7 @@ existing `SyncRunUnit` pipeline, and `estimate_provider_budget()` dispatches to
 
 ## Current provider status
 
-The canonical `src/dev_health_ops/providers/launchdarkly/` package is partial. It currently contains code-reference helpers, a code-reference client, and the LaunchDarkly budget estimator. Existing flag and audit-log fetches still live in the frozen legacy connector path and are called by the feature-flag worker through the `SyncRunUnit` dataset adapter path. Future provider work must move canonical raw fetch, pagination, retry, rate-limit handling, and normalization under `providers/launchdarkly/`; until then, do not add new code under `connectors/`.
+The canonical `src/dev_health_ops/providers/launchdarkly/` package is now complete for the `feature-flags` dataset (CHAOS-2761). It contains code-reference helpers, a code-reference client (`code_refs.py`), a flags/audit-log client (`client.py`, migrated off the frozen legacy connector), and the LaunchDarkly budget estimator (`budget.py`). All three currently-emitted route families (`flags`, `audit_log`, `code_refs`) record real per-request actuals through the shared CHAOS-2754 recorder, so LaunchDarkly units now produce a `budget_comparison`. The legacy connector (`connectors/launchdarkly.py`) is left in place, unused by the sync path, but still backs the admin credentials "test connection" endpoint (`api/admin/routers/credentials.py::_test_launchdarkly_connection`) — that path never flows through a `SyncRunUnit` or budget estimation, mirroring the same raw/legacy-client pattern already used there for Jira/Linear connectivity checks, so it carries no actuals-instrumentation gap. As with every canonical provider, do not add new code under `connectors/`.
 
 ## Estimator contract
 
@@ -71,9 +71,10 @@ CHAOS-2687 satisfies the budgeting gate for the existing `feature-flags` unit. B
 
 ## Follow-ups
 
-- Migrate the full LaunchDarkly provider off the frozen connector path.
 - Replace fixed request estimates with dynamic estimates driven by project, environment, flag, audit-log, and code-reference fanout.
 - Add GitLab feature-flag budgeting when GitLab feature-flag sync units are enabled.
+- Reserve budget for the `projects`, `segments`, and `members` route families once a client fetches them (currently modeled but not emitted or instrumented).
+- Feed the `X-RateLimit-Route-Remaining` low-budget warning into the deferral/cooldown machinery instead of only logging it (see [Provider Rate-Limit Policy — Known gaps](../providers/rate-limit-policy.md#known-gaps)).
 
 ## Initial operator defaults
 

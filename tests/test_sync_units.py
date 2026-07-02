@@ -450,6 +450,82 @@ def test_run_sync_unit_success_attaches_launchdarkly_budget_estimate(
     assert finalize_calls == [((str(run.id),), "sync")]
 
 
+def test_run_sync_unit_success_attaches_launchdarkly_budget_comparison(
+    db_session, monkeypatch
+):
+    """CHAOS-2761: LaunchDarklyClient / LaunchDarklyCodeReferencesClient now
+    drain real request counts through the shared CHAOS-2754 recorder for all
+    3 currently-emitted LD route families, so a run's provider_usage actuals
+    join against the LaunchDarklyBudgetEstimator estimate exactly like
+    GitHub's CHAOS-2759 calibration already does."""
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(
+        db_session,
+        provider="launchdarkly",
+        source_type="project",
+        external_id="project:default",
+        name="default",
+        full_name="LaunchDarkly/default",
+        dataset_key="feature-flags",
+        processor_flags={"sync_feature_flags": True},
+    )
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        dataset_adapters,
+        "run_dataset_unit",
+        lambda ctx, runtime: {
+            "ok": True,
+            "observations": {
+                "provider_usage": [
+                    {
+                        "transport": "rest",
+                        "route_family": "flags",
+                        "dimension": "rest_core",
+                        "request_count": 3,
+                    },
+                    {
+                        "transport": "rest",
+                        "route_family": "audit_log",
+                        "dimension": "rest_core",
+                        "request_count": 1,
+                    },
+                    {
+                        "transport": "rest",
+                        "route_family": "code_refs",
+                        "dimension": "rest_core",
+                        "request_count": 1,
+                    },
+                ]
+            },
+        },
+    )
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    assert result["status"] == "success"
+    db_session.refresh(unit)
+    observations = unit.result["observations"]
+    comparisons = {
+        row["route_family"]: row for row in observations["budget_comparison"]
+    }
+    assert set(comparisons) == {"flags", "audit_log", "code_refs"}
+    assert comparisons["flags"]["actual_requests"] == 3
+    assert comparisons["audit_log"]["actual_requests"] == 1
+    assert comparisons["code_refs"]["actual_requests"] == 1
+    # code_refs' estimated_units=1 (LaunchDarklyBudgetEstimator, 1 REST_CORE
+    # estimate) vs. 1 actual request -> not underestimated.
+    assert comparisons["code_refs"]["underestimated"] is False
+    assert "budget_comparison_computed_at" in observations
+
+
 def test_run_sync_unit_success_attaches_linear_budget_estimate(db_session, monkeypatch):
     from dev_health_ops.processors import dataset_adapters
     from dev_health_ops.workers.sync_units import run_sync_unit

@@ -65,12 +65,15 @@ def _sync_launchdarkly_feature_flags(
     since_dt: datetime | None,
 ) -> dict[str, Any]:
     from dev_health_ops.connectors.exceptions import ConnectorException
-    from dev_health_ops.connectors.launchdarkly import LaunchDarklyConnector
+    from dev_health_ops.metrics.job_work_items import (
+        attach_work_item_partial_observations,
+    )
     from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
     from dev_health_ops.processors.launchdarkly import (
         normalize_audit_events,
         normalize_flags,
     )
+    from dev_health_ops.providers.launchdarkly.client import LaunchDarklyClient
     from dev_health_ops.providers.launchdarkly.code_refs import (
         LD_CODE_REFERENCE_CONFIDENCE,
         LaunchDarklyCodeReferencesClient,
@@ -78,6 +81,7 @@ def _sync_launchdarkly_feature_flags(
         index_repo_rows,
         resolve_repo_id,
     )
+    from dev_health_ops.providers.usage import drain_provider_usage
     from dev_health_ops.work_graph.builder import BuildConfig, WorkGraphBuilder
     from dev_health_ops.work_graph.ids import generate_feature_flag_id
     from dev_health_ops.work_graph.models import EdgeType, NodeType, Provenance
@@ -99,14 +103,41 @@ def _sync_launchdarkly_feature_flags(
         )
 
     async def _run() -> dict[str, Any]:
-        async with LaunchDarklyConnector(
-            api_key=api_key, project_key=project_key
-        ) as connector:
-            raw_flags = await connector.get_flags(project_key)
-            raw_events = await connector.get_audit_log(since=since_dt, limit=1000)
+        # Real per-request actuals drained through the shared CHAOS-2754
+        # recorder for all 3 currently-emitted LaunchDarkly route families
+        # (flags, audit_log, code_refs) -- CHAOS-2761.
+        provider_usage_observations: list[dict[str, Any]] = []
+
+        connector: LaunchDarklyClient | None = None
         try:
-            async with LaunchDarklyCodeReferencesClient(api_key=api_key) as code_refs:
-                raw_code_refs = await code_refs.list_default_branch_references(
+            async with LaunchDarklyClient(
+                api_key=api_key, project_key=project_key
+            ) as connector:
+                raw_flags = await connector.get_flags(project_key)
+                raw_events = await connector.get_audit_log(since=since_dt, limit=1000)
+        except Exception as exc:
+            # Preserve actuals gathered before the raise (e.g. flags succeeded,
+            # audit_log then hit a rate limit) so the worker's deferral/failure
+            # stamp can still persist them (CHAOS-2754 contract, reused here
+            # verbatim -- `attach_work_item_partial_observations` is
+            # provider-neutral despite its name; `_merge_partial_observations_
+            # into_result` in workers/sync_units.py reads it regardless of
+            # dataset/provider).
+            if connector is not None:
+                provider_usage_observations.extend(drain_provider_usage(connector))
+            if provider_usage_observations:
+                attach_work_item_partial_observations(
+                    exc, {"provider_usage": provider_usage_observations}
+                )
+            raise
+        provider_usage_observations.extend(drain_provider_usage(connector))
+
+        code_refs_client: LaunchDarklyCodeReferencesClient | None = None
+        try:
+            async with LaunchDarklyCodeReferencesClient(
+                api_key=api_key
+            ) as code_refs_client:
+                raw_code_refs = await code_refs_client.list_default_branch_references(
                     project_key=project_key
                 )
             code_references_error = None
@@ -118,6 +149,14 @@ def _sync_launchdarkly_feature_flags(
             )
             raw_code_refs = []
             code_references_error = str(exc)
+        finally:
+            # Code references are best-effort (errors are swallowed above), but
+            # any requests that DID complete before the failure still count as
+            # real actuals -- drain regardless of outcome.
+            if code_refs_client is not None:
+                provider_usage_observations.extend(
+                    drain_provider_usage(code_refs_client)
+                )
 
         flags = normalize_flags(raw_flags, org_id)
         if environment:
@@ -243,7 +282,7 @@ def _sync_launchdarkly_feature_flags(
             builder.close()
             sink.close()
 
-        return {
+        result: dict[str, Any] = {
             "flags_synced": len(flags),
             "events_synced": len(events),
             "code_references_synced": len(raw_code_refs),
@@ -253,6 +292,9 @@ def _sync_launchdarkly_feature_flags(
             "project_key": project_key,
             "environment": environment or None,
         }
+        if provider_usage_observations:
+            result["observations"] = {"provider_usage": provider_usage_observations}
+        return result
 
     return run_async(_run())
 

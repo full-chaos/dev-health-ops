@@ -110,6 +110,22 @@ class ExternalIngestBatch(Base):
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # CHAOS-2699 (master-spec CC21): bounded-recompute visibility, added by
+    # migration 0034 which ALTERs this table (owned by CHAOS-2694). Enum
+    # pinned epic-wide: not_applicable | pending | dispatched |
+    # skipped_no_scope | failed. Written by recompute_status.py, never by
+    # this file's own status.py CRUD helpers.
+    recompute_status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="not_applicable"
+    )
+    recompute_scope: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    recompute_dispatched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    recompute_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    recompute_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         UniqueConstraint(
@@ -187,6 +203,57 @@ class ExternalIngestBatchPayload(Base):
     __table_args__ = (Index("ix_external_ingest_batch_payloads_org_id", "org_id"),)
 
 
+class ExternalIngestRecomputeJob(Base):
+    """Per-dispatch recompute job log (CHAOS-2699, migration 0034).
+
+    A single debounced flush can fan out to N per-repo
+    ``run_daily_metrics``/``run_work_graph_build`` chains plus one
+    ``dispatch_investment_materialize_partitioned`` call; this table logs
+    each individual Celery dispatch for observability (the acceptance
+    criteria explicitly ask for "observability around recompute
+    scheduling"). FK-less by design (mirrors ``provider_rate_limit_observations``,
+    migration 0031): a flush coalesces N ingestion_ids (debounce key grain is
+    ``(org_id, source_system, source_instance)``, not per-ingestion), so
+    there is no single ``external_ingest_batches`` row to own a job row --
+    the affected batches' own ``recompute_status``/``recompute_scope``
+    columns are updated separately, keyed by org/source/time range.
+    """
+
+    __tablename__ = "external_ingest_recompute_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[str] = mapped_column(Text, nullable=False)
+    source_system: Mapped[str] = mapped_column(Text, nullable=False)
+    source_instance: Mapped[str] = mapped_column(Text, nullable=False)
+    celery_task_name: Mapped[str] = mapped_column(Text, nullable=False)
+    # Nullable: a per-repo daily-metrics job's captured id can be None when
+    # its chain AsyncResult has no `.parent` -- the Celery dispatch itself
+    # still succeeded (see recompute.py's dispatch_recompute()).
+    celery_task_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    queue: Mapped[str] = mapped_column(Text, nullable=False)
+    repo_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="dispatched")
+    dispatched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        Index(
+            "ix_external_ingest_recompute_jobs_scope",
+            "org_id",
+            "source_system",
+            "source_instance",
+            "dispatched_at",
+        ),
+    )
+
+
 def terminal_status_for(
     items_received: int, items_accepted: int, items_rejected: int
 ) -> BatchStatus:
@@ -212,6 +279,7 @@ __all__ = [
     "BatchStatus",
     "ExternalIngestBatch",
     "ExternalIngestBatchPayload",
+    "ExternalIngestRecomputeJob",
     "ExternalIngestRejection",
     "terminal_status_for",
 ]

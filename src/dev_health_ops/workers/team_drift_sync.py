@@ -80,7 +80,11 @@ async def _sync_team_drift_async(org_id: str) -> dict[str, Any]:
 
 def _configured_provider_syncs(org_id: str) -> list[_DriftSyncConfig]:
     from dev_health_ops.db import get_postgres_session_sync
-    from dev_health_ops.models import IntegrationCredential, SyncConfiguration
+    from dev_health_ops.models import (
+        Integration,
+        IntegrationCredential,
+        SyncConfiguration,
+    )
     from dev_health_ops.workers.task_utils import (
         _credential_mapping,
         _resolve_env_credentials,
@@ -101,11 +105,24 @@ def _configured_provider_syncs(org_id: str) -> list[_DriftSyncConfig]:
         for row in rows:
             provider = str(row.provider or "").strip().lower()
             credential = None
-            if row.credential_id is not None:
+            # CHAOS-2762: SyncConfiguration carries no credential of its own --
+            # resolve through the linked Integration (the single sanctioned
+            # surface reached via integration_id), never a per-row column.
+            credential_id = None
+            if row.integration_id is not None:
+                integration = (
+                    session.query(Integration)
+                    .filter(Integration.id == row.integration_id)
+                    .one_or_none()
+                )
+                credential_id = (
+                    integration.credential_id if integration is not None else None
+                )
+            if credential_id is not None:
                 credential = (
                     session.query(IntegrationCredential)
                     .filter(
-                        IntegrationCredential.id == row.credential_id,
+                        IntegrationCredential.id == credential_id,
                         IntegrationCredential.org_id == org_id,
                     )
                     .one_or_none()

@@ -310,6 +310,39 @@ def test_sync_run_unit_model_has_no_credential_column() -> None:
     )
 
 
+def test_sync_configuration_has_no_credential_column() -> None:
+    """CHAOS-2762: ``SyncConfiguration`` carries no credential of its own.
+
+    Before this change, ``SyncConfiguration.credential_id`` was a second,
+    *unfrozen* mirror of ``Integration.credential_id`` -- writable and
+    readable independently of the run-auth freeze CHAOS-2755 stamps onto
+    ``sync_runs`` at plan time, even though nothing in the auth-resolution
+    path (``sync/planner.py``, ``workers/sync_bootstrap.py``) ever read it.
+    ``Integration.credential_id`` (reached via ``SyncConfiguration
+    .integration_id``) is now the only surface a credential attaches to sync
+    work through. Both the mapped table and the constructor must reject the
+    legacy field so it cannot silently come back.
+    """
+    from dev_health_ops.models.settings import SyncConfiguration
+
+    column_names = {column.name for column in SyncConfiguration.__table__.columns}
+    assert "credential_id" not in column_names, (
+        "SyncConfiguration must carry no credential_id column (CHAOS-2762): "
+        "Integration.credential_id is the only sanctioned surface"
+    )
+
+    with pytest.raises(TypeError):
+        # Deliberately passing a removed constructor kwarg -- mypy also
+        # rejects this call statically (call-arg), which is the same
+        # regression from the other direction; silence it here rather than
+        # weaken the constructor's signature to humor a test.
+        SyncConfiguration(  # type: ignore[call-arg]
+            name="legacy-write-attempt",
+            provider="github",
+            credential_id=uuid.uuid4(),
+        )
+
+
 # --- Behavior guards ----------------------------------------------------------
 
 

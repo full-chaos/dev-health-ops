@@ -1,7 +1,8 @@
 """Sync configuration service.
 
-Manages provider sync configuration rows (cron-like sync target lists,
-sync options, credential association).
+Manages provider sync configuration rows (cron-like sync target lists, sync
+options). Credential association lives on the linked ``Integration``
+(``integration_id``), not here -- see CHAOS-2762.
 """
 
 from __future__ import annotations

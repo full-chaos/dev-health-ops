@@ -25,6 +25,20 @@ The concrete shape that enforces this today:
   `workers/sync_bootstrap.py`. There is no credential pool, no round-robin, and
   no unit-level credential selection. A sync unit uses exactly the integration's
   one active credential (or the env fallback when `credential_id is None`).
+- **Exactly one place a credential attaches to sync work.**
+  `SyncConfiguration` (the admin API's sync-config row) used to carry its own
+  `credential_id` column — a second, *unfrozen* copy of the same selection,
+  writable independently of `Integration.credential_id` and never read by
+  planning, budgeting, or auth resolution. It was removed
+  ([CHAOS-2762](https://linear.app/fullchaos/issue/CHAOS-2762)); the admin API
+  still accepts/returns `credential_id` on sync-config payloads, but it is now
+  resolved live from the linked `Integration.credential_id` on every read (see
+  `api/admin/routers/sync.py`), so it can never drift from the surface auth
+  resolution actually uses. **`SyncConfigResponse.credential_id` is a
+  compatibility read-through alias, not a design target** — it exists only
+  because the web admin UI still reads a sync config's credential off the
+  sync-config response. It is a candidate for removal once web reads
+  credentials at the `Integration` level directly instead.
 - **Runtime cache is credential-scoped for isolation, not capacity.** The
   provider runtime reuse cache keys on
   `RuntimeCacheKey(org_id, integration_id, credential_id, credential_fingerprint,

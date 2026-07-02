@@ -95,8 +95,28 @@ def _mark_backfill_job_failed(
     sync_session.flush()
 
 
+def _sync_config_integration_credential_id(sync_session, config) -> uuid.UUID | None:
+    """Resolve the credential a config's LINKED integration actually uses.
+
+    ``SyncConfiguration`` carries no credential of its own (CHAOS-2762) --
+    ``Integration.credential_id`` (reached via ``config.integration_id``) is
+    the single sanctioned surface. Returns ``None`` when the config has no
+    linked integration (a pre-planner legacy row; the trigger/backfill
+    endpoints already reject those with "no linked integration" downstream).
+    """
+    integration_id = getattr(config, "integration_id", None)
+    if integration_id is None:
+        return None
+    integration = (
+        sync_session.query(Integration)
+        .filter(Integration.id == integration_id)
+        .one_or_none()
+    )
+    return getattr(integration, "credential_id", None) if integration else None
+
+
 def _preflight_planner_credential(sync_session, config) -> None:
-    credential_id = getattr(config, "credential_id", None)
+    credential_id = _sync_config_integration_credential_id(sync_session, config)
     if credential_id is None:
         return
     from dev_health_ops.models.settings import IntegrationCredential
@@ -190,20 +210,63 @@ class _MutableSyncConfiguration(Protocol):
     is_active: bool
 
 
+async def _integration_credential_id_for_config(
+    session: AsyncSession, config: object
+) -> uuid.UUID | None:
+    """Async counterpart of ``_sync_config_integration_credential_id``.
+
+    Resolves the ``credential_id`` of a config's linked ``Integration`` --
+    the single sanctioned surface (CHAOS-2762) -- for building API responses.
+    """
+    integration_id = getattr(config, "integration_id", None)
+    if integration_id is None:
+        return None
+    result = await session.execute(
+        select(Integration.credential_id).where(Integration.id == integration_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def _integration_credential_ids_for_configs(
+    session: AsyncSession, configs: Sequence[object]
+) -> dict[str, uuid.UUID | None]:
+    """Batch variant of ``_integration_credential_id_for_config`` for list responses.
+
+    ONE query for the whole page via ``Integration.id.in_(...)`` -- callers
+    must use this (not a per-row ``_integration_credential_id_for_config``
+    call in a loop) when building a list response, or credential resolution
+    becomes an N+1 over ``Integration``.
+    """
+    integration_ids = {
+        getattr(config, "integration_id")
+        for config in configs
+        if getattr(config, "integration_id", None) is not None
+    }
+    if not integration_ids:
+        return {}
+    result = await session.execute(
+        select(Integration.id, Integration.credential_id).where(
+            Integration.id.in_(integration_ids)
+        )
+    )
+    return {
+        str(integration_id): credential_id
+        for integration_id, credential_id in result.all()
+    }
+
+
 def _sync_config_to_response(
     config: object,
     children_count: int | None = None,
+    *,
+    credential_id: uuid.UUID | str | None = None,
 ) -> SyncConfigResponse:
     return SyncConfigResponse.model_validate(
         {
             "id": str(getattr(config, "id")),
             "name": getattr(config, "name"),
             "provider": getattr(config, "provider"),
-            "credential_id": (
-                str(getattr(config, "credential_id"))
-                if getattr(config, "credential_id") is not None
-                else None
-            ),
+            "credential_id": str(credential_id) if credential_id is not None else None,
             "sync_targets": list(getattr(config, "sync_targets") or []),
             "sync_options": dict(getattr(config, "sync_options") or {}),
             "is_active": getattr(config, "is_active"),
@@ -699,11 +762,14 @@ async def _replace_planner_repository_selection(
     mutable_config = cast(_MutableSyncConfiguration, config)
     mutable_config.sync_options = sync_options
 
+    existing_credential_id = await _integration_credential_id_for_config(
+        session, config
+    )
     batch_payload = SyncConfigBatchCreate(
         name=str(getattr(config, "name")),
         provider=str(getattr(config, "provider")),
-        credential_id=str(getattr(config, "credential_id"))
-        if getattr(config, "credential_id", None)
+        credential_id=str(existing_credential_id)
+        if existing_credential_id is not None
         else None,
         sync_targets=list(getattr(config, "sync_targets") or []),
         sync_options=sync_options,
@@ -841,6 +907,10 @@ async def _create_planner_managed_config(
     the scheduled-job anchor. There is no bare ``SyncConfiguration`` insert path
     anywhere, so a config can never be created unlinked from its integration and
     the planner can always route it.
+
+    The credential is stamped ONLY on ``Integration.credential_id`` (CHAOS-2762):
+    ``SyncConfiguration`` carries no credential column of its own, so there is
+    exactly one place a credential attaches to sync work.
     """
     credential_uuid = uuid.UUID(credential_id) if credential_id else None
     integration = Integration(
@@ -860,7 +930,6 @@ async def _create_planner_managed_config(
         name=name,
         provider=provider,
         org_id=org_id,
-        credential_id=credential_uuid,
         sync_targets=sync_targets,
         sync_options=parent_options,
         is_active=True,
@@ -969,10 +1038,22 @@ async def list_sync_configs(
         rows = (await session.execute(stmt)).all()
         children_counts = {str(pid): cnt for pid, cnt in rows}
 
+    credential_ids_by_integration = await _integration_credential_ids_for_configs(
+        session, configs
+    )
+
     results = []
     for c in configs:
         cc = children_counts.get(str(getattr(c, "id")))
-        results.append(_sync_config_to_response(c, children_count=cc))
+        integration_id = getattr(c, "integration_id", None)
+        credential_id = (
+            credential_ids_by_integration.get(str(integration_id))
+            if integration_id is not None
+            else None
+        )
+        results.append(
+            _sync_config_to_response(c, children_count=cc, credential_id=credential_id)
+        )
     return results
 
 
@@ -1235,7 +1316,9 @@ async def batch_create_sync_configs(
     )
 
     return SyncConfigBatchResponse(
-        parent=_sync_config_to_response(parent, children_count=0),
+        parent=_sync_config_to_response(
+            parent, children_count=0, credential_id=integration.credential_id
+        ),
         children=[],
         total_created=0,
     )
@@ -1382,7 +1465,7 @@ async def create_sync_config(
         timezone=payload.timezone,
         build_source_rows=_build_sources,
     )
-    return _sync_config_to_response(config)
+    return _sync_config_to_response(config, credential_id=integration.credential_id)
 
 
 @router.get("/sync-configs/{config_id}", response_model=SyncConfigResponse)
@@ -1395,7 +1478,8 @@ async def get_sync_config(
     config = await svc.get_by_id(config_id)
     if config is None:
         raise HTTPException(status_code=404, detail="Sync configuration not found")
-    return _sync_config_to_response(config)
+    credential_id = await _integration_credential_id_for_config(session, config)
+    return _sync_config_to_response(config, credential_id=credential_id)
 
 
 @router.get(
@@ -1572,7 +1656,8 @@ async def update_sync_config(
                 await _upsert_scheduled_job(session, child, org_id)
             await session.flush()
 
-    return _sync_config_to_response(updated)
+    credential_id = await _integration_credential_id_for_config(session, updated)
+    return _sync_config_to_response(updated, credential_id=credential_id)
 
 
 @router.delete("/sync-configs/{config_id}", status_code=204)

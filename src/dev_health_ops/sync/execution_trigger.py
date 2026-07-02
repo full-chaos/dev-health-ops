@@ -14,6 +14,7 @@ from dev_health_ops.models.settings import (
     ScheduledJob,
     SyncConfiguration,
 )
+from dev_health_ops.sync.error_sanitize import sanitize_error_text
 from dev_health_ops.sync.planner import SyncRunPlan, plan_sync_run
 from dev_health_ops.sync.trigger_routing import planner_request_for_config_if_routed
 
@@ -93,7 +94,21 @@ def merge_job_run_result(
     session.flush()
 
 
-def mark_job_run_failed(session: Session, run_id: str, error: str) -> None:
+def mark_job_run_failed(
+    session: Session, run_id: str, error: BaseException | str
+) -> None:
+    """Terminalize a ``JobRun`` as failed.
+
+    ``error`` is sanitized here, at the sink, rather than trusting every
+    caller to have already redacted it (CHAOS-2766 codex review finding):
+    a Celery/broker enqueue-failure exception can embed the configured
+    broker/result-backend URL, including its credentials, and this column
+    surfaces verbatim through admin job-history responses. Accepting
+    ``BaseException | str`` (not just ``str``) means a caller that still
+    pre-formats a message (e.g. ``f"dispatch enqueue failed: {exc}"``) stays
+    covered too -- ``sanitize_error_text`` redacts credential-shaped
+    substrings in plain text the same way it does in an exception's message.
+    """
     completed_at = datetime.now(timezone.utc)
     run = (
         session.query(JobRun).filter(JobRun.id == uuid.UUID(str(run_id))).one_or_none()
@@ -102,7 +117,7 @@ def mark_job_run_failed(session: Session, run_id: str, error: str) -> None:
         return
     run.status = JobRunStatus.FAILED.value
     run.completed_at = completed_at
-    run.error = error
+    run.error = sanitize_error_text(error)
     started_at = getattr(run, "started_at", None)
     if started_at is not None:
         if started_at.tzinfo is None:

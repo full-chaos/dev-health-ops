@@ -552,7 +552,7 @@ def test_b5_broker_failure_during_reconciler_enqueue_rearms_without_losing_work(
     assert dispatch_row.status == OUTBOX_STATUS_PENDING
     assert dispatch_row.attempts == 1
     assert dispatch_row.claim_token is None
-    assert dispatch_row.last_error == "broker down"
+    assert dispatch_row.last_error == "RuntimeError: broker down"
     assert _aware(dispatch_row.available_at) > before
     assert "reconcile_sync_dispatch.outbox_publish_failed" in caplog.text
 

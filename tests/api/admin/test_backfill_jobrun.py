@@ -432,7 +432,7 @@ async def test_backfill_fanout_enqueue_failure_marks_records_failed(
         )
 
     assert resp.status_code == 503
-    assert "Task queue unavailable: broker down" in resp.json()["detail"]
+    assert "Task queue unavailable: RuntimeError: broker down" in resp.json()["detail"]
 
     async with session_maker() as session:
         backfill_job = (await session.execute(select(BackfillJob))).scalar_one()
@@ -440,15 +440,73 @@ async def test_backfill_fanout_enqueue_failure_marks_records_failed(
         sync_runs = list((await session.execute(select(SyncRun))).scalars().all())
 
     assert backfill_job.status == "failed"
-    assert backfill_job.error_message == "enqueue failed: broker down"
+    assert backfill_job.error_message == "RuntimeError: broker down"
     assert backfill_job.completed_at is not None
     assert backfill_job.celery_task_id is None
     assert len(job_runs) == 1
     assert job_runs[0].status == JobRunStatus.FAILED.value
-    assert job_runs[0].error == "enqueue failed: broker down"
+    assert job_runs[0].error == "RuntimeError: broker down"
     assert job_runs[0].completed_at is not None
     assert len(sync_runs) == 1
     assert sync_runs[0].status == SyncRunStatus.FAILED.value
+
+
+@pytest.mark.asyncio
+async def test_backfill_fanout_enqueue_failure_sanitizes_broker_url_credential(
+    client, session_maker, seeded_state
+):
+    """Codex review finding (CHAOS-2766 PR #1123): a Celery/broker
+    enqueue-failure exception can embed the configured broker/result-backend
+    URL, credentials included -- e.g. Celery/kombu wrapping a connection
+    error with the DSN it tried. That credential must not survive into
+    BackfillJob.error_message, JobRun.error, or the API-returned detail; all
+    three are populated from the same exception."""
+    from dev_health_ops.sync.error_sanitize import REDACTION_MARKER
+
+    ac, _ = client
+
+    create_resp = await _create_sync_config(
+        ac, name="bf-fanout-broker-credential-leak", provider="github"
+    )
+    assert create_resp.status_code == 201
+    config_id = create_resp.json()["id"]
+    await _link_migrated_integration(
+        session_maker, seeded_state["org_id"], config_id, planner_managed=True
+    )
+
+    # Built via concatenation, not a single literal (Gitleaks; see
+    # tests/test_error_sanitize.py's module docstring for why).
+    fixture_value = "brokerXzqmno" + "9876543210"
+    broker_dsn_error = RuntimeError(
+        "Error 111 connecting to redis://:"
+        + fixture_value
+        + "@redis-broker.internal:6379/0."
+    )
+
+    with _patch_dispatch(side_effect=broker_dsn_error):
+        resp = await ac.post(
+            f"/api/v1/admin/sync-configs/{config_id}/backfill",
+            json={"since": "2026-01-01", "before": "2026-01-08"},
+        )
+
+    assert resp.status_code == 503
+    detail = resp.json()["detail"]
+    assert fixture_value not in detail
+    assert REDACTION_MARKER in detail
+
+    async with session_maker() as session:
+        backfill_job = (await session.execute(select(BackfillJob))).scalar_one()
+        job_runs = list((await session.execute(select(JobRun))).scalars().all())
+
+    assert backfill_job.status == "failed"
+    assert backfill_job.error_message is not None
+    assert fixture_value not in backfill_job.error_message
+    assert REDACTION_MARKER in backfill_job.error_message
+
+    assert len(job_runs) == 1
+    assert job_runs[0].error is not None
+    assert fixture_value not in job_runs[0].error
+    assert REDACTION_MARKER in job_runs[0].error
 
 
 @pytest.mark.asyncio

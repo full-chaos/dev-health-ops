@@ -45,6 +45,7 @@ from dev_health_ops.models.settings import (
     SyncConfiguration,
 )
 from dev_health_ops.sync.datasets import supported_datasets, supported_legacy_targets
+from dev_health_ops.sync.error_sanitize import sanitize_error_text
 from dev_health_ops.sync.execution_trigger import (
     create_sync_execution_trigger,
     ensure_pending_sync_job_run,
@@ -64,7 +65,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-def _mark_job_run_failed(sync_session, run_id: str, error: str) -> None:
+def _mark_job_run_failed(sync_session, run_id: str, error: BaseException | str) -> None:
     mark_job_run_failed(sync_session, run_id, error)
 
 
@@ -75,8 +76,19 @@ def _merge_job_run_result(
 
 
 def _mark_backfill_job_failed(
-    sync_session, backfill_job_id: str, error: str, completed_at: datetime
+    sync_session,
+    backfill_job_id: str,
+    error: BaseException | str,
+    completed_at: datetime,
 ) -> None:
+    """Terminalize a ``BackfillJob`` as failed.
+
+    ``error`` is sanitized here, at the sink (CHAOS-2766 codex review
+    finding), for the same reason as ``mark_job_run_failed``: a Celery/broker
+    enqueue-failure exception can embed the broker/result-backend URL
+    including credentials, and ``error_message`` surfaces through admin
+    backfill-job responses.
+    """
     from dev_health_ops.models.backfill import BackfillJob as BackfillJobModel
 
     bf_job = (
@@ -87,7 +99,7 @@ def _mark_backfill_job_failed(
     if bf_job is None:
         return
     bf_job.status = "failed"
-    bf_job.error_message = error
+    bf_job.error_message = sanitize_error_text(error)
     bf_job.completed_at = completed_at
     # The dispatch never enqueued (or its task id is meaningless), so drop any
     # pre-dispatch sync_run marker: the run is separately terminalized as failed.
@@ -1764,7 +1776,7 @@ async def trigger_sync_config(
             )
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=sanitize_error_text(exc))
     if trigger is None:
         raise HTTPException(
             status_code=400,
@@ -1776,17 +1788,28 @@ async def trigger_sync_config(
             args=(trigger.sync_run_id,), queue="sync"
         )
     except Exception as exc:
-        error_message = f"dispatch enqueue failed: {exc}"
+        # Bind to a plain local before closing over it in the lambdas below:
+        # `except ... as exc` implicitly deletes `exc` at the end of THIS
+        # block, which a closure captures by reference, not by value (ruff
+        # F821 catches this). The raw exception is passed straight through
+        # to the sink (_mark_job_run_failed -> sanitize_error_text), not
+        # pre-formatted into a string here -- a Celery/broker enqueue
+        # failure can embed the broker/result-backend URL, credentials
+        # included (CHAOS-2766 codex review finding).
+        dispatch_exc = exc
         await session.run_sync(
             lambda s: mark_sync_run_failed(
                 s, trigger.sync_run_id, "dispatch enqueue failed"
             )
         )
         await session.run_sync(
-            lambda s: _mark_job_run_failed(s, trigger.job_run_id, error_message)
+            lambda s: _mark_job_run_failed(s, trigger.job_run_id, dispatch_exc)
         )
         await session.commit()
-        raise HTTPException(status_code=503, detail=f"Task queue unavailable: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Task queue unavailable: {sanitize_error_text(dispatch_exc)}",
+        )
     dispatch_task_id = str(getattr(dispatch_result, "id", "") or "")
     await session.run_sync(
         lambda s: _merge_job_run_result(
@@ -1880,16 +1903,22 @@ async def trigger_sync_config_backfill(
                 args=(trigger.sync_run_id,), queue="sync"
             )
         except Exception as e:
-            error_message = f"enqueue failed: {e}"
+            # Bind to a plain local before closing over it below -- see the
+            # matching comment in trigger_sync_config above (ruff F821: a
+            # closure over a bare `except ... as e` name is unreliable,
+            # since the name is implicitly deleted at block exit). Same
+            # sink-sanitizes-not-caller rationale (CHAOS-2766 codex review
+            # finding).
+            dispatch_exc = e
             completed_at = datetime.now(timezone.utc)
             await session.run_sync(
                 lambda sync_session: _mark_backfill_job_failed(
-                    sync_session, backfill_job_id, error_message, completed_at
+                    sync_session, backfill_job_id, dispatch_exc, completed_at
                 )
             )
             await session.run_sync(
                 lambda sync_session: _mark_job_run_failed(
-                    sync_session, trigger.job_run_id, error_message
+                    sync_session, trigger.job_run_id, dispatch_exc
                 )
             )
             await session.run_sync(
@@ -1898,7 +1927,10 @@ async def trigger_sync_config_backfill(
                 )
             )
             await session.commit()
-            raise HTTPException(status_code=503, detail=f"Task queue unavailable: {e}")
+            raise HTTPException(
+                status_code=503,
+                detail=f"Task queue unavailable: {sanitize_error_text(dispatch_exc)}",
+            )
         backfill_job.celery_task_id = f"{result.id}|sync_run:{trigger.sync_run_id}"
         await session.commit()
         return {
@@ -1914,7 +1946,10 @@ async def trigger_sync_config_backfill(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Task queue unavailable: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Task queue unavailable: {sanitize_error_text(e)}",
+        )
 
 
 @router.get("/sync-configs/{config_id}/jobs", response_model=list[JobRunResponse])

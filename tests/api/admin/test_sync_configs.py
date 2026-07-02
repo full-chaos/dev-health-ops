@@ -1654,7 +1654,7 @@ async def test_trigger_marks_pending_job_run_failed_when_enqueue_fails(
     run = runs[0]
     assert run.status == JobRunStatus.FAILED.value
     assert run.completed_at is not None
-    assert run.error == "dispatch enqueue failed: broker down"
+    assert run.error == "RuntimeError: broker down"
 
 
 @pytest.mark.asyncio

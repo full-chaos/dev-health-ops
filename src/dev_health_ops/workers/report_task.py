@@ -9,6 +9,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from dev_health_ops.sync.error_sanitize import sanitize_error_text
 from dev_health_ops.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -165,6 +166,13 @@ def execute_saved_report(self, report_id: str, run_id: str) -> dict:
 
     except Exception as exc:
         logger.exception("Report execution failed for run %s", run_id)
+        # CHAOS-2784: report_runs.error / error_traceback are free-form Text
+        # columns populated from str(exc) / traceback.format_exc() -- neither
+        # controls what a downstream client library or provider response body
+        # embeds in an exception message, so redact credential-shaped
+        # substrings before persisting (mirrors sync/dispatch_outbox.py and
+        # workers/sync_units.py, CHAOS-2766).
+        sanitized_error = sanitize_error_text(exc)
         with get_postgres_session_sync() as session:
             run = session.execute(
                 select(ReportRun).where(ReportRun.id == run_uuid)
@@ -180,8 +188,12 @@ def execute_saved_report(self, report_id: str, run_id: str) -> dict:
                         "duration_seconds",
                         (completed_at - started_at).total_seconds(),
                     )
-                setattr(run, "error", str(exc))
-                setattr(run, "error_traceback", traceback.format_exc())
+                setattr(run, "error", sanitized_error)
+                setattr(
+                    run,
+                    "error_traceback",
+                    sanitize_error_text(traceback.format_exc()),
+                )
                 session.commit()
 
             report_obj = session.execute(
@@ -192,4 +204,4 @@ def execute_saved_report(self, report_id: str, run_id: str) -> dict:
                 setattr(report_obj, "last_run_status", ReportRunStatus.FAILED.value)
                 session.commit()
 
-        return {"status": "failed", "run_id": run_id, "error": str(exc)}
+        return {"status": "failed", "run_id": run_id, "error": sanitized_error}

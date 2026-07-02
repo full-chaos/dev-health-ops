@@ -174,6 +174,19 @@ def _audit_org_byo_base_url_fallback(
             AuditLog,
             AuditResourceType,
         )
+        from dev_health_ops.sync.error_sanitize import sanitize_error_text
+
+        # CHAOS-2784: `reason` comes from validate_llm_base_url and can embed
+        # raw tenant-controlled input (e.g. an invalid-port ValueError
+        # interpolates the literal, attacker-chosen port text), and
+        # `base_url` is the org's raw BYO value -- SSRF validation rejects
+        # userinfo-bearing URLs but still routes the *original* base_url
+        # here for the audit trail. Both are direct AuditLog(...)
+        # constructions (not routed through AuditService.log or
+        # emit_audit_log), so redact credential-shaped substrings before
+        # persisting, same as those two sinks.
+        sanitized_reason = sanitize_error_text(reason) or "invalid_base_url"
+        sanitized_base_url = sanitize_error_text(_safe_log_value(base_url))
 
         with get_postgres_session_sync() as session:
             session.add(
@@ -188,12 +201,12 @@ def _audit_org_byo_base_url_fallback(
                     ),
                     changes={
                         "provider": _safe_log_value(provider_name),
-                        "base_url": _safe_log_value(base_url),
-                        "reason": reason or "invalid_base_url",
+                        "base_url": sanitized_base_url,
+                        "reason": sanitized_reason,
                     },
                     request_metadata={"source": "llm_credentials_resolver"},
                     status="failure",
-                    error_message=reason or "invalid_base_url",
+                    error_message=sanitized_reason,
                 )
             )
             session.flush()

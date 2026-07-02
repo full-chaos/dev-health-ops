@@ -7,6 +7,7 @@ from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.models.audit import AuditAction, AuditLog, AuditResourceType
+from dev_health_ops.sync.error_sanitize import sanitize_error_text
 
 
 def extract_request_metadata(request: Request) -> dict[str, str]:
@@ -57,6 +58,10 @@ def emit_audit_log(
         request_id=metadata.get("request_id"),
     )
     setattr(entry, "status", status)
-    setattr(entry, "error_message", error_message)
+    # CHAOS-2784: second writer to audit_logs.error_message (distinct from
+    # AuditService.log) -- same redaction requirement, no transaction
+    # semantics changed (db.add/flush only; commit-or-rollback stays with
+    # the caller's get_postgres_session scope).
+    setattr(entry, "error_message", sanitize_error_text(error_message))
     db.add(entry)
     return entry

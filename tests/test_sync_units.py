@@ -501,6 +501,398 @@ def test_run_sync_unit_success_attaches_linear_budget_estimate(db_session, monke
     }
 
 
+def test_run_sync_unit_success_attaches_budget_comparison_per_route_family(
+    db_session, monkeypatch
+):
+    """CHAOS-2759: a success result carries budget_comparison rows joining
+    the run-time estimate to CHAOS-2754's normalized provider_usage actuals
+    for every route_family/dimension present in both."""
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(db_session)  # provider="github", dataset_key="commits"
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        dataset_adapters,
+        "run_dataset_unit",
+        lambda ctx, runtime: {
+            "ok": True,
+            "observations": {
+                "provider_usage": [
+                    {
+                        "transport": "rest",
+                        "route_family": "git",
+                        "dimension": "rest_core",
+                        "request_count": 5,
+                    }
+                ]
+            },
+        },
+    )
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    assert result["status"] == "success"
+    db_session.refresh(unit)
+    observations = unit.result["observations"]
+    # "commits" dataset estimate: route_family="git", dimension="rest_core",
+    # estimated_units=2 (providers/github/budget.py _scaled_units(2, 1)).
+    budget_estimate = observations["budget_estimate"]
+    assert budget_estimate[0]["route_family"] == "git"
+    assert budget_estimate[0]["estimated_units"] == 2
+
+    comparisons = observations["budget_comparison"]
+    assert len(comparisons) == 1
+    row = comparisons[0]
+    assert row["route_family"] == "git"
+    assert row["dimension"] == "rest_core"
+    assert row["estimated_units"] == 2
+    assert row["actual_requests"] == 5
+    assert row["ratio"] == 2.5
+    assert row["underestimated"] is True
+    assert row["incomplete"] is False
+    assert "budget_comparison_computed_at" in observations
+
+
+def test_run_sync_unit_success_omits_budget_comparison_without_actuals(
+    db_session, monkeypatch
+):
+    """CHAOS-2759: a dataset with a budget estimate but no drained actuals
+    this run must not produce a comparison row -- never a fake 100%
+    over-estimation."""
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        dataset_adapters,
+        "run_dataset_unit",
+        lambda ctx, runtime: {"ok": True, "observations": {}},
+    )
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    assert result["status"] == "success"
+    db_session.refresh(unit)
+    observations = unit.result["observations"]
+    assert "budget_estimate" in observations
+    assert "budget_comparison" not in observations
+
+
+def test_run_sync_unit_success_logs_budget_underestimated_warning(
+    db_session, monkeypatch, caplog
+):
+    """CHAOS-2759: an underestimated route_family/dimension logs
+    run_sync_unit.budget_underestimated using BudgetGuard's structured field
+    vocabulary (bucket, budget_key, estimated_units, route_family) so
+    operators can correlate a calibration warning with the run's admission
+    decision."""
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        dataset_adapters,
+        "run_dataset_unit",
+        lambda ctx, runtime: {
+            "ok": True,
+            "observations": {
+                "provider_usage": [
+                    {
+                        "transport": "rest",
+                        "route_family": "git",
+                        "dimension": "rest_core",
+                        "request_count": 50,
+                    }
+                ]
+            },
+        },
+    )
+
+    with caplog.at_level(logging.WARNING, logger="dev_health_ops.workers.sync_units"):
+        result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    assert result["status"] == "success"
+    warnings = [
+        r for r in caplog.records if r.message == "run_sync_unit.budget_underestimated"
+    ]
+    assert len(warnings) == 1
+    record = warnings[0]
+    assert record.route_family == "git"
+    assert record.dimension == "rest_core"
+    assert record.estimated_units == 2
+    assert record.actual_requests == 50
+    assert record.sync_run_id == str(run.id)
+    assert record.unit_id == str(unit.id)
+    assert record.bucket["provider"] == "github"
+    assert record.budget_key.endswith(":rest_core:git")
+    assert record.reason == "underestimated"
+
+
+def test_run_sync_unit_success_surfaces_unbudgeted_actual_route_family(
+    db_session, monkeypatch, caplog
+):
+    """CHAOS-2759 adversarial review fix: actual traffic on a route_family
+    with NO matching budget estimate (e.g. the shared recorder's
+    'unclassified' fallback for an operation that couldn't be resolved to any
+    family) must surface as an explicit unbudgeted_actual row and a
+    budget_underestimated warning with reason=unbudgeted_actual -- never be
+    silently dropped."""
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(db_session)  # provider="github", dataset_key="commits"
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        dataset_adapters,
+        "run_dataset_unit",
+        lambda ctx, runtime: {
+            "ok": True,
+            "observations": {
+                "provider_usage": [
+                    {
+                        "transport": "rest",
+                        "route_family": "unclassified",
+                        "dimension": "rest_core",
+                        "request_count": 6,
+                    }
+                ]
+            },
+        },
+    )
+
+    with caplog.at_level(logging.WARNING, logger="dev_health_ops.workers.sync_units"):
+        result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    assert result["status"] == "success"
+    db_session.refresh(unit)
+    observations = unit.result["observations"]
+    comparisons = observations["budget_comparison"]
+    unclassified_row = next(
+        row for row in comparisons if row["route_family"] == "unclassified"
+    )
+    assert unclassified_row["estimated_units"] == 0
+    assert unclassified_row["actual_requests"] == 6
+    assert unclassified_row["unbudgeted_actual"] is True
+    assert unclassified_row["underestimated"] is True
+    assert unclassified_row["underestimation_assessable"] is True
+
+    warnings = [
+        r for r in caplog.records if r.message == "run_sync_unit.budget_underestimated"
+    ]
+    unbudgeted_warnings = [w for w in warnings if w.route_family == "unclassified"]
+    assert len(unbudgeted_warnings) == 1
+    assert unbudgeted_warnings[0].reason == "unbudgeted_actual"
+
+
+def test_run_sync_unit_success_does_not_warn_for_non_assessable_dimension(
+    db_session, monkeypatch, caplog
+):
+    """CHAOS-2759 adversarial review fix: a graphql_cost route_family
+    (query-cost/complexity points, not a request count) with actual_requests
+    far exceeding estimated_units must NOT log budget_underestimated -- the
+    comparison isn't unit-comparable."""
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    # "prs" estimates REST_CORE "prs", GRAPHQL_COST "pr_social", and
+    # SECONDARY_ABUSE_RISK "pr_social" (providers/github/budget.py) -- all
+    # unconditional, no processor_flags needed.
+    run, unit = _seed_run(db_session, dataset_key="prs")
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        dataset_adapters,
+        "run_dataset_unit",
+        lambda ctx, runtime: {
+            "ok": True,
+            "observations": {
+                "provider_usage": [
+                    {
+                        "transport": "graphql",
+                        "route_family": "pr_social",
+                        "dimension": "graphql_cost",
+                        "request_count": 999,
+                    }
+                ]
+            },
+        },
+    )
+
+    with caplog.at_level(logging.WARNING, logger="dev_health_ops.workers.sync_units"):
+        result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    assert result["status"] == "success"
+    db_session.refresh(unit)
+    comparisons = unit.result["observations"]["budget_comparison"]
+    pr_social_row = next(
+        row for row in comparisons if row["route_family"] == "pr_social"
+    )
+    assert pr_social_row["actual_requests"] == 999
+    assert pr_social_row["underestimated"] is False
+    assert pr_social_row["underestimation_assessable"] is False
+    assert pr_social_row["underestimation_assessable_reason"] is not None
+    assert not [
+        r for r in caplog.records if r.message == "run_sync_unit.budget_underestimated"
+    ]
+
+
+def test_run_sync_unit_budget_comparison_never_mutates_estimate(
+    db_session, monkeypatch
+):
+    """No auto-tuning regression guard (CHAOS-2759): computing a
+    budget_comparison must never re-estimate or alter what
+    estimate_provider_budget produced. The persisted budget_estimate
+    observation is byte-identical to the (spied) live estimator output, and
+    the estimator is invoked exactly once -- the comparison never triggers a
+    second estimation pass or touches SYNC_BUDGET_* consumption (that lives
+    entirely in dispatch_sync_run/BudgetGuard, never called from
+    run_sync_unit)."""
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers import sync_units as sync_units_module
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    calls = []
+    real_estimate_provider_budget = sync_units_module.estimate_provider_budget
+
+    def spy_estimate_provider_budget(ctx):
+        estimates = real_estimate_provider_budget(ctx)
+        calls.append(estimates)
+        return estimates
+
+    monkeypatch.setattr(
+        sync_units_module, "estimate_provider_budget", spy_estimate_provider_budget
+    )
+
+    run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        dataset_adapters,
+        "run_dataset_unit",
+        lambda ctx, runtime: {
+            "ok": True,
+            "observations": {
+                "provider_usage": [
+                    {
+                        "transport": "rest",
+                        "route_family": "git",
+                        "dimension": "rest_core",
+                        "request_count": 999,
+                    }
+                ]
+            },
+        },
+    )
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    assert result["status"] == "success"
+    assert len(calls) == 1, "comparison must not trigger a second estimation call"
+    live_estimate = [estimate.to_dict() for estimate in calls[0]]
+
+    db_session.refresh(unit)
+    observations = unit.result["observations"]
+    assert observations["budget_estimate"] == live_estimate
+    comparison = observations["budget_comparison"][0]
+    assert comparison["underestimated"] is True
+    assert comparison["estimated_units"] == live_estimate[0]["estimated_units"]
+    assert comparison["bucket"] == live_estimate[0]["bucket"]
+
+
+def test_run_sync_unit_budget_comparison_survives_result_stamp_and_admin_passthrough(
+    db_session, monkeypatch
+):
+    """CHAOS-2759: budget_comparison must survive the terminal SUCCESS UPDATE
+    (re-read from the DB, not just the in-memory result dict) and pass
+    through the admin API's result field untouched -- without perturbing the
+    promoted linear_page_count/linear_batch_count fields or error_category."""
+    from dev_health_ops.api.admin.routers.integrations import _unit_to_response
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        dataset_adapters,
+        "run_dataset_unit",
+        lambda ctx, runtime: {
+            "ok": True,
+            "observations": {
+                "provider_usage": [
+                    {
+                        "transport": "rest",
+                        "route_family": "git",
+                        "dimension": "rest_core",
+                        "request_count": 7,
+                    }
+                ]
+            },
+        },
+    )
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+    assert result["status"] == "success"
+
+    # Raw UPDATE used synchronize_session=False -- refresh proves this
+    # actually persisted through the terminal SUCCESS stamp, not merely the
+    # in-memory result dict built inside run_sync_unit.
+    db_session.refresh(unit)
+    assert unit.status == SyncRunUnitStatus.SUCCESS.value
+    persisted_comparison = unit.result["observations"]["budget_comparison"]
+    assert persisted_comparison[0]["route_family"] == "git"
+
+    response = _unit_to_response(unit)
+    response_result = response.result
+    assert response_result is not None
+    assert response_result["observations"]["budget_comparison"] == persisted_comparison
+    assert response.linear_page_count is None
+    assert response.linear_batch_count is None
+    assert response.error_category is None
+
+
 def test_run_sync_unit_success_survives_finalize_enqueue_failure(
     db_session, monkeypatch
 ):

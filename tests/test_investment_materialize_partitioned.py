@@ -372,7 +372,6 @@ def test_finalize_aggregates_split_stats_by_max_not_sum() -> None:
     assert result["oversized_components"] == 2
     assert result["dropped_edges"] == 9
     assert result["dropped_nodes"] == 3
-||||||| 9deae3284
 
 
 def test_partitioned_finalizer_skips_membership_when_flag_false() -> None:

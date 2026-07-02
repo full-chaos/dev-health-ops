@@ -384,3 +384,113 @@ async def test_get_credential_not_found(client):
 
     assert resp.status_code == 404
     assert resp.json()["detail"] == "Credential not found"
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-2780 codex HIGH: /credentials/test must never echo a raw secret back
+# through the HTTP response, even though the persisted last_test_error was
+# already sanitized. Fixture secret assembled at runtime with a neutral name
+# per the Gitleaks-safety convention (tests/test_error_sanitize.py).
+# ---------------------------------------------------------------------------
+
+
+def _fake_secret(*parts: str) -> str:
+    return "".join(parts)
+
+
+_LEAK = _fake_secret("ghp_", "FAKEtestconnLEAK1234567890AB")
+
+
+@pytest.mark.asyncio
+async def test_test_connection_sanitizes_exception_in_response_and_persisted_error(
+    client,
+):
+    cred = _mock_credential(provider="github", name="default")
+
+    with (
+        patch(
+            "dev_health_ops.api.admin.routers.credentials.IntegrationCredentialsService"
+        ) as mock_svc_cls,
+        patch(
+            "dev_health_ops.api.admin.routers.credentials._test_github_connection",
+            new_callable=AsyncMock,
+        ) as mock_test,
+    ):
+        svc = AsyncMock()
+        svc.get.return_value = cred
+        mock_svc_cls.return_value = svc
+        mock_test.side_effect = RuntimeError(
+            f"403 rate limited -- Authorization: Bearer {_LEAK}"
+        )
+
+        resp = await client.post(
+            "/api/v1/admin/credentials/test",
+            json={
+                "provider": "github",
+                "name": "default",
+                "credentials": {"token": "ghp_test"},
+            },
+            headers=HEADERS,
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is False
+    # The HTTP response body must be redacted, not just the persisted row --
+    # this is the exact leak: error = str(e) returned verbatim to the caller.
+    assert data["error"] is not None
+    assert _LEAK not in data["error"]
+    assert "Bearer" not in data["error"]
+    assert "[REDACTED]" in data["error"]
+
+    # And the value handed to the persistence layer must be the SAME
+    # sanitized text (single source of truth, not sanitized twice
+    # differently).
+    svc.update_test_result.assert_awaited_once()
+    persisted_args = svc.update_test_result.await_args.args
+    persisted_error = persisted_args[2]
+    assert persisted_error == data["error"]
+    assert _LEAK not in persisted_error
+
+
+@pytest.mark.asyncio
+async def test_gitlab_connection_helper_sanitizes_raw_response_body():
+    """Direct unit test on the OTHER error-bearing response field codex
+    flagged: provider helpers echo up to 200 chars of the raw external HTTP
+    response body into details['error']. Some providers echo request
+    details (including the submitted credential) back in error bodies, so
+    this must be redacted too, not just the top-level exception path."""
+
+    class _FakeResponse:
+        status_code = 401
+
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+        def json(self):
+            return {}
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args) -> bool:
+            return False
+
+        async def get(self, *args, **kwargs):
+            return _FakeResponse(
+                f"401 Unauthorized: submitted PRIVATE-TOKEN {_LEAK} is invalid"
+            )
+
+    with patch("httpx.AsyncClient", _FakeAsyncClient):
+        success, details = await admin_router_module._test_gitlab_connection(
+            {"token": "placeholder"}
+        )
+
+    assert success is False
+    assert details["status"] == 401
+    assert _LEAK not in details["error"]
+    assert "[REDACTED]" in details["error"]

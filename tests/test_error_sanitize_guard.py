@@ -12,7 +12,7 @@ The check is a precise AST walk (not a `grep`, which would false-positive on
 diagnostic logs, not persisted DB columns, and are intentionally out of this
 ticket's scope) over the worker/sync modules that write
 ``sync_run_units.error`` and its siblings (``sync_runs.error``,
-``sync_run_reference_discovery.error``, ``sync_dispatch_outbox.last_error``).
+``sync_run_reference_discoveries.error``, ``sync_dispatch_outbox.last_error``).
 It flags any *raw* ``str(exc)``-shaped call or bare ``f"...{exc}"``
 interpolation that is not inside a ``logger.<method>(...)`` call -- which is
 exactly what a persistence site producing unsanitized text looks like, since

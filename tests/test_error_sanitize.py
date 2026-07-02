@@ -243,3 +243,43 @@ def test_sanitize_error_text_max_length_none_disables_cap():
     raw = "z" * 10_000
     sanitized = sanitize_error_text(raw, max_length=None)
     assert sanitized == raw
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-2780: idempotency property.
+#
+# ``dev-hops maintenance scrub-error-text`` relies on
+# ``sanitize(sanitize(x)) == sanitize(x)`` to make a second ``--apply`` run
+# report zero changes -- no ``_SECRET_PATTERN`` matches the literal
+# ``REDACTION_MARKER``, and truncation is a fixed point once the text is
+# under the cap. This was previously an unstated assumption the copy sites
+# relied on (``workers/sync_units.py:1810-1817, 2057-2064``); this test pins
+# it explicitly, over the same pattern-fixture table used above plus a
+# capped variant so both the redaction and truncation fixed points are
+# covered. Appended, not interleaved, so this addition stays a clean diff
+# against the rest of the file.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("raw", "max_length"),
+    [
+        (f"GET /repos failed: Authorization: Bearer {_FIXTURE_2}", None),
+        (f"GET /repos failed: Authorization: Bearer {_FIXTURE_2}", 40),
+        (f"push rejected using {_FIXTURE_7}", None),
+        (f"push rejected using {_FIXTURE_7}", 4000),
+        (
+            "connection reset by peer while fetching page 3 of 10 "
+            "(status=502, retry_count=2)",
+            None,
+        ),
+        (
+            f"Error 111 connecting to redis://:{_FIXTURE_16}@redis-broker.internal:6379/0.",
+            2000,
+        ),
+        ("x" * 10_000, 4000),
+        ("x" * 10_000, None),
+    ],
+)
+def test_sanitize_error_text_is_idempotent(raw, max_length):
+    once = sanitize_error_text(raw, max_length=max_length)
+    twice = sanitize_error_text(once, max_length=max_length)
+    assert twice == once

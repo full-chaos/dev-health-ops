@@ -164,6 +164,50 @@ def test_enabled_sources_and_enabled_datasets_fan_out_to_units(db_session):
     assert discovery.org_id == ORG_ID
 
 
+def test_planner_stamps_single_credential_per_run(db_session):
+    """CHAOS-2755: plan_sync_run stamps credential_id + fingerprint + auth_source
+    ONCE on the SyncRun, and neither PlannedUnit nor SyncRunUnit gains a
+    credential field (credentials are auth state, never dispatch capacity)."""
+    import dataclasses
+
+    from dev_health_ops.credentials.fingerprint import AUTH_SOURCE_ENVIRONMENT
+    from dev_health_ops.sync.planner import PlannedUnit
+
+    integration = _create_integration(db_session)  # env auth (credential_id=None)
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_source(db_session, integration, external_id="full-chaos/dev-health-web")
+    _create_dataset(db_session, integration, "commits")
+    _create_dataset(db_session, integration, "prs")
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    sync_run = db_session.get(SyncRun, plan.sync_run_id)
+    assert sync_run is not None
+    # Stamped exactly once, on the run.
+    assert sync_run.auth_source == AUTH_SOURCE_ENVIRONMENT
+    assert sync_run.credential_id is None  # environment auth
+    assert isinstance(sync_run.credential_fingerprint, str)
+    assert len(sync_run.credential_fingerprint) == 64  # sha256 hex digest
+
+    # The run-level columns exist ONLY on sync_runs, never on sync_run_units.
+    unit_columns = set(SyncRunUnit.__table__.columns.keys())
+    assert "credential_id" not in unit_columns
+    assert "credential_fingerprint" not in unit_columns
+    assert "auth_source" not in unit_columns
+
+    # PlannedUnit likewise carries no credential field.
+    planned_fields = {f.name for f in dataclasses.fields(PlannedUnit)}
+    assert not any("credential" in name for name in planned_fields)
+
+
 def test_unsupported_provider_dataset_pairs_are_skipped(db_session):
     integration = _create_integration(db_session, provider="jira")
     _create_source(db_session, integration, external_id="jira-project", provider="jira")

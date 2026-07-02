@@ -33,9 +33,11 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
+from dev_health_ops.core.encryption import encrypt_value
 from dev_health_ops.models import (
     Base,
     Integration,
+    IntegrationCredential,
     IntegrationDataset,
     IntegrationSource,
     SyncRun,
@@ -311,18 +313,43 @@ def test_sync_run_unit_model_has_no_credential_column() -> None:
 # --- Behavior guards ----------------------------------------------------------
 
 
-def test_plan_sync_run_identical_under_credential_swap(db_session: Session) -> None:
+def test_plan_sync_run_identical_under_credential_swap(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Planning is credential-blind: swapping the integration's credential
     yields byte-identical units (count, datasets, windows, cost).
 
     Backfill mode with explicit ``since``/``before`` keeps windows deterministic
     (chunker-derived, wall-clock-independent) so equality is not flaky.
-    """
 
-    credential_a = uuid.uuid4()
-    credential_b = uuid.uuid4()
+    Both credentials are REAL active rows: since CHAOS-2755 the planner stamps
+    the run's auth at plan time and fail-fasts on a missing/inactive credential,
+    so a dangling UUID would abort planning — that fail-fast has its own test;
+    THIS invariant is about unit shapes being identical across valid swaps.
+    """
+    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", "test-capacity-invariants-secret")
+    org = str(uuid.uuid4())
+
+    def _make_credential(name: str, token: str) -> IntegrationCredential:
+        credential = IntegrationCredential(
+            provider="github",
+            name=name,
+            org_id=org,
+            credentials_encrypted=encrypt_value(json.dumps({"token": token})),
+            config={},
+            is_active=True,
+        )
+        db_session.add(credential)
+        db_session.flush()
+        return credential
+
+    credential_a = _make_credential("primary", "tok-A").id
+    credential_b = _make_credential("secondary", "tok-B").id
     integration, _source = _seed_github_integration(
-        db_session, credential_id=credential_a, dataset_keys=("commits", "prs")
+        db_session,
+        org_id=org,
+        credential_id=credential_a,
+        dataset_keys=("commits", "prs"),
     )
 
     plan_a = plan_sync_run(db_session, _backfill_request(integration))

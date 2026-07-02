@@ -84,8 +84,57 @@ The ⚠️ cells are the work this epic removes. GitHub/GitLab already solved th
 - **ClickHouse idempotency.** Reference reads and collapsed/scoped writes stay idempotent (`teams FINAL`, `sprints FINAL`).
 - **No Postgres team/identity attribution.** Reference data is read from ClickHouse, never a Postgres attribution bridge.
 
+## Run auth freeze (CHAOS-2755)
+
+A sync run's auth is **resolved once, at plan time, and frozen for the whole run.**
+Before this, credentials were re-resolved from the *mutable*
+`Integration.credential_id` at four independent points — reference discovery
+(`_load_discovery_context`), the three BudgetGuard passes (`observe_run`,
+`enforce_run`, `_active_budget_consumption`), and unit execution (`run_sync_unit`) —
+so a credential edit *mid-run* could split one run across two identities
+(mixed-auth). Freezing makes a run's auth **deterministic**.
+
+**How it is stamped.** `plan_sync_run` resolves the credential immediately after
+loading the integration and stamps three RUN-level columns on `sync_runs`:
+
+| Column | Meaning |
+| ------ | ------- |
+| `credential_id` | The credential UUID resolved at plan time. **Plain UUID, no foreign key** — deleting a stamped credential mid-run is deliberately not blocked; it surfaces as the existing "Credential not found" unit failure. `NULL` for environment auth. |
+| `credential_fingerprint` | A **safe-scope content witness** (`credentials/fingerprint.py`): a SHA-256 digest over non-secret identifiers plus per-secret SHA-256 markers. Never a raw secret, and deliberately **not** the full-payload runtime-cache hash (`sync_bootstrap._credential_fingerprint`). |
+| `auth_source` | `integration_credential` \| `environment`. **`NULL` marks a legacy / pre-migration / in-flight-at-deploy run** that was never stamped and falls back to the mutable resolution path. |
+
+**How it is read.** Every later phase resolves auth through
+`sync_bootstrap.resolve_run_auth(run, integration, …)`, which is the single choke
+point behind `SyncTaskBootstrap.load` (so BudgetGuard and `run_sync_unit` inherit
+it) and is called directly by reference discovery. When `auth_source` is non-NULL
+it uses the run-stamped credential; when `NULL` it falls back to today's
+`Integration.credential_id` path so runs already in flight at deploy keep working.
+
+**Deliberate asymmetries (this is what "freezing" means):**
+
+- **`is_active` is enforced at plan-time stamping ONLY.** A run stamped against an
+  active credential tolerates that credential being *deactivated* mid-run — the
+  run finishes on the frozen credential. There is intentionally no bootstrap-time
+  `is_active` check.
+- **In-place secret edit (fingerprint mismatch).** If a credential's *secret bytes*
+  change mid-run (same id, rotated token), the recomputed fingerprint no longer
+  matches the stamp. Default behavior is **warn-and-continue** with the new secret
+  (rotation-to-fix-a-bad-token is the common legitimate edit); set
+  **`SYNC_RUN_AUTH_STRICT`** (`1`/`true`/`yes`/`on`) to hard-fail such units
+  non-retryably during rollout.
+
+**Capacity invariant (binding).** Run-level stamping is for **determinism only**.
+No credential field is added to `PlannedUnit` or `SyncRunUnit`, and
+`RuntimeCacheKey` is byte-unchanged. Credentials are auth state, **never** dispatch
+capacity — changing or rotating credentials must never increase sync dispatch
+capacity.
+
+**Migration.** Alembic `0030` adds the three nullable `sync_runs` columns using the
+retry-safe guarded-column pattern (revision `0022`).
+
 ## References
 
 - Epic: CHAOS-2719 (sync unit model); children CHAOS-2718 (Linear reference re-fetch), CHAOS-2720 (GitHub source fan-out), CHAOS-2721 (work-item-family fan-in), CHAOS-2722 (window-aware budget), CHAOS-2725 (scoped backfill).
+- Run auth freeze: CHAOS-2755 (parent CHAOS-2742 — harden sync budget / rate-limit without credential capacity).
 - Related: [Durable Dispatch Outbox](dispatch-outbox.md), [Data Pipeline](data-pipeline.md), [Team Attribution](team-attribution.md), [Connector Inventory](../ops/connector-inventory.md).
 - Rate limits & budget: [Provider Rate-Limit Policy](../providers/rate-limit-policy.md) — per-provider quota dimensions/headers/retry semantics, the credentials-are-not-capacity invariant, and how work-item units reserve budget by route family before dispatch.

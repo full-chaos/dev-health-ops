@@ -15,11 +15,14 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Annotated
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, Request, Response
 from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from dev_health_ops.api.dependencies import get_postgres_session_dep
 from dev_health_ops.api.middleware.rate_limit import (
     INGEST_BATCH_LIMIT,
     INGEST_READ_LIMIT,
@@ -28,6 +31,7 @@ from dev_health_ops.api.middleware.rate_limit import (
     get_ingest_token_key,
     limiter,
 )
+from dev_health_ops.external_ingest.payload_store import delete_payload, upsert_payload
 from dev_health_ops.external_ingest.validate import validate_records
 
 from .auth import IngestAuthContext, require_ingest_scope, require_matching_source
@@ -245,6 +249,7 @@ async def validate_batch(
 @limiter.limit(INGEST_BATCH_LIMIT, key_func=get_ingest_token_key)
 async def accept_batch(
     request: Request,
+    session: Annotated[AsyncSession, Depends(get_postgres_session_dep)],
     ctx: IngestAuthContext = Depends(_require_ingest_write),
     idempotency_key_header: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> BatchAcceptedResponse:
@@ -263,20 +268,54 @@ async def accept_batch(
 
     ingestion_id = str(uuid4())
     window = envelope.window
+
+    # Persist the raw payload BEFORE enqueueing the pointer (D2/CC9): the
+    # stream entry never carries payload bytes, so a worker fetching by
+    # ingestion_id must always find a durable row. Committed here, ahead of
+    # enqueue_batch()'s own fail-closed payload-durability check (streams.py)
+    # -- that check opens an independent read after this commit, so it must
+    # already be visible. This is the interim (pre-CHAOS-2695) accept flow:
+    # no idempotency/ownership resolution or status-row write yet (CHAOS-2695
+    # wave 4 owns that full CC22 rewrite) -- adding only the payload
+    # persistence this issue (CHAOS-2693) owns.
+    await upsert_payload(
+        session,
+        ingestion_id=ingestion_id,
+        org_id=ctx.org_id,
+        schema_version=envelope.schema_version,
+        payload_bytes=raw,
+    )
+    await session.commit()
+
     try:
-        stream = enqueue_batch(
+        stream = await enqueue_batch(
             org_id=ctx.org_id,
             ingestion_id=ingestion_id,
             source_system=envelope.source.system,
             source_instance=envelope.source.instance,
             schema_version=envelope.schema_version,
             idempotency_key=envelope.idempotency_key,
-            payload_json=raw.decode("utf-8"),
             record_count=len(envelope.records),
             window_started_at=window.started_at if window else None,
             window_ended_at=window.ended_at if window else None,
         )
     except StreamUnavailableError as exc:
+        # Adversarial-review round-2: without cleanup, every customer retry of
+        # a 503 leaves another committed multi-MB payload row behind (each
+        # accept mints a fresh ingestion_id in this interim flow, so nothing
+        # ever reuses or prunes them). Best-effort delete keeps "payload row
+        # exists" ~equivalent to "a pointer may exist". Residual orphans from
+        # a crash between commit and enqueue remain possible -- the
+        # CHAOS-2769 reconciler / CHAOS-2695 status rows are the systematic
+        # answer; a failed delete here must never mask the customer-facing
+        # 503.
+        try:
+            await delete_payload(session, ingestion_id=ingestion_id)
+            await session.commit()
+        except Exception:
+            logger.exception(
+                "orphan payload cleanup failed for ingestion_id=%s", ingestion_id
+            )
         raise ExternalIngestError(
             503, "stream_unavailable", "Ingest stream unavailable"
         ) from exc

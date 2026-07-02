@@ -1,3 +1,4 @@
+import dev_health_ops.workers.external_ingest_recompute  # noqa: F401
 from dev_health_ops.workers.external_ingest_reconciler import (
     prune_external_ingest_batches,
 )
@@ -33,9 +34,11 @@ from dev_health_ops.workers.sync_units import (
     run_sync_unit,
 )
 from dev_health_ops.workers.system_tasks import (
+    external_ingest_stream_health,
     health_check,
     phone_home_heartbeat,
     process_webhook_event,
+    run_external_ingest_consumer,
     run_ingest_consumer,
     run_product_telemetry_consumer,
     send_billing_notification,
@@ -73,6 +76,7 @@ __all__ = [
     "dispatch_scheduled_syncs",
     "dispatch_sync_run",
     "execute_saved_report",
+    "external_ingest_stream_health",
     "health_check",
     "monitor_queue_depths",
     "phone_home_heartbeat",
@@ -87,6 +91,7 @@ __all__ = [
     "run_daily_metrics_batch",
     "run_daily_metrics_finalize_task",
     "run_dora_metrics",
+    "run_external_ingest_consumer",
     "run_ingest_consumer",
     "run_investment_materialize",
     "run_investment_materialize_chunk",

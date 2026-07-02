@@ -282,6 +282,20 @@ services:
     container_name: worker-ingest
     command: -A dev_health_ops.workers.celery_app worker --loglevel=info --disable-prefetch -Q ingest --concurrency=1
 
+  # CHAOS-2693 D8/master-spec CC11: dedicated queue/container, not folded
+  # into worker-ingest -- external-ingest is customer-facing (spiky,
+  # potentially larger batches) and must not share throughput with an
+  # unrelated internal consumer backlog, nor vice versa.
+  # DEPLOYMENT INVARIANT: exactly ONE replica at --concurrency=1. The
+  # reclaim/redelivery design (StreamConsumer.enable_reclaim,
+  # reclaim_idle_ms=900_000) assumes a single logical consumer identity
+  # draining the PEL; scaling replicas requires revisiting reclaim
+  # semantics first. tests/test_compose_config.py asserts this flag shape.
+  worker-external-ingest:
+    <<: *worker-base
+    container_name: worker-external-ingest
+    command: -A dev_health_ops.workers.celery_app worker --loglevel=info --disable-prefetch -Q external-ingest --concurrency=1
+
   worker-heavy:
     <<: *worker-base
     container_name: worker-heavy

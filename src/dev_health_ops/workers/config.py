@@ -47,6 +47,13 @@ late_ack_excluded_tasks = (
     "dev_health_ops.workers.system_ops.send_billing_notification",
     "dev_health_ops.workers.tasks.run_ingest_consumer",
     "dev_health_ops.workers.tasks.run_product_telemetry_consumer",
+    "dev_health_ops.workers.tasks.run_external_ingest_consumer",
+    # CHAOS-2699's debounced recompute flush task (master-spec CC20; see the
+    # INTEGRATOR TODO atop workers/external_ingest_recompute.py). Valkey's
+    # SETNX debounce guard is the durability/dedup layer here, not Celery's
+    # acks-late redelivery -- reuses the existing `default` queue, no
+    # task_queues/compose change needed.
+    "dev_health_ops.workers.tasks.flush_external_ingest_recompute",
 )
 task_annotations = {
     task_name: {"acks_late": False, "reject_on_worker_lost": False}
@@ -110,6 +117,13 @@ task_queues: dict[str, dict[str, Any]] = {
     "backfill": {},
     "webhooks": {},
     "ingest": {},
+    # Dedicated queue (CHAOS-2693 D8), not the shared `ingest` queue:
+    # external-ingest is customer-facing, potentially spiky/large-batch, and
+    # must not have its processing throughput hostage to an unrelated
+    # internal consumer backlog (nor vice versa). Consumed by the dedicated
+    # `worker-external-ingest` container (compose.yml), single replica at
+    # --concurrency=1 (master-spec CC11 deployment invariant).
+    "external-ingest": {},
     "reports": {},
     "scheduler": {},
     # Dedicated telemetry queue: monitor_queue_depths must not share a queue
@@ -202,6 +216,23 @@ beat_schedule = {
         "schedule": stream_consumer_schedule_seconds,
         "kwargs": {"max_iterations": stream_consumer_max_iterations},
         "options": {"queue": "ingest", "expires": stream_consumer_expires_seconds},
+    },
+    "process-external-ingest-streams": {
+        "task": "dev_health_ops.workers.tasks.run_external_ingest_consumer",
+        "schedule": stream_consumer_schedule_seconds,
+        "kwargs": {"max_iterations": stream_consumer_max_iterations},
+        "options": {
+            "queue": "external-ingest",
+            "expires": stream_consumer_expires_seconds,
+        },
+    },
+    "external-ingest-stream-health": {
+        "task": "dev_health_ops.workers.tasks.external_ingest_stream_health",
+        "schedule": 60.0,
+        # Dedicated `monitoring` queue (matches monitor-queue-depths):
+        # telemetry must keep flowing even when `external-ingest` itself
+        # backs up -- that is exactly when it is needed.
+        "options": {"queue": "monitoring"},
     },
     "phone-home-heartbeat": {
         "task": "dev_health_ops.workers.tasks.phone_home_heartbeat",

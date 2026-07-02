@@ -87,6 +87,221 @@ class TestWorkGraphBuilder:
             fake_sink.close.assert_called_once()
 
 
+class TestDependencyIssuePrLinks:
+    def test_linear_attachment_derives_issue_pr_fast_path_link(self):
+        repo_id = uuid.uuid4()
+        synced_at = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
+
+        fake_sink = MagicMock()
+        fake_sink.backend_type = "clickhouse"
+        fake_sink.write_work_graph_issue_pr = MagicMock()
+
+        def mock_query(query, params):
+            if "work_item_dependencies" in query:
+                return [
+                    {
+                        "org_id": "org-a",
+                        "source_work_item_id": "ghpr:full-chaos/dev-health-ops#968",
+                        "target_work_item_id": "linear:CHAOS-2400",
+                        "relationship_type_raw": "linear_attachment",
+                        "last_synced": synced_at,
+                    }
+                ]
+            if "FROM repos" in query:
+                return [
+                    {
+                        "org_id": "org-a",
+                        "id": repo_id,
+                        "repo": "full-chaos/dev-health-ops",
+                    }
+                ]
+            if "git_pull_requests" in query:
+                return [
+                    {
+                        "org_id": "org-a",
+                        "repo_id": repo_id,
+                        "number": 968,
+                        "created_at": synced_at,
+                    }
+                ]
+            if "work_items" in query:
+                return [{"org_id": "org-a", "work_item_id": "linear:CHAOS-2400"}]
+            return []
+
+        fake_sink.query_dicts.side_effect = mock_query
+
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default", org_id="org-a")
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            count = builder._derive_issue_pr_links_from_dependencies()
+            builder.close()
+
+        assert count == 1
+        records = fake_sink.write_work_graph_issue_pr.call_args[0][0]
+        assert len(records) == 1
+        record = records[0]
+        assert record.repo_id == repo_id
+        assert record.work_item_id == "linear:CHAOS-2400"
+        assert record.pr_number == 968
+        assert record.provenance == "native"
+        assert record.confidence == 1.0
+        assert record.evidence == "linear_attachment"
+        assert record.org_id == "org-a"
+
+    def test_pr_attachment_dependency_is_not_written_as_issue_issue_edge(self):
+        fake_sink = MagicMock()
+        fake_sink.backend_type = "clickhouse"
+        fake_sink.write_work_graph_edges = MagicMock()
+        fake_sink.query_dicts.return_value = [
+            {
+                "source_work_item_id": "ghpr:full-chaos/dev-health-ops#968",
+                "target_work_item_id": "linear:CHAOS-2400",
+                "relationship_type": "relates_to",
+                "relationship_type_raw": "linear_attachment",
+                "last_synced": datetime(2026, 7, 1, tzinfo=timezone.utc),
+            }
+        ]
+
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default")
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            count = builder._build_issue_issue_edges()
+            builder.close()
+
+        assert count == 0
+        fake_sink.write_work_graph_edges.assert_not_called()
+
+    def test_regular_dependency_still_writes_issue_issue_edge(self):
+        fake_sink = MagicMock()
+        fake_sink.backend_type = "clickhouse"
+        fake_sink.write_work_graph_edges = MagicMock()
+        fake_sink.query_dicts.return_value = [
+            {
+                "source_work_item_id": "linear:CHAOS-2400",
+                "target_work_item_id": "linear:CHAOS-2401",
+                "relationship_type": "blocks",
+                "relationship_type_raw": "blocks",
+                "last_synced": datetime(2026, 7, 1, tzinfo=timezone.utc),
+            }
+        ]
+
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default")
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            count = builder._build_issue_issue_edges()
+            builder.close()
+
+        assert count == 1
+        fake_sink.write_work_graph_edges.assert_called_once()
+        edge = fake_sink.write_work_graph_edges.call_args[0][0][0]
+        assert edge.source_type == "issue"
+        assert edge.source_id == "linear:CHAOS-2400"
+        assert edge.target_type == "issue"
+        assert edge.target_id == "linear:CHAOS-2401"
+        assert edge.edge_type == "blocks"
+
+    def test_stale_pr_dependency_issue_edge_cleanup_is_scoped(self):
+        fake_sink = MagicMock()
+        fake_sink.backend_type = "clickhouse"
+        fake_sink.client = MagicMock()
+
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default", org_id="org-a")
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            builder._delete_stale_pr_dependency_issue_edges()
+            builder.close()
+
+        sql = fake_sink.client.command.call_args.args[0]
+        params = fake_sink.client.command.call_args.kwargs["parameters"]
+        assert "ALTER TABLE work_graph_edges DELETE WHERE" in sql
+        assert "source_type = 'issue'" in sql
+        assert "target_type = 'issue'" in sql
+        assert "evidence = 'linear_attachment'" in sql
+        assert "github_comment_linear_url" not in sql
+        assert "startsWith(source_id, 'ghpr:')" in sql
+        assert "startsWith(source_id, 'gitlab:')" in sql
+        assert "startsWith(target_id, 'linear:')" in sql
+        assert "org_id = {org_id:String}" in sql
+        assert params == {"org_id": "org-a"}
+
+    def test_generic_pr_shaped_dependency_does_not_derive_issue_pr_link(self):
+        repo_id = uuid.uuid4()
+        fake_sink = MagicMock()
+        fake_sink.backend_type = "clickhouse"
+        fake_sink.write_work_graph_issue_pr = MagicMock()
+
+        def mock_query(query, params):
+            if "work_item_dependencies" in query:
+                return [
+                    {
+                        "org_id": "org-a",
+                        "source_work_item_id": "ghpr:full-chaos/dev-health-ops#10",
+                        "target_work_item_id": "gh:full-chaos/dev-health-ops#123",
+                        "relationship_type_raw": "blocks",
+                        "last_synced": datetime(2026, 7, 1, tzinfo=timezone.utc),
+                    }
+                ]
+            if "FROM repos" in query:
+                return [
+                    {
+                        "org_id": "org-a",
+                        "id": repo_id,
+                        "repo": "full-chaos/dev-health-ops",
+                    }
+                ]
+            if "git_pull_requests" in query:
+                return [{"org_id": "org-a", "repo_id": repo_id, "number": 10}]
+            if "work_items" in query:
+                return [
+                    {
+                        "org_id": "org-a",
+                        "work_item_id": "gh:full-chaos/dev-health-ops#123",
+                    }
+                ]
+            return []
+
+        fake_sink.query_dicts.side_effect = mock_query
+
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default", org_id="org-a")
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            count = builder._derive_issue_pr_links_from_dependencies()
+            builder.close()
+
+        assert count == 0
+        fake_sink.write_work_graph_issue_pr.assert_not_called()
+
+    def test_dependency_derivation_skips_unscoped_builds(self):
+        fake_sink = MagicMock()
+        fake_sink.backend_type = "clickhouse"
+        fake_sink.query_dicts = MagicMock()
+        fake_sink.write_work_graph_issue_pr = MagicMock()
+
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default")
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            count = builder._derive_issue_pr_links_from_dependencies()
+            builder._delete_stale_pr_dependency_issue_edges()
+            builder.close()
+
+        assert count == 0
+        fake_sink.query_dicts.assert_not_called()
+        fake_sink.write_work_graph_issue_pr.assert_not_called()
+        fake_sink.client.command.assert_not_called()
+
+
 class TestHeuristicMatching:
     """Tests for heuristic issue->PR matching with binary search optimization."""
 
@@ -707,7 +922,36 @@ class TestFastPathTenantIsolation:
         normalized = " ".join(sql.split())
         # Both join sides must be org-scoped together.
         assert "toString(p.org_id) = toString(c.org_id)" in normalized
+        assert "work_graph_pr_commit AS p FINAL" in normalized
+        assert "git_commits AS c FINAL" in normalized
         # The selected org is still pinned via the WHERE filter.
+        assert "p.org_id = 'org-a'" in normalized
+
+    def test_issue_pr_fast_path_uses_final_and_scopes_prs_by_org(self):
+        captured: dict[str, str] = {}
+
+        def mock_query(query, params):
+            if "work_graph_issue_pr AS p" in query:
+                captured["query"] = query
+            return []
+
+        fake_sink = MagicMock()
+        fake_sink.backend_type = "clickhouse"
+        fake_sink.query_dicts.side_effect = mock_query
+
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default", org_id="org-a")
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            builder._build_issue_pr_edges_from_fast_path()
+            builder.close()
+
+        sql = captured["query"]
+        normalized = " ".join(sql.split())
+        assert "work_graph_issue_pr AS p FINAL" in normalized
+        assert "git_pull_requests AS pr FINAL" in normalized
+        assert "toString(p.org_id) = toString(pr.org_id)" in normalized
         assert "p.org_id = 'org-a'" in normalized
 
     def test_cross_tenant_commit_collision_is_excluded(self):

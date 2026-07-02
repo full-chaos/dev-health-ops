@@ -49,6 +49,7 @@ Drains emit two keys on `ProviderBatch.observations` / the unit-result
 | GitLab | REST | `GitLabProvider.ingest` **and** `metrics.work_items.fetch_gitlab_work_items` (the live worker path) |
 | Jira | REST | `JiraProvider.ingest` (legacy + atlassian paths) and the `job_work_items` client drain |
 | Linear | GraphQL | `LinearClient` per-POST counting (`X-RateLimit-Requests-*` capture) drained via `job_work_items` |
+| LaunchDarkly | REST | `_sync_launchdarkly_feature_flags` (CHAOS-2761): `LaunchDarklyClient` (flags, audit_log) + `LaunchDarklyCodeReferencesClient` (code_refs), both drained into `provider_usage` |
 
 Failure preservation: work-item clients are built per sync unit (unit-scoped,
 safe to instrument). `run_work_items_sync_job` accumulates observations
@@ -71,17 +72,23 @@ attribution would require richer operation labels at the client call sites.
 
 ## Out-of-scope actuals gaps (documented, not fixed here)
 
-1. **LaunchDarkly actuals.** LaunchDarkly flag/audit-log fetches still live in
-   the frozen `connectors/` path (see
-   [`launchdarkly-sync-budgeting.md`](launchdarkly-sync-budgeting.md)), which
-   forbids new code. No recorder is wired there. Actuals capture must wait for
-   the canonical-provider migration that moves LaunchDarkly raw fetch under
-   `providers/launchdarkly/`.
-2. **Code-dataset actuals.** The GitHub code datasets (`commits`, `files`,
-   `blame`, `cicd`, `tests`, `deployments`, `security`) run through
-   `processors/dataset_adapters._run_github_dataset`, which uses a shared/reused
-   store rather than an instrumented per-unit work client. Their budget families
-   (`git`, `commit_stats`, `files`, `blame`, `cicd`, `tests`, `deployments`,
-   `security`) are declared in the GitHub usage registry for coverage but carry
-   no operation markers. Instrumenting them needs a recorder threaded through
-   the dataset store and is deferred to a follow-up.
+1. **Code-dataset actuals.** The GitHub/GitLab code datasets (`commits`,
+   `files`, `blame`, `cicd`, `tests`, `deployments`, `security`) run through
+   `processors/dataset_adapters._run_github_dataset` / `_run_gitlab_dataset`,
+   which use a shared/reused store rather than an instrumented per-unit work
+   client — they still fetch through the frozen `connectors/github.py`
+   (PyGithub-based) / `connectors/gitlab.py` (python-gitlab-based) connectors.
+   Their budget families (`git`, `commit_stats`, `files`, `blame`, `cicd`,
+   `tests`, `deployments`, `security`) are declared in the GitHub/GitLab usage
+   registries for coverage but carry no operation markers. Instrumenting them
+   needs a canonical-provider migration off PyGithub/python-gitlab (much
+   larger than a follow-up-ticket-sized change — see [Provider Rate-Limit
+   Policy — Known gaps](../providers/rate-limit-policy.md#known-gaps)) and is
+   deferred to its own tracked effort.
+
+> **Resolved (CHAOS-2761):** LaunchDarkly flag/audit-log actuals — previously
+> gap #1 here, blocked on the frozen `connectors/launchdarkly.py` path — are
+> now instrumented. `flags`/`audit_log` moved to the canonical
+> `providers/launchdarkly/client.py::LaunchDarklyClient`, and the pre-existing
+> canonical `code_refs.py` client was wired to the same shared recorder. See
+> [LaunchDarkly sync budgeting](launchdarkly-sync-budgeting.md).

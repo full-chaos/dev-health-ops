@@ -17,6 +17,7 @@ from dev_health_ops.connectors.exceptions import (
     RateLimitException,
 )
 from dev_health_ops.metrics.schemas import FeatureFlagLinkRecord
+from dev_health_ops.providers.usage import UsageRecorder
 from dev_health_ops.sync.budget_types import BudgetDimension
 from dev_health_ops.sync.rate_limit_signal import RateLimitSignal
 from dev_health_ops.work_graph.ids import generate_feature_flag_id, generate_file_id
@@ -32,6 +33,21 @@ def _response_host(response: httpx.Response) -> str | None:
 
 _BASE_URL = "https://app.launchdarkly.com/api/v2"
 LD_CODE_REFERENCE_CONFIDENCE = 0.95
+
+# Response headers worth recording to diagnose throttling (never the token).
+_DIAGNOSTIC_HEADER_NAMES = (
+    "x-ratelimit-route-remaining",
+    "x-ratelimit-reset",
+    "retry-after",
+)
+
+
+def _diagnostic_headers(headers: object) -> dict[str, str]:
+    get_items = getattr(headers, "items", None)
+    if get_items is None:
+        return {}
+    lowered = {str(k).lower(): str(v) for k, v in get_items()}
+    return {name: lowered[name] for name in _DIAGNOSTIC_HEADER_NAMES if name in lowered}
 
 
 @dataclass(frozen=True)
@@ -87,12 +103,19 @@ def _normalize_path(path: str, branch_name: str) -> str:
 
 
 def _raise_for_status(response: httpx.Response) -> None:
+    # Deferred import mirrors the budget-resolver imports below: avoids a
+    # module-load-order cycle with providers/launchdarkly/client.py (CHAOS-2761
+    # review finding -- share the canonical Retry-After parser instead of
+    # re-copying an unguarded `float(...)` that raises on an HTTP-date or
+    # malformed header, which would escape this function entirely and never
+    # produce a `RateLimitException` at all).
+    from dev_health_ops.providers.launchdarkly.client import _parse_retry_after
+
     status = response.status_code
     if status == 401:
         raise AuthenticationException("LaunchDarkly authentication failed")
     if status == 429:
-        retry_after_raw = response.headers.get("Retry-After")
-        retry_after = float(retry_after_raw) if retry_after_raw else None
+        retry_after = _parse_retry_after(response)
         raise RateLimitException(
             "LaunchDarkly rate limit exceeded",
             retry_after_seconds=retry_after,
@@ -141,6 +164,15 @@ class LaunchDarklyCodeReferencesClient:
         self.max_retries = max_retries
         self._client: httpx.AsyncClient | None = None
 
+        # Deferred import mirrors providers/github/client.py + providers/jira/
+        # client.py: budget.py is the source of truth for the route-family
+        # vocabulary, imported lazily to avoid a module-load-order cycle.
+        from dev_health_ops.providers.launchdarkly.budget import (
+            LAUNCHDARKLY_USAGE_RESOLVER,
+        )
+
+        self._usage = UsageRecorder(resolver=LAUNCHDARKLY_USAGE_RESOLVER)
+
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
@@ -157,16 +189,27 @@ class LaunchDarklyCodeReferencesClient:
         *,
         params: dict[str, Any] | None = None,
     ) -> Any:
+        # Shared with providers/launchdarkly/client.py (CHAOS-2761 review
+        # finding): a bare `float(retry_after)` raises ValueError on an
+        # HTTP-date or malformed Retry-After header, which would escape this
+        # retry loop entirely -- _parse_retry_after returns None instead, so
+        # the exponential-backoff `delay` fallback below always applies.
+        from dev_health_ops.providers.launchdarkly.client import _parse_retry_after
+
         client = await self._get_client()
         delay = 1.0
         last_exc: Exception | None = None
         for attempt in range(self.max_retries):
             try:
                 response = await client.request(method, path, params=params)
+                self._record_rest_usage(
+                    f"{method} {path}",
+                    headers=response.headers,
+                    status=response.status_code,
+                )
                 if response.status_code == 429 or response.status_code >= 500:
                     if attempt < self.max_retries - 1:
-                        retry_after = response.headers.get("Retry-After")
-                        wait_seconds = float(retry_after) if retry_after else delay
+                        wait_seconds = _parse_retry_after(response) or delay
                         logger.warning(
                             "LaunchDarkly %d on %s (attempt %d/%d), retrying in %.1fs",
                             response.status_code,
@@ -190,6 +233,58 @@ class LaunchDarklyCodeReferencesClient:
                     f"LaunchDarkly code references request failed: {exc}"
                 ) from exc
         raise APIException("LaunchDarkly code references request failed") from last_exc
+
+    # ------------------------------------------------------------------
+    # Usage recording (CHAOS-2754 / CHAOS-2761)
+    # ------------------------------------------------------------------
+
+    def _record_usage_observation(
+        self,
+        *,
+        transport: str,
+        operation: str,
+        headers: dict[str, str],
+        rate_limit: dict[str, Any],
+        status: int | None = None,
+    ) -> None:
+        # Aggregation/keying by route_family lives in the shared recorder
+        # (CHAOS-2754); this client only owns the header extraction below.
+        self._usage.record(
+            transport=transport,
+            operation=operation,
+            headers=headers,
+            rate_limit=rate_limit,
+            status=status,
+        )
+
+    def _record_rest_usage(
+        self,
+        operation: str,
+        *,
+        headers: object | None = None,
+        status: int | None = None,
+    ) -> None:
+        safe_headers = _diagnostic_headers(headers or {})
+        rate_limit: dict[str, Any] = {}
+        remaining = safe_headers.get("x-ratelimit-route-remaining")
+        reset = safe_headers.get("x-ratelimit-reset")
+        retry_after = safe_headers.get("retry-after")
+        if remaining is not None:
+            rate_limit["remaining"] = remaining
+        if reset is not None:
+            rate_limit["reset"] = reset
+        if retry_after is not None:
+            rate_limit["retry_after"] = retry_after
+        self._record_usage_observation(
+            transport="rest",
+            operation=operation,
+            headers=safe_headers,
+            rate_limit=rate_limit,
+            status=status,
+        )
+
+    def drain_usage_observations(self) -> list[dict[str, Any]]:
+        return self._usage.drain()
 
     async def list_default_branch_references(
         self,

@@ -83,7 +83,8 @@ cooperating layers:
    | Jira client (JQL + enrichment) | 4 (`max_retries_429=3` → `+1` initial) | `providers/jira/client.py` |
    | Jira Atlassian REST compat | 5 (`RESTClient(max_retries=5)`) | `connectors/utils/rest.py` |
    | Linear | 5 (`DEFAULT_MAX_ATTEMPTS`) | `providers/linear/client.py` |
-   | LaunchDarkly | 5 (`max_retries=5`) | `connectors/launchdarkly.py` |
+   | LaunchDarkly (flags/audit_log) | 5 (`max_retries=5`) | `providers/launchdarkly/client.py` |
+   | LaunchDarkly (code_refs) | 5 (`max_retries=5`) | `providers/launchdarkly/code_refs.py` |
 
 2. **`RateLimitException` as the carrier.** When in-place retries are exhausted
    (or a 429/permission-vs-limit decision is made), the **canonical provider
@@ -173,7 +174,9 @@ CHAOS-2754's normalized `provider_usage` actuals, one row per
   `actual_requests`; the two are reported side by side, not blended into one
   number.
 - **A route_family/dimension with an estimate but no drained actuals this
-  run produces no row** (code datasets, an unwired LaunchDarkly family, …) —
+  run produces no row** (GitHub/GitLab code datasets still on the frozen
+  connector path, a `contents_blob`/`secondary_abuse_risk` dimension sharing
+  its single REST call with an already-recorded `rest_core` dimension, …) —
   never a fabricated 100% over-estimation.
 - **`unbudgeted_actual`** is the reverse case: actual traffic on a
   route_family/dimension with **no matching estimate at all**, including the
@@ -704,27 +707,46 @@ once beyond what DispatchGuard's concurrency cap already allows
   endpoint hard-caps pages at 20 entries. Code-reference reads carry a
   `secondary_abuse_risk` reservation in addition to `rest_core`.
 - **Headers.** `X-RateLimit-Route-Remaining` (per-route remaining budget) and
-  `Retry-After` on `429` (`connectors/launchdarkly.py`).
+  `Retry-After` on `429` (`providers/launchdarkly/client.py`,
+  `providers/launchdarkly/code_refs.py`).
 - **Retry semantics.** `429` and `5xx` are retried with exponential backoff
   (honoring `Retry-After`) up to `max_retries = 5`. On exhaustion the terminal
   type differs: a `429` raises `RateLimitException` (→ worker deferral) while a
-  `5xx` raises `APIException` (a normal failure, `connectors/launchdarkly.py`
-  `_raise_for_status`). A low `X-RateLimit-Route-Remaining` (< 5) is currently
-  only **logged as a warning**, not fed into the deferral/cooldown machinery —
-  see [Known gaps](#known-gaps).
+  `5xx` raises `APIException` (a normal failure, `providers/launchdarkly/
+  client.py` / `providers/launchdarkly/code_refs.py` `_raise_for_status`). A
+  low `X-RateLimit-Route-Remaining` (< 5) is currently only **logged as a
+  warning**, not fed into the deferral/cooldown machinery — see
+  [Known gaps](#known-gaps).
 - **Non-retryable auth cases.** `401` → `AuthenticationException`; `403` →
   `APIException` (forbidden). LaunchDarkly does **not** distinguish a
   permission-403 from a rate-limit case the way GitHub/GitLab do.
-- **Frozen path caveat.** Flag and audit-log fetches still live in the **frozen
-  legacy connector** (`connectors/launchdarkly.py`); only the code-reference
-  client, code-ref helpers, and the budget estimator are canonical under
-  `providers/launchdarkly/`. See
+- **Canonical provider migration complete (CHAOS-2761).** Flag and audit-log
+  fetches moved off the frozen legacy connector
+  (`connectors/launchdarkly.py`, left in place unused by the sync path — it
+  still backs the admin credentials "test connection" endpoint, which mirrors
+  the same raw/legacy-client pattern already used there for Jira/Linear
+  connectivity checks and carries no actuals-instrumentation gap) into
+  `providers/launchdarkly/client.py::LaunchDarklyClient`, mirroring the
+  request/retry semantics byte-for-byte (parity pinned by
+  `tests/test_rate_limit_signal.py::test_launchdarkly_403_is_authentication_error`).
+  Combined with the pre-existing canonical `providers/launchdarkly/code_refs.py`,
+  all of `providers/launchdarkly/` is now canonical. See
   [LaunchDarkly sync budgeting](../architecture/launchdarkly-sync-budgeting.md).
+- **Actuals instrumentation (CHAOS-2761).** All 3 currently-emitted route
+  families (`flags`, `audit_log`, `code_refs`) now record real per-request
+  counts through the shared CHAOS-2754 recorder
+  (`LAUNCHDARKLY_USAGE_RESOLVER` in `providers/launchdarkly/budget.py`), so
+  LaunchDarkly units produce a `budget_comparison` row like GitHub/GitLab/
+  Jira/Linear work-item units already did. `code_refs`' `secondary_abuse_risk`
+  reservation shares its single REST call with the `rest_core` reservation, so
+  only `rest_core` ever gets a live actual (same one-call/two-dimension shape
+  as GitHub's `commit_stats`/`files`/`blame` `contents_blob` entries).
 - **Documented vs. emitted families.** The estimator currently emits `flags`,
   `audit_log`, and `code_refs`. `projects`, `segments`, and `members` are
   **modeled route families** (`LAUNCHDARKLY_BUDGET_ROUTE_FAMILIES` in
   `providers/launchdarkly/budget.py`) that the current `feature-flags` estimator
-  does not yet reserve; they are documented here for completeness.
+  does not yet reserve, and no client fetches yet; they are documented here for
+  completeness.
 
 #### Route families
 <!-- route-families:launchdarkly -->
@@ -760,11 +782,21 @@ paper over:
   `connectors.base.RateLimitException` (frozen legacy connectors) — and neither
   carries a normalized `route_family` / `dimension` / `reason` / `request_id`.
   (Target: [CHAOS-2753](https://linear.app/fullchaos/issue/CHAOS-2753).)
-- **Frozen `connectors/` path.** LaunchDarkly flag/audit-log fetches and several
-  GitHub/GitLab paths remain under the frozen `connectors/` tree. No new code may
-  be added there (see [`AGENTS.md`](../../AGENTS.md)); rate-limit/actuals
+- **Frozen `connectors/` path.** GitHub's `git`/`commit_stats`/`files`/`blame`/
+  `cicd`/`tests`/`deployments`/`security` route families and the equivalent
+  GitLab code-dataset paths remain under the frozen `connectors/` tree
+  (`connectors/github.py`'s PyGithub-based `GitHubConnector`, `connectors/
+  gitlab.py`'s python-gitlab-based `GitLabConnector`). No new code may be added
+  there (see [`AGENTS.md`](../../AGENTS.md)); rate-limit/actuals
   instrumentation for those datasets lands as the fetch moves to
-  `providers/<provider>/`.
+  `providers/github/` / `providers/gitlab/` — tracked as its own
+  canonical-provider-migration effort in
+  [CHAOS-2773](https://linear.app/fullchaos/issue/CHAOS-2773), since it is a
+  much larger migration (~1400 lines per connector, off PyGithub/python-gitlab
+  entirely) than a follow-up-ticket-sized change. LaunchDarkly's equivalent
+  gap (flag/audit-log fetches on the frozen connector) was closed in
+  [CHAOS-2761](https://linear.app/fullchaos/issue/CHAOS-2761); see
+  [LaunchDarkly](#launchdarkly) above.
 
 ## Target contracts (CHAOS-2742)
 

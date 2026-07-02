@@ -1162,6 +1162,14 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     duration_seconds=duration_seconds,
                     result=result_payload,
                     error=None,
+                    # Review finding (round 3): SUCCESS ends any rate-limit
+                    # episode this unit was in -- clear the shared deferral
+                    # bookkeeping so a stale first_seen_at from an EARLIER,
+                    # resolved episode can never be misread as still-ongoing
+                    # by the cooldown gate's wall-clock-exhaustion check
+                    # (sync/budget_guard.py _rate_limit_deferral_exhausted).
+                    rate_limit_deferrals=0,
+                    rate_limit_first_seen_at=None,
                     lease_owner=None,
                     lease_expires_at=None,
                     last_heartbeat_at=completed_at,
@@ -1550,6 +1558,13 @@ def _stamp_sync_unit_soft_timeout(
                     ),
                     last_retry_reason="soft_timeout",
                     retry_exhausted_at=None,
+                    # Review finding (round 3): a soft-timeout retry is NOT a
+                    # rate-limit episode -- clear any stale
+                    # rate_limit_deferrals/first_seen_at carried over from an
+                    # earlier, resolved rate-limit episode (same reasoning as
+                    # the budget-guard deferral clear).
+                    rate_limit_deferrals=0,
+                    rate_limit_first_seen_at=None,
                     lease_owner=None,
                     lease_expires_at=None,
                     last_heartbeat_at=completed_at,

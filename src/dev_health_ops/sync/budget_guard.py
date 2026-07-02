@@ -42,6 +42,16 @@ _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION = "ambiguous_dimension"
 _RATE_LIMIT_COOLDOWN_DEFERRED_CATEGORY = "rate_limit_cooldown_deferred"
 _RATE_LIMIT_COOLDOWN_EXHAUSTED_CATEGORY = "rate_limit_cooldown_exhausted"
 
+# Defense in depth for _rate_limit_deferral_exhausted (review finding, round
+# 3): the unit's own last-recorded result.error_category must ALSO show a
+# rate-limit-related cause before the wall-clock-exhaustion check can fire.
+# 'rate_limit' mirrors the in-worker 429 path's category
+# (workers/sync_units.py's RateLimitException handler) -- duplicated for the
+# same reverse-import-cycle reason as _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION.
+_RATE_LIMIT_EPISODE_ERROR_CATEGORIES = frozenset(
+    {"rate_limit", _RATE_LIMIT_COOLDOWN_DEFERRED_CATEGORY}
+)
+
 
 @dataclass(frozen=True)
 class BudgetGuardResult:
@@ -575,6 +585,14 @@ def _defer_unit_for_budget(
                 "not_before": available_at.isoformat(),
                 "budget_guard": observations,
             },
+            # Review finding (round 3): a budget deferral is NOT a rate-limit
+            # episode -- clear any stale rate_limit_deferrals/first_seen_at
+            # this unit is carrying from an EARLIER, since-resolved
+            # rate-limit episode. Leaving them untouched here is exactly the
+            # state-lifecycle hole that let _rate_limit_deferral_exhausted
+            # (added for the cooldown gate) fire against unrelated old data.
+            rate_limit_deferrals=0,
+            rate_limit_first_seen_at=None,
             lease_owner=None,
             lease_expires_at=None,
             last_heartbeat_at=now,
@@ -585,6 +603,8 @@ def _defer_unit_for_budget(
     if int(result.rowcount or 0) > 0:
         unit.status = SyncRunUnitStatus.RETRYING.value
         unit.available_at = available_at
+        unit.rate_limit_deferrals = 0
+        unit.rate_limit_first_seen_at = None
         return True
     return False
 
@@ -804,8 +824,26 @@ def _rate_limit_deferral_exhausted(unit: SyncRunUnit, *, now: datetime) -> bool:
     fires for a unit with genuine prior rate-limit-deferral history (from
     EITHER this gate or the in-worker 429 path; they share the same
     columns).
+
+    Defense in depth (review finding, round 3): ``rate_limit_deferrals`` /
+    ``rate_limit_first_seen_at`` are cleared at every SUCCESS stamp and every
+    non-rate-limit RETRYING stamp (budget deferral, expired-lease retry,
+    soft-timeout retry) -- see the "keep or clear" audit in
+    ``docs/providers/rate-limit-policy.md`` -- so a genuinely UNRELATED
+    retry reason should never reach here with stale nonzero columns. This is
+    a SECOND, independent check in case a clear site is ever missed: it also
+    requires the unit's own MOST RECENTLY recorded ``result.error_category``
+    to be rate-limit-related. A stale row surviving a missed clear would
+    still show its last real cause (``budget_deferred``, ``worker_lost``,
+    ``soft_timeout``, ...) and be refused here regardless.
     """
     if unit.rate_limit_deferrals <= 0 and unit.rate_limit_first_seen_at is None:
+        return False
+    result = unit.result
+    error_category = (
+        result.get("error_category") if isinstance(result, Mapping) else None
+    )
+    if error_category not in _RATE_LIMIT_EPISODE_ERROR_CATEGORIES:
         return False
     return (
         plan_rate_limit_deferral(

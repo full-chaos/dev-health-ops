@@ -442,6 +442,59 @@ it terminalizes from that state alone, with or without a currently-visible
 cooldown observation
 (`test_cooldown_observation_aged_past_lookback_terminalizes_from_unit_state`).
 
+**`rate_limit_deferrals`/`rate_limit_first_seen_at` are cleared at episode
+boundaries — not left to go stale.** Checking a unit's own persisted
+deferral state directly (the belt-and-suspenders backstop above) only works
+if that state actually reflects the CURRENT episode. Review finding, round
+3: these columns were never cleared once a unit left a rate-limit episode —
+a successful claim of a due `RETRYING` unit doesn't touch them, and neither
+did any non-rate-limit retry path (expired lease, soft timeout, generic
+worker-lost retry). Sequence that broke: a unit takes one rate-limit
+deferral, is later claimed fine (the provider recovers), then loses its
+worker (lease expiry) or soft-times-out for a totally unrelated reason; once
+the stale `first_seen_at` from the OLD episode is more than
+`RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS` old, `_rate_limit_deferral_exhausted`
+would fire against it and wrongly terminalize healthy, unrelated work — a
+silent data gap. Fixed at the root: every transition to `SUCCESS` and every
+`RETRYING` stamp for a reason OTHER than a rate limit now explicitly clears
+both columns to `0`/`NULL`; only a rate-limit-caused deferral (the in-worker
+429 path, or this gate's own cooldown deferral) keeps/accumulates them,
+because that is the episode continuing. Defense in depth on top:
+`_rate_limit_deferral_exhausted` ALSO requires the unit's own
+most-recently-recorded `result.error_category` to be rate-limit-related
+(`rate_limit` or `rate_limit_cooldown_deferred`) before it can fire at all —
+a stale row that somehow survives a missed clear site still cannot
+terminalize healthy work, because its last recorded cause would show
+something else
+(`test_stale_rate_limit_columns_without_rate_limit_error_category_do_not_terminalize`).
+Gating alone would not have been sufficient as the root fix, though: a
+genuinely NEW rate-limit episode starting while a stale `first_seen_at`
+persists would still terminalize prematurely against the old clock, which
+is exactly why the clear-at-episode-boundary fix is the primary mechanism
+and the `error_category` check is the backstop, not the other way around.
+
+Every `SyncRunUnit` transition to `RETRYING` or a terminal state across
+`workers/sync_units.py`, `sync/budget_guard.py`, and
+`workers/sync_reconciler.py` was swept for an explicit keep-or-clear
+decision:
+
+| Site | Transition | Cause | Decision |
+| --- | --- | --- | --- |
+| `run_sync_unit` success stamp (`sync_units.py`) | `RUNNING`→`SUCCESS` | episode resolved | **clear** |
+| In-worker `RateLimitException` deferral (`sync_units.py`) | `RUNNING`→`RETRYING` | rate limit | **keep/accumulate** |
+| Soft-timeout retry (`_stamp_sync_unit_soft_timeout`, `sync_units.py`) | `RUNNING`→`RETRYING` | unrelated | **clear** |
+| Soft-timeout exhausted (`sync_units.py`) | `RUNNING`→`FAILED` | unrelated, terminal | leave (informational) |
+| Generic failure (`_stamp_sync_unit_failed`, `sync_units.py`) | `RUNNING`→`FAILED` | unrelated/terminal | leave (informational) |
+| Total-cap stale-dispatch fail (`sync_units.py`) | `DISPATCHING`→`FAILED` | unrelated, terminal | leave (informational) |
+| `PLANNED` claim (`_claim_units`, `sync_units.py`) | `PLANNED`→`DISPATCHING` | n/a (always fresh) | no change needed |
+| Due-`RETRYING` claim (`_claim_units`, `sync_units.py`) | `RETRYING`→`DISPATCHING` | unknown (batch claim, any prior reason) | **no change** — must NOT clear here: this fires before the attempt's outcome is known, so clearing would prematurely reset an ONGOING rate-limit episode's counter before the redispatch even runs; the correct clear point is the transition AFTER this attempt resolves (`SUCCESS`, or a specific non-rate-limit retry stamp) |
+| Lease acquire (`DISPATCHING`→`RUNNING`, `sync_units.py`) | transient | n/a | no change needed (outcome still unknown) |
+| Expired-lease retry (`sync_reconciler.py`) | `RUNNING`→`RETRYING` | unrelated | **clear** |
+| Expired-lease exhausted (`sync_reconciler.py`) | `RUNNING`→`FAILED` | unrelated, terminal | leave (informational) |
+| Budget-guard deferral (`_defer_unit_for_budget`, `budget_guard.py`) | any→`RETRYING` | unrelated (budget capacity, not a provider rate limit) | **clear** |
+| Cooldown-gate deferral (`_apply_cooldown_deferral`, `budget_guard.py`) | any→`RETRYING` | rate limit | **keep/accumulate** |
+| Wall-clock/cooldown exhaustion terminalize (`_terminalize_rate_limit_exhausted`, `budget_guard.py`) | any→`FAILED` | rate limit, terminal | leave (informational — the count that caused termination) |
+
 **Fail-open on a broken read, including a single malformed row.** Any error
 querying the observation store (migration not yet applied on a rolling
 node, transient DB error, etc.) is logged and treated as "no active

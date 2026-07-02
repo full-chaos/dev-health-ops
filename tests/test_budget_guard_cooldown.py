@@ -41,6 +41,12 @@ Covers:
     sleeping past the clamp (review finding).
   * a malformed observation row (non-finite retry_after_seconds) is skipped,
     not fatal to the whole dispatch pass (review finding).
+  * rate_limit_deferrals/rate_limit_first_seen_at are cleared at episode
+    boundaries (SUCCESS, and any non-rate-limit RETRYING stamp) so stale
+    bookkeeping from an earlier, resolved rate-limit episode can never be
+    misread as an ongoing one by the wall-clock-exhaustion check; a defense-
+    in-depth error_category gate protects against a missed clear site too
+    (review finding).
 """
 
 from __future__ import annotations
@@ -88,6 +94,7 @@ def _sibling_unit(
     status: str = SyncRunUnitStatus.PLANNED.value,
     rate_limit_deferrals: int = 0,
     rate_limit_first_seen_at: datetime | None = None,
+    result: dict | None = None,
 ) -> SyncRunUnit:
     return SyncRunUnit(
         org_id=run.org_id,
@@ -103,6 +110,7 @@ def _sibling_unit(
         processor_flags=processor_flags if processor_flags is not None else {},
         rate_limit_deferrals=rate_limit_deferrals,
         rate_limit_first_seen_at=rate_limit_first_seen_at,
+        result=result,
     )
 
 
@@ -1189,6 +1197,18 @@ def test_cooldown_observation_aged_past_lookback_terminalizes_from_unit_state(
         rate_limit_deferrals=1,
         rate_limit_first_seen_at=now
         - timedelta(seconds=RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS + 30),
+        # A genuine, still-ongoing rate-limit episode: the unit's own last
+        # recorded cause is the cooldown gate's deferral category -- this is
+        # what the round-3 defense-in-depth error_category gate on
+        # _rate_limit_deferral_exhausted requires to even consider
+        # terminalizing (a unit whose last cause was unrelated, e.g.
+        # budget_deferred, must NOT be terminalized off stale columns; see
+        # test_stale_rate_limit_state_does_not_terminalize_unrelated_retry).
+        result={
+            "error_category": "rate_limit_cooldown_deferred",
+            "not_before": (now - timedelta(seconds=1)).isoformat(),
+            "rate_limit_deferrals": 1,
+        },
     )
     second.available_at = now - timedelta(seconds=1)  # due
     run.total_units = 2
@@ -1271,3 +1291,177 @@ def test_cooldown_lookback_window_has_slack_beyond_wall_clock_budget(
     assert second.status == SyncRunUnitStatus.RETRYING.value
     assert second.result is not None
     assert second.result["error_category"] == "rate_limit_cooldown_deferred"
+
+
+# ---------------------------------------------------------------------------
+# Codex adversarial review round 3 finding: stale rate-limit state lifecycle
+# ---------------------------------------------------------------------------
+
+
+def test_stale_rate_limit_state_cleared_by_non_rate_limit_retry_then_claimed(
+    db_session, monkeypatch
+):
+    """HIGH finding, round 3, regression (i): a unit carrying STALE
+    rate_limit_deferrals/rate_limit_first_seen_at from an earlier, resolved
+    rate-limit episode must not be wrongly terminalized just because it
+    later goes through an UNRELATED retry (here: budget deferral, not a
+    rate limit). The non-rate-limit deferral clears the stale columns (root
+    fix); the unit is claimed normally on its next due pass instead of
+    being terminalized off ancient data.
+    """
+    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers.rate_limit_defer import (
+        RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS,
+    )
+
+    run, unit = _seed_run(db_session)  # provider=github, dataset_key=commits
+    now = datetime.now(timezone.utc)
+    # Stale rate-limit history: well past the wall-clock budget, from a
+    # rate-limit episode that has nothing to do with what happens next.
+    unit.rate_limit_deferrals = 1
+    unit.rate_limit_first_seen_at = now - timedelta(
+        seconds=RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS + 3600
+    )
+    db_session.flush()
+
+    _patch_db_session(monkeypatch, db_session)
+    _patch_worker_enqueues(monkeypatch)
+    # Force a budget deferral (unrelated to rate limits) on this pass.
+    monkeypatch.setenv("SYNC_BUDGET_BUCKET_LIMITS", '{"github:rest_core": 0}')
+    monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_SECONDS", "60")
+    monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
+
+    result = sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(unit)
+    assert result["status"] == "deferred"
+    assert unit.status == SyncRunUnitStatus.RETRYING.value
+    assert unit.result is not None
+    assert unit.result["error_category"] == "budget_deferred"
+    # Root fix: cleared by the non-rate-limit (budget) deferral.
+    assert unit.rate_limit_deferrals == 0
+    assert unit.rate_limit_first_seen_at is None
+
+    # Let the deferral elapse and redispatch -- with clean columns, the unit
+    # is claimed normally instead of being wrongly terminalized off the
+    # stale, unrelated old data.
+    unit.available_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    monkeypatch.delenv("SYNC_BUDGET_BUCKET_LIMITS", raising=False)
+    db_session.flush()
+
+    result2 = sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(unit)
+    assert result2 == {"status": "dispatched", "queued_units": 1}
+    assert unit.status == SyncRunUnitStatus.DISPATCHING.value
+
+
+def test_stale_rate_limit_columns_without_rate_limit_error_category_do_not_terminalize(  # noqa: E501
+    db_session, monkeypatch
+):
+    """HIGH finding, round 3, defense in depth: even if a unit somehow still
+    carries stale, budget-exhausted-looking rate_limit_deferrals/
+    rate_limit_first_seen_at (simulating a missed clear site),
+    _rate_limit_deferral_exhausted refuses to fire unless the unit's own
+    last-recorded result.error_category is rate-limit-related. A stale row
+    whose last real cause was unrelated (here: worker_lost, as a reconciler
+    expired-lease retry would stamp) must dispatch normally, not
+    terminalize.
+    """
+    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers.rate_limit_defer import (
+        RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS,
+    )
+
+    run, unit = _seed_run(db_session)
+    now = datetime.now(timezone.utc)
+    unit.status = SyncRunUnitStatus.RETRYING.value
+    unit.available_at = now - timedelta(seconds=1)
+    unit.rate_limit_deferrals = 1
+    unit.rate_limit_first_seen_at = now - timedelta(
+        seconds=RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS + 60
+    )
+    unit.result = {"error_category": "worker_lost", "retry_reason": "expired_lease"}
+    db_session.flush()
+
+    _patch_db_session(monkeypatch, db_session)
+    _patch_worker_enqueues(monkeypatch)
+
+    result = sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(unit)
+    assert result == {"status": "dispatched", "queued_units": 1}
+    assert unit.status == SyncRunUnitStatus.DISPATCHING.value
+
+
+def test_rate_limit_state_cleared_on_success_starts_fresh_episode_later(
+    db_session, monkeypatch
+):
+    """HIGH finding, round 3, regression (ii): a unit that resolves a
+    rate-limit episode by SUCCEEDING has its rate_limit_deferrals/
+    rate_limit_first_seen_at cleared. A LATER, unrelated rate-limit episode
+    (simulated well past the OLD episode's 2h wall-clock budget) computes
+    its OWN fresh clock starting from the new first_seen_at -- it is not
+    immediately exhausted against the stale old timestamp, which is exactly
+    what would happen if the clear had not fired.
+    """
+    from dev_health_ops.exceptions import RateLimitException
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.rate_limit_defer import plan_rate_limit_deferral
+    from dev_health_ops.workers.sync_units import run_sync_unit
+    from tests.test_sync_units import (
+        _mark_dispatching,
+        _patch_finalize_apply,
+        _patch_runtime,
+    )
+
+    run, unit = _seed_run(db_session)  # provider=github, dataset_key=commits
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+
+    def rate_limited(ctx, runtime):
+        raise RateLimitException("rate limited", retry_after_seconds=1.0)
+
+    monkeypatch.setattr(dataset_adapters, "run_dataset_unit", rate_limited)
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+    assert result["status"] == "rate_limited_deferred"
+
+    db_session.refresh(unit)
+    assert unit.rate_limit_deferrals == 1
+    assert unit.rate_limit_first_seen_at is not None
+    old_first_seen = _aware(unit.rate_limit_first_seen_at)
+
+    # Redispatch -- this time the provider is healthy.
+    _mark_dispatching(db_session, unit)
+
+    def succeeds(ctx, runtime):
+        return {"ok": True}
+
+    monkeypatch.setattr(dataset_adapters, "run_dataset_unit", succeeds)
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+    assert result["status"] == "success"
+
+    db_session.refresh(unit)
+    assert unit.status == SyncRunUnitStatus.SUCCESS.value
+    # Root fix: cleared on SUCCESS.
+    assert unit.rate_limit_deferrals == 0
+    assert unit.rate_limit_first_seen_at is None
+
+    # A LATER, unrelated rate-limit episode -- well past the OLD episode's
+    # wall-clock budget -- must start its OWN fresh clock, not be treated
+    # as a continuation of (and therefore immediately exhausted against)
+    # the stale old first_seen_at.
+    much_later = old_first_seen + timedelta(hours=3)
+    deferral = plan_rate_limit_deferral(
+        retry_after_seconds=30.0,
+        attempts=unit.rate_limit_deferrals,
+        first_seen_at=unit.rate_limit_first_seen_at.isoformat()
+        if unit.rate_limit_first_seen_at
+        else None,
+        now=much_later,
+    )
+    assert deferral is not None
+    fresh_first_seen = datetime.fromisoformat(deferral.first_seen_at)
+    assert abs((fresh_first_seen - much_later).total_seconds()) < 1

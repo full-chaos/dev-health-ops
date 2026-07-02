@@ -8,6 +8,7 @@ from .credentials import (
 from .credentials import (
     router as credentials_router,
 )
+from .customer_push import router as customer_push_router
 from .features import router as features_router
 from .github_app import router as github_app_router
 from .governance import router as governance_router
@@ -23,6 +24,7 @@ from .users import router as users_router
 
 __all__ = [
     "credentials_router",
+    "customer_push_router",
     "features_router",
     "get_clickhouse_store",
     "get_session",

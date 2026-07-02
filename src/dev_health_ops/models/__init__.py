@@ -21,6 +21,13 @@ from .checkpoints import (
 )
 from .git import Base, GitBlame, GitBlameMixin, GitCommit, GitCommitStat, GitFile, Repo
 from .impersonation import ImpersonationSession
+from .ingest_auth import (
+    IngestSource,
+    IngestSourceMode,
+    IngestToken,
+    IngestTokenScope,
+    IngestWebhookMode,
+)
 from .integrations import (
     Integration,
     IntegrationDataset,
@@ -122,6 +129,11 @@ __all__ = [
     "GitCommitStat",
     "GitFile",
     "GithubAppInstallation",
+    "IngestSource",
+    "IngestSourceMode",
+    "IngestToken",
+    "IngestTokenScope",
+    "IngestWebhookMode",
     "Integration",
     "IntegrationCredential",
     "IntegrationDataset",

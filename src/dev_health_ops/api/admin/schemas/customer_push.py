@@ -1,0 +1,144 @@
+"""Pydantic schemas for the customer-push admin API (CHAOS-2696).
+
+snake_case field naming, matching every other admin schema module (see
+Design Decision 15 in docs/architecture/customer-push-authz.md) -- this is a
+deliberate divergence from the camelCase data-plane batch envelope.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from dev_health_ops.models.ingest_auth import IngestTokenScope, IngestWebhookMode
+
+_VALID_ADMIN_WEBHOOK_MODES = {
+    IngestWebhookMode.DISABLED.value,
+    IngestWebhookMode.CUSTOMER_RELAY.value,
+}
+_VALID_SCOPES = {scope.value for scope in IngestTokenScope}
+
+
+def _validate_webhook_mode(value: str | None) -> str | None:
+    if value is None:
+        return value
+    if value not in _VALID_ADMIN_WEBHOOK_MODES:
+        raise ValueError(
+            "webhook_mode must be one of "
+            f"{sorted(_VALID_ADMIN_WEBHOOK_MODES)} (fullchaos_hosted is reserved, "
+            "not available in v1)"
+        )
+    return value
+
+
+# ---------------------------------------------------------------------------
+# Sources
+# ---------------------------------------------------------------------------
+
+
+class IngestSourceCreate(BaseModel):
+    system: str = Field(..., min_length=1)
+    instance: str = Field(..., min_length=1)
+    display_name: str | None = None
+    mode: str = "customer_push"
+    webhook_mode: str = "disabled"
+
+    @field_validator("instance")
+    @classmethod
+    def _check_instance(cls, value: str) -> str:
+        # Trim before storage/matching -- an un-normalized "acme/api " would
+        # both create a distinct (org_id, system, instance) row AND silently
+        # bypass the CC5 ownership match against the trimmed managed-source
+        # value, defeating the one-active-owner 409.
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("instance must not be blank")
+        return normalized
+
+    @field_validator("webhook_mode")
+    @classmethod
+    def _check_webhook_mode(cls, value: str) -> str:
+        result = _validate_webhook_mode(value)
+        assert result is not None
+        return result
+
+
+class IngestSourceResponse(BaseModel):
+    id: str
+    org_id: str
+    system: str
+    instance: str
+    display_name: str | None
+    mode: str
+    enabled: bool
+    webhook_mode: str
+    matched_integration_source_id: str | None
+    created_at: datetime
+    updated_at: datetime
+    # Decision 8 non-blocking managed-sync-conflict warning; empty on plain reads.
+    warnings: list[str] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class IngestSourcePatch(BaseModel):
+    display_name: str | None = None
+    mode: str | None = None
+    enabled: bool | None = None
+    webhook_mode: str | None = None
+
+    @field_validator("webhook_mode")
+    @classmethod
+    def _check_webhook_mode(cls, value: str | None) -> str | None:
+        return _validate_webhook_mode(value)
+
+
+# ---------------------------------------------------------------------------
+# Tokens
+# ---------------------------------------------------------------------------
+
+
+class IngestTokenCreate(BaseModel):
+    name: str = Field(..., min_length=1)
+    scopes: list[str] = Field(..., min_length=1)
+    expires_at: datetime | None = None
+
+    @field_validator("scopes")
+    @classmethod
+    def _check_scopes(cls, value: list[str]) -> list[str]:
+        unknown = sorted(set(value) - _VALID_SCOPES)
+        if unknown:
+            raise ValueError(
+                f"Unknown scope(s) {unknown}; valid scopes are {sorted(_VALID_SCOPES)}"
+            )
+        return value
+
+
+class IngestTokenCreateResponse(BaseModel):
+    id: str
+    org_id: str
+    source_id: str | None
+    name: str
+    token: str  # PLAINTEXT -- present only in this one response, never again
+    token_prefix: str
+    scopes: list[str]
+    expires_at: datetime | None
+    created_at: datetime
+
+
+class IngestTokenResponse(BaseModel):
+    """List/detail view -- deliberately has no ``token`` field."""
+
+    id: str
+    org_id: str
+    source_id: str | None
+    name: str
+    token_prefix: str
+    scopes: list[str]
+    expires_at: datetime | None
+    revoked_at: datetime | None
+    last_used_at: datetime | None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

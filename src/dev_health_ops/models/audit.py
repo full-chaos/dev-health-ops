@@ -90,6 +90,14 @@ class AuditAction(str, Enum):
     IMPERSONATION_START = "impersonation_start"
     IMPERSONATION_STOP = "impersonation_stop"
 
+    # Customer-push ingest events (CHAOS-2696/2712)
+    INGEST_TOKEN_CREATED = "ingest_token_created"
+    INGEST_TOKEN_ROTATED = "ingest_token_rotated"
+    INGEST_TOKEN_REVOKED = "ingest_token_revoked"
+    INGEST_SOURCE_REGISTERED = "ingest_source_registered"
+    INGEST_SOURCE_MODE_CHANGED = "ingest_source_mode_changed"
+    INGEST_AUTH_FAILED = "ingest_auth_failed"
+
     # Settings events
     SETTINGS_UPDATED = "settings_updated"
     CREDENTIAL_CREATED = "credential_created"
@@ -122,6 +130,8 @@ class AuditResourceType(str, Enum):
     AUDIT_LOG = "audit_log"
     METRICS = "metrics"
     SESSION = "session"
+    INGEST_TOKEN = "ingest_token"
+    INGEST_SOURCE = "ingest_source"
     OTHER = "other"
 
 

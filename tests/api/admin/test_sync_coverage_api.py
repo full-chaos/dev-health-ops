@@ -173,6 +173,22 @@ async def _seed_scope(session_maker, org_id: str, *, other_org: bool = False) ->
         }
 
 
+async def _seed_legacy_config(session_maker, org_id: str) -> str:
+    async with session_maker() as session:
+        config = SyncConfiguration(
+            org_id=org_id,
+            name="Legacy Coverage",
+            provider="github",
+            sync_targets=["git"],
+            sync_options={},
+            integration_id=None,
+            planner_managed=False,
+        )
+        session.add(config)
+        await session.commit()
+        return str(config.id)
+
+
 async def _seed_unit(
     session_maker,
     scope: dict,
@@ -181,14 +197,20 @@ async def _seed_unit(
     before: datetime,
     status: str = "success",
     updated_at: datetime | None = None,
+    source_id: str | None = None,
 ) -> str:
     async with session_maker() as session:
+        run_status = "success"
+        if status == "failed":
+            run_status = "failed"
+        elif status in {"planned", "dispatching", "running", "retrying"}:
+            run_status = "running"
         run = SyncRun(
             org_id=scope["org_id"],
             integration_id=uuid.UUID(scope["integration_id"]),
             triggered_by="manual",
             mode="incremental",
-            status="success" if status == "success" else "failed",
+            status=run_status,
             total_units=1,
             completed_units=1 if status == "success" else 0,
             failed_units=1 if status == "failed" else 0,
@@ -201,7 +223,7 @@ async def _seed_unit(
             org_id=scope["org_id"],
             sync_run_id=run.id,
             integration_id=uuid.UUID(scope["integration_id"]),
-            source_id=uuid.UUID(scope["source_id"]),
+            source_id=uuid.UUID(source_id or scope["source_id"]),
             provider="github",
             dataset_key="commits",
             cost_class="standard",
@@ -272,6 +294,72 @@ async def test_sync_coverage_api_includes_backfill_gap(client, session_maker):
     assert data["overall"]["health"] == "gaps"
     assert data["overall"]["gap_count"] == 1
     assert data["datasets"][0]["gaps"]
+    assert data["sources"][0]["gap_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_sync_coverage_api_keeps_source_gaps_separate(client, session_maker):
+    ac, seeded_state = client
+    scope = await _seed_scope(session_maker, seeded_state["org_id"])
+    async with session_maker() as session:
+        extra_source = IntegrationSource(
+            org_id=scope["org_id"],
+            integration_id=uuid.UUID(scope["integration_id"]),
+            provider="github",
+            source_type="repository",
+            external_id="acme/other",
+            name="other",
+            full_name="acme/other",
+            metadata_={"planner_managed_sync_config_id": scope["config_id"]},
+            is_enabled=True,
+        )
+        session.add(extra_source)
+        await session.commit()
+        extra_source_id = str(extra_source.id)
+    since = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    before = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    await _seed_unit(session_maker, scope, since=since, before=before, status="success")
+    await _seed_unit(
+        session_maker,
+        scope,
+        since=since,
+        before=before,
+        status="planned",
+        source_id=extra_source_id,
+    )
+
+    resp = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["overall"]["health"] == "gaps"
+    assert data["datasets"][0]["gaps"][0]["source_ids"] == [extra_source_id]
+    sources = {source["source_id"]: source for source in data["sources"]}
+    assert sources[scope["source_id"]]["gap_count"] == 0
+    assert sources[extra_source_id]["gap_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_sync_coverage_api_planned_units_create_requested_gap(
+    client, session_maker
+):
+    ac, seeded_state = client
+    scope = await _seed_scope(session_maker, seeded_state["org_id"])
+    await _seed_unit(
+        session_maker,
+        scope,
+        since=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        before=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        status="planned",
+    )
+
+    resp = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["datasets"][0]["requested_ranges"]
+    assert data["datasets"][0]["covered_ranges"] == []
+    assert data["overall"]["health"] == "gaps"
 
 
 @pytest.mark.asyncio
@@ -296,6 +384,34 @@ async def test_sync_coverage_fetches_latest_success_outside_lookback(
     data = resp.json()
     assert data["history_lookback_days"] == 30
     assert data["overall"]["latest_covered_through"] is not None
+
+
+@pytest.mark.asyncio
+async def test_sync_coverage_zero_run_planner_config_reports_planner_basis(
+    client, session_maker
+):
+    ac, seeded_state = client
+    scope = await _seed_scope(session_maker, seeded_state["org_id"])
+
+    resp = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["data_basis"] == "planner"
+    assert data["overall"]["health"] == "insufficient_data"
+
+
+@pytest.mark.asyncio
+async def test_sync_coverage_legacy_config_reports_legacy_basis(client, session_maker):
+    ac, seeded_state = client
+    config_id = await _seed_legacy_config(session_maker, seeded_state["org_id"])
+
+    resp = await ac.get(f"/api/v1/admin/sync-configs/{config_id}/coverage")
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["data_basis"] == "legacy"
+    assert data["overall"]["health"] == "insufficient_data"
 
 
 @pytest.mark.asyncio

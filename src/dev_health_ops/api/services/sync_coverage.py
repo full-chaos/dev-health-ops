@@ -8,7 +8,7 @@ from datetime import datetime, time, timedelta, timezone
 from typing import Any
 
 from croniter import croniter as Croniter
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.models.backfill import BackfillJob
@@ -31,6 +31,12 @@ INTERVAL_ADJACENCY_TOLERANCE = timedelta(microseconds=1)
 TERMINAL_UNIT_STATUSES = {
     SyncRunUnitStatus.SUCCESS.value,
     SyncRunUnitStatus.FAILED.value,
+}
+REQUESTED_UNIT_STATUSES = TERMINAL_UNIT_STATUSES | {
+    SyncRunUnitStatus.PLANNED.value,
+    SyncRunUnitStatus.DISPATCHING.value,
+    SyncRunUnitStatus.RUNNING.value,
+    SyncRunUnitStatus.RETRYING.value,
 }
 ACTIVE_RUN_STATUSES = {
     SyncRunStatus.PLANNED.value,
@@ -83,7 +89,22 @@ class _DatasetCoverage:
     status: str = "insufficient_data"
 
 
+@dataclass
+class _PairCoverage:
+    source_id: str
+    dataset_key: str
+    requested: list[CoverageInterval] = field(default_factory=list)
+    covered: list[CoverageInterval] = field(default_factory=list)
+    gaps: list[CoverageInterval] = field(default_factory=list)
+    stale_ranges: list[CoverageInterval] = field(default_factory=list)
+    failed_ranges: list[CoverageInterval] = field(default_factory=list)
+    covered_through: datetime | None = None
+    status: str = "insufficient_data"
+
+
 def ensure_utc(value: datetime) -> datetime:
+    """Return ``value`` as an aware UTC datetime, treating naive values as UTC."""
+
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
@@ -94,6 +115,8 @@ def merge_intervals(
     *,
     tolerance: timedelta = INTERVAL_ADJACENCY_TOLERANCE,
 ) -> list[CoverageInterval]:
+    """Sort, normalize, and merge overlapping or adjacent coverage intervals."""
+
     normalized = sorted(
         (
             CoverageInterval(
@@ -130,6 +153,8 @@ def merge_intervals(
 def subtract_intervals(
     requested: Iterable[CoverageInterval], covered: Iterable[CoverageInterval]
 ) -> list[CoverageInterval]:
+    """Return requested sub-ranges that are not covered by covered intervals."""
+
     gaps: list[CoverageInterval] = []
     covered_merged = merge_intervals(covered)
     for req in merge_intervals(requested):
@@ -166,6 +191,8 @@ def subtract_intervals(
 def failed_ranges_not_superseded(
     failed: Iterable[UnitWindow], successful: Iterable[UnitWindow]
 ) -> list[CoverageInterval]:
+    """Return failed unit windows that no later successful unit fully covers."""
+
     success_windows = list(successful)
     ranges: list[CoverageInterval] = []
     for failure in failed:
@@ -204,6 +231,8 @@ def classify_staleness(
     paused: bool = False,
     scheduled: bool = True,
 ) -> StaleClassification:
+    """Classify whether coverage is stale under schedule-aware grace rules."""
+
     if paused:
         return StaleClassification(status="paused", stale_after=None)
     if not scheduled:
@@ -272,6 +301,8 @@ def _planner_source_for_config(
 async def resolve_effective_scope(
     session: AsyncSession, org_id: str, config: SyncConfiguration
 ) -> EffectiveScope:
+    """Resolve the source and dataset scope covered by a sync configuration."""
+
     integration_id = config.integration_id
     if integration_id is None:
         return EffectiveScope(None, (), _dataset_keys_for_config(config))
@@ -363,7 +394,7 @@ async def _terminal_unit_windows(
         SyncRunUnit.integration_id == scope.integration_id,
         SyncRunUnit.source_id.in_(source_ids),
         SyncRunUnit.dataset_key.in_(scope.dataset_keys),
-        SyncRunUnit.status.in_(TERMINAL_UNIT_STATUSES),
+        SyncRunUnit.status.in_(REQUESTED_UNIT_STATUSES),
         SyncRunUnit.since_at.is_not(None),
         SyncRunUnit.before_at.is_not(None),
         SyncRun.org_id == org_id,
@@ -373,12 +404,31 @@ async def _terminal_unit_windows(
         .join(SyncRun, SyncRun.id == SyncRunUnit.sync_run_id)
         .where(*base_filters, SyncRunUnit.updated_at >= truncated_before)
     )
+    latest_success_ranked = (
+        select(
+            SyncRunUnit.id.label("unit_id"),
+            func.row_number()
+            .over(
+                partition_by=(SyncRunUnit.source_id, SyncRunUnit.dataset_key),
+                order_by=(
+                    SyncRunUnit.before_at.desc(),
+                    SyncRunUnit.updated_at.desc(),
+                ),
+            )
+            .label("row_num"),
+        )
+        .join(SyncRun, SyncRun.id == SyncRunUnit.sync_run_id)
+        .where(*base_filters, SyncRunUnit.status == SyncRunUnitStatus.SUCCESS.value)
+        .subquery()
+    )
     latest_success_stmt = (
         select(SyncRunUnit, SyncRun)
         .join(SyncRun, SyncRun.id == SyncRunUnit.sync_run_id)
-        .where(*base_filters, SyncRunUnit.status == SyncRunUnitStatus.SUCCESS.value)
-        .order_by(
-            SyncRunUnit.source_id, SyncRunUnit.dataset_key, SyncRunUnit.before_at.desc()
+        .join(latest_success_ranked, latest_success_ranked.c.unit_id == SyncRunUnit.id)
+        .where(
+            *base_filters,
+            SyncRunUnit.status == SyncRunUnitStatus.SUCCESS.value,
+            latest_success_ranked.c.row_num == 1,
         )
     )
     rows: list[tuple[SyncRunUnit, SyncRun]] = [
@@ -400,11 +450,12 @@ async def _terminal_unit_windows(
 
 async def _active_run_ids(
     session: AsyncSession, org_id: str, scope: EffectiveScope
-) -> set[str]:
+) -> set[tuple[str, str]]:
     if scope.integration_id is None or not scope.sources or not scope.dataset_keys:
         return set()
     stmt = (
-        select(SyncRun.id)
+        select(SyncRunUnit.source_id, SyncRunUnit.dataset_key)
+        .select_from(SyncRun)
         .join(SyncRunUnit, SyncRunUnit.sync_run_id == SyncRun.id)
         .where(
             SyncRun.org_id == org_id,
@@ -416,7 +467,10 @@ async def _active_run_ids(
         )
         .distinct()
     )
-    return {str(run_id) for run_id in (await session.execute(stmt)).scalars().all()}
+    return {
+        (str(source_id), str(dataset_key))
+        for source_id, dataset_key in (await session.execute(stmt)).all()
+    }
 
 
 def _backfill_interval(job: BackfillJob) -> CoverageInterval:
@@ -491,71 +545,158 @@ def _status_from_parts(
     return "healthy"
 
 
+def _rollup_stale_status(statuses: Iterable[str]) -> str:
+    status_set = set(statuses)
+    if "paused" in status_set:
+        return "paused"
+    if "not_scheduled" in status_set:
+        return "not_scheduled"
+    if "stale" in status_set:
+        return "stale"
+    return "healthy"
+
+
+def _data_basis_for_config(config: SyncConfiguration, scope: EffectiveScope) -> str:
+    if config.integration_id is not None and scope.integration_id is not None:
+        return "planner"
+    return "legacy"
+
+
 def build_coverage_summary_payload(
     *,
     config: SyncConfiguration,
     scope: EffectiveScope,
     windows: Sequence[UnitWindow],
     backfill_requested: Sequence[CoverageInterval],
-    active_run_ids: set[str],
+    active_pairs: set[tuple[str, str]],
     active_schedule: ScheduledJob | None,
     has_schedule_row: bool,
     generated_at: datetime | None = None,
     lookback_days: int = HISTORY_LOOKBACK_DAYS,
 ) -> dict[str, Any]:
+    """Build the API coverage payload from persisted unit and backfill windows.
+
+    Interval math is evaluated per ``(source_id, dataset_key)`` before summaries
+    roll up to dataset, source, and overall levels.
+    """
+
     now = ensure_utc(generated_at or datetime.now(timezone.utc))
     schedule_interval = _schedule_interval(active_schedule, now)
     paused = not bool(config.is_active)
     scheduled = active_schedule is not None and has_schedule_row
 
-    by_dataset: dict[str, list[UnitWindow]] = defaultdict(list)
+    by_pair: dict[tuple[str, str], list[UnitWindow]] = defaultdict(list)
     for window in windows:
-        by_dataset[window.dataset_key].append(window)
+        by_pair[(window.source_id, window.dataset_key)].append(window)
 
-    backfill_by_dataset: dict[str, list[CoverageInterval]] = defaultdict(list)
+    scope_source_ids = {str(source.id) for source in scope.sources}
+    backfill_by_pair: dict[tuple[str, str], list[CoverageInterval]] = defaultdict(list)
     for interval in backfill_requested:
+        interval_source_ids = interval.source_ids or tuple(sorted(scope_source_ids))
+        for source_id in interval_source_ids:
+            if source_id not in scope_source_ids:
+                continue
+            for dataset_key in scope.dataset_keys:
+                backfill_by_pair[(source_id, dataset_key)].append(
+                    CoverageInterval(
+                        since=interval.since,
+                        before=interval.before,
+                        source_ids=(source_id,),
+                        run_ids=interval.run_ids,
+                    )
+                )
+
+    pair_coverages: list[_PairCoverage] = []
+    for source in scope.sources:
+        source_id = str(source.id)
         for dataset_key in scope.dataset_keys:
-            backfill_by_dataset[dataset_key].append(interval)
+            pair_windows = by_pair.get((source_id, dataset_key), [])
+            successes = [
+                window
+                for window in pair_windows
+                if window.status == SyncRunUnitStatus.SUCCESS.value
+            ]
+            failures = [
+                window
+                for window in pair_windows
+                if window.status == SyncRunUnitStatus.FAILED.value
+            ]
+            requested = merge_intervals(
+                [
+                    *_intervals_from_windows(pair_windows),
+                    *backfill_by_pair[(source_id, dataset_key)],
+                ]
+            )
+            covered = merge_intervals(_intervals_from_windows(successes))
+            failed_ranges = failed_ranges_not_superseded(failures, successes)
+            gaps = subtract_intervals(requested, covered)
+            covered_through = max(
+                (interval.before for interval in covered), default=None
+            )
+            stale = classify_staleness(
+                covered_through,
+                now=now,
+                schedule_interval=schedule_interval,
+                paused=paused,
+                scheduled=scheduled,
+            )
+            stale_ranges = []
+            if stale.status == "stale" and covered_through is not None:
+                stale_ranges = [
+                    CoverageInterval(
+                        since=covered_through,
+                        before=now,
+                        source_ids=(source_id,),
+                    )
+                ]
+            status = _status_from_parts(
+                failed_count=len(failed_ranges),
+                gap_count=len(gaps),
+                stale_status=stale.status,
+                has_data=bool(requested or covered),
+                running=(source_id, dataset_key) in active_pairs,
+            )
+            pair_coverages.append(
+                _PairCoverage(
+                    source_id=source_id,
+                    dataset_key=dataset_key,
+                    requested=requested,
+                    covered=covered,
+                    gaps=gaps,
+                    stale_ranges=stale_ranges,
+                    failed_ranges=failed_ranges,
+                    covered_through=covered_through,
+                    status=status,
+                )
+            )
 
     datasets: list[_DatasetCoverage] = []
     for dataset_key in scope.dataset_keys:
-        dataset_windows = by_dataset.get(dataset_key, [])
-        successes = [
-            window
-            for window in dataset_windows
-            if window.status == SyncRunUnitStatus.SUCCESS.value
-        ]
-        failures = [
-            window
-            for window in dataset_windows
-            if window.status == SyncRunUnitStatus.FAILED.value
-        ]
+        pairs = [pair for pair in pair_coverages if pair.dataset_key == dataset_key]
         requested = merge_intervals(
-            [
-                *_intervals_from_windows(dataset_windows),
-                *backfill_by_dataset[dataset_key],
-            ]
+            interval for pair in pairs for interval in pair.requested
         )
-        covered = merge_intervals(_intervals_from_windows(successes))
-        failed_ranges = failed_ranges_not_superseded(failures, successes)
-        gaps = subtract_intervals(requested, covered)
-        covered_through = max((interval.before for interval in covered), default=None)
-        stale = classify_staleness(
-            covered_through,
-            now=now,
-            schedule_interval=schedule_interval,
-            paused=paused,
-            scheduled=scheduled,
+        covered = merge_intervals(
+            interval for pair in pairs for interval in pair.covered
         )
-        stale_ranges = []
-        if stale.status == "stale" and covered_through is not None:
-            stale_ranges = [CoverageInterval(since=covered_through, before=now)]
+        gaps = merge_intervals(interval for pair in pairs for interval in pair.gaps)
+        failed_ranges = merge_intervals(
+            interval for pair in pairs for interval in pair.failed_ranges
+        )
+        stale_ranges = merge_intervals(
+            interval for pair in pairs for interval in pair.stale_ranges
+        )
+        covered_through = max(
+            (pair.covered_through for pair in pairs if pair.covered_through),
+            default=None,
+        )
         status = _status_from_parts(
             failed_count=len(failed_ranges),
             gap_count=len(gaps),
-            stale_status=stale.status,
+            stale_status=_rollup_stale_status(pair.status for pair in pairs),
             has_data=bool(requested or covered),
-            running=bool(active_run_ids),
+            running=any(pair.status == "running" for pair in pairs)
+            and not any(pair.status == "stale" for pair in pairs),
         )
         datasets.append(
             _DatasetCoverage(
@@ -572,46 +713,30 @@ def build_coverage_summary_payload(
 
     source_payloads: list[dict[str, Any]] = []
     for source in scope.sources:
-        source_windows = [
-            window for window in windows if window.source_id == str(source.id)
-        ]
-        successes = [
-            window
-            for window in source_windows
-            if window.status == SyncRunUnitStatus.SUCCESS.value
-        ]
-        failures = [
-            window
-            for window in source_windows
-            if window.status == SyncRunUnitStatus.FAILED.value
-        ]
-        requested = merge_intervals(_intervals_from_windows(source_windows))
-        covered = merge_intervals(_intervals_from_windows(successes))
-        gaps = subtract_intervals(requested, covered)
-        failed_ranges = failed_ranges_not_superseded(failures, successes)
-        covered_through = max((interval.before for interval in covered), default=None)
-        stale = classify_staleness(
-            covered_through,
-            now=now,
-            schedule_interval=schedule_interval,
-            paused=paused,
-            scheduled=scheduled,
+        source_id = str(source.id)
+        pairs = [pair for pair in pair_coverages if pair.source_id == source_id]
+        covered_through = max(
+            (pair.covered_through for pair in pairs if pair.covered_through),
+            default=None,
         )
+        gap_count = sum(len(pair.gaps) for pair in pairs)
+        failed_range_count = sum(len(pair.failed_ranges) for pair in pairs)
         status = _status_from_parts(
-            failed_count=len(failed_ranges),
-            gap_count=len(gaps),
-            stale_status=stale.status,
-            has_data=bool(requested or covered),
-            running=bool(active_run_ids),
+            failed_count=failed_range_count,
+            gap_count=gap_count,
+            stale_status=_rollup_stale_status(pair.status for pair in pairs),
+            has_data=any(pair.requested or pair.covered for pair in pairs),
+            running=any(pair.status == "running" for pair in pairs)
+            and not any(pair.status == "stale" for pair in pairs),
         )
         source_payloads.append(
             {
-                "source_id": str(source.id),
+                "source_id": source_id,
                 "source_name": source.full_name or source.name,
                 "status": status,
                 "covered_through": covered_through,
-                "gap_count": len(gaps),
-                "failed_range_count": len(failed_ranges),
+                "gap_count": gap_count,
+                "failed_range_count": failed_range_count,
             }
         )
 
@@ -640,7 +765,7 @@ def build_coverage_summary_payload(
         (dataset.covered_through for dataset in datasets if dataset.covered_through),
         default=None,
     )
-    data_basis = "planner" if windows else "legacy"
+    data_basis = _data_basis_for_config(config, scope)
     truncated_before = now - timedelta(days=lookback_days)
     return {
         "config_id": str(config.id),
@@ -689,13 +814,15 @@ async def build_sync_coverage_summary(
     lookback_days: int = HISTORY_LOOKBACK_DAYS,
     generated_at: datetime | None = None,
 ) -> dict[str, Any]:
+    """Query persisted sync state and return a config-scoped coverage summary."""
+
     now = ensure_utc(generated_at or datetime.now(timezone.utc))
     truncated_before = now - timedelta(days=lookback_days)
     scope = await resolve_effective_scope(session, org_id, config)
     schedule = await _active_schedule(session, org_id, config)
     has_schedule = await _has_schedule_row(session, org_id, config)
     windows = await _terminal_unit_windows(session, org_id, scope, truncated_before)
-    active_runs = await _active_run_ids(session, org_id, scope)
+    active_pairs = await _active_run_ids(session, org_id, scope)
     backfill_requested = await _backfill_requested_ranges(
         session, org_id, config, scope, truncated_before
     )
@@ -704,7 +831,7 @@ async def build_sync_coverage_summary(
         scope=scope,
         windows=windows,
         backfill_requested=backfill_requested,
-        active_run_ids=active_runs,
+        active_pairs=active_pairs,
         active_schedule=schedule,
         has_schedule_row=has_schedule,
         generated_at=now,

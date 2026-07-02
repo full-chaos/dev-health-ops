@@ -9,6 +9,7 @@ from dev_health_ops.api.services.sync_coverage import (
     UnitWindow,
     build_coverage_summary_payload,
     classify_staleness,
+    ensure_utc,
     failed_ranges_not_superseded,
     merge_intervals,
     subtract_intervals,
@@ -72,12 +73,14 @@ def _summary(
     windows: list[UnitWindow],
     *,
     backfill_requested: list[CoverageInterval] | None = None,
-    active_run_ids: set[str] | None = None,
+    active_pairs: set[tuple[str, str]] | None = None,
     now: datetime = _dt(2, 1),
+    config: SyncConfiguration | None = None,
+    scope: EffectiveScope | None = None,
 ) -> dict:
     source_id = uuid.UUID(windows[0].source_id) if windows else uuid.uuid4()
-    config = _config()
-    scope = EffectiveScope(
+    config = config or _config()
+    scope = scope or EffectiveScope(
         integration_id=config.integration_id,
         sources=(_source(source_id),),
         dataset_keys=("commits",),
@@ -95,7 +98,7 @@ def _summary(
         scope=scope,
         windows=windows,
         backfill_requested=backfill_requested or [],
-        active_run_ids=active_run_ids or set(),
+        active_pairs=active_pairs or set(),
         active_schedule=schedule,
         has_schedule_row=True,
         generated_at=now,
@@ -116,6 +119,18 @@ def test_merge_intervals_collapses_overlap_and_adjacency():
         (_dt(5), _dt(6)),
     ]
     assert merged[0].source_ids == ("a", "b")
+
+
+def test_merge_intervals_drops_zero_duration_and_same_instant_ranges():
+    instant = _dt(1)
+
+    assert merge_intervals([CoverageInterval(instant, instant)]) == []
+
+
+def test_ensure_utc_marks_naive_datetimes_as_utc():
+    naive = datetime(2026, 1, 1, 12, 30)
+
+    assert ensure_utc(naive) == datetime(2026, 1, 1, 12, 30, tzinfo=timezone.utc)
 
 
 def test_subtract_intervals_returns_partial_gap():
@@ -158,6 +173,73 @@ def test_backfill_intent_exposes_gap_without_failed_unit():
     assert [
         (gap["since"], gap["before"]) for gap in summary["datasets"][0]["gaps"]
     ] == [(_dt(2), _dt(3))]
+    assert summary["sources"][0]["gap_count"] == 1
+
+
+def test_dataset_gaps_are_computed_per_source_before_rollup():
+    source_a = uuid.uuid4()
+    source_b = uuid.uuid4()
+    config = _config()
+    scope = EffectiveScope(
+        integration_id=config.integration_id,
+        sources=(_source(source_a), _source(source_b)),
+        dataset_keys=("commits",),
+    )
+
+    summary = _summary(
+        [
+            _window(_dt(1), _dt(2), source_id=source_a, status="success"),
+            _window(_dt(1), _dt(2), source_id=source_b, status="planned"),
+        ],
+        config=config,
+        scope=scope,
+    )
+
+    dataset = summary["datasets"][0]
+    assert dataset["status"] == "gaps"
+    assert [
+        (gap["since"], gap["before"], gap["source_ids"]) for gap in dataset["gaps"]
+    ] == [(_dt(1), _dt(2), [str(source_b)])]
+    assert summary["sources"][0]["gap_count"] == 0
+    assert summary["sources"][1]["gap_count"] == 1
+
+
+def test_planned_units_contribute_requested_intent_only():
+    source_id = uuid.uuid4()
+
+    summary = _summary([_window(_dt(1), _dt(2), source_id=source_id, status="planned")])
+
+    dataset = summary["datasets"][0]
+    assert dataset["requested_ranges"]
+    assert dataset["covered_ranges"] == []
+    assert dataset["gaps"]
+    assert summary["overall"]["health"] == "gaps"
+
+
+def test_active_runs_only_mark_touched_pairs_running():
+    source_a = uuid.uuid4()
+    source_b = uuid.uuid4()
+    config = _config()
+    scope = EffectiveScope(
+        integration_id=config.integration_id,
+        sources=(_source(source_a), _source(source_b)),
+        dataset_keys=("commits",),
+    )
+
+    summary = _summary(
+        [
+            _window(_dt(1), _dt(2), source_id=source_a, status="success"),
+            _window(_dt(1), _dt(2), source_id=source_b, status="success"),
+        ],
+        active_pairs={(str(source_a), "commits")},
+        now=_dt(5),
+        config=config,
+        scope=scope,
+    )
+
+    sources = {source["source_id"]: source for source in summary["sources"]}
+    assert sources[str(source_a)]["status"] == "running"
+    assert sources[str(source_b)]["status"] == "stale"
 
 
 def test_stale_classification_uses_schedule_grace():
@@ -167,11 +249,21 @@ def test_stale_classification_uses_schedule_grace():
 
 
 def test_empty_legacy_summary_is_insufficient_data():
-    summary = _summary([])
+    config = _config()
+    config.integration_id = None
+    scope = EffectiveScope(integration_id=None, sources=(), dataset_keys=("commits",))
+    summary = _summary([], config=config, scope=scope)
 
     assert summary["data_basis"] == "legacy"
     assert summary["overall"]["health"] == "insufficient_data"
     assert summary["datasets"][0]["status"] == "insufficient_data"
+
+
+def test_zero_run_planner_summary_keeps_planner_data_basis():
+    summary = _summary([])
+
+    assert summary["data_basis"] == "planner"
+    assert summary["overall"]["health"] == "insufficient_data"
 
 
 def test_failed_retry_superseded_by_later_success_is_healthy():

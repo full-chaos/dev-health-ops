@@ -324,19 +324,31 @@ def _sync_gitlab_feature_flags(
     credentials: dict[str, Any],
     sync_options: dict[str, Any],
 ) -> dict[str, Any]:
-    from dev_health_ops.connectors.gitlab import GitLabConnector
+    from dev_health_ops.metrics.job_work_items import (
+        attach_work_item_partial_observations,
+    )
     from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
     from dev_health_ops.processors.gitlab_feature_flags import (
         normalize_gitlab_feature_flags,
         snapshot_gitlab_feature_flag_events,
     )
+    from dev_health_ops.providers.gitlab.feature_flags import GitLabFeatureFlagsClient
+    from dev_health_ops.providers.usage import drain_provider_usage
     from dev_health_ops.work_graph.builder import BuildConfig, WorkGraphBuilder
     from dev_health_ops.work_graph.ids import generate_feature_flag_id
     from dev_health_ops.work_graph.models import EdgeType, NodeType, Provenance
 
     token = str(credentials.get("token") or "")
+    # Precedence matches the canonical resolver
+    # (credentials/resolver.py::gitlab_credentials_from_mapping): gitlab_url >
+    # url > base_url on the stored credentials mapping, before falling back to
+    # sync_options / the gitlab.com default. Self-hosted orgs whose credential
+    # row stores the base URL under "gitlab_url" (the key every other GitLab
+    # dataset path resolves through) previously fell through to gitlab.com
+    # here instead (CHAOS-2785 review finding).
     gitlab_url = str(
-        credentials.get("url")
+        credentials.get("gitlab_url")
+        or credentials.get("url")
         or credentials.get("base_url")
         or sync_options.get("gitlab_url")
         or "https://gitlab.com"
@@ -355,76 +367,112 @@ def _sync_gitlab_feature_flags(
             "Feature-flag sync requires CLICKHOUSE_URI / ClickHouse analytics sink"
         )
 
-    connector = GitLabConnector(url=gitlab_url, private_token=token)
-    raw_flags = connector.get_feature_flags(project_id_or_path)
-    project_key = connector.get_project_name(project_id_or_path)
-    repo_id = None
+    async def _run() -> dict[str, Any]:
+        # Real per-request actuals drained through the shared CHAOS-2754
+        # recorder (CHAOS-2785) -- the whole body below is one big try/except
+        # (not just the fetch step) so a failure ANYWHERE downstream of the
+        # fetch (normalization, ClickHouse/WorkGraph writes) still preserves
+        # whatever actuals were already recorded instead of silently dropping
+        # real request counts, mirroring
+        # _sync_launchdarkly_feature_flags (CHAOS-2761).
+        provider_usage_observations: list[dict[str, Any]] = []
+        client: GitLabFeatureFlagsClient | None = None
 
-    flags = normalize_gitlab_feature_flags(
-        raw_flags,
-        project_key=project_key,
-        org_id=org_id,
-        repo_id=repo_id,
-    )
-    events = snapshot_gitlab_feature_flag_events(
-        raw_flags,
-        project_key=project_key,
-        org_id=org_id,
-        repo_id=repo_id,
-    )
+        try:
+            async with GitLabFeatureFlagsClient(
+                private_token=token, base_url=gitlab_url
+            ) as client:
+                raw_flags = await client.get_feature_flags(project_id_or_path)
+                project_key = await client.get_project_name(project_id_or_path)
+            provider_usage_observations.extend(drain_provider_usage(client))
 
-    sink = ClickHouseMetricsSink(db_url)
-    setattr(sink, "org_id", org_id)
-    builder = WorkGraphBuilder(BuildConfig(dsn=db_url, org_id=org_id))
-    try:
-        sink.write_feature_flags(flags)
-        sink.write_feature_flag_events(events)
-
-        latest_events: dict[str, Any] = {}
-        for event in events:
-            existing = latest_events.get(event.flag_key)
-            if existing is None or event.event_ts > existing.event_ts:
-                latest_events[event.flag_key] = event
-
-        for flag in flags:
-            builder.add_feature_flag_node(
-                flag_key=flag.flag_key,
-                provider=flag.provider,
-                project_key=flag.project_key or project_key,
-                repo_id=flag.repo_id,
-                event_ts=flag.created_at,
+            repo_id = None
+            flags = normalize_gitlab_feature_flags(
+                raw_flags,
+                project_key=project_key,
+                org_id=org_id,
+                repo_id=repo_id,
             )
-            latest_event = latest_events.get(flag.flag_key)
-            if latest_event is None:
-                continue
-            flag_id = generate_feature_flag_id(
-                org_id,
-                flag.provider,
-                flag.project_key or project_key,
-                flag.flag_key,
+            events = snapshot_gitlab_feature_flag_events(
+                raw_flags,
+                project_key=project_key,
+                org_id=org_id,
+                repo_id=repo_id,
             )
-            builder.add_feature_flag_edge(
-                flag_id=flag_id,
-                target_type=NodeType.FEATURE_FLAG,
-                target_id=flag_id,
-                edge_type=EdgeType.CONFIG_CHANGED_BY,
-                confidence=1.0,
-                evidence=(
-                    f"{latest_event.event_ts.isoformat()}"
-                    f"|{latest_event.event_type}"
-                    f"|{latest_event.next_state or ''}"
-                ),
-                provenance=Provenance.NATIVE,
-                provider=flag.provider,
-                event_ts=latest_event.event_ts,
-            )
-    finally:
-        builder.close()
-        sink.close()
 
-    return {
-        "flags_synced": len(flags),
-        "events_synced": len(events),
-        "project_key": project_key,
-        "gitlab_url": gitlab_url,
-    }
+            sink = ClickHouseMetricsSink(db_url)
+            setattr(sink, "org_id", org_id)
+            builder = WorkGraphBuilder(BuildConfig(dsn=db_url, org_id=org_id))
+            try:
+                sink.write_feature_flags(flags)
+                sink.write_feature_flag_events(events)
+
+                latest_events: dict[str, Any] = {}
+                for event in events:
+                    existing = latest_events.get(event.flag_key)
+                    if existing is None or event.event_ts > existing.event_ts:
+                        latest_events[event.flag_key] = event
+
+                for flag in flags:
+                    builder.add_feature_flag_node(
+                        flag_key=flag.flag_key,
+                        provider=flag.provider,
+                        project_key=flag.project_key or project_key,
+                        repo_id=flag.repo_id,
+                        event_ts=flag.created_at,
+                    )
+                    latest_event = latest_events.get(flag.flag_key)
+                    if latest_event is None:
+                        continue
+                    flag_id = generate_feature_flag_id(
+                        org_id,
+                        flag.provider,
+                        flag.project_key or project_key,
+                        flag.flag_key,
+                    )
+                    builder.add_feature_flag_edge(
+                        flag_id=flag_id,
+                        target_type=NodeType.FEATURE_FLAG,
+                        target_id=flag_id,
+                        edge_type=EdgeType.CONFIG_CHANGED_BY,
+                        confidence=1.0,
+                        evidence=(
+                            f"{latest_event.event_ts.isoformat()}"
+                            f"|{latest_event.event_type}"
+                            f"|{latest_event.next_state or ''}"
+                        ),
+                        provenance=Provenance.NATIVE,
+                        provider=flag.provider,
+                        event_ts=latest_event.event_ts,
+                    )
+            finally:
+                builder.close()
+                sink.close()
+
+            result: dict[str, Any] = {
+                "flags_synced": len(flags),
+                "events_synced": len(events),
+                "project_key": project_key,
+                "gitlab_url": gitlab_url,
+            }
+            if provider_usage_observations:
+                result["observations"] = {"provider_usage": provider_usage_observations}
+            return result
+        except Exception as exc:
+            # Preserve actuals gathered before the raise so the worker's
+            # deferral/failure stamp can still persist them (CHAOS-2754
+            # contract, reused here verbatim -- see
+            # _sync_launchdarkly_feature_flags for the full rationale).
+            # Draining an already-drained UsageRecorder is safe: drain()
+            # clears its internal state, so re-draining `client` here after
+            # an earlier successful drain returns [] and nothing is
+            # double-counted.
+            if client is not None:
+                provider_usage_observations.extend(drain_provider_usage(client))
+            if provider_usage_observations:
+                attach_work_item_partial_observations(
+                    exc, {"provider_usage": provider_usage_observations}
+                )
+            raise
+
+    return run_async(_run())

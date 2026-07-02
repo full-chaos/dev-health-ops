@@ -283,9 +283,27 @@ def _scaled_units(fixed_floor: int, span_days: int) -> int:
 
 
 def _host_from_credentials(credentials: object) -> str:
+    """Resolve the GitLab instance host a budget bucket should key against.
+
+    CHAOS-2785 review finding: this previously checked only ``base_url`` /
+    ``baseUrl``, so a self-hosted credential row stored under ``gitlab_url``
+    (the key ``credentials/resolver.py::gitlab_credentials_from_mapping`` and
+    ``workers/feature_flag_sync.py``'s ``GitLabFeatureFlagsClient``
+    construction resolve first) fell through to the ``gitlab.com`` default --
+    budget reservation/attribution disagreed with where the physical request
+    actually went. Extended to the same precedence
+    (``gitlab_url > url > base_url``), preserving the existing ``baseUrl``
+    fallback. Host resolution INPUT only -- no change to estimator units,
+    confidence, dimensions, or reservation logic below.
+    """
     base_url = _DEFAULT_BASE_URL
     if isinstance(credentials, Mapping):
-        raw_base_url = credentials.get("base_url") or credentials.get("baseUrl")
+        raw_base_url = (
+            credentials.get("gitlab_url")
+            or credentials.get("url")
+            or credentials.get("base_url")
+            or credentials.get("baseUrl")
+        )
         if raw_base_url:
             base_url = str(raw_base_url)
     host = urlparse(base_url).hostname

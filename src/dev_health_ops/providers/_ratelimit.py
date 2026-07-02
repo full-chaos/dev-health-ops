@@ -22,6 +22,7 @@ header), use the helper form::
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -112,3 +113,77 @@ def penalize_from_response(
     if retry_after is None:
         retry_after = default
     return gate.penalize(retry_after)
+
+
+def gitlab_403_is_rate_limited(headers: Any) -> bool:
+    """Return ``True`` when a GitLab 403 actually carries rate-limit signal.
+
+    GitLab returns 403 both for permission/feature-disabled errors
+    (non-retryable) and, less commonly, for a throttled request that a
+    self-managed instance's proxy tier fronts with 403 instead of 429 --
+    distinguishable only by the presence of rate-limit headers (``Retry-
+    After``, or ``RateLimit-Remaining: 0``); see
+    ``docs/providers/rate-limit-policy.md#gitlab``.
+
+    Mirrors ``providers/gitlab/client.py::_maybe_raise_gitlab_rate_limit``'s
+    403 qualification (the canonical ``GitLabWorkClient``'s classifier). That
+    copy operates on a python-gitlab ``GitlabError`` exception's
+    ``response_code``/``response_headers`` attributes, so it can't be called
+    directly from an httpx-based client; this header-only extraction is the
+    shared predicate every GitLab provider client should use instead of
+    re-deriving the same boolean check a third time.
+
+    :param headers: any object exposing a ``.get(name)`` mapping interface --
+        an ``httpx.Headers``, a plain ``dict``, or python-gitlab's
+        ``response_headers``.
+    """
+    if headers is None:
+        return False
+    try:
+        remaining = headers.get("RateLimit-Remaining")
+        retry_after_raw = headers.get("Retry-After")
+    except AttributeError:
+        return False
+    return (
+        parse_retry_after_header(headers) is not None
+        or str(remaining) == "0"
+        or retry_after_raw is not None
+    )
+
+
+def gitlab_resolve_retry_after_seconds(headers: Any) -> float | None:
+    """Resolve the effective retry delay for a rate-limited GitLab response.
+
+    Prefers ``Retry-After`` via :func:`parse_retry_after_header` (handles
+    both delta-seconds and HTTP-date forms). When that header is absent or
+    unparseable, derives the delay from ``RateLimit-Reset`` (an absolute
+    epoch-seconds timestamp) instead of leaving the caller with ``None`` --
+    a caller that treats "no Retry-After" as "no signal at all" and falls
+    back to its own short default backoff ends up re-hammering a
+    still-throttled self-hosted instance sooner than the server intends.
+
+    Mirrors ``providers/gitlab/client.py::_maybe_raise_gitlab_rate_limit``'s
+    ``Retry-After`` / ``RateLimit-Reset`` fallback byte-for-byte; extracted
+    here so GitLab provider clients other than ``GitLabWorkClient`` derive
+    the SAME delay from the SAME headers instead of reimplementing (or
+    worse, silently omitting) the ``RateLimit-Reset`` fallback.
+
+    :param headers: any object exposing a ``.get(name)`` mapping interface --
+        an ``httpx.Headers``, a plain ``dict``, or python-gitlab's
+        ``response_headers``.
+    """
+    retry_after = parse_retry_after_header(headers)
+    if retry_after is not None:
+        return retry_after
+    if headers is None:
+        return None
+    try:
+        reset_raw = headers.get("RateLimit-Reset")
+    except AttributeError:
+        return None
+    if reset_raw is None:
+        return None
+    try:
+        return max(0.0, float(reset_raw) - time.time())
+    except (TypeError, ValueError):
+        return None

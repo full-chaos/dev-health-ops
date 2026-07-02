@@ -22,6 +22,10 @@ configure_logging()
 init_sentry()
 init_tracing()
 
+from dev_health_ops.api.external_ingest import router as external_ingest_router
+from dev_health_ops.api.external_ingest.errors import (
+    register_external_ingest_error_handlers,
+)
 from dev_health_ops.api.middleware.rate_limit import limiter
 from dev_health_ops.api.product_telemetry import router as product_telemetry_router
 from dev_health_ops.api.telemetry.router import router as telemetry_router
@@ -191,6 +195,7 @@ app = FastAPI(
 
 app.state.limiter = limiter
 register_exception_handlers(app)
+register_external_ingest_error_handlers(app)
 
 register_middleware(app)
 
@@ -205,6 +210,7 @@ app.include_router(licensing_router)
 app.include_router(telemetry_router)
 app.include_router(product_telemetry_router)
 app.include_router(ingest_router)
+app.include_router(external_ingest_router)
 app.include_router(orgs_router)
 
 register_observability(app)

@@ -15,6 +15,9 @@ from dev_health_ops.api.queries.investment import (
     LATEST_WORK_UNIT_REPO_EFFORT_CTE,
     fetch_investment_quality_stats,
 )
+from dev_health_ops.api.queries.investment_membership_scope import (
+    record_stale_investment_membership_scope,
+)
 
 from ..authz import require_org_id
 from ..context import GraphQLContext
@@ -350,6 +353,8 @@ async def _execute_timeseries_query(
 
     sql, params = compile_timeseries(request, org_id, timeout, filters=filters)
 
+    if use_investment:
+        await record_stale_investment_membership_scope(client, org_id=org_id)
     rows = await query_dicts(client, sql, params)
     grouped: dict[str, list[TimeseriesBucket]] = {}
 
@@ -807,6 +812,10 @@ async def resolve_analytics(
                 cov_params.update(coverage_filter_params)
 
                 try:
+                    if request.use_investment:
+                        await record_stale_investment_membership_scope(
+                            client, org_id=org_id
+                        )
                     c_rows = await query_dicts(client, coverage_sql, cov_params)
                     if c_rows:
                         total = float(c_rows[0].get("total", 0))

@@ -22,13 +22,85 @@ from dev_health_ops.metrics.job_daily import run_daily_metrics_job
 from dev_health_ops.metrics.schemas import WorkUnitInvestmentRecord
 from dev_health_ops.models.teams import Team
 from dev_health_ops.providers.teams import load_team_resolver
-from dev_health_ops.storage import SQLAlchemyStore, resolve_db_type, run_with_store
+from dev_health_ops.storage import (
+    ClickHouseStore,
+    SQLAlchemyStore,
+    resolve_db_type,
+    run_with_store,
+)
 from dev_health_ops.utils import BATCH_SIZE, MAX_WORKERS
 from dev_health_ops.work_graph.runner import materialize_fixture_investments
 
 MIN_WORK_UNIT_INVESTMENT_RECORDS = 5
 MIN_WORK_UNIT_REPO_COVERAGE = 0.9
 MIN_WORK_UNIT_TEAM_COVERAGE = 0.8
+
+# Providers that only ever appear via a real connector sync. Fixture runs may
+# label rows "github" etc. via --provider, so the guard keys on whether any of
+# these are ALREADY present for the org, not on the label being generated.
+LIVE_PROVIDERS: tuple[str, ...] = ("github", "gitlab", "jira", "linear", "bitbucket")
+
+
+class MixedOrgError(RuntimeError):
+    """Refusal to write synthetic fixtures into an org holding synced data."""
+
+
+# Server messages that mean the scanned table simply is not there yet (fresh
+# database, migrations not run). ONLY these disarm the scan for that table —
+# any other failure (connectivity, auth, syntax) must fail CLOSED, or a
+# transient outage would silently let fixtures pollute a live org.
+_MISSING_TABLE_MARKERS = ("UNKNOWN_TABLE", "does not exist", "doesn't exist")
+
+
+async def _detect_live_providers(store: Any, org_id: str) -> set[str]:
+    """Best-effort scan for live (connector-synced) providers in ``org_id``.
+
+    Synthetic fixtures silently mixed into a synced org pollute Investment
+    allocation and every team/repo rollup with repos and teams that do not
+    exist for that tenant (CHAOS-2778). Only the ClickHouse analytics store is
+    scanned — that is where fixture work items/repos land; other store types
+    return an empty set and skip the guard.
+    """
+    client = getattr(store, "client", None)
+    if not isinstance(store, ClickHouseStore) or client is None:
+        return set()
+    found: set[str] = set()
+    for table in ("work_items", "repos"):
+        query = (
+            f"SELECT DISTINCT provider FROM {table} "
+            "WHERE org_id = {org_id:String} AND provider IN {live:Array(String)}"
+        )
+        try:
+            result = await asyncio.to_thread(
+                client.query,
+                query,
+                parameters={"org_id": org_id, "live": list(LIVE_PROVIDERS)},
+            )
+        except Exception as exc:
+            if any(marker in str(exc) for marker in _MISSING_TABLE_MARKERS):
+                # Fresh DB / missing table: nothing synced yet.
+                logging.debug("mixed-org guard skipped table %s: %s", table, exc)
+                continue
+            raise
+        found.update(str(row[0]) for row in getattr(result, "result_rows", []) or [])
+    return found
+
+
+async def _ensure_org_unpolluted(
+    store: Any, org_id: str, *, allow_mixed_org: bool
+) -> None:
+    """Refuse fixture generation into an org that already holds synced data."""
+    if allow_mixed_org:
+        return
+    live_providers = await _detect_live_providers(store, org_id)
+    if live_providers:
+        raise MixedOrgError(
+            f"Org {org_id} already holds synced data from "
+            f"{sorted(live_providers)}. Generating synthetic fixtures into it "
+            "would pollute Investment/team/repo rollups with demo repos and "
+            "teams (CHAOS-2778). Use a dedicated demo org, or pass "
+            "--allow-mixed-org to override."
+        )
 
 
 async def _insert_batches(
@@ -577,6 +649,10 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
         if isinstance(store, SQLAlchemyStore):
             await store.ensure_tables()
 
+        await _ensure_org_unpolluted(
+            store, org_id, allow_mixed_org=getattr(ns, "allow_mixed_org", False)
+        )
+
         repo_count = max(1, ns.repo_count)
         base_name = ns.repo_name
         team_count = getattr(ns, "team_count", 10)
@@ -1064,7 +1140,11 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                     if comp_data["dailies"]:
                         sink.write_repo_complexity_daily(comp_data["dailies"])
 
-    await run_with_store(ns.sink, db_type, _handler, org_id=org_id)
+    try:
+        await run_with_store(ns.sink, db_type, _handler, org_id=org_id)
+    except MixedOrgError as exc:
+        logging.error("%s", exc)
+        return 1
 
     all_ff_flags: list = []
     feature_flag_graph_contexts: list[dict[str, Any]] = []
@@ -2333,6 +2413,17 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         help=(
             "Bypass metric-coherence validation after generation. "
             "Off by default; use only when generation performance is the bottleneck."
+        ),
+    )
+    fix_gen.add_argument(
+        "--allow-mixed-org",
+        action="store_true",
+        dest="allow_mixed_org",
+        default=False,
+        help=(
+            "Write fixtures even if the target org already holds live "
+            "connector-synced data. Off by default: mixing synthetic repos/teams "
+            "into a synced org pollutes Investment and rollup charts (CHAOS-2778)."
         ),
     )
     fix_gen.set_defaults(func=run_fixtures_generation)

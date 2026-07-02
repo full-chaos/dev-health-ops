@@ -438,7 +438,7 @@ def test_reference_discovery_honors_retry_after() -> None:
 
 
 # ---------------------------------------------------------------------------
-# LaunchDarkly 403 -> AuthenticationException (both LD client modules)
+# LaunchDarkly 403 -> AuthenticationException (all three LD client modules)
 # ---------------------------------------------------------------------------
 
 
@@ -446,18 +446,27 @@ def test_launchdarkly_403_is_authentication_error() -> None:
     from dev_health_ops.connectors.launchdarkly import (
         _raise_for_status as connector_raise,
     )
+    from dev_health_ops.providers.launchdarkly.client import (
+        _raise_for_status as client_raise,
+    )
     from dev_health_ops.providers.launchdarkly.code_refs import (
         _raise_for_status as code_refs_raise,
     )
+
+    # CHAOS-2761: providers/launchdarkly/client.py is the canonical migration
+    # target for connectors/launchdarkly.py's flag/audit-log fetch logic --
+    # behavior parity means all three raise sites (legacy connector, the new
+    # canonical client, and the pre-existing canonical code-refs client)
+    # classify identically.
+    raise_sites = (connector_raise, client_raise, code_refs_raise)
 
     forbidden = cast(
         httpx.Response,
         SimpleNamespace(status_code=403, text="forbidden", headers={}, url=None),
     )
-    with pytest.raises(AuthenticationException):
-        connector_raise(forbidden)
-    with pytest.raises(AuthenticationException):
-        code_refs_raise(forbidden)
+    for raise_site in raise_sites:
+        with pytest.raises(AuthenticationException):
+            raise_site(forbidden)
 
     # 429 still yields a retryable RateLimitException carrying a signal.
     throttled = cast(
@@ -469,11 +478,12 @@ def test_launchdarkly_403_is_authentication_error() -> None:
             url=None,
         ),
     )
-    with pytest.raises(RootRateLimitException) as excinfo:
-        connector_raise(throttled)
-    assert excinfo.value.signal is not None
-    assert excinfo.value.signal.provider == "launchdarkly"
-    assert excinfo.value.signal.reason == "primary"
-    assert excinfo.value.signal.dimension is BudgetDimension.REST_CORE
-    assert excinfo.value.signal.retry_after_seconds == 7.0
-    assert excinfo.value.signal.reset_at == _EPOCH_UTC
+    for raise_site in raise_sites:
+        with pytest.raises(RootRateLimitException) as excinfo:
+            raise_site(throttled)
+        assert excinfo.value.signal is not None
+        assert excinfo.value.signal.provider == "launchdarkly"
+        assert excinfo.value.signal.reason == "primary"
+        assert excinfo.value.signal.dimension is BudgetDimension.REST_CORE
+        assert excinfo.value.signal.retry_after_seconds == 7.0
+        assert excinfo.value.signal.reset_at == _EPOCH_UTC

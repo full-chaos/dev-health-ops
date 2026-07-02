@@ -75,6 +75,10 @@ from dev_health_ops.metrics.schemas import (
 )
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.metrics.sinks.factory import create_sink
+from dev_health_ops.work_graph.investment.components import (
+    ComponentBuildStats,
+    build_components,
+)
 from dev_health_ops.work_graph.investment.membership import (
     NodeKey,
     build_membership_records,
@@ -108,39 +112,21 @@ class MembershipBackfillConfig:
 
 def _build_components_for_backfill(
     edges: list[dict[str, Any]],
+    *,
+    stats: ComponentBuildStats | None = None,
 ) -> list[list[NodeKey]]:
     """Connected-component node lists from work_graph_edges.
 
-    Mirrors ``materialize._build_components`` (same union-find over
-    source/target endpoints) but returns only the per-component node lists — the
-    backfill does not need the component edges. Kept local to avoid importing the
-    heavy ``materialize`` module (and its LLM provider deps) into the worker.
+    Delegates to the SHARED ``components.build_components`` (the exact same
+    grouping + CHAOS-2775 oversized-component split the LLM materializer uses)
+    and drops the per-component edge bundles the backfill does not need. Sharing
+    the implementation is REQUIRED for correctness: ``work_unit_id`` is a hash of
+    a component's node set, so if this path grouped nodes even slightly
+    differently from the materializer the projected membership would target
+    non-existent unit ids. ``components`` is intentionally lightweight (no LLM
+    provider deps), so importing it into the worker is cheap.
     """
-    adjacency: dict[NodeKey, list[NodeKey]] = {}
-    for edge in edges:
-        source = (str(edge.get("source_type")), str(edge.get("source_id")))
-        target = (str(edge.get("target_type")), str(edge.get("target_id")))
-        adjacency.setdefault(source, []).append(target)
-        adjacency.setdefault(target, []).append(source)
-
-    visited: set[NodeKey] = set()
-    components: list[list[NodeKey]] = []
-    for node in adjacency:
-        if node in visited:
-            continue
-        stack = [node]
-        visited.add(node)
-        component_nodes: list[NodeKey] = []
-        while stack:
-            current = stack.pop()
-            component_nodes.append(current)
-            for neighbor in adjacency.get(current, []):
-                if neighbor in visited:
-                    continue
-                visited.add(neighbor)
-                stack.append(neighbor)
-        components.append(component_nodes)
-    return components
+    return [nodes for nodes, _edges in build_components(edges, stats=stats)]
 
 
 def _fetch_latest_distributions(
@@ -206,7 +192,8 @@ def backfill_memberships(config: MembershipBackfillConfig) -> dict[str, int]:
         sink.ensure_schema()
 
         edges = fetch_work_graph_edges(sink, repo_ids=config.repo_ids, org_id=org_id)
-        components = _build_components_for_backfill(edges)
+        component_stats = ComponentBuildStats()
+        components = _build_components_for_backfill(edges, stats=component_stats)
         if not components:
             logger.info(
                 "Membership backfill: no work graph components for org=%s", org_id
@@ -216,6 +203,7 @@ def backfill_memberships(config: MembershipBackfillConfig) -> dict[str, int]:
                 "matched": 0,
                 "skipped": 0,
                 "memberships": 0,
+                **component_stats.as_dict(),
             }
 
         # Map each current work_unit_id -> its node list.
@@ -375,6 +363,7 @@ def backfill_memberships(config: MembershipBackfillConfig) -> dict[str, int]:
             "matched": matched,
             "skipped": skipped,
             "memberships": len(membership_records),
+            **component_stats.as_dict(),
         }
     finally:
         sink.close()

@@ -6,7 +6,7 @@ import json
 import logging
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from billiard.exceptions import SoftTimeLimitExceeded
@@ -15,6 +15,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from dev_health_ops.models import (
+    BackfillJob,
     Base,
     Integration,
     IntegrationDataset,
@@ -42,6 +43,7 @@ from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_STATUS_DISPATCHED,
     OUTBOX_STATUS_PENDING,
 )
+from dev_health_ops.sync.error_sanitize import REDACTION_MARKER
 from dev_health_ops.workers.post_sync_dispatch import build_post_sync_dispatch_payload
 
 
@@ -448,6 +450,82 @@ def test_run_sync_unit_success_attaches_launchdarkly_budget_estimate(
         "code_refs",
     }
     assert finalize_calls == [((str(run.id),), "sync")]
+
+
+def test_run_sync_unit_success_attaches_launchdarkly_budget_comparison(
+    db_session, monkeypatch
+):
+    """CHAOS-2761: LaunchDarklyClient / LaunchDarklyCodeReferencesClient now
+    drain real request counts through the shared CHAOS-2754 recorder for all
+    3 currently-emitted LD route families, so a run's provider_usage actuals
+    join against the LaunchDarklyBudgetEstimator estimate exactly like
+    GitHub's CHAOS-2759 calibration already does."""
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(
+        db_session,
+        provider="launchdarkly",
+        source_type="project",
+        external_id="project:default",
+        name="default",
+        full_name="LaunchDarkly/default",
+        dataset_key="feature-flags",
+        processor_flags={"sync_feature_flags": True},
+    )
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        dataset_adapters,
+        "run_dataset_unit",
+        lambda ctx, runtime: {
+            "ok": True,
+            "observations": {
+                "provider_usage": [
+                    {
+                        "transport": "rest",
+                        "route_family": "flags",
+                        "dimension": "rest_core",
+                        "request_count": 3,
+                    },
+                    {
+                        "transport": "rest",
+                        "route_family": "audit_log",
+                        "dimension": "rest_core",
+                        "request_count": 1,
+                    },
+                    {
+                        "transport": "rest",
+                        "route_family": "code_refs",
+                        "dimension": "rest_core",
+                        "request_count": 1,
+                    },
+                ]
+            },
+        },
+    )
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    assert result["status"] == "success"
+    db_session.refresh(unit)
+    observations = unit.result["observations"]
+    comparisons = {
+        row["route_family"]: row for row in observations["budget_comparison"]
+    }
+    assert set(comparisons) == {"flags", "audit_log", "code_refs"}
+    assert comparisons["flags"]["actual_requests"] == 3
+    assert comparisons["audit_log"]["actual_requests"] == 1
+    assert comparisons["code_refs"]["actual_requests"] == 1
+    # code_refs' estimated_units=1 (LaunchDarklyBudgetEstimator, 1 REST_CORE
+    # estimate) vs. 1 actual request -> not underestimated.
+    assert comparisons["code_refs"]["underestimated"] is False
+    assert "budget_comparison_computed_at" in observations
 
 
 def test_run_sync_unit_success_attaches_linear_budget_estimate(db_session, monkeypatch):
@@ -1040,7 +1118,7 @@ def test_run_sync_unit_failure_persists_failed_and_error(db_session, monkeypatch
     assert result["status"] == "failed"
     db_session.refresh(unit)
     assert unit.status == SyncRunUnitStatus.FAILED.value
-    assert unit.error == "adapter failed"
+    assert unit.error == "RuntimeError: adapter failed"
     assert unit.lease_owner is None
     assert unit.lease_expires_at is None
     assert unit.last_heartbeat_at is not None
@@ -1051,6 +1129,49 @@ def test_run_sync_unit_failure_persists_failed_and_error(db_session, monkeypatch
     )
     assert finalize_outbox.status == OUTBOX_STATUS_PENDING
     assert finalize_calls == [((str(run.id),), "sync")]
+
+
+def test_run_sync_unit_failure_sanitizes_credential_material(db_session, monkeypatch):
+    """Mirrors CHAOS-2758's live-verify case B: a provider exception whose
+    message embeds an Authorization header (e.g. "403 rate limited --
+    Authorization: Bearer ghp_FAKE...") must not persist the raw credential
+    to sync_run_units.error, even though the same text used to land there
+    verbatim before CHAOS-2766 (evidence comment on CHAOS-2742)."""
+
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    # Built via concatenation, not a single literal: Gitleaks scans literal
+    # file bytes, and a contiguous "ghp_..." shape in the SOURCE reads as a
+    # real leaked credential to a byte scanner (CHAOS-2766 PR #1123 CI).
+    fixture_value = "ghp_" + "FAKE1234567890abcdefghijklmnopqrst"
+
+    def fail(ctx, runtime):
+        raise RuntimeError(f"403 rate limited -- Authorization: Bearer {fixture_value}")
+
+    monkeypatch.setattr(dataset_adapters, "run_dataset_unit", fail)
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+    assert result["status"] == "failed"
+    db_session.refresh(unit)
+    assert unit.status == SyncRunUnitStatus.FAILED.value
+
+    for persisted_text in (unit.error, result.get("error")):
+        assert persisted_text is not None
+        assert fixture_value not in persisted_text
+        assert "Bearer" not in persisted_text
+        assert REDACTION_MARKER in persisted_text
+    assert "RuntimeError" in unit.error
+    assert "403 rate limited" in unit.error
 
 
 def test_legacy_connector_rate_limit_reaches_unit_deferral(db_session, monkeypatch):
@@ -1476,7 +1597,7 @@ def test_run_sync_unit_bootstrap_failure_enqueues_finalize(db_session, monkeypat
     assert result["status"] == "failed"
     assert unit.status == SyncRunUnitStatus.FAILED.value
     assert unit.attempts == 1
-    assert unit.error == "missing source"
+    assert unit.error == "ValueError: missing source"
     assert unit.lease_owner is None
     assert unit.lease_expires_at is None
     assert unit.result == {"error_category": "adapter_error"}
@@ -1511,7 +1632,7 @@ def test_run_sync_unit_bootstrap_failure_survives_session_rollback(
     assert result["status"] == "failed"
     assert unit.status == SyncRunUnitStatus.FAILED.value
     assert unit.attempts == 1
-    assert unit.error == "missing source"
+    assert unit.error == "ValueError: missing source"
     assert unit.lease_owner is None
     assert unit.lease_expires_at is None
     assert unit.result == {"error_category": "adapter_error"}
@@ -2094,6 +2215,94 @@ def test_finalize_sync_run_only_syncs_nonterminal_job_run_observers(
         "sync_run_id": str(run.id),
         "sentinel": "preserved",
     }
+
+
+def test_finalize_sync_run_sanitizes_copied_run_error_into_observer_columns(
+    db_session, monkeypatch
+):
+    """CHAOS-2766 codex review finding, round 2: finalize_sync_run and
+    sync_observers_for_terminal_sync_run both copy SyncRun.error VERBATIM
+    into other durable columns (SyncConfiguration.last_sync_error,
+    JobRun.error, BackfillJob.error_message) via a plain variable
+    assignment -- not str(exc)/an f-string -- so the CHAOS-2766 AST guard
+    (test_error_sanitize_guard.py) cannot see this propagation. A row
+    written before sanitize_error_text existed (or written by any future
+    site this repo's guard doesn't cover) could carry raw credential text in
+    SyncRun.error; this asserts that text is re-sanitized at every copy
+    site, not just at the original write."""
+    from dev_health_ops.sync.error_sanitize import REDACTION_MARKER
+    from dev_health_ops.workers import sync_units
+
+    fixture_value = "ghp_" + "FAKE1234567890abcdefghijklmnopqrst"
+    run, unit = _seed_run(db_session)
+    unit.status = SyncRunUnitStatus.FAILED.value
+    # Simulates a row carrying raw credential text at rest -- set directly on
+    # the column rather than through a sanitizing write path, exactly what a
+    # pre-CHAOS-2766 row (or any future unsanitized write) would look like.
+    run.error = (
+        "403 rate limited -- Authorization: Bearer "
+        + fixture_value
+        + " (redis://:"
+        + fixture_value
+        + "@redis-broker.internal:6379/0)"
+    )
+    config = SyncConfiguration(
+        org_id=run.org_id,
+        name="canonical-copied-error-sanitize",
+        provider="github",
+        sync_targets=["git"],
+        integration_id=run.integration_id,
+    )
+    db_session.add(config)
+    db_session.flush()
+    scheduled = ScheduledJob(
+        org_id=run.org_id,
+        name=f"sync-config-{uuid.uuid4()}",
+        job_type="sync",
+        provider="github",
+        schedule_cron="0 * * * *",
+        job_config={},
+        sync_config_id=config.id,
+        tz="UTC",
+        status=1,
+    )
+    db_session.add(scheduled)
+    db_session.flush()
+    pending_job_run = JobRun(
+        job_id=scheduled.id,
+        triggered_by="manual",
+        status=JobRunStatus.PENDING.value,
+    )
+    pending_job_run.result = {"sync_run_id": str(run.id)}
+    backfill_job = BackfillJob(
+        org_id=str(run.org_id),
+        sync_config_id=config.id,
+        celery_task_id=f"sync_run:{run.id}",
+        status="pending",
+        since_date=date(2026, 1, 1),
+        before_date=date(2026, 1, 8),
+        total_chunks=1,
+    )
+    db_session.add_all([pending_job_run, backfill_job])
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+
+    result = sync_units.finalize_sync_run(str(run.id))
+
+    db_session.refresh(config)
+    db_session.refresh(pending_job_run)
+    db_session.refresh(backfill_job)
+    assert result["status"] == "finalized"
+
+    for persisted_text in (
+        config.last_sync_error,
+        pending_job_run.error,
+        backfill_job.error_message,
+    ):
+        assert persisted_text is not None
+        assert fixture_value not in persisted_text
+        assert "Bearer" not in persisted_text
+        assert REDACTION_MARKER in persisted_text
 
 
 def test_reconciler_repairs_stale_observer_for_older_terminal_run_with_limit(

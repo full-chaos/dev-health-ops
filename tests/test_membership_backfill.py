@@ -271,6 +271,9 @@ def test_backfill_empty_graph_is_clean_noop() -> None:
         "matched": 0,
         "skipped": 0,
         "memberships": 0,
+        "oversized_components": 0,
+        "dropped_edges": 0,
+        "dropped_nodes": 0,
     }
     assert sink.written == []
     assert sink.run_markers == []

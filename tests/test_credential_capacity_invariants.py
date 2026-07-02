@@ -24,12 +24,17 @@ credential selection (forbidden).
 from __future__ import annotations
 
 import dataclasses
+import importlib
 import json
 import uuid
 from collections.abc import Iterator
 from datetime import datetime, timezone
+from typing import Any
 
 import pytest
+import sqlalchemy as sa
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -310,6 +315,42 @@ def test_sync_run_unit_model_has_no_credential_column() -> None:
     )
 
 
+def test_sync_configuration_has_no_credential_column() -> None:
+    """CHAOS-2762: ``SyncConfiguration`` carries no credential of its own.
+
+    Before this change, ``SyncConfiguration.credential_id`` was a second,
+    *unfrozen* mirror of ``Integration.credential_id`` -- writable and
+    readable independently of the run-auth freeze CHAOS-2755 stamps onto
+    ``sync_runs`` at plan time, even though nothing in the auth-resolution
+    path (``sync/planner.py``, ``workers/sync_bootstrap.py``) ever read it.
+    ``Integration.credential_id`` (reached via ``SyncConfiguration
+    .integration_id``) is now the only surface a credential attaches to sync
+    work through. Both the mapped table and the constructor must reject the
+    legacy field so it cannot silently come back.
+    """
+    from dev_health_ops.models.settings import SyncConfiguration
+
+    column_names = {column.name for column in SyncConfiguration.__table__.columns}
+    assert "credential_id" not in column_names, (
+        "SyncConfiguration must carry no credential_id column (CHAOS-2762): "
+        "Integration.credential_id is the only sanctioned surface"
+    )
+
+    # Built as a dict and unpacked (not passed as a literal keyword) so this
+    # deliberately-invalid call isn't statically bindable to the constructor
+    # signature -- both mypy (call-arg) and CodeQL
+    # (py/call/wrong-named-class-argument) would otherwise flag the literal
+    # form as a static error, which is exactly the point being proven, just
+    # asserted at runtime instead.
+    legacy_write_kwargs: dict[str, Any] = {
+        "name": "legacy-write-attempt",
+        "provider": "github",
+        "credential_id": uuid.uuid4(),
+    }
+    with pytest.raises(TypeError):
+        SyncConfiguration(**legacy_write_kwargs)
+
+
 # --- Behavior guards ----------------------------------------------------------
 
 
@@ -505,3 +546,140 @@ def test_credential_rotation_never_increases_admitted_capacity(
         "rotation admitted every candidate — in-flight consumption stopped "
         "gating after the fingerprint changed"
     )
+
+
+# ---------------------------------------------------------------------------
+# Migration 0032: downgrade repopulates credential_id (codex finding #2)
+# ---------------------------------------------------------------------------
+
+
+def _load_migration_0032():
+    return importlib.import_module(
+        "dev_health_ops.alembic.versions.0032_drop_sync_config_credential_id"
+    )
+
+
+def test_migration_0032_downgrade_repopulates_credential_id_from_integration():
+    """The recreated column must be repopulated from each config's linked
+    ``Integration.credential_id``, not left NULL.
+
+    A bare rollback that only re-adds the column (no data) would silently
+    change behavior for anything still reading it post-downgrade -- the same
+    class of surprise this migration exists to remove going the other
+    direction. Runs the real migration module's ``upgrade()`` against a live
+    schema (the documented way to unit-test one migration in isolation -- see
+    ``test_migration_0031_idempotent_upgrade``), then the real
+    column-add-and-repopulate helpers ``downgrade()`` itself calls, using a
+    correlated-subquery ``UPDATE`` that behaves the same on this test's
+    SQLite engine as it will on Postgres.
+    """
+    migration = _load_migration_0032()
+    assert migration.revision == "0032"
+    assert migration.down_revision == "0031"
+
+    metadata = sa.MetaData()
+    sa.Table(
+        "integration_credentials",
+        metadata,
+        sa.Column("id", sa.String, primary_key=True),
+    )
+    integrations = sa.Table(
+        "integrations",
+        metadata,
+        sa.Column("id", sa.String, primary_key=True),
+        sa.Column("credential_id", sa.String, nullable=True),
+    )
+    sync_configurations = sa.Table(
+        "sync_configurations",
+        metadata,
+        sa.Column("id", sa.String, primary_key=True),
+        sa.Column("integration_id", sa.String, nullable=True),
+        sa.Column("credential_id", sa.String, nullable=True),
+    )
+
+    engine = create_engine("sqlite:///:memory:")
+    try:
+        with engine.connect() as conn:
+            metadata.create_all(conn)
+
+            linked_integration_id = "integration-with-credential"
+            env_auth_integration_id = "integration-env-auth"
+            credential_id = "credential-a"
+
+            conn.execute(
+                integrations.insert(),
+                [
+                    {"id": linked_integration_id, "credential_id": credential_id},
+                    {"id": env_auth_integration_id, "credential_id": None},
+                ],
+            )
+            conn.execute(
+                sync_configurations.insert(),
+                [
+                    {
+                        "id": "config-linked",
+                        "integration_id": linked_integration_id,
+                        "credential_id": None,
+                    },
+                    {
+                        "id": "config-env-auth",
+                        "integration_id": env_auth_integration_id,
+                        "credential_id": None,
+                    },
+                    {
+                        "id": "config-unlinked",
+                        "integration_id": None,
+                        "credential_id": None,
+                    },
+                ],
+            )
+            conn.commit()
+
+            ctx = MigrationContext.configure(conn)
+            with Operations.context(ctx):
+                # Simulate the pre-0032 state (column present) by upgrading
+                # first (drops it), so there is something real to restore --
+                # exactly the rollback path this test pins.
+                migration.upgrade()
+                inspector = sa.inspect(conn)
+                assert "credential_id" not in {
+                    col["name"] for col in inspector.get_columns("sync_configurations")
+                }
+
+                # Exercise downgrade()'s column-add + repopulation directly
+                # rather than the full public function: its third step
+                # (re-adding the FK to integration_credentials) requires
+                # ALTER-ADD-CONSTRAINT support SQLite's Alembic dialect does
+                # not have without batch mode (a driver limitation unrelated
+                # to this migration's logic). That FK step was hand-verified
+                # against a real Postgres round-trip during CHAOS-2762
+                # review; what's being pinned HERE -- and what codex flagged
+                # -- is specifically that the column comes back populated,
+                # not empty.
+                migration._add_column_if_missing(
+                    migration._TABLE,
+                    sa.Column(migration._COLUMN, sa.String, nullable=True),
+                )
+                migration._repopulate_from_linked_integration()
+                inspector = sa.inspect(conn)
+                assert "credential_id" in {
+                    col["name"] for col in inspector.get_columns("sync_configurations")
+                }
+
+            rows = {
+                row.id: row.credential_id
+                for row in conn.execute(sa.select(sync_configurations))
+            }
+            assert rows["config-linked"] == credential_id, (
+                "downgrade must repopulate credential_id from the linked "
+                "Integration's credential_id, not leave it NULL"
+            )
+            assert rows["config-env-auth"] is None, (
+                "an Integration with credential_id NULL (env auth) must "
+                "repopulate as NULL, not invent a value"
+            )
+            assert rows["config-unlinked"] is None, (
+                "a config with no linked integration at all must stay NULL"
+            )
+    finally:
+        engine.dispose()

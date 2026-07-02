@@ -353,7 +353,7 @@ def _run_feature_flags_dataset(context: SyncTaskContext) -> dict[str, Any]:
             f"Unsupported feature-flags provider: provider={context.provider!r}"
         )
 
-    return {
+    dataset_result: dict[str, Any] = {
         "provider": context.provider,
         "dataset": context.dataset_key,
         "source": context.source_external_id,
@@ -365,6 +365,9 @@ def _run_feature_flags_dataset(context: SyncTaskContext) -> dict[str, Any]:
         if context.window_end is not None
         else None,
     }
+    if isinstance(result, dict) and isinstance(result.get("observations"), dict):
+        dataset_result["observations"] = result["observations"]
+    return dataset_result
 
 
 def run_dataset_unit(

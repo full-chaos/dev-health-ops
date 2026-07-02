@@ -519,7 +519,7 @@ def test_reconciler_rearms_dispatch_outbox_after_publish_failure(
     assert dispatch_row.status == OUTBOX_STATUS_PENDING
     assert dispatch_row.claim_token is None
     assert dispatch_row.attempts == 1
-    assert dispatch_row.last_error == "broker down"
+    assert dispatch_row.last_error == "RuntimeError: broker down"
     assert _aware(dispatch_row.available_at) > before
 
 
@@ -560,7 +560,7 @@ def test_reconciler_rearms_finalizer_outbox_after_publish_failure(
     assert finalize_row.status == OUTBOX_STATUS_PENDING
     assert finalize_row.claim_token is None
     assert finalize_row.attempts == 1
-    assert finalize_row.last_error == "broker down"
+    assert finalize_row.last_error == "RuntimeError: broker down"
     assert _aware(finalize_row.available_at) > before
 
 

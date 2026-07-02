@@ -58,20 +58,117 @@ LATEST_WORK_UNIT_INVESTMENTS_CTE = f"""
 """.rstrip()
 
 
+# CHAOS-2777: work_unit_repo_effort is a ReplacingMergeTree deduped on
+# computed_at with the RMT/GROUP key (org_id, work_unit_id, repo_id). Each
+# materialize run stamps ALL of a unit's per-repo rows with a single run
+# ``computed_at`` (materialize.py: one clock per run) -- INCLUDING the
+# categorization-skipped path, which rewrites repo-effort even when the
+# investment row is left untouched. So a unit's allocation is versioned
+# independently of its work_unit_investments row, and if a later generation
+# emits a SMALLER repo set (a repo's churn share drops to zero), the per-repo
+# dedup key keeps the stale (unit, dropped-repo) row alive under its own older
+# ``computed_at``. A naive per-repo argMax would then fan BOTH the current repos
+# AND the stale repo out, over-counting effort and breaking the sum invariant.
+#
+# Fix: scope to the unit's LATEST allocation generation. ``d`` dedups each
+# (org, work_unit_id, repo_id) to its newest row; ``g`` is the per-unit clock
+# = max(computed_at) across ALL of that unit's repo rows (i.e. the newest run
+# that touched it). We keep only rows whose own newest ``computed_at`` equals
+# that per-unit clock, dropping repos that only exist in older generations.
+# The clock is the allocation table's OWN per-unit max -- NOT the investments
+# computed_at -- because the skipped path legitimately writes allocation rows
+# newer than the investments row. ``has_allocation = 1`` is an explicit
+# match flag so consumers never depend on a non-empty work_unit_id sentinel.
+#
+# KNOWN THEORETICAL EDGE (accepted, not fixed): two DIFFERENT generations of a
+# unit's allocation sharing an IDENTICAL millisecond ``computed_at`` cannot be
+# told apart by this clock — a stale repo row from the tied older generation
+# would survive. Reaching it requires a retried chunk within one
+# frozen-``computed_at`` run to compute a DIFFERENT repo set mid-run; there is
+# no per-row version column beyond ``computed_at`` to break such a tie, and a
+# schema change is not warranted for it (codex round-3 on CHAOS-2777).
 LATEST_WORK_UNIT_REPO_EFFORT_CTE = """
         latest_work_unit_repo_effort AS (
             SELECT
-                work_unit_id,
-                repo_id,
-                argMax(effort_metric, computed_at) AS effort_metric,
-                argMax(effort_value, computed_at) AS repo_effort_value,
-                argMax(allocation_source, computed_at) AS allocation_source,
-                org_id,
-                max(computed_at) AS latest_repo_effort_computed_at
-            FROM work_unit_repo_effort
-            WHERE org_id = %(org_id)s
-            GROUP BY org_id, work_unit_id, repo_id
+                d.work_unit_id AS work_unit_id,
+                d.repo_id AS repo_id,
+                d.effort_metric AS effort_metric,
+                d.repo_effort_value AS repo_effort_value,
+                d.allocation_source AS allocation_source,
+                d.org_id AS org_id,
+                d.latest_repo_effort_computed_at AS latest_repo_effort_computed_at,
+                1 AS has_allocation
+            FROM (
+                SELECT
+                    work_unit_id,
+                    repo_id,
+                    org_id,
+                    argMax(effort_metric, computed_at) AS effort_metric,
+                    argMax(effort_value, computed_at) AS repo_effort_value,
+                    argMax(allocation_source, computed_at) AS allocation_source,
+                    max(computed_at) AS latest_repo_effort_computed_at
+                FROM work_unit_repo_effort
+                WHERE org_id = %(org_id)s
+                GROUP BY org_id, work_unit_id, repo_id
+            ) AS d
+            INNER JOIN (
+                SELECT
+                    org_id,
+                    work_unit_id,
+                    max(computed_at) AS unit_generation_at
+                FROM work_unit_repo_effort
+                WHERE org_id = %(org_id)s
+                GROUP BY org_id, work_unit_id
+            ) AS g
+                ON g.org_id = d.org_id
+                AND g.work_unit_id = d.work_unit_id
+            WHERE d.latest_repo_effort_computed_at = g.unit_generation_at
         )
+""".rstrip()
+
+
+# CHAOS-2777: multi-repo work units carry a NULL scalar ``repo_id`` in
+# work_unit_investments; their real per-repo effort split lives in
+# work_unit_repo_effort (migration 064, one row per (work_unit, repo)). This
+# derived table LEFT JOINs the latest-generation per-repo allocation onto
+# latest_work_unit_investments and, for units WITH allocation rows, fans each
+# unit out to one row per allocated repo -- replacing the scalar ``repo_id`` /
+# ``effort_value`` with the per-repo ``repo_id`` / ``repo_effort_value``. Units
+# WITHOUT any allocation row keep their scalar repo_id + full effort_value. The
+# match is gated on the explicit ``wure.has_allocation = 1`` flag (an unmatched
+# LEFT JOIN yields 0 under join_use_nulls=0 and NULL otherwise, both of which
+# fall through to the scalar branch), so no unit is ever dropped and we never
+# rely on a non-empty work_unit_id sentinel. ``has_allocation`` is re-exposed so
+# consumers (e.g. the unassigned-repo count) can tell "no allocation row" apart
+# from "allocation row with a NULL repo".
+#
+# Because a unit's per-repo effort sums to its total effort by construction
+# (materialize allocates the unit's effort across its repos) AND the CTE is
+# scoped to the unit's latest allocation generation, a downstream
+# ``sum(subcategory_kv.2 * effort_value)`` is UNCHANGED for single-repo units and
+# split -- same total -- across repos for multi-repo units (the allocation sum
+# invariant). Keyed on (org_id, work_unit_id) so tenant isolation is preserved.
+# Mirrors the GraphQL compiler (api/graphql/sql/compiler.py) and coverage-stats
+# (api/graphql/resolvers/analytics.py) scalar-fallback pattern. Callers MUST
+# chain LATEST_WORK_UNIT_REPO_EFFORT_CTE into the WITH clause and expose the
+# alias ``work_unit_investments`` so existing column references keep resolving.
+REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE = """
+            (
+                SELECT
+                    wui.work_unit_id AS work_unit_id,
+                    wui.from_ts AS from_ts,
+                    wui.to_ts AS to_ts,
+                    wui.org_id AS org_id,
+                    if(wure.has_allocation = 1, wure.repo_id, wui.repo_id) AS repo_id,
+                    if(wure.has_allocation = 1, wure.repo_effort_value, wui.effort_value) AS effort_value,
+                    if(wure.has_allocation = 1, 1, 0) AS has_allocation,
+                    wui.subcategory_distribution_json AS subcategory_distribution_json,
+                    wui.structural_evidence_json AS structural_evidence_json
+                FROM latest_work_unit_investments AS wui
+                LEFT JOIN latest_work_unit_repo_effort AS wure
+                    ON wure.org_id = wui.org_id
+                    AND wure.work_unit_id = wui.work_unit_id
+            ) AS work_unit_investments
 """.rstrip()
 
 
@@ -424,6 +521,7 @@ async def fetch_investment_repo_team_edges(
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
     query = f"""
         WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE},
+        {LATEST_WORK_UNIT_REPO_EFFORT_CTE},
         unit_team AS (
             SELECT
                 work_unit_id,
@@ -433,7 +531,7 @@ async def fetch_investment_repo_team_edges(
                     work_unit_investments.work_unit_id AS work_unit_id,
                     ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
                     countIf(ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) IS NOT NULL) AS cnt
-                FROM latest_work_unit_investments AS work_unit_investments
+                FROM {REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE}
                 ARRAY JOIN arrayDistinct(arrayConcat(
                     JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
                     [work_unit_investments.work_unit_id]
@@ -460,7 +558,7 @@ async def fetch_investment_repo_team_edges(
             ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id))) AS repo,
             ifNull(nullIf(unit_team.team, ''), 'unassigned') AS team,
             sum(subcategory_kv.2 * effort_value) AS value
-        FROM latest_work_unit_investments AS work_unit_investments
+        FROM {REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE}
         LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)
         LEFT JOIN unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
@@ -499,6 +597,7 @@ async def fetch_investment_team_category_repo_edges(
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
     query = f"""
         WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE},
+        {LATEST_WORK_UNIT_REPO_EFFORT_CTE},
         unit_team AS (
             SELECT
                 work_unit_id,
@@ -508,7 +607,7 @@ async def fetch_investment_team_category_repo_edges(
                     work_unit_investments.work_unit_id AS work_unit_id,
                     ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
                     countIf(ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) IS NOT NULL) AS cnt
-                FROM latest_work_unit_investments AS work_unit_investments
+                FROM {REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE}
                 ARRAY JOIN arrayDistinct(arrayConcat(
                     JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
                     [work_unit_investments.work_unit_id]
@@ -535,7 +634,7 @@ async def fetch_investment_team_category_repo_edges(
             splitByChar('.', subcategory_kv.1)[1] AS category,
             ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id))) AS repo,
             sum(subcategory_kv.2 * effort_value) AS value
-        FROM latest_work_unit_investments AS work_unit_investments
+        FROM {REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE}
         LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)
         LEFT JOIN unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
@@ -574,6 +673,7 @@ async def fetch_investment_team_subcategory_repo_edges(
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
     query = f"""
         WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE},
+        {LATEST_WORK_UNIT_REPO_EFFORT_CTE},
         unit_team AS (
             SELECT
                 work_unit_id,
@@ -583,7 +683,7 @@ async def fetch_investment_team_subcategory_repo_edges(
                     work_unit_investments.work_unit_id AS work_unit_id,
                     ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
                     countIf(ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) IS NOT NULL) AS cnt
-                FROM latest_work_unit_investments AS work_unit_investments
+                FROM {REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE}
                 ARRAY JOIN arrayDistinct(arrayConcat(
                     JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
                     [work_unit_investments.work_unit_id]
@@ -610,7 +710,7 @@ async def fetch_investment_team_subcategory_repo_edges(
             subcategory_kv.1 AS subcategory,
             ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id))) AS repo,
             sum(subcategory_kv.2 * effort_value) AS value
-        FROM latest_work_unit_investments AS work_unit_investments
+        FROM {REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE}
         LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)
         LEFT JOIN unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
@@ -653,6 +753,7 @@ async def fetch_investment_unassigned_counts(
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
     query = f"""
         WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE},
+        {LATEST_WORK_UNIT_REPO_EFFORT_CTE},
         unit_team AS (
             SELECT
                 work_unit_id,
@@ -662,7 +763,7 @@ async def fetch_investment_unassigned_counts(
                     work_unit_investments.work_unit_id AS work_unit_id,
                     ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
                     countIf(ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) IS NOT NULL) AS cnt
-                FROM latest_work_unit_investments AS work_unit_investments
+                FROM {REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE}
                 ARRAY JOIN arrayDistinct(arrayConcat(
                     JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
                     [work_unit_investments.work_unit_id]
@@ -686,12 +787,24 @@ async def fetch_investment_unassigned_counts(
             GROUP BY work_unit_id
         )
         SELECT
-            countDistinctIf(work_unit_investments.work_unit_id, repo_id IS NULL) AS missing_repo,
+            -- CHAOS-2777: a unit is only "missing repo" when it has a NULL scalar
+            -- repo_id AND no per-repo allocation row at all. Multi-repo units carry
+            -- a NULL scalar repo_id but DO have work_unit_repo_effort rows mapping
+            -- their effort to real repos, so they must NOT be counted as unassigned.
+            -- Reading from the same repo-allocated source as the Sankey edges keeps
+            -- the repo scope_filter applied to the fanned repo_id: there
+            -- ``has_allocation = 0 AND repo_id IS NULL`` is exactly the
+            -- no-allocation + NULL-scalar unit (allocated repos are non-null and
+            -- flagged), and countDistinct collapses the per-repo fan-out.
+            countDistinctIf(
+                work_unit_investments.work_unit_id,
+                has_allocation = 0 AND repo_id IS NULL
+            ) AS missing_repo,
             countDistinctIf(
                 work_unit_investments.work_unit_id,
                 ifNull(nullIf(unit_team.team, ''), '') = ''
             ) AS missing_team
-        FROM latest_work_unit_investments AS work_unit_investments
+        FROM {REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE}
         LEFT JOIN unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
         WHERE work_unit_investments.from_ts < %(end_ts)s
           AND work_unit_investments.to_ts >= %(start_ts)s

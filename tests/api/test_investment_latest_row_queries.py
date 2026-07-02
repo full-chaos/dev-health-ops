@@ -306,7 +306,14 @@ async def test_investment_queries_read_latest_work_unit_rows(
 
     sql = captured["sql"]
     assert "latest_work_unit_investments AS" in sql
-    assert "FROM latest_work_unit_investments AS work_unit_investments" in sql
+    # The data source is the membership-scoped latest-row CTE. Most fetchers read
+    # it directly (``AS work_unit_investments``); the CHAOS-2777 allocation
+    # fetchers wrap it in a repo-effort fan-out derived table (``AS wui``). Either
+    # aliasing is acceptable — both read the deduped, org-scoped CTE.
+    assert (
+        "FROM latest_work_unit_investments AS work_unit_investments" in sql
+        or "FROM latest_work_unit_investments AS wui" in sql
+    )
     assert "argMax(effort_value, computed_at) AS effort_value" in sql
     assert "work_unit_investments.from_ts < %(end_ts)s" in sql
     assert "work_unit_investments.to_ts >= %(start_ts)s" in sql

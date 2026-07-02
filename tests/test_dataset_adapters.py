@@ -363,6 +363,37 @@ def test_launchdarkly_feature_flags_route_to_existing_feature_flag_sync() -> Non
     assert result["feature_flags"] == {"flags_synced": 3}
 
 
+def test_launchdarkly_feature_flags_threads_usage_observations_to_result() -> None:
+    """CHAOS-2761: provider_usage actuals drained by LaunchDarklyClient /
+    LaunchDarklyCodeReferencesClient must reach the unit result's top-level
+    ``observations``, mirroring the work-items dataset passthrough, so
+    run_sync_unit's budget_comparison join can see them."""
+    ctx = _context(
+        provider="launchdarkly",
+        dataset_key="feature-flags",
+        source_external_id="proj",
+        credentials={"api_key": "ld-key"},
+    )
+    observations = {
+        "provider_usage": [
+            {
+                "transport": "rest",
+                "route_family": "flags",
+                "dimension": "rest_core",
+                "request_count": 1,
+            }
+        ]
+    }
+
+    with patch(
+        "dev_health_ops.workers.feature_flag_sync._sync_launchdarkly_feature_flags",
+        return_value={"flags_synced": 3, "observations": observations},
+    ):
+        result = run_dataset_unit(ctx, _runtime())
+
+    assert result["observations"] == observations
+
+
 def test_unsupported_provider_dataset_pair_raises_value_error() -> None:
     ctx = _context(provider="jira", dataset_key="commits", source_external_id="OPS")
 

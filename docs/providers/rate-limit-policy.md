@@ -25,6 +25,20 @@ The concrete shape that enforces this today:
   `workers/sync_bootstrap.py`. There is no credential pool, no round-robin, and
   no unit-level credential selection. A sync unit uses exactly the integration's
   one active credential (or the env fallback when `credential_id is None`).
+- **Exactly one place a credential attaches to sync work.**
+  `SyncConfiguration` (the admin API's sync-config row) used to carry its own
+  `credential_id` column — a second, *unfrozen* copy of the same selection,
+  writable independently of `Integration.credential_id` and never read by
+  planning, budgeting, or auth resolution. It was removed
+  ([CHAOS-2762](https://linear.app/fullchaos/issue/CHAOS-2762)); the admin API
+  still accepts/returns `credential_id` on sync-config payloads, but it is now
+  resolved live from the linked `Integration.credential_id` on every read (see
+  `api/admin/routers/sync.py`), so it can never drift from the surface auth
+  resolution actually uses. **`SyncConfigResponse.credential_id` is a
+  compatibility read-through alias, not a design target** — it exists only
+  because the web admin UI still reads a sync config's credential off the
+  sync-config response. It is a candidate for removal once web reads
+  credentials at the `Integration` level directly instead.
 - **Runtime cache is credential-scoped for isolation, not capacity.** The
   provider runtime reuse cache keys on
   `RuntimeCacheKey(org_id, integration_id, credential_id, credential_fingerprint,
@@ -44,9 +58,15 @@ The concrete shape that enforces this today:
   credential identity/version onto a `SyncRun` at plan time (so a mid-run
   credential edit cannot produce a mixed-auth run) is a *determinism* mechanism.
   It selects **one** auth context for the whole run and must never be used to
-  pick different credentials per unit for throughput. **Target contract, landing
-  in [CHAOS-2755](https://linear.app/fullchaos/issue/CHAOS-2755):** the `SyncRun`
-  model does not yet carry a credential stamp column.
+  pick different credentials per unit for throughput. **Shipped**
+  ([CHAOS-2755](https://linear.app/fullchaos/issue/CHAOS-2755), migration
+  `0030`): `sync_runs` carries `credential_id` / `credential_fingerprint` /
+  `auth_source`, stamped once at plan time by `sync/planner.py`'s
+  `_resolve_credential_stamp` and never re-resolved mid-run —
+  `workers/sync_bootstrap.py` reads the frozen stamp, falling back to the
+  mutable `Integration.credential_id` path only for legacy/in-flight-at-deploy
+  runs whose stamp is `NULL`. Enforced by `tests/test_sync_run_auth_freeze.py`
+  and `tests/test_sync_planner.py`.
 
 **Out of scope, permanently:** credential pools, credential round-robin,
 unit-level credential assignment for throughput, and any UI/API language
@@ -83,20 +103,21 @@ cooperating layers:
    | Jira client (JQL + enrichment) | 4 (`max_retries_429=3` → `+1` initial) | `providers/jira/client.py` |
    | Jira Atlassian REST compat | 5 (`RESTClient(max_retries=5)`) | `connectors/utils/rest.py` |
    | Linear | 5 (`DEFAULT_MAX_ATTEMPTS`) | `providers/linear/client.py` |
-   | LaunchDarkly | 5 (`max_retries=5`) | `connectors/launchdarkly.py` |
+   | LaunchDarkly (flags/audit_log) | 5 (`max_retries=5`) | `providers/launchdarkly/client.py` |
+   | LaunchDarkly (code_refs) | 5 (`max_retries=5`) | `providers/launchdarkly/code_refs.py` |
 
 2. **`RateLimitException` as the carrier.** When in-place retries are exhausted
    (or a 429/permission-vs-limit decision is made), the **canonical provider
    clients** (`providers/<provider>/client.py`) raise
-   `dev_health_ops.exceptions.RateLimitException` carrying an optional
-   `retry_after_seconds`, and the worker deferral (`workers/sync_units.py`)
-   catches exactly that type. **Caveat:** the frozen legacy connectors
-   (`connectors/github.py`, `connectors/gitlab.py`) raise a *separate*
-   `connectors.base.RateLimitException` (it subclasses plain `Exception`, not
-   `ConnectorException`), so the two exception hierarchies are **not yet
-   unified**. Normalizing every provider onto one signal is
-   [CHAOS-2753](https://linear.app/fullchaos/issue/CHAOS-2753) — see
-   [Known gaps](#known-gaps).
+   `dev_health_ops.exceptions.RateLimitException` carrying a normalized
+   `RateLimitSignal` (`route_family`, `dimension`,
+   `reason`, `retry_after_seconds`, `reset_at`, `request_id`), and the worker
+   deferral (`workers/sync_units.py`) catches exactly that type. The frozen
+   legacy connectors (`connectors/github.py`, `connectors/gitlab.py`) raise
+   `connectors.base.RateLimitException`, which **subclasses the canonical root**
+   (shipped as [CHAOS-2753](https://linear.app/fullchaos/issue/CHAOS-2753),
+   ops#1111) — so a rate limit raised deep in a legacy connector reaches the
+   same deferral branch and carries the same signal, one unified hierarchy.
 
 3. **Worker-level deferral (`workers/rate_limit_defer.py`).** Instead of
    consuming the genuine-failure retry budget and stamping the run `FAILED`, a
@@ -173,7 +194,9 @@ CHAOS-2754's normalized `provider_usage` actuals, one row per
   `actual_requests`; the two are reported side by side, not blended into one
   number.
 - **A route_family/dimension with an estimate but no drained actuals this
-  run produces no row** (code datasets, an unwired LaunchDarkly family, …) —
+  run produces no row** (GitHub/GitLab code datasets still on the frozen
+  connector path, a `contents_blob`/`secondary_abuse_risk` dimension sharing
+  its single REST call with an already-recorded `rest_core` dimension, …) —
   never a fabricated 100% over-estimation.
 - **`unbudgeted_actual`** is the reverse case: actual traffic on a
   route_family/dimension with **no matching estimate at all**, including the
@@ -325,6 +348,123 @@ deleted outright, no archival path.
 
 **Cooldown gating reads this table back before dispatch** — see the next
 section.
+
+## Legacy error-text columns (`sync_run_units.error` and siblings)
+
+Shipped in [CHAOS-2766](https://linear.app/fullchaos/issue/CHAOS-2766). Live
+verification of CHAOS-2758 above (evidence comment on CHAOS-2742) found that
+the *observation store*'s `reason` allow-list did its job, but a
+provider exception whose message embeds an `Authorization` header (e.g.
+`403 rate limited -- Authorization: Bearer ghp_FAKE...`) still landed
+**verbatim** in the pre-existing, free-form `sync_run_units.error` column —
+these legacy columns predate CHAOS-2742 and were never brought under the same
+discipline.
+
+**Redaction, not an allow-list — deliberately.** `reason` above is a closed,
+normalized enum with no diagnostic-text mandate, so allow-listing a fixed
+vocabulary is correct there. `sync_run_units.error` and its siblings
+(`sync_runs.error`, `sync_run_reference_discovery.error`,
+`sync_dispatch_outbox.last_error`) are free-form, operator-facing
+diagnostics — the entire point of persisting them is to help debug a failed
+sync without re-running it. Collapsing them to a category string would defeat
+that purpose. Instead, `dev_health_ops.sync.error_sanitize.sanitize_error_text`
+(one shared helper, imported at every persistence site — no per-site regexes)
+strips/masks only the specific credential-shaped substrings that must never
+reach the database:
+
+- `Authorization` / `Proxy-Authorization` headers, any scheme
+- Bearer tokens, with or without a leading header name
+- HTTP Basic auth base64 blobs
+- Provider PAT/bot-token prefixes: `ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`,
+  `github_pat_`, `glpat-`, `xoxb-`/`xoxp-`/`xoxa-`/`xoxr-`
+- `token=`/`private_token=`/`api_key=`/`access_token=`/`secret=`-style
+  key/value pairs
+- A credential embedded in a URL's userinfo component
+  (`scheme://user:pass@host`, e.g. `redis://:password@host:6379/0`,
+  `amqp://user:pass@host`) — added for a codex review finding on this PR: a
+  Celery/broker enqueue-failure exception can embed the configured
+  broker/result-backend connection string, and that shape evades every
+  pattern above
+
+Everything else in the message — status codes, provider names, retry
+context — passes through unchanged. A redacted match is replaced with the
+`REDACTION_MARKER` sentinel (`"[REDACTED]"`), and when the input is an
+exception object (the common case) the output is prefixed with the exception
+**class name** (`"RateLimitException: 403 rate limited -- [REDACTED]"`), so
+even a bare `raise SomeError()` with no message still persists something
+diagnostically useful. Redaction always runs *before* the length cap
+(`DEFAULT_MAX_ERROR_TEXT_LENGTH`, 4000 chars — `sync_dispatch_outbox.last_error`
+keeps its pre-existing, tighter 2000-char cap) so truncation can never split a
+credential in half and leave a partial value exposed.
+
+**Enforced by a source-level guard, not review discipline.** There is no
+type-system way to require "this exception must be sanitized before it
+reaches a DB column." `tests/test_error_sanitize_guard.py` AST-walks the
+worker/sync modules that own these columns and fails if any raw
+`str(exc)`-shaped call or bare `f"...{exc}"` interpolation exists outside a
+`logger.*(...)` call (diagnostic logs are a separate risk surface, out of
+this ticket's scope) — mirroring the doc-drift-guard precedent in
+`tests/test_rate_limit_policy_doc.py` (CHAOS-2757). Two internal
+classification helpers (`_classify_error` in `workers/sync_units.py`,
+`_is_retryable_discovery_error` in `workers/reference_discovery.py`) are
+exempted: they lowercase `str(exc)` only to pattern-match it against a fixed,
+curated vocabulary and return a category — the raw text itself is discarded,
+never persisted, the same shape as the `reason` allow-list above.
+
+**Out of scope.** Diagnostic *logs* (`logger.warning(..., extra={"error":
+str(exc)})`) are not touched — they are a different risk surface (a log
+aggregator, not this Postgres table) and were not part of the live-verified
+case. `MetricCheckpoint.error` (`metrics/checkpoints.py`) and
+`InvestmentBatchJob.error` (`work_graph/investment/batch_store.py`) are also
+out of scope: they belong to the LLM-categorization and metrics-checkpoint
+subsystems, not the sync-run/unit execution ledger this epic hardens, and
+their exception provenance (classification/LLM-batch errors, not raw
+provider-client HTTP exceptions) differs from the live-verified case.
+
+**`JobRun.error` / `BackfillJob.error_message` (manual-trigger enqueue
+path).** Added for a codex review finding on this PR: `sync/execution_trigger.py`
+`mark_job_run_failed` and `api/admin/routers/sync.py` `_mark_backfill_job_failed`
+sanitize **at the sink**, not their callers — a Celery/broker enqueue-failure
+exception raised from `dispatch_sync_run.apply_async(...)` in the manual-trigger
+and backfill admin endpoints can embed the broker/result-backend URL
+(credentials included), and both columns surface through admin job-history
+responses. Both functions now accept `BaseException | str` and call
+`sanitize_error_text` internally, so a future caller cannot bypass it by
+passing an already-formatted string; the corresponding `HTTPException`
+`detail` on the same enqueue-failure path is sanitized the same way. The
+CHAOS-2766 guard test (`tests/test_error_sanitize_guard.py`) covers this file
+too, scoped to only the functions that touch these columns — the router file
+has many unrelated `except ... str(exc)` sites for ordinary HTTP validation
+errors that are out of this guard's scope.
+
+**Copied-column propagation (`sync_observers_for_terminal_sync_run`,
+`finalize_sync_run`'s `stamp_sync_run_canonical_config` call).** Added for a
+codex review finding on this PR, round 2: two sites in `workers/sync_units.py`
+read `SyncRun.error` and assign it VERBATIM into another durable column via a
+plain variable (`error = ... (run.error or "...")`, `run_error = ... (run.error
+or "...")`) rather than a `str(exc)`/`f"...{exc}"` expression -- a shape the
+AST guard, which only recognizes exception-stringification forms, cannot see.
+`sync_observers_for_terminal_sync_run` copies it into both
+`BackfillJob.error_message` and `JobRun.error`; `finalize_sync_run` copies it
+into `SyncConfiguration.last_sync_error` via `stamp_sync_run_canonical_config`.
+Both now wrap the copied value in `sanitize_error_text` too (idempotent and
+cheap on already-sanitized text) -- this matters even with every write site
+above already covered, because `sync_observers_for_terminal_sync_run` also
+runs from the reconciler's stale-observer repair path
+(`reconcile_sync_dispatch`), which can touch a `SyncRun.error` value written
+by an OLDER code path or before this ticket shipped. Since AST-detecting
+arbitrary variable-to-column flows (as opposed to a fixed `str(exc)` shape)
+is not a tractable static check, this is covered by a targeted regression
+test instead
+(`test_finalize_sync_run_sanitizes_copied_run_error_into_observer_columns` in
+`tests/test_sync_units.py`) rather than an AST guard extension.
+
+**Pre-existing rows.** Any `sync_run_units.error`/`sync_runs.error`/etc. row
+written before this column was brought under `sanitize_error_text` keeps its
+raw text at rest until the row is next overwritten by a sanitizing write path
+(or copied through one of the sinks above, which now re-sanitizes on the way
+through). A scrub/backfill of already-persisted rows is a deliberately
+separate decision, out of scope for this PR.
 
 ## Cooldown gating
 
@@ -647,8 +787,8 @@ once beyond what DispatchGuard's concurrency cap already allows
   takes over.
 - **Non-retryable auth cases.** Jira has **no dedicated 403 rate-limit vs.
   permission classification** — a 403 surfaces through the shared HTTP error path
-  (`raise_for_status`). This is a known asymmetry vs. GitHub/GitLab; unified 403
-  handling is part of the [target contract](#target-contracts-chaos-2742).
+  (`raise_for_status`). This is a known asymmetry vs. GitHub/GitLab — see
+  [Known gaps](#known-gaps).
 - **Gating.** Worklog and AGG-GraphQL route families only appear when
   `JIRA_FETCH_WORKLOGS` / `ATLASSIAN_GQL_ENABLED` are set (`providers/jira/budget.py`).
 
@@ -704,27 +844,46 @@ once beyond what DispatchGuard's concurrency cap already allows
   endpoint hard-caps pages at 20 entries. Code-reference reads carry a
   `secondary_abuse_risk` reservation in addition to `rest_core`.
 - **Headers.** `X-RateLimit-Route-Remaining` (per-route remaining budget) and
-  `Retry-After` on `429` (`connectors/launchdarkly.py`).
+  `Retry-After` on `429` (`providers/launchdarkly/client.py`,
+  `providers/launchdarkly/code_refs.py`).
 - **Retry semantics.** `429` and `5xx` are retried with exponential backoff
   (honoring `Retry-After`) up to `max_retries = 5`. On exhaustion the terminal
   type differs: a `429` raises `RateLimitException` (→ worker deferral) while a
-  `5xx` raises `APIException` (a normal failure, `connectors/launchdarkly.py`
-  `_raise_for_status`). A low `X-RateLimit-Route-Remaining` (< 5) is currently
-  only **logged as a warning**, not fed into the deferral/cooldown machinery —
-  see [Known gaps](#known-gaps).
+  `5xx` raises `APIException` (a normal failure, `providers/launchdarkly/
+  client.py` / `providers/launchdarkly/code_refs.py` `_raise_for_status`). A
+  low `X-RateLimit-Route-Remaining` (< 5) is currently only **logged as a
+  warning**, not fed into the deferral/cooldown machinery — see
+  [Known gaps](#known-gaps).
 - **Non-retryable auth cases.** `401` → `AuthenticationException`; `403` →
   `APIException` (forbidden). LaunchDarkly does **not** distinguish a
   permission-403 from a rate-limit case the way GitHub/GitLab do.
-- **Frozen path caveat.** Flag and audit-log fetches still live in the **frozen
-  legacy connector** (`connectors/launchdarkly.py`); only the code-reference
-  client, code-ref helpers, and the budget estimator are canonical under
-  `providers/launchdarkly/`. See
+- **Canonical provider migration complete (CHAOS-2761).** Flag and audit-log
+  fetches moved off the frozen legacy connector
+  (`connectors/launchdarkly.py`, left in place unused by the sync path — it
+  still backs the admin credentials "test connection" endpoint, which mirrors
+  the same raw/legacy-client pattern already used there for Jira/Linear
+  connectivity checks and carries no actuals-instrumentation gap) into
+  `providers/launchdarkly/client.py::LaunchDarklyClient`, mirroring the
+  request/retry semantics byte-for-byte (parity pinned by
+  `tests/test_rate_limit_signal.py::test_launchdarkly_403_is_authentication_error`).
+  Combined with the pre-existing canonical `providers/launchdarkly/code_refs.py`,
+  all of `providers/launchdarkly/` is now canonical. See
   [LaunchDarkly sync budgeting](../architecture/launchdarkly-sync-budgeting.md).
+- **Actuals instrumentation (CHAOS-2761).** All 3 currently-emitted route
+  families (`flags`, `audit_log`, `code_refs`) now record real per-request
+  counts through the shared CHAOS-2754 recorder
+  (`LAUNCHDARKLY_USAGE_RESOLVER` in `providers/launchdarkly/budget.py`), so
+  LaunchDarkly units produce a `budget_comparison` row like GitHub/GitLab/
+  Jira/Linear work-item units already did. `code_refs`' `secondary_abuse_risk`
+  reservation shares its single REST call with the `rest_core` reservation, so
+  only `rest_core` ever gets a live actual (same one-call/two-dimension shape
+  as GitHub's `commit_stats`/`files`/`blame` `contents_blob` entries).
 - **Documented vs. emitted families.** The estimator currently emits `flags`,
   `audit_log`, and `code_refs`. `projects`, `segments`, and `members` are
   **modeled route families** (`LAUNCHDARKLY_BUDGET_ROUTE_FAMILIES` in
   `providers/launchdarkly/budget.py`) that the current `feature-flags` estimator
-  does not yet reserve; they are documented here for completeness.
+  does not yet reserve, and no client fetches yet; they are documented here for
+  completeness.
 
 #### Route families
 <!-- route-families:launchdarkly -->
@@ -740,10 +899,16 @@ once beyond what DispatchGuard's concurrency cap already allows
 
 ## Known gaps
 
-These are the instrumentation/coverage gaps the [CHAOS-2742](https://linear.app/fullchaos/issue/CHAOS-2742)
-epic exists to close. They are documented as **current reality**, not defects to
+These are the remaining instrumentation/coverage gaps after the
+[CHAOS-2742](https://linear.app/fullchaos/issue/CHAOS-2742) epic (all eight
+sub-issues shipped). They are documented as **current reality**, not defects to
 paper over:
 
+- **Jira 403s are not classified rate-limit vs. permission.** Unlike
+  GitHub/GitLab, Jira has no dedicated 403 classification — a 403 surfaces
+  through the shared HTTP error path rather than as a `RateLimitSignal` with a
+  `permission` reason (see [Jira](#jira) above). Untracked; file under a
+  follow-up if it bites in practice.
 - **Calibration only covers instrumented route families.** [CHAOS-2759](https://linear.app/fullchaos/issue/CHAOS-2759)
   attaches a `budget_comparison` (see
   [Actual-vs-estimated calibration](#actual-vs-estimated-calibration-chaos-2759)
@@ -754,37 +919,23 @@ paper over:
   **uninstrumented**, so those families never produce a comparison row.
   There is also no cross-run aggregation/dashboard yet — calibration today is
   visible per-unit (result + structured log), not rolled up over time.
-- **Signal handling is not yet provider-neutral.** There are two unrelated
-  `RateLimitException` classes — `dev_health_ops.exceptions.RateLimitException`
-  (canonical providers, caught by the worker deferral) and
-  `connectors.base.RateLimitException` (frozen legacy connectors) — and neither
-  carries a normalized `route_family` / `dimension` / `reason` / `request_id`.
-  (Target: [CHAOS-2753](https://linear.app/fullchaos/issue/CHAOS-2753).)
-- **Frozen `connectors/` path.** LaunchDarkly flag/audit-log fetches and several
-  GitHub/GitLab paths remain under the frozen `connectors/` tree. No new code may
-  be added there (see [`AGENTS.md`](../../AGENTS.md)); rate-limit/actuals
+- **Frozen `connectors/` path.** GitHub's `git`/`commit_stats`/`files`/`blame`/
+  `cicd`/`tests`/`deployments`/`security` route families and the equivalent
+  GitLab code-dataset paths remain under the frozen `connectors/` tree
+  (`connectors/github.py`'s PyGithub-based `GitHubConnector`, `connectors/
+  gitlab.py`'s python-gitlab-based `GitLabConnector`). No new code may be added
+  there (see [`AGENTS.md`](../../AGENTS.md)); rate-limit/actuals
   instrumentation for those datasets lands as the fetch moves to
-  `providers/<provider>/`.
+  `providers/github/` / `providers/gitlab/` — tracked as its own
+  canonical-provider-migration effort in
+  [CHAOS-2773](https://linear.app/fullchaos/issue/CHAOS-2773), since it is a
+  much larger migration (~1400 lines per connector, off PyGithub/python-gitlab
+  entirely) than a follow-up-ticket-sized change. LaunchDarkly's equivalent
+  gap (flag/audit-log fetches on the frozen connector) was closed in
+  [CHAOS-2761](https://linear.app/fullchaos/issue/CHAOS-2761); see
+  [LaunchDarkly](#launchdarkly) above.
 
-## Target contracts (CHAOS-2742)
 
-The following are **not shipped**; each lands in its own sub-issue PR, which will
-append its section here in the same changeset (per `AGENTS.md`
-"behavior docs updated with code"). Do not treat these as current behavior.
-
-- **`RateLimitSignal` normalization — [CHAOS-2753](https://linear.app/fullchaos/issue/CHAOS-2753).**
-  A provider-neutral
-  `RateLimitSignal(provider, host, integration_id, route_family, dimension,
-  retry_after_seconds, reset_at, reason, request_id)` that every provider emits
-  and the deferral machinery consumes, preserving GitHub's
-  primary/secondary/permission distinction and extending comparable handling to
-  Linear, Jira, GitLab, and LaunchDarkly.
-- **Shared actuals recorder — [CHAOS-2754](https://linear.app/fullchaos/issue/CHAOS-2754).**
-  A shared usage recorder with route-family keying and GitLab/Jira/Linear drains.
-- **Run-auth freeze — [CHAOS-2755](https://linear.app/fullchaos/issue/CHAOS-2755).**
-  Stamp `credential_id`/version onto `SyncRun` at plan time; bootstrap uses the
-  run-stamped auth context, not mutable integration state. Determinism only —
-  **never** unit-level credential selection for capacity.
 ## References
 
 - Epic: [CHAOS-2742](https://linear.app/fullchaos/issue/CHAOS-2742) — Harden sync

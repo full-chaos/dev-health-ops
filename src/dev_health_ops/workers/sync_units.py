@@ -84,6 +84,7 @@ from dev_health_ops.sync.dispatch_outbox import (
     upsert_outbox_wakeup,
 )
 from dev_health_ops.sync.dispatch_policy import route
+from dev_health_ops.sync.error_sanitize import sanitize_error_text
 from dev_health_ops.sync.guard import DispatchGuard
 from dev_health_ops.sync.trigger_routing import (
     stamp_sync_run_canonical_config,
@@ -1279,7 +1280,7 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     available_at=not_before,
                     rate_limit_deferrals=deferral.attempts,
                     rate_limit_first_seen_at=first_seen_at,
-                    error=str(exc),
+                    error=sanitize_error_text(exc),
                     result=deferral_result_payload,
                     lease_owner=None,
                     lease_expires_at=None,
@@ -1551,7 +1552,7 @@ def _stamp_sync_unit_soft_timeout(
                     status=SyncRunUnitStatus.RETRYING.value,
                     available_at=available_at,
                     duration_seconds=duration_seconds,
-                    error=str(exc),
+                    error=sanitize_error_text(exc),
                     result=result_payload,
                     expired_lease_retry_count=(
                         SyncRunUnit.expired_lease_retry_count + 1
@@ -1621,7 +1622,7 @@ def _stamp_sync_unit_soft_timeout(
                 status=SyncRunUnitStatus.FAILED.value,
                 available_at=None,
                 duration_seconds=duration_seconds,
-                error=str(exc),
+                error=sanitize_error_text(exc),
                 result=failed_payload,
                 last_retry_reason="soft_timeout",
                 retry_exhausted_at=completed_at
@@ -1657,7 +1658,7 @@ def _stamp_sync_unit_soft_timeout(
         {
             "status": "failed",
             "unit_id": unit_id,
-            "error": str(exc),
+            "error": sanitize_error_text(exc),
             "error_category": "soft_timeout",
             "retry_exhausted": failed_payload["retry_exhausted"],
         },
@@ -1697,7 +1698,7 @@ def _stamp_sync_unit_failed(
             .values(
                 status=SyncRunUnitStatus.FAILED.value,
                 duration_seconds=duration_seconds,
-                error=str(exc),
+                error=sanitize_error_text(exc),
                 result=failed_result_payload,
                 lease_owner=None,
                 lease_expires_at=None,
@@ -1736,7 +1737,7 @@ def _stamp_sync_unit_failed(
         {
             "status": "failed",
             "unit_id": unit_id,
-            "error": str(exc),
+            "error": sanitize_error_text(exc),
             "error_category": error_category,
         },
         True,
@@ -1806,10 +1807,21 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
             result_payload["reason"] = "no_sync_units_planned"
         run.result = result_payload
         run_success = run.status == SyncRunStatus.SUCCESS.value
+        # sanitize_error_text is applied here too, not just at the original
+        # write site: run.error is copied straight into
+        # SyncConfiguration.last_sync_error below (another variable-to-column
+        # assignment an str(exc)-focused AST guard can't see), and a row
+        # written before this column was brought under sanitize_error_text's
+        # discipline could still carry raw credential text (CHAOS-2766 codex
+        # review finding, round 2 -- same class as
+        # sync_observers_for_terminal_sync_run below). Idempotent/harmless on
+        # already-sanitized text.
         run_error = (
             None
             if run_success
-            else (run.error or "Sync run completed with failed units")
+            else sanitize_error_text(
+                run.error or "Sync run completed with failed units"
+            )
         )
         stamp_sync_run_canonical_config(
             session,
@@ -2042,7 +2054,19 @@ def sync_observers_for_terminal_sync_run(session, run: SyncRun) -> None:
         JobRunStatus.SUCCESS.value if success else JobRunStatus.FAILED.value
     )
     backfill_status = "completed" if success else "failed"
-    error = None if success else (run.error or "Sync run completed with failed units")
+    # sanitize_error_text is applied here too, not just at the original
+    # write site: this function copies SyncRun.error directly into
+    # BackfillJob.error_message / JobRun.error (a variable-to-column
+    # assignment the str(exc)-focused AST guard can't see), and a row
+    # written before this column was brought under sanitize_error_text's
+    # discipline could still carry raw credential text (CHAOS-2766 codex
+    # review finding, round 2). Idempotent/harmless on already-sanitized
+    # text.
+    error = (
+        None
+        if success
+        else sanitize_error_text(run.error or "Sync run completed with failed units")
+    )
     result_patch = {
         "sync_run_status": run.status,
         "total_units": int(run.total_units or 0),

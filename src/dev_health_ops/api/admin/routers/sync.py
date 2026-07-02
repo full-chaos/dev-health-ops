@@ -45,6 +45,7 @@ from dev_health_ops.models.settings import (
     SyncConfiguration,
 )
 from dev_health_ops.sync.datasets import supported_datasets, supported_legacy_targets
+from dev_health_ops.sync.error_sanitize import sanitize_error_text
 from dev_health_ops.sync.execution_trigger import (
     create_sync_execution_trigger,
     ensure_pending_sync_job_run,
@@ -64,7 +65,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-def _mark_job_run_failed(sync_session, run_id: str, error: str) -> None:
+def _mark_job_run_failed(sync_session, run_id: str, error: BaseException | str) -> None:
     mark_job_run_failed(sync_session, run_id, error)
 
 
@@ -75,8 +76,19 @@ def _merge_job_run_result(
 
 
 def _mark_backfill_job_failed(
-    sync_session, backfill_job_id: str, error: str, completed_at: datetime
+    sync_session,
+    backfill_job_id: str,
+    error: BaseException | str,
+    completed_at: datetime,
 ) -> None:
+    """Terminalize a ``BackfillJob`` as failed.
+
+    ``error`` is sanitized here, at the sink (CHAOS-2766 codex review
+    finding), for the same reason as ``mark_job_run_failed``: a Celery/broker
+    enqueue-failure exception can embed the broker/result-backend URL
+    including credentials, and ``error_message`` surfaces through admin
+    backfill-job responses.
+    """
     from dev_health_ops.models.backfill import BackfillJob as BackfillJobModel
 
     bf_job = (
@@ -87,7 +99,7 @@ def _mark_backfill_job_failed(
     if bf_job is None:
         return
     bf_job.status = "failed"
-    bf_job.error_message = error
+    bf_job.error_message = sanitize_error_text(error)
     bf_job.completed_at = completed_at
     # The dispatch never enqueued (or its task id is meaningless), so drop any
     # pre-dispatch sync_run marker: the run is separately terminalized as failed.
@@ -95,8 +107,35 @@ def _mark_backfill_job_failed(
     sync_session.flush()
 
 
+def _sync_config_integration_credential_id(
+    sync_session, config, org_id: str
+) -> uuid.UUID | None:
+    """Resolve the credential a config's LINKED integration actually uses.
+
+    ``SyncConfiguration`` carries no credential of its own (CHAOS-2762) --
+    ``Integration.credential_id`` (reached via ``config.integration_id``) is
+    the single sanctioned surface. Returns ``None`` when the config has no
+    linked integration (a pre-planner legacy row; the trigger/backfill
+    endpoints already reject those with "no linked integration" downstream)
+    OR when the linked integration does not belong to ``org_id``: an
+    out-of-org ``integration_id`` (corrupt data / manual tampering) must never
+    leak another org's credential, so it is treated as no-credential -- the
+    same org-scoping ``sync/planner.py``'s ``_load_integration`` enforces.
+    """
+    integration_id = getattr(config, "integration_id", None)
+    if integration_id is None:
+        return None
+    integration = (
+        sync_session.query(Integration)
+        .filter(Integration.id == integration_id, Integration.org_id == org_id)
+        .one_or_none()
+    )
+    return getattr(integration, "credential_id", None) if integration else None
+
+
 def _preflight_planner_credential(sync_session, config) -> None:
-    credential_id = getattr(config, "credential_id", None)
+    org_id = str(getattr(config, "org_id"))
+    credential_id = _sync_config_integration_credential_id(sync_session, config, org_id)
     if credential_id is None:
         return
     from dev_health_ops.models.settings import IntegrationCredential
@@ -105,7 +144,7 @@ def _preflight_planner_credential(sync_session, config) -> None:
         sync_session.query(IntegrationCredential)
         .filter(
             IntegrationCredential.id == credential_id,
-            IntegrationCredential.org_id == getattr(config, "org_id"),
+            IntegrationCredential.org_id == org_id,
         )
         .one_or_none()
     )
@@ -190,20 +229,70 @@ class _MutableSyncConfiguration(Protocol):
     is_active: bool
 
 
+async def _integration_credential_id_for_config(
+    session: AsyncSession, config: object, org_id: str
+) -> uuid.UUID | None:
+    """Async counterpart of ``_sync_config_integration_credential_id``.
+
+    Resolves the ``credential_id`` of a config's linked ``Integration`` --
+    the single sanctioned surface (CHAOS-2762) -- for building API responses.
+    Scoped to ``org_id`` so an out-of-org ``integration_id`` (corrupt data)
+    can never leak another org's credential UUID into this response; treated
+    as no-credential, same as the planner's org-scoped integration lookup.
+    """
+    integration_id = getattr(config, "integration_id", None)
+    if integration_id is None:
+        return None
+    result = await session.execute(
+        select(Integration.credential_id).where(
+            Integration.id == integration_id, Integration.org_id == org_id
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def _integration_credential_ids_for_configs(
+    session: AsyncSession, configs: Sequence[object], org_id: str
+) -> dict[str, uuid.UUID | None]:
+    """Batch variant of ``_integration_credential_id_for_config`` for list responses.
+
+    ONE query for the whole page via ``Integration.id.in_(...)`` -- callers
+    must use this (not a per-row ``_integration_credential_id_for_config``
+    call in a loop) when building a list response, or credential resolution
+    becomes an N+1 over ``Integration``. Also scoped to ``org_id`` (see
+    ``_integration_credential_id_for_config``) so an out-of-org
+    ``integration_id`` never leaks another org's credential.
+    """
+    integration_ids = {
+        getattr(config, "integration_id")
+        for config in configs
+        if getattr(config, "integration_id", None) is not None
+    }
+    if not integration_ids:
+        return {}
+    result = await session.execute(
+        select(Integration.id, Integration.credential_id).where(
+            Integration.org_id == org_id, Integration.id.in_(integration_ids)
+        )
+    )
+    return {
+        str(integration_id): credential_id
+        for integration_id, credential_id in result.all()
+    }
+
+
 def _sync_config_to_response(
     config: object,
     children_count: int | None = None,
+    *,
+    credential_id: uuid.UUID | str | None = None,
 ) -> SyncConfigResponse:
     return SyncConfigResponse.model_validate(
         {
             "id": str(getattr(config, "id")),
             "name": getattr(config, "name"),
             "provider": getattr(config, "provider"),
-            "credential_id": (
-                str(getattr(config, "credential_id"))
-                if getattr(config, "credential_id") is not None
-                else None
-            ),
+            "credential_id": str(credential_id) if credential_id is not None else None,
             "sync_targets": list(getattr(config, "sync_targets") or []),
             "sync_options": dict(getattr(config, "sync_options") or {}),
             "is_active": getattr(config, "is_active"),
@@ -699,11 +788,14 @@ async def _replace_planner_repository_selection(
     mutable_config = cast(_MutableSyncConfiguration, config)
     mutable_config.sync_options = sync_options
 
+    existing_credential_id = await _integration_credential_id_for_config(
+        session, config, org_id
+    )
     batch_payload = SyncConfigBatchCreate(
         name=str(getattr(config, "name")),
         provider=str(getattr(config, "provider")),
-        credential_id=str(getattr(config, "credential_id"))
-        if getattr(config, "credential_id", None)
+        credential_id=str(existing_credential_id)
+        if existing_credential_id is not None
         else None,
         sync_targets=list(getattr(config, "sync_targets") or []),
         sync_options=sync_options,
@@ -841,6 +933,10 @@ async def _create_planner_managed_config(
     the scheduled-job anchor. There is no bare ``SyncConfiguration`` insert path
     anywhere, so a config can never be created unlinked from its integration and
     the planner can always route it.
+
+    The credential is stamped ONLY on ``Integration.credential_id`` (CHAOS-2762):
+    ``SyncConfiguration`` carries no credential column of its own, so there is
+    exactly one place a credential attaches to sync work.
     """
     credential_uuid = uuid.UUID(credential_id) if credential_id else None
     integration = Integration(
@@ -860,7 +956,6 @@ async def _create_planner_managed_config(
         name=name,
         provider=provider,
         org_id=org_id,
-        credential_id=credential_uuid,
         sync_targets=sync_targets,
         sync_options=parent_options,
         is_active=True,
@@ -969,10 +1064,22 @@ async def list_sync_configs(
         rows = (await session.execute(stmt)).all()
         children_counts = {str(pid): cnt for pid, cnt in rows}
 
+    credential_ids_by_integration = await _integration_credential_ids_for_configs(
+        session, configs, org_id
+    )
+
     results = []
     for c in configs:
         cc = children_counts.get(str(getattr(c, "id")))
-        results.append(_sync_config_to_response(c, children_count=cc))
+        integration_id = getattr(c, "integration_id", None)
+        credential_id = (
+            credential_ids_by_integration.get(str(integration_id))
+            if integration_id is not None
+            else None
+        )
+        results.append(
+            _sync_config_to_response(c, children_count=cc, credential_id=credential_id)
+        )
     return results
 
 
@@ -1235,7 +1342,9 @@ async def batch_create_sync_configs(
     )
 
     return SyncConfigBatchResponse(
-        parent=_sync_config_to_response(parent, children_count=0),
+        parent=_sync_config_to_response(
+            parent, children_count=0, credential_id=integration.credential_id
+        ),
         children=[],
         total_created=0,
     )
@@ -1382,7 +1491,7 @@ async def create_sync_config(
         timezone=payload.timezone,
         build_source_rows=_build_sources,
     )
-    return _sync_config_to_response(config)
+    return _sync_config_to_response(config, credential_id=integration.credential_id)
 
 
 @router.get("/sync-configs/{config_id}", response_model=SyncConfigResponse)
@@ -1395,7 +1504,8 @@ async def get_sync_config(
     config = await svc.get_by_id(config_id)
     if config is None:
         raise HTTPException(status_code=404, detail="Sync configuration not found")
-    return _sync_config_to_response(config)
+    credential_id = await _integration_credential_id_for_config(session, config, org_id)
+    return _sync_config_to_response(config, credential_id=credential_id)
 
 
 @router.get(
@@ -1572,7 +1682,10 @@ async def update_sync_config(
                 await _upsert_scheduled_job(session, child, org_id)
             await session.flush()
 
-    return _sync_config_to_response(updated)
+    credential_id = await _integration_credential_id_for_config(
+        session, updated, org_id
+    )
+    return _sync_config_to_response(updated, credential_id=credential_id)
 
 
 @router.delete("/sync-configs/{config_id}", status_code=204)
@@ -1663,7 +1776,7 @@ async def trigger_sync_config(
             )
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=sanitize_error_text(exc))
     if trigger is None:
         raise HTTPException(
             status_code=400,
@@ -1675,17 +1788,28 @@ async def trigger_sync_config(
             args=(trigger.sync_run_id,), queue="sync"
         )
     except Exception as exc:
-        error_message = f"dispatch enqueue failed: {exc}"
+        # Bind to a plain local before closing over it in the lambdas below:
+        # `except ... as exc` implicitly deletes `exc` at the end of THIS
+        # block, which a closure captures by reference, not by value (ruff
+        # F821 catches this). The raw exception is passed straight through
+        # to the sink (_mark_job_run_failed -> sanitize_error_text), not
+        # pre-formatted into a string here -- a Celery/broker enqueue
+        # failure can embed the broker/result-backend URL, credentials
+        # included (CHAOS-2766 codex review finding).
+        dispatch_exc = exc
         await session.run_sync(
             lambda s: mark_sync_run_failed(
                 s, trigger.sync_run_id, "dispatch enqueue failed"
             )
         )
         await session.run_sync(
-            lambda s: _mark_job_run_failed(s, trigger.job_run_id, error_message)
+            lambda s: _mark_job_run_failed(s, trigger.job_run_id, dispatch_exc)
         )
         await session.commit()
-        raise HTTPException(status_code=503, detail=f"Task queue unavailable: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Task queue unavailable: {sanitize_error_text(dispatch_exc)}",
+        )
     dispatch_task_id = str(getattr(dispatch_result, "id", "") or "")
     await session.run_sync(
         lambda s: _merge_job_run_result(
@@ -1779,16 +1903,22 @@ async def trigger_sync_config_backfill(
                 args=(trigger.sync_run_id,), queue="sync"
             )
         except Exception as e:
-            error_message = f"enqueue failed: {e}"
+            # Bind to a plain local before closing over it below -- see the
+            # matching comment in trigger_sync_config above (ruff F821: a
+            # closure over a bare `except ... as e` name is unreliable,
+            # since the name is implicitly deleted at block exit). Same
+            # sink-sanitizes-not-caller rationale (CHAOS-2766 codex review
+            # finding).
+            dispatch_exc = e
             completed_at = datetime.now(timezone.utc)
             await session.run_sync(
                 lambda sync_session: _mark_backfill_job_failed(
-                    sync_session, backfill_job_id, error_message, completed_at
+                    sync_session, backfill_job_id, dispatch_exc, completed_at
                 )
             )
             await session.run_sync(
                 lambda sync_session: _mark_job_run_failed(
-                    sync_session, trigger.job_run_id, error_message
+                    sync_session, trigger.job_run_id, dispatch_exc
                 )
             )
             await session.run_sync(
@@ -1797,7 +1927,10 @@ async def trigger_sync_config_backfill(
                 )
             )
             await session.commit()
-            raise HTTPException(status_code=503, detail=f"Task queue unavailable: {e}")
+            raise HTTPException(
+                status_code=503,
+                detail=f"Task queue unavailable: {sanitize_error_text(dispatch_exc)}",
+            )
         backfill_job.celery_task_id = f"{result.id}|sync_run:{trigger.sync_run_id}"
         await session.commit()
         return {
@@ -1813,7 +1946,10 @@ async def trigger_sync_config_backfill(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Task queue unavailable: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Task queue unavailable: {sanitize_error_text(e)}",
+        )
 
 
 @router.get("/sync-configs/{config_id}/jobs", response_model=list[JobRunResponse])

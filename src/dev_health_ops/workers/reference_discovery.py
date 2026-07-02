@@ -29,6 +29,7 @@ from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_FINALIZE,
     upsert_outbox_wakeup,
 )
+from dev_health_ops.sync.error_sanitize import sanitize_error_text
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.sync_bootstrap import resolve_run_auth
 from dev_health_ops.workers.task_utils import _get_db_url
@@ -157,13 +158,13 @@ def run_sync_reference_discovery(sync_run_id: str) -> dict[str, Any]:
                 if _is_retryable_discovery_error(exc)
                 else "failed",
                 "sync_run_id": sync_run_id,
-                "error": str(exc),
+                "error": sanitize_error_text(exc),
             }
         return {
             "status": "skipped",
             "sync_run_id": sync_run_id,
             "reason": "lease_lost",
-            "error": str(exc),
+            "error": sanitize_error_text(exc),
         }
     finally:
         if heartbeat_stop is not None:
@@ -368,7 +369,7 @@ def _handle_reference_discovery_failure(
                     lease_owner=None,
                     lease_expires_at=None,
                     last_heartbeat_at=now,
-                    error=str(exc),
+                    error=sanitize_error_text(exc),
                     updated_at=now,
                 )
                 .execution_options(synchronize_session=False)
@@ -398,7 +399,7 @@ def _handle_reference_discovery_failure(
                 lease_expires_at=None,
                 last_heartbeat_at=now,
                 completed_at=now,
-                error=str(exc),
+                error=sanitize_error_text(exc),
                 result={
                     "error_category": REFERENCE_DISCOVERY_ERROR_CATEGORY,
                     "retryable": retryable,
@@ -410,10 +411,11 @@ def _handle_reference_discovery_failure(
         )
         if _rowcount(result) == 0:
             return False
-        _fail_nonterminal_units(session, run_uuid, now=now, error=str(exc))
+        sanitized_error = sanitize_error_text(exc)
+        _fail_nonterminal_units(session, run_uuid, now=now, error=sanitized_error)
         run = session.query(SyncRun).filter(SyncRun.id == run_uuid).one_or_none()
         if run is not None:
-            run.error = f"Reference discovery failed: {exc}"
+            run.error = f"Reference discovery failed: {sanitized_error}"
         upsert_outbox_wakeup(
             session,
             sync_run_id=run_uuid,
@@ -426,7 +428,7 @@ def _handle_reference_discovery_failure(
 
 
 def _fail_nonterminal_units(
-    session: Any, run_uuid: uuid.UUID, *, now: datetime, error: str
+    session: Any, run_uuid: uuid.UUID, *, now: datetime, error: str | None
 ) -> None:
     session.execute(
         update(SyncRunUnit)

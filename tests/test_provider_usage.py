@@ -23,6 +23,11 @@ from dev_health_ops.providers.jira.budget import (
     JIRA_USAGE_ROUTE_FAMILY_KEYS,
     JiraBudgetEstimator,
 )
+from dev_health_ops.providers.launchdarkly.budget import (
+    LAUNCHDARKLY_USAGE_RESOLVER,
+    LAUNCHDARKLY_USAGE_ROUTE_FAMILY_KEYS,
+    LaunchDarklyBudgetEstimator,
+)
 from dev_health_ops.providers.linear.budget import (
     LINEAR_USAGE_RESOLVER,
     LINEAR_USAGE_ROUTE_FAMILY_KEYS,
@@ -145,6 +150,23 @@ def test_jira_resolver_maps_rest_paths_to_estimator_families() -> None:
         )
 
 
+def test_launchdarkly_resolver_maps_operations_to_estimator_families() -> None:
+    cases = {
+        "GET /flags/default": ("flags", BudgetDimension.REST_CORE),
+        "GET /auditlog": ("audit_log", BudgetDimension.REST_CORE),
+        # Cursor-paginated audit-log pages carry the stripped /api/v2 href
+        # (querystring included) as their operation label; the marker must
+        # still match.
+        "GET /auditlog?limit=20&before=1000": ("audit_log", BudgetDimension.REST_CORE),
+        "GET /code-refs/repositories": ("code_refs", BudgetDimension.REST_CORE),
+    }
+    for operation, expected in cases.items():
+        assert (
+            LAUNCHDARKLY_USAGE_RESOLVER.resolve(transport="rest", operation=operation)
+            == expected
+        ), operation
+
+
 def test_gitlab_resolver_distinguishes_project_metadata_from_iterators() -> None:
     assert GITLAB_USAGE_RESOLVER.resolve(
         transport="rest", operation="GET /projects/:id"
@@ -190,6 +212,11 @@ def test_operation_route_family_mapping_covers_estimator_families() -> None:
         ("gitlab", GitLabBudgetEstimator(), GITLAB_USAGE_ROUTE_FAMILY_KEYS),
         ("jira", JiraBudgetEstimator(), JIRA_USAGE_ROUTE_FAMILY_KEYS),
         ("linear", LinearBudgetEstimator(), LINEAR_USAGE_ROUTE_FAMILY_KEYS),
+        (
+            "launchdarkly",
+            LaunchDarklyBudgetEstimator(),
+            LAUNCHDARKLY_USAGE_ROUTE_FAMILY_KEYS,
+        ),
     ]
     for provider, estimator, registry_keys in providers:
         emitted: set[str] = set()

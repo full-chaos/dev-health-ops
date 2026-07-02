@@ -109,6 +109,9 @@ class SyncConfigResponse(BaseModel):
     id: str
     name: str
     provider: str
+    # CHAOS-2762: SyncConfiguration stores no credential of its own -- this is
+    # resolved live from the linked Integration.credential_id (the single
+    # sanctioned surface) each time a response is built, never a stored mirror.
     credential_id: str | None
     sync_targets: list[str]
     sync_options: dict[str, Any]
@@ -127,6 +130,8 @@ class SyncConfigResponse(BaseModel):
 class SyncConfigCreate(BaseModel):
     name: str = Field(..., min_length=1)
     provider: str = Field(..., min_length=1)
+    # CHAOS-2762: write-only input -- seeds the created Integration's
+    # credential_id. SyncConfiguration itself stores no credential column.
     credential_id: str | None = None
     sync_targets: list[str] = Field(default_factory=list)
     sync_options: dict[str, Any] = Field(default_factory=dict)
@@ -140,6 +145,8 @@ class SyncConfigBatchCreate(BaseModel):
 
     name: str = Field(..., min_length=1)
     provider: str = Field(..., min_length=1)
+    # CHAOS-2762: write-only input -- seeds the created Integration's
+    # credential_id. SyncConfiguration itself stores no credential column.
     credential_id: str | None = None
     sync_targets: list[str] = Field(default_factory=list)
     sync_options: dict[str, Any] = Field(default_factory=dict)

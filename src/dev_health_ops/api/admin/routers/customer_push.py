@@ -9,23 +9,36 @@ See docs/architecture/customer-push-authz.md for the one-active-owner
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.admin.middleware import get_admin_user
 from dev_health_ops.api.admin.schemas.customer_push import (
+    AdminBatchListItemResponse,
+    AdminBatchListResponse,
+    AdminBatchResponse,
+    AdminRejectedRecordResponse,
     IngestSourceCreate,
     IngestSourcePatch,
     IngestSourceResponse,
     IngestTokenCreate,
     IngestTokenCreateResponse,
     IngestTokenResponse,
+)
+from dev_health_ops.api.external_ingest import status as ingest_status
+from dev_health_ops.api.external_ingest.schemas import (
+    MAX_BODY_BYTES_DEFAULT,
+    MAX_RECORDS_DEFAULT,
+    RECORD_KIND_MODELS,
+    SCHEMA_VERSION,
+    BatchEnvelope,
 )
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.utils.audit import emit_audit_log
@@ -652,3 +665,197 @@ async def revoke_token(
         await session.commit()
 
     return _token_to_response(token)
+
+
+# ---------------------------------------------------------------------------
+# Batches (CHAOS-2694) -- admin-plane read proxies over the CHAOS-2694
+# status.py store (same tables the token-authed data-plane GET
+# /api/v1/external-ingest/batches* endpoints read). Session-JWT +
+# require_admin (already applied at the parent router level, CC25) rather
+# than an ingest token.
+# ---------------------------------------------------------------------------
+
+
+def _batch_to_admin_list_item(
+    batch: ingest_status.BatchRow,
+) -> AdminBatchListItemResponse:
+    return AdminBatchListItemResponse(
+        ingestion_id=str(batch.ingestion_id),
+        status=batch.status,
+        source_system=batch.source_system,
+        source_instance=batch.source_instance,
+        producer=batch.producer,
+        items_received=batch.items_received,
+        items_accepted=batch.items_accepted,
+        items_rejected=batch.items_rejected,
+        created_at=batch.created_at,
+        completed_at=batch.completed_at,
+    )
+
+
+async def _batch_to_admin_response(
+    session: AsyncSession,
+    batch: ingest_status.BatchRow,
+    *,
+    org_id: str,
+    rejected_records_limit: int,
+    rejected_records_offset: int,
+) -> AdminBatchResponse:
+    errors, errors_total = await ingest_status.list_rejections(
+        session,
+        org_id=org_id,
+        ingestion_id=batch.ingestion_id,
+        limit=rejected_records_limit,
+        offset=rejected_records_offset,
+    )
+    return AdminBatchResponse(
+        ingestion_id=str(batch.ingestion_id),
+        org_id=batch.org_id,
+        status=batch.status,
+        attempts=batch.attempts,
+        source_system=batch.source_system,
+        source_instance=batch.source_instance,
+        producer=batch.producer,
+        producer_version=batch.producer_version,
+        schema_version=batch.schema_version,
+        window_started_at=batch.window_started_at,
+        window_ended_at=batch.window_ended_at,
+        items_received=batch.items_received,
+        items_accepted=batch.items_accepted,
+        items_rejected=batch.items_rejected,
+        record_counts=batch.record_counts,
+        error_summary=batch.error_summary,
+        created_at=batch.created_at,
+        updated_at=batch.updated_at,
+        completed_at=batch.completed_at,
+        rejected_records=[
+            AdminRejectedRecordResponse(
+                index=e.record_index,
+                kind=e.record_kind,
+                external_id=e.external_id,
+                code=e.code,
+                message=e.message,
+                path=e.path,
+            )
+            for e in errors
+        ],
+        rejected_records_total=errors_total,
+        rejected_records_limit=rejected_records_limit,
+        rejected_records_offset=rejected_records_offset,
+    )
+
+
+@router.get(
+    "/customer-push/sources/{source_id}/batches",
+    response_model=AdminBatchListResponse,
+)
+async def list_source_batches(
+    source_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(get_admin_user),
+    status_filter: str | None = Query(default=None, alias="status"),
+    producer: str | None = Query(default=None),
+    from_: datetime | None = Query(default=None, alias="from"),
+    to: datetime | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> AdminBatchListResponse:
+    org_id = current_user.org_id
+    source = await _get_org_source(session, org_id, source_id)
+    rows, total = await ingest_status.list_batches(
+        session,
+        org_id=org_id,
+        source_system=source.system,
+        source_instance=source.instance,
+        status=status_filter,
+        producer=producer,
+        created_after=from_,
+        created_before=to,
+        limit=limit,
+        offset=offset,
+    )
+    return AdminBatchListResponse(
+        items=[_batch_to_admin_list_item(row) for row in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/customer-push/batches/{ingestion_id}", response_model=AdminBatchResponse)
+async def get_batch_detail(
+    ingestion_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(get_admin_user),
+    rejected_records_limit: int = Query(default=50, ge=1, le=200),
+    rejected_records_offset: int = Query(default=0, ge=0),
+) -> AdminBatchResponse:
+    org_id = current_user.org_id
+    try:
+        parsed_id = uuid.UUID(ingestion_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    batch = await ingest_status.get_batch(
+        session, org_id=org_id, ingestion_id=parsed_id
+    )
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    return await _batch_to_admin_response(
+        session,
+        batch,
+        org_id=org_id,
+        rejected_records_limit=rejected_records_limit,
+        rejected_records_offset=rejected_records_offset,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Schemas passthrough (CHAOS-2694) -- thin proxy over the same
+# schemas.py-derived payload the data-plane GET /schemas* endpoints return
+# (router.py owns those; not modified here). CHAOS-2692's schema registry
+# will eventually be the shared source for this once it lands.
+# ---------------------------------------------------------------------------
+
+
+def _external_ingest_limits() -> dict[str, int]:
+    return {
+        "maxRecordsPerBatch": int(
+            os.environ.get("EXTERNAL_INGEST_MAX_RECORDS", str(MAX_RECORDS_DEFAULT))
+        ),
+        "maxBodyBytes": int(
+            os.environ.get(
+                "EXTERNAL_INGEST_MAX_BODY_BYTES", str(MAX_BODY_BYTES_DEFAULT)
+            )
+        ),
+    }
+
+
+@router.get("/customer-push/schemas")
+async def admin_list_schemas(
+    current_user: AuthenticatedUser = Depends(get_admin_user),
+) -> dict[str, Any]:
+    return {
+        "schemaVersions": [SCHEMA_VERSION],
+        "recordKinds": sorted(RECORD_KIND_MODELS),
+        "limits": _external_ingest_limits(),
+    }
+
+
+@router.get("/customer-push/schemas/{schema_version}")
+async def admin_get_schema(
+    schema_version: str,
+    current_user: AuthenticatedUser = Depends(get_admin_user),
+) -> dict[str, Any]:
+    if schema_version != SCHEMA_VERSION:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown schema version: {schema_version!r}"
+        )
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "envelope": BatchEnvelope.model_json_schema(by_alias=True),
+        "recordKinds": {
+            kind: model.model_json_schema(by_alias=True)
+            for kind, model in RECORD_KIND_MODELS.items()
+        },
+        "limits": _external_ingest_limits(),
+    }

@@ -142,3 +142,67 @@ class IngestTokenResponse(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ---------------------------------------------------------------------------
+# Batches (CHAOS-2694) -- admin-plane read proxies over the same status.py
+# store the data-plane GET /api/v1/external-ingest/batches* endpoints use.
+# snake_case (admin convention), NOT the data-plane's camelCase. Deliberately
+# does NOT surface recompute_status in v1 (CHAOS-2699 adds that in wave 3,
+# master-spec CC21).
+# ---------------------------------------------------------------------------
+
+
+class AdminRejectedRecordResponse(BaseModel):
+    index: int
+    kind: str
+    external_id: str | None
+    code: str
+    message: str
+    path: str | None
+
+
+class AdminBatchResponse(BaseModel):
+    ingestion_id: str
+    org_id: str
+    status: str
+    attempts: int
+    source_system: str
+    source_instance: str
+    producer: str | None
+    producer_version: str | None
+    schema_version: str
+    window_started_at: datetime | None
+    window_ended_at: datetime | None
+    items_received: int
+    items_accepted: int
+    items_rejected: int
+    record_counts: dict | None
+    error_summary: dict | None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None
+    rejected_records: list[AdminRejectedRecordResponse]
+    rejected_records_total: int
+    rejected_records_limit: int
+    rejected_records_offset: int
+
+
+class AdminBatchListItemResponse(BaseModel):
+    ingestion_id: str
+    status: str
+    source_system: str
+    source_instance: str
+    producer: str | None
+    items_received: int
+    items_accepted: int
+    items_rejected: int
+    created_at: datetime
+    completed_at: datetime | None
+
+
+class AdminBatchListResponse(BaseModel):
+    items: list[AdminBatchListItemResponse]
+    total: int
+    limit: int
+    offset: int

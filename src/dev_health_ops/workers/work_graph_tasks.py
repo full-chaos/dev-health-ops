@@ -527,7 +527,32 @@ def dispatch_investment_materialize_partitioned(
     from dev_health_ops.work_graph.investment.queries import fetch_work_graph_edges
 
     # Hoisted to guarantee definite assignment on every return path (CodeQL).
-    run_membership = not (repo_ids or team_ids or from_date or to_date)
+    #
+    # CHAOS-2776: gate the finalizer's membership projection on SCOPE, not window.
+    # The finalizer runs ``backfill_memberships`` (see
+    # ``work_graph.investment.backfill`` module docstring for the CHAOS-2433
+    # run-marker protocol), which is ALWAYS full-coverage BY CONSTRUCTION: it
+    # iterates the FULL current work graph and projects from the latest persisted
+    # investments per unit (argMax(computed_at)), independent of any materialize
+    # window. ``from_date``/``to_date`` only bound which units get NEW LLM
+    # investment rows; they do NOT bound projection coverage. So running the
+    # projection after a WINDOWED org-wide materialize is safe and correct — it
+    # republishes a full-coverage org-wide completion marker at >= the newest
+    # investment clock, re-arming the read-path stale-generation guard
+    # (CHAOS-2764, api/queries/investment_membership_scope.py).
+    #
+    # The old ``... or from_date or to_date`` gate broke the post-sync path: the
+    # dispatcher (post_sync_dispatch.py) ALWAYS forwards the sync window as
+    # from_date/to_date, so the finalizer NEVER projected after a post-sync
+    # materialize. The guard then disarmed (investments newer than the marker,
+    # scope_mode='unscoped_fallback') until the next daily 03:30 org-wide
+    # projection — which the next sync immediately disarmed again, flooding the
+    # Investment charts with stale work-unit generations (~18x effort inflation).
+    #
+    # Only repo/team-SCOPED runs must still skip publishing the org-wide marker: a
+    # scoped projection would only cover in-scope units and blank every other
+    # repo's membership for unscoped reads.
+    run_membership = not (repo_ids or team_ids)
 
     # Resolve the component-size cap ONCE and freeze it for the whole
     # partitioned run: chunk workers rebuild the component list from a fresh

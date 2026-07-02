@@ -259,15 +259,22 @@ def run_investment_materialization(ns: argparse.Namespace) -> int:
     # synchronously after a successful materialization (a direct call, not a
     # Celery dispatch, so the CLI is complete on return).
     #
-    # COVERAGE RULE (finding #2, unchanged): only an ORG-WIDE FULL-COVERAGE run may
-    # publish the org-wide marker. A repo/team-SCOPED OR date-WINDOWED manual
-    # materialize must NOT publish an org marker (it would blank out-of-scope /
-    # out-of-window components under the new latest marker). We detect a
-    # date-windowed run by whether the operator explicitly bounded the window via
-    # --from/--to/--window-days. Such scoped/windowed runs refresh investments
-    # only; the org-wide daily projection republishes the full-coverage marker.
-    explicitly_windowed = bool(ns.from_date or ns.to_date or ns.window_days)
-    is_full_org_wide = not repo_ids and not team_ids and not explicitly_windowed
+    # COVERAGE RULE (CHAOS-2433 finding #2, AMENDED by CHAOS-2776): the publish
+    # gate is SCOPE, not window. ``backfill_memberships`` is ALWAYS full-coverage
+    # BY CONSTRUCTION — it iterates the FULL current work graph and projects from
+    # the latest persisted investments per unit (argMax(computed_at)), regardless
+    # of the materialize window. --from/--to/--window-days only bound which units
+    # get NEW LLM investment rows; they do NOT bound projection coverage. So an
+    # UNSCOPED-but-WINDOWED materialize is safe to project: it republishes a
+    # full-coverage marker at >= the newest investment clock and re-arms the
+    # read-path stale-generation guard (CHAOS-2764). Previously we ALSO skipped
+    # the projection for windowed runs, which — mirroring the post-sync Celery bug
+    # this ticket fixes — left investments newer than the marker
+    # (scope_mode='unscoped_fallback') until the daily 03:30 org-wide projection.
+    # Only a repo/team-SCOPED run must NOT publish the org marker (a scoped
+    # projection covers only in-scope units and would blank other repos for
+    # unscoped reads); it relies on the org-wide daily projection to republish.
+    is_org_wide = not repo_ids and not team_ids
 
     logging.info(f"Materializing investments from {config.from_ts} to {config.to_ts}")
     try:
@@ -282,9 +289,11 @@ def run_investment_materialization(ns: argparse.Namespace) -> int:
         logging.error(f"Investment materialization failed: {e}")
         return 1
 
-    if is_full_org_wide:
+    if is_org_wide:
         # Publish a fresh full-coverage membership run + marker so theme filters
-        # read the new investments. The projection is no-LLM and synchronous.
+        # read the new investments. The projection is no-LLM and synchronous, and
+        # its coverage is independent of any --from/--to/--window-days on this run
+        # (CHAOS-2776).
         from dev_health_ops.work_graph.investment.backfill import (
             MembershipBackfillConfig,
             backfill_memberships,
@@ -310,12 +319,11 @@ def run_investment_materialization(ns: argparse.Namespace) -> int:
             return 1
     else:
         logging.info(
-            "Scoped/windowed materialization (repos=%s teams=%s windowed=%s) — "
-            "NOT publishing an org-wide membership marker; the org-wide daily "
-            "projection republishes full coverage (CHAOS-2433).",
+            "Scoped materialization (repos=%s teams=%s) — NOT publishing an "
+            "org-wide membership marker; the org-wide daily projection "
+            "republishes full coverage (CHAOS-2433/2776).",
             repo_ids or None,
             team_ids or None,
-            explicitly_windowed,
         )
 
     return 0
@@ -438,9 +446,11 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         type=int,
         default=None,
         help="Window size in days when --from is not set (default: 30). "
-        "Passing this (or --from/--to) marks the run as date-windowed, so it "
-        "refreshes investments only and does NOT publish an org-wide membership "
-        "marker (CHAOS-2433 coverage rule).",
+        "Bounds which WorkUnits get NEW LLM investment rows; it does NOT bound "
+        "membership-projection coverage, so an unscoped windowed run still "
+        "publishes a full-coverage org-wide membership marker (CHAOS-2776). "
+        "Only --repo-id/--team-id scoping suppresses the org-wide marker "
+        "(CHAOS-2433 coverage rule).",
     )
     investment_materialize.add_argument(
         "--repo-id",

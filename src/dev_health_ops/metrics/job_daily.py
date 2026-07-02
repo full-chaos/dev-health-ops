@@ -116,13 +116,57 @@ def discover_repos(
             )
         ]
 
-    # Query repos from ClickHouse, scoped by org_id
+    # Query repos from ClickHouse, scoped by org_id.
+    #
+    # ``repos`` is a ReplacingMergeTree(last_synced) ordered by (org_id, id)
+    # (migration 027). ``insert_repo`` always writes a fresh row per sync
+    # rather than short-circuiting on an existing row (CHAOS-1775), so
+    # multiple logical versions of the same (org_id, id) routinely coexist
+    # until a background merge collapses them -- a plain ``SELECT *`` here
+    # returns those pre-merge duplicates as separate DiscoveredRepo entries,
+    # causing duplicate per-project fetches downstream (CHAOS-2787). Dedup
+    # server-side to the latest row per (org_id, id) via argMax(*, last_synced)
+    # rather than relying on background merges or FINAL.
+    #
+    # All three projected columns (repo, settings, provider) MUST come from
+    # the SAME winning physical row. Three independent
+    # argMax(col, last_synced) aggregates each pick a tied-row winner
+    # *independently* when two versions share the exact same last_synced --
+    # realistic here, since ``last_synced`` is only DateTime64(3) and
+    # ``insert_repo`` stamps it from ``datetime.now()``, so rapid re-syncs of
+    # the same (org_id, id) can land in the same millisecond. That would let
+    # discover_repos synthesize a Frankenstein row (e.g. a new repo name with
+    # a stale provider). Instead, collapse to a SINGLE
+    # ``argMax(tuple(repo, settings, provider), last_synced)`` -- exactly one
+    # row is chosen as "latest", and the three values are unwrapped from that
+    # one row via ``tupleElement``, guaranteeing internal consistency. Ties
+    # resolve to an arbitrary but internally-consistent version (matching
+    # ReplacingMergeTree's own tie semantics); a deterministic tie-breaker
+    # beyond that is not required here.
+    #
+    # ``settings`` is Nullable(String): a bare argMax(settings, last_synced)
+    # SKIPS NULL values entirely, so an older *non-NULL* settings value would
+    # incorrectly mask a genuinely NULL settings value on the latest row.
+    # Wrapping the whole projection in tuple(...) sidesteps this too -- the
+    # outer tuple is never NULL itself even when its ``settings`` element is,
+    # so argMax compares/carries it correctly, and tupleElement(...) then
+    # unwraps each value, NULL and all.
     try:
-        query = "SELECT id, repo, settings, provider FROM repos"
+        query = (
+            "SELECT id, "
+            "tupleElement(latest, 1) AS repo, "
+            "tupleElement(latest, 2) AS settings, "
+            "tupleElement(latest, 3) AS provider "
+            "FROM ("
+            "SELECT id, "
+            "argMax(tuple(repo, settings, provider), last_synced) AS latest "
+            "FROM repos"
+        )
         params: dict[str, str] = {}
         if org_id:
             query += " WHERE org_id = {org_id:String}"
             params["org_id"] = org_id
+        query += " GROUP BY org_id, id)"
         rows = primary_sink.client.query(query, parameters=params).result_rows
         return [
             DiscoveredRepo(

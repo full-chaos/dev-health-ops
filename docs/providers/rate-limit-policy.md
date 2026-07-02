@@ -323,10 +323,100 @@ value outside this vocabulary) — never `str(exception)`.
 once daily. This is an observation log, not an audit trail — expired rows are
 deleted outright, no archival path.
 
-**Not yet wired: cooldown gating.** Nothing reads this table back before
-dispatch yet — see [Known gaps](#known-gaps) /
-[CHAOS-2760](https://linear.app/fullchaos/issue/CHAOS-2760). Any such
-consumer must honor the `route_family_attribution` fallback contract above.
+**Cooldown gating reads this table back before dispatch** — see the next
+section.
+
+## Cooldown gating
+
+Shipped in [CHAOS-2760](https://linear.app/fullchaos/issue/CHAOS-2760). A 429
+observed by one unit today only defers *that* unit
+(`workers/sync_units.py:731-836`, the `RateLimitException` handler above) —
+siblings of the same provider/integration/route-family would otherwise
+dispatch anyway and rediscover the same limit in-worker, each burning a
+worker slot and a provider round-trip the observation store already knows is
+futile. `BudgetGuard.enforce_run` (`sync/budget_guard.py`) closes that gap:
+before admitting this dispatch pass's candidates against budget, it consults
+`provider_rate_limit_observations` for an ACTIVE cooldown and defers (or, on
+deferral-budget exhaustion, terminally fails) any candidate that matches.
+
+**Match key: `(org_id, provider, integration_id, route_family)` — org-scoped,
+and deliberately excluding `credential_fingerprint`/`host`.** This is the
+credentials-are-not-capacity invariant applied to gating: rotating an
+integration's credential between the observation write and the next dispatch
+pass must never let a sibling unit slip past a cooldown that is still active
+(`tests/test_budget_guard_cooldown.py::test_credential_rotation_does_not_bypass_cooldown`).
+`host` is diagnostic-only on the observation row (multi-host GitHub
+Enterprise, etc.) and is never part of the match. A cooldown observed under
+one `org_id` never gates another org's units, even if `(provider,
+integration_id, route_family)` coincide
+(`test_cooldown_never_crosses_org_boundary`).
+
+**Ambiguous-attribution fallback.** Per the [observation store's confidence
+gate](#observation-store), a row with `route_family=NULL` and
+`route_family_attribution='ambiguous_dimension'` carries a populated
+`dimension` instead. The gate never treats that NULL family as matching
+every candidate (over-defer) or none (silent under-defer): it falls back to
+matching on `(org_id, provider, integration_id, dimension)`, gating every
+candidate estimate whose dimension matches, regardless of which specific
+family within that dimension actually hit the limit
+(`test_ambiguous_attribution_falls_back_to_dimension_gating`).
+
+**Cooldown window.** `coalesce(reset_at, observed_at + retry_after_seconds)`,
+falling back to a fixed conservative window
+(`RATE_LIMIT_DEFAULT_COUNTDOWN_SECONDS`, 60s) when an observation carried
+neither — never treated as "already expired" (under-defer) nor "cooldown
+forever" (stuck run). `available_at` for a gated unit is the cooldown expiry
+plus the same jitter (`SYNC_BUDGET_DEFERRAL_JITTER_SECONDS`) the budget-defer
+path already uses, not a fixed 60s. A unit whose estimates span multiple
+route families is deferred if **any** one is cooling down (mirrors the
+existing would-defer-any-estimate budget semantics) and, when more than one
+matches, waits for the last one to clear.
+
+**One indexed query per dispatch pass, never per unit.** The gate issues a
+single `provider_rate_limit_observations` query per `enforce_run` call,
+scoped to the dispatch pass's candidate `(org_id, provider, integration_id)`
+tuples and a bounded recency window
+(`SYNC_RATE_LIMIT_COOLDOWN_LOOKBACK_SECONDS`, default 2h — long enough to
+cover a chunked GitHub primary-limit reset), using the `ws-d`
+`(provider, integration_id, route_family, observed_at)` index
+(`test_single_observation_query_per_dispatch_pass`).
+
+**Fail-open on a broken read.** Any error querying the observation store
+(migration not yet applied on a rolling node, transient DB error, etc.) is
+logged and treated as "no active cooldown" — a diagnostic store must never
+block dispatch (`test_cooldown_read_failure_fails_open`).
+
+**Deferral mechanics reuse the existing budget-guard vocabulary, not a new
+unit status.** A gated unit is stamped `RETRYING` with the computed
+`available_at`, exactly like `_defer_unit_for_budget`, but with a
+**distinct** `result.error_category`: `rate_limit_cooldown_deferred` — so
+operators can tell a shared-cooldown hit apart from `budget_deferred`
+(budget admission) and `rate_limit` (the in-worker per-unit 429 path).
+`BudgetGuardResult.next_deferred_at` folds in the earliest cooldown-deferred
+`available_at` exactly like a budget deferral, so the existing
+`_schedule_redispatch` re-arm (`workers/sync_units.py`) fires and the run
+does not strand until the periodic reconciler scan
+(`test_next_deferred_at_rearms_redispatch`).
+
+**Cooldown deferrals count against the existing per-unit rate-limit-deferral
+budget.** `plan_rate_limit_deferral`
+(`workers/rate_limit_defer.py`, `RATE_LIMIT_MAX_DEFERRALS=10` /
+`RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS=2h`) is reused for the
+`rate_limit_deferrals`/`rate_limit_first_seen_at` bookkeeping — the SAME
+columns and budget the in-worker 429 path already uses. This was a deliberate
+CHAOS-2742 recon decision: run-liveness beats optimism, so a chronically
+rate-limited provider **terminalizes** (stamped `FAILED`,
+`error_category=rate_limit_cooldown_exhausted`) once the shared budget is
+spent, rather than holding the run open indefinitely on gate hits that never
+even reach the provider
+(`test_cooldown_deferral_consumes_rate_limit_budget_and_terminalizes`).
+
+**Herd-on-expiry is naturally paced.** `RETRYING` units never consume
+concurrency capacity, and due-`RETRYING` claims are still bounded by
+`SYNC_UNIT_CONCURRENCY_PER_BUCKET` per dispatch pass exactly like any other
+candidate — an expired cooldown does not cause every sibling to dispatch at
+once beyond what DispatchGuard's concurrency cap already allows
+(`test_cooldown_expiry_drains_bounded_by_concurrency_cap`).
 
 ## Per-provider policy
 
@@ -527,12 +617,6 @@ These are the instrumentation/coverage gaps the [CHAOS-2742](https://linear.app/
 epic exists to close. They are documented as **current reality**, not defects to
 paper over:
 
-- **No cross-unit cooldown gating.** Provider rate-limit observations are now
-  durably persisted (see [Observation store](#observation-store), shipped in
-  [CHAOS-2758](https://linear.app/fullchaos/issue/CHAOS-2758)), but nothing
-  reads them back yet: when one unit discovers a real cooldown, sibling units
-  still call the provider and re-discover it independently. (Target:
-  [CHAOS-2760](https://linear.app/fullchaos/issue/CHAOS-2760).)
 - **Calibration only covers instrumented route families.** [CHAOS-2759](https://linear.app/fullchaos/issue/CHAOS-2759)
   attaches a `budget_comparison` (see
   [Actual-vs-estimated calibration](#actual-vs-estimated-calibration-chaos-2759)
@@ -574,10 +658,6 @@ append its section here in the same changeset (per `AGENTS.md`
   Stamp `credential_id`/version onto `SyncRun` at plan time; bootstrap uses the
   run-stamped auth context, not mutable integration state. Determinism only —
   **never** unit-level credential selection for capacity.
-- **Cooldown gating — [CHAOS-2760](https://linear.app/fullchaos/issue/CHAOS-2760).**
-  Consult recent observations before dispatch and defer sibling units into a
-  known provider/integration/route-family cooldown window.
-
 ## References
 
 - Epic: [CHAOS-2742](https://linear.app/fullchaos/issue/CHAOS-2742) — Harden sync

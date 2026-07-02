@@ -13,11 +13,33 @@ from typing import Any
 
 from sqlalchemy import or_, text, update
 
-from dev_health_ops.models import SyncRunUnit, SyncRunUnitStatus
+from dev_health_ops.models import (
+    ProviderRateLimitObservation,
+    SyncRunUnit,
+    SyncRunUnitStatus,
+)
 from dev_health_ops.sync.budget import BudgetEstimate, estimate_provider_budget
+from dev_health_ops.workers.rate_limit_defer import (
+    RATE_LIMIT_DEFAULT_COUNTDOWN_SECONDS,
+    plan_rate_limit_deferral,
+)
 from dev_health_ops.workers.sync_bootstrap import SyncTaskBootstrap
 
 logger = logging.getLogger(__name__)
+
+# Mirrors ``workers/sync_units.py::_AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION``
+# verbatim. Duplicated rather than imported: sync_units.py already imports
+# BudgetGuard from this module, so the reverse import would cycle; the same
+# duplicate-rather-than-reach-in pattern is already used for
+# ``_comparison_budget_key`` mirroring ``_budget_key``. Pinned equal by
+# ``tests/test_budget_guard_cooldown.py::test_ambiguous_attribution_constant_matches_observation_writer``.
+_AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION = "ambiguous_dimension"
+
+# Distinct from 'budget_deferred' (_defer_unit_for_budget) and 'rate_limit'
+# (workers/sync_units.py's in-worker deferral) so operators can tell a
+# shared-cooldown gate hit apart from either (docs/providers/rate-limit-policy.md).
+_RATE_LIMIT_COOLDOWN_DEFERRED_CATEGORY = "rate_limit_cooldown_deferred"
+_RATE_LIMIT_COOLDOWN_EXHAUSTED_CATEGORY = "rate_limit_cooldown_exhausted"
 
 
 @dataclass(frozen=True)
@@ -134,15 +156,65 @@ class BudgetGuard:
                 )
 
         _acquire_budget_advisory_locks(session, sorted(budget_keys))
+
+        deferred_unit_ids: set[str] = set()
+        next_deferred_at: datetime | None = None
+        cooldown_handled_unit_ids: set[str] = set()
+
+        # --- Shared cooldown gating (CHAOS-2760) — BEFORE budget admission,
+        # so a unit gated by a known cooldown never also reserves budget
+        # capacity it will not use this pass.
+        cooldown_by_family, cooldown_by_dimension = _active_cooldowns(
+            session,
+            sync_run_id=sync_run_id,
+            candidates=units,
+            now=enforced_at,
+        )
+        if cooldown_by_family or cooldown_by_dimension:
+            for unit in units:
+                estimates = estimates_by_unit[str(unit.id)]
+                if not estimates:
+                    continue
+                cooldown_expiry = _matching_cooldown_expiry(
+                    estimates,
+                    org_id=str(unit.org_id),
+                    provider=str(unit.provider),
+                    integration_id=unit.integration_id,
+                    cooldown_by_family=cooldown_by_family,
+                    cooldown_by_dimension=cooldown_by_dimension,
+                )
+                if cooldown_expiry is None:
+                    continue
+                outcome = _apply_cooldown_deferral(
+                    session,
+                    unit,
+                    cooldown_expiry=cooldown_expiry,
+                    jitter_seconds=jitter_seconds,
+                    now=enforced_at,
+                    log_ctx=_unit_log_context(sync_run_id, unit),
+                )
+                if outcome is None:
+                    # CAS lost the race (unit moved on concurrently) — leave
+                    # it for the budget loop / _claim_units to sort out, same
+                    # as a lost _defer_unit_for_budget race.
+                    continue
+                cooldown_handled_unit_ids.add(str(unit.id))
+                available_at, terminalized = outcome
+                if terminalized:
+                    continue
+                deferred_unit_ids.add(str(unit.id))
+                if next_deferred_at is None or available_at < next_deferred_at:
+                    next_deferred_at = available_at
+
         consumed_by_bucket = _active_budget_consumption(
             session,
             now=enforced_at,
             budget_keys=budget_keys,
         )
-        deferred_unit_ids: set[str] = set()
-        next_deferred_at: datetime | None = None
 
         for unit in units:
+            if str(unit.id) in cooldown_handled_unit_ids:
+                continue
             log_ctx = _unit_log_context(sync_run_id, unit)
             estimates = estimates_by_unit[str(unit.id)]
             if not estimates:
@@ -342,6 +414,280 @@ def _defer_unit_for_budget(
         unit.available_at = available_at
         return True
     return False
+
+
+def _as_aware(value: datetime) -> datetime:
+    """Return a timezone-aware UTC datetime (mirrors sync_units._as_aware /
+    guard._as_aware_guard). SQLite (unit tests) returns naive datetimes for
+    ``DateTime(timezone=True)`` columns; Postgres returns aware ones."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _cooldown_expiry(observation: ProviderRateLimitObservation) -> datetime:
+    """The moment an observation's cooldown lifts:
+    ``coalesce(reset_at, observed_at + retry_after_seconds)``, falling back
+    to a conservative fixed window when the signal carried neither. Never
+    treated as "no cooldown" (an observation with no delay info would be
+    silently ignored) nor as "cooldown forever" (over-defer) -- see
+    docs/providers/rate-limit-policy.md "Cooldown gating".
+    """
+    if observation.reset_at is not None:
+        return _as_aware(observation.reset_at)
+    observed_at = _as_aware(observation.observed_at)
+    if observation.retry_after_seconds is not None:
+        return observed_at + timedelta(
+            seconds=max(0.0, observation.retry_after_seconds)
+        )
+    return observed_at + timedelta(seconds=RATE_LIMIT_DEFAULT_COUNTDOWN_SECONDS)
+
+
+def _cooldown_lookback_seconds() -> int:
+    # Bounds the observation query to a recency window so the lookup stays
+    # cheap regardless of the table's 14-day (default) retention. 2h matches
+    # RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS -- the longest a real cooldown
+    # (chunked provider resets included) can legitimately still be active.
+    return _env_int("SYNC_RATE_LIMIT_COOLDOWN_LOOKBACK_SECONDS", 2 * 60 * 60)
+
+
+def _active_cooldowns(
+    session: Any,
+    *,
+    sync_run_id: str,
+    candidates: Iterable[SyncRunUnit],
+    now: datetime,
+) -> tuple[
+    dict[tuple[str, str, uuid.UUID, str], datetime],
+    dict[tuple[str, str, uuid.UUID, str], datetime],
+]:
+    """Resolve which ``(org_id, provider, integration_id, route_family)`` /
+    ambiguous-fallback ``(org_id, provider, integration_id, dimension)``
+    tuples carry an ACTIVE shared cooldown right now (CHAOS-2760).
+
+    ONE indexed query per dispatch pass -- never per unit -- over
+    ``provider_rate_limit_observations``, using the ``ws-d``
+    ``(provider, integration_id, route_family, observed_at)`` index. The
+    match key is deliberately ``(org_id, provider, integration_id,
+    route_family)``: org-scoped, and EXCLUDING credential_fingerprint/host,
+    so rotating a credential can never bypass an active cooldown (the
+    credentials-are-not-capacity invariant applied to gating).
+
+    Rows with ``route_family_attribution == 'ambiguous_dimension'`` (CHAOS-2758:
+    the writer could not confidently attribute one route family) carry
+    ``route_family=NULL`` and are NEVER matched by family -- a NULL family is
+    never treated as matching everything (over-defer) or nothing (silent
+    under-defer). They instead populate the dimension-keyed fallback map, so
+    a candidate unit's estimate is gated by the observation's dimension when
+    its own family cannot be resolved from the ambiguous row.
+
+    Fail-open on ANY error reading the store: a broken observation read must
+    never block dispatch -- logs a warning and returns two empty maps so the
+    caller proceeds exactly as if no cooldown existed.
+    """
+    family_cooldowns: dict[tuple[str, str, uuid.UUID, str], datetime] = {}
+    dimension_cooldowns: dict[tuple[str, str, uuid.UUID, str], datetime] = {}
+
+    org_ids: set[str] = set()
+    providers: set[str] = set()
+    integration_ids: set[uuid.UUID] = set()
+    for unit in candidates:
+        org_ids.add(str(unit.org_id))
+        providers.add(str(unit.provider))
+        integration_ids.add(unit.integration_id)
+    if not org_ids or not providers or not integration_ids:
+        return family_cooldowns, dimension_cooldowns
+
+    lookback_cutoff = now - timedelta(seconds=_cooldown_lookback_seconds())
+    try:
+        rows = (
+            session.query(ProviderRateLimitObservation)
+            .filter(
+                ProviderRateLimitObservation.org_id.in_(org_ids),
+                ProviderRateLimitObservation.provider.in_(providers),
+                ProviderRateLimitObservation.integration_id.in_(integration_ids),
+                ProviderRateLimitObservation.observed_at >= lookback_cutoff,
+            )
+            .all()
+        )
+    except Exception as exc:
+        logger.warning(
+            "dispatch_sync_run.cooldown_observation_read_failed",
+            extra={"sync_run_id": sync_run_id, "error": str(exc)},
+        )
+        return family_cooldowns, dimension_cooldowns
+
+    for row in rows:
+        expiry = _cooldown_expiry(row)
+        if expiry <= now:
+            continue
+        key_prefix = (str(row.org_id), str(row.provider), row.integration_id)
+        if row.route_family_attribution == _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION:
+            if row.dimension is None:
+                continue
+            key = (*key_prefix, row.dimension)
+            dimension_cooldowns[key] = max(expiry, dimension_cooldowns.get(key, expiry))
+        elif row.route_family is not None:
+            key = (*key_prefix, row.route_family)
+            family_cooldowns[key] = max(expiry, family_cooldowns.get(key, expiry))
+
+    return family_cooldowns, dimension_cooldowns
+
+
+def _matching_cooldown_expiry(
+    estimates: Iterable[BudgetEstimate],
+    *,
+    org_id: str,
+    provider: str,
+    integration_id: uuid.UUID,
+    cooldown_by_family: Mapping[tuple[str, str, uuid.UUID, str], datetime],
+    cooldown_by_dimension: Mapping[tuple[str, str, uuid.UUID, str], datetime],
+) -> datetime | None:
+    """Whole-unit deferral on ANY estimate match -- mirrors the existing
+    would-defer-any-estimate budget semantics in ``enforce_run``: a unit
+    mapping to multiple route families is held back if ANY of them is
+    cooling down. When more than one matches, the unit waits for the LAST
+    one to clear (max expiry), not the first.
+    """
+    matches: list[datetime] = []
+    for estimate in estimates:
+        family_key = (org_id, provider, integration_id, estimate.route_family)
+        expiry = cooldown_by_family.get(family_key)
+        if expiry is not None:
+            matches.append(expiry)
+        dimension_key = (
+            org_id,
+            provider,
+            integration_id,
+            estimate.bucket.dimension.value,
+        )
+        expiry = cooldown_by_dimension.get(dimension_key)
+        if expiry is not None:
+            matches.append(expiry)
+    if not matches:
+        return None
+    return max(matches)
+
+
+def _cooldown_claim_predicate(now: datetime) -> Any:
+    stale_dispatch_cutoff = _stale_dispatch_cutoff(now)
+    return or_(
+        SyncRunUnit.status == SyncRunUnitStatus.PLANNED.value,
+        (
+            (SyncRunUnit.status == SyncRunUnitStatus.RETRYING.value)
+            & (SyncRunUnit.available_at.is_not(None))
+            & (SyncRunUnit.available_at <= now)
+        ),
+        (
+            (SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value)
+            & (SyncRunUnit.updated_at <= stale_dispatch_cutoff)
+        ),
+    )
+
+
+def _apply_cooldown_deferral(
+    session: Any,
+    unit: SyncRunUnit,
+    *,
+    cooldown_expiry: datetime,
+    jitter_seconds: int,
+    now: datetime,
+    log_ctx: dict[str, Any],
+) -> tuple[datetime, bool] | None:
+    """Defer (or, on rate-limit-deferral-budget exhaustion, terminally fail)
+    a unit gated by an active shared cooldown (CHAOS-2760).
+
+    Cooldown deferrals COUNT against the SAME
+    ``rate_limit_deferrals`` / ``rate_limit_first_seen_at`` budget the
+    in-worker 429 path uses (``workers/rate_limit_defer.plan_rate_limit_deferral``,
+    ``RATE_LIMIT_MAX_DEFERRALS`` / ``RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS`` --
+    binding CHAOS-2742 recon decision: run-liveness beats optimism, so a
+    chronically rate-limited provider terminalizes here rather than holding
+    the run open on repeated gate hits that never even reach the provider.
+
+    Returns ``(available_at, terminalized)`` on a successful CAS transition,
+    or ``None`` if the CAS lost the race (the unit moved on concurrently,
+    e.g. another dispatcher pass claimed/reconciled it first -- the caller
+    simply skips it, mirroring ``_defer_unit_for_budget``).
+    """
+    retry_after_seconds = max(0.0, (cooldown_expiry - now).total_seconds())
+    deferral = plan_rate_limit_deferral(
+        retry_after_seconds=retry_after_seconds,
+        attempts=unit.rate_limit_deferrals,
+        first_seen_at=unit.rate_limit_first_seen_at.isoformat()
+        if unit.rate_limit_first_seen_at
+        else None,
+        now=now,
+    )
+    claim_predicate = _cooldown_claim_predicate(now)
+
+    if deferral is None:
+        result: Any = session.execute(
+            update(SyncRunUnit)
+            .where(SyncRunUnit.id == unit.id, claim_predicate)
+            .values(
+                status=SyncRunUnitStatus.FAILED.value,
+                error="rate limit cooldown deferral budget exhausted",
+                result={
+                    "error_category": _RATE_LIMIT_COOLDOWN_EXHAUSTED_CATEGORY,
+                    "rate_limit_deferrals": unit.rate_limit_deferrals,
+                },
+                lease_owner=None,
+                lease_expires_at=None,
+                last_heartbeat_at=now,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if int(result.rowcount or 0) == 0:
+            return None
+        unit.status = SyncRunUnitStatus.FAILED.value
+        logger.warning(
+            "dispatch_sync_run.rate_limit_cooldown_exhausted",
+            extra={**log_ctx, "rate_limit_deferrals": unit.rate_limit_deferrals},
+        )
+        return now, True
+
+    available_at = cooldown_expiry + timedelta(
+        seconds=random.uniform(0, float(jitter_seconds))  # noqa: S311
+    )
+    first_seen_at = datetime.fromisoformat(deferral.first_seen_at)
+    result = session.execute(
+        update(SyncRunUnit)
+        .where(SyncRunUnit.id == unit.id, claim_predicate)
+        .values(
+            status=SyncRunUnitStatus.RETRYING.value,
+            available_at=available_at,
+            rate_limit_deferrals=deferral.attempts,
+            rate_limit_first_seen_at=first_seen_at,
+            error="deferred by sync cooldown guard",
+            result={
+                "error_category": _RATE_LIMIT_COOLDOWN_DEFERRED_CATEGORY,
+                "not_before": available_at.isoformat(),
+                "rate_limit_deferrals": deferral.attempts,
+            },
+            lease_owner=None,
+            lease_expires_at=None,
+            last_heartbeat_at=now,
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if int(result.rowcount or 0) == 0:
+        return None
+    unit.status = SyncRunUnitStatus.RETRYING.value
+    unit.available_at = available_at
+    unit.rate_limit_deferrals = deferral.attempts
+    unit.rate_limit_first_seen_at = first_seen_at
+    logger.info(
+        "dispatch_sync_run.rate_limit_cooldown_deferred",
+        extra={
+            **log_ctx,
+            "available_at": available_at.isoformat(),
+            "rate_limit_deferrals": deferral.attempts,
+        },
+    )
+    return available_at, False
 
 
 def _active_budget_consumption(

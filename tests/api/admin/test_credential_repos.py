@@ -10,6 +10,8 @@ Covers the fix in 6668b2175 which gracefully handles:
 from __future__ import annotations
 
 import importlib
+import ipaddress
+import socket
 import uuid
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -44,6 +46,40 @@ _TABLES = tables_of(User, Organization, OrgLicense, IntegrationCredential)
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_dns(monkeypatch: pytest.MonkeyPatch):
+    """CHAOS-2767: resolve every host to a fixed public IP so the SSRF guard
+    never touches the network.
+
+    The repos endpoint's ``_validate_external_url`` SSRF guard calls
+    ``socket.getaddrinfo`` on the target host (defaulting to ``api.github.com`` /
+    ``gitlab.com``). These tests cover the endpoint's connector-exception
+    handling, not DNS — but with live resolution they 400 in offline/CI sandboxes
+    (``gaierror`` → "Cannot resolve hostname"), which is exactly why they were red
+    on ``main``.
+
+    IP-literal hosts are echoed back unchanged so the guard's private-range
+    rejection still fires (``test_gitlab_internal_url_rejected_ssrf`` passes
+    ``169.254.169.254`` / ``192.168.1.1``); real hostnames resolve to a fixed
+    public IP so the happy paths need no network. The guard's own behaviour is
+    covered hermetically in ``tests/test_admin_credentials.py``.
+    """
+
+    def _fake_getaddrinfo(host: str, port: int | None, *args: object, **kwargs: object):
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            ip = ipaddress.ip_address("8.8.8.8")  # real hostname → public IP
+        if ip.version == 6:
+            return [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", (str(ip), 0, 0, 0))]
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (str(ip), 0))]
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.admin.routers.credentials.socket.getaddrinfo",
+        _fake_getaddrinfo,
+    )
 
 
 @pytest_asyncio.fixture
@@ -641,10 +677,6 @@ async def test_gitlab_base_url_key_used_for_self_hosted(client):
         ) as _,
         patch(_GL_CONNECTOR) as MockGLConnector,
         patch(_GL_MEMBERSHIP_HELPER, return_value=gl_repos) as MockMembership,
-        patch(
-            "dev_health_ops.api.admin.routers.credentials.socket.getaddrinfo",
-            return_value=[(2, 1, 6, "", ("8.8.8.8", 0))],
-        ),
     ):
         resp = await ac.get(
             f"/api/v1/admin/credentials/{state['cred_id']}/repos",

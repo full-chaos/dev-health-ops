@@ -64,15 +64,13 @@ class TestDiscoverReposForConfig:
         mock_gh.assert_called_once()
 
     @patch("requests.get")
-    @patch("dev_health_ops.connectors.utils.github_app.GitHubAppTokenProvider")
+    @patch("dev_health_ops.providers.github.app_auth.mint_installation_token")
     def test_github_app_all_repos_lists_installation_repositories(
-        self, mock_token_provider_cls, mock_get
+        self, mock_mint_token, mock_get
     ):
         from dev_health_ops.discovery.repos import discover_repos_for_config
 
-        mock_token_provider_cls.return_value.get_token.return_value = (
-            "installation-token"
-        )
+        mock_mint_token.return_value = "installation-token"
         mock_response = MagicMock(status_code=200)
         mock_response.json.return_value = {
             "repositories": [
@@ -99,11 +97,13 @@ class TestDiscoverReposForConfig:
         )
 
         assert result == [("orgA", "api"), ("orgA", "api-worker")]
-        mock_token_provider_cls.assert_called_once_with(
+        # Installation token is minted via the standalone providers.github
+        # utility (CHAOS-2786), not the connectors-side GitHubAppTokenProvider.
+        mock_mint_token.assert_called_once_with(
             app_id="123",
             private_key="private-key",
             installation_id="456",
-            api_base_url="https://api.github.test",
+            base_url="https://api.github.test",
         )
         mock_get.assert_called_once()
         assert mock_get.call_args.args[0] == (
@@ -114,15 +114,13 @@ class TestDiscoverReposForConfig:
         )
 
     @patch("requests.get")
-    @patch("dev_health_ops.connectors.utils.github_app.GitHubAppTokenProvider")
+    @patch("dev_health_ops.providers.github.app_auth.mint_installation_token")
     def test_github_app_all_repos_installation_api_failure_raises(
-        self, mock_token_provider_cls, mock_get
+        self, mock_mint_token, mock_get
     ):
         from dev_health_ops.discovery.repos import discover_repos_for_config
 
-        mock_token_provider_cls.return_value.get_token.return_value = (
-            "installation-token"
-        )
+        mock_mint_token.return_value = "installation-token"
         mock_get.return_value = MagicMock(status_code=401, text="bad credentials")
         config = _make_config(
             provider="github",
@@ -138,6 +136,46 @@ class TestDiscoverReposForConfig:
                     "installation_id": "456",
                 },
             )
+
+    @patch("requests.get")
+    @patch("dev_health_ops.providers.github.app_auth.mint_installation_token")
+    def test_github_app_all_repos_defaults_base_url_and_propagates_mint_error(
+        self, mock_mint_token, mock_get
+    ):
+        """The ``all_repos`` App-auth path (Codex-flagged CHAOS-2786 gap) --
+
+        (a) defaults ``base_url`` to ``api.github.com`` through the new
+        minter exactly like the non-``all_repos`` path, and (b) propagates
+        whatever the minter raises (``providers.github.app_auth`` errors,
+        not a connectors-side exception type) without ever calling the
+        installation-listing endpoint.
+        """
+        from dev_health_ops.discovery.repos import discover_repos_for_config
+        from dev_health_ops.providers.github.app_auth import GitHubAppAuthError
+
+        mock_mint_token.side_effect = GitHubAppAuthError("boom")
+        config = _make_config(
+            provider="github",
+            sync_options={"all_repos": True, "search": "orgA/*"},
+        )
+
+        with pytest.raises(GitHubAppAuthError, match="boom"):
+            discover_repos_for_config(
+                config,
+                {
+                    "app_id": "123",
+                    "private_key": "private-key",
+                    "installation_id": "456",
+                },
+            )
+
+        mock_mint_token.assert_called_once_with(
+            app_id="123",
+            private_key="private-key",
+            installation_id="456",
+            base_url="https://api.github.com",
+        )
+        mock_get.assert_not_called()
 
     @patch("dev_health_ops.discovery.repos.discover_gitlab_repos")
     def test_gitlab_delegates_to_gitlab_discovery(self, mock_gl):

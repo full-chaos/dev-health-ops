@@ -186,18 +186,22 @@ class ExternalIngestStreamConsumer(StreamConsumer):
         than call :meth:`_mark_batch_failed_best_effort` (which itself calls
         :func:`run_async`), or ``run_async``'s own re-entrancy guard raises.
 
-        Returns whether the DLQ write succeeded -- the caller must only ack
-        the source entry when this is ``True`` (same rationale as
-        :meth:`move_to_dlq`).
+        Returns whether the source entry may be ACKed: requires BOTH the DLQ
+        write to succeed (same rationale as :meth:`move_to_dlq`) AND, when an
+        ingestion_id is present, the failed-status write to be safe (see
+        :meth:`_mark_batch_failed_best_effort_async` -- adversarial-review
+        round-2: ACKing past a raised ``mark_batch_failed`` strands the batch
+        in a non-terminal status with the entry gone).
         """
         org_id, dlq_written = self._xadd_dlq_entry(
             rc, stream_key, entry_id, reason, data
         )
         ingestion_id = data.get("ingestion_id")
         if dlq_written and ingestion_id:
-            await self._mark_batch_failed_best_effort_async(
+            marked_ok = await self._mark_batch_failed_best_effort_async(
                 org_id=org_id, ingestion_id=ingestion_id, reason=reason
             )
+            return dlq_written and marked_ok
         return dlq_written
 
     def _xadd_dlq_entry(
@@ -289,10 +293,22 @@ class ExternalIngestStreamConsumer(StreamConsumer):
 
     async def _mark_batch_failed_best_effort_async(
         self, *, org_id: str, ingestion_id: str, reason: str
-    ) -> None:
+    ) -> bool:
         """Async path: used by :meth:`_dlq_entry_async`, already inside a
         running event loop -- awaits the coroutine directly, never
-        :func:`run_async`."""
+        :func:`run_async`.
+
+        Returns whether it is safe to ACK the source entry with respect to
+        status marking: ``True`` when the batch was marked failed OR when the
+        seam is not yet importable (pre-CHAOS-2697 there is no worker writing
+        statuses to strand; the CC13 stale-accepted RETRY path remains the
+        customer's recovery). ``False`` ONLY when a resolvable
+        ``mark_batch_failed`` raised (e.g. transient Postgres outage): the
+        caller must then leave the entry un-ACKed so a later redelivery
+        retries the status write -- otherwise the customer-visible status
+        never reaches ``failed`` while the entry is gone (adversarial-review
+        round-2 finding). A duplicate DLQ entry on that retry is accepted
+        operational noise; a silently non-terminal batch is not."""
         mark_batch_failed = self._resolve_mark_batch_failed()
         if mark_batch_failed is None:
             logger.warning(
@@ -301,7 +317,7 @@ class ExternalIngestStreamConsumer(StreamConsumer):
                 ingestion_id,
                 org_id,
             )
-            return
+            return True
         try:
             result = mark_batch_failed(
                 ingestion_id=ingestion_id, org_id=org_id, reason=reason
@@ -310,10 +326,13 @@ class ExternalIngestStreamConsumer(StreamConsumer):
                 await result
         except Exception:
             logger.exception(
-                "mark_batch_failed failed for ingestion_id=%s org=%s",
+                "mark_batch_failed failed for ingestion_id=%s org=%s -- "
+                "leaving source entry un-ACKed for a status-write retry",
                 ingestion_id,
                 org_id,
             )
+            return False
+        return True
 
     # ------------------------------------------------------------------
     # Idempotent-skip guard

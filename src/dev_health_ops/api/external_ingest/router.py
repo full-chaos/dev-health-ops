@@ -31,7 +31,7 @@ from dev_health_ops.api.middleware.rate_limit import (
     get_ingest_token_key,
     limiter,
 )
-from dev_health_ops.external_ingest.payload_store import upsert_payload
+from dev_health_ops.external_ingest.payload_store import delete_payload, upsert_payload
 from dev_health_ops.external_ingest.validate import validate_records
 
 from .auth import IngestAuthContext, require_ingest_scope, require_matching_source
@@ -300,6 +300,22 @@ async def accept_batch(
             window_ended_at=window.ended_at if window else None,
         )
     except StreamUnavailableError as exc:
+        # Adversarial-review round-2: without cleanup, every customer retry of
+        # a 503 leaves another committed multi-MB payload row behind (each
+        # accept mints a fresh ingestion_id in this interim flow, so nothing
+        # ever reuses or prunes them). Best-effort delete keeps "payload row
+        # exists" ~equivalent to "a pointer may exist". Residual orphans from
+        # a crash between commit and enqueue remain possible -- the
+        # CHAOS-2769 reconciler / CHAOS-2695 status rows are the systematic
+        # answer; a failed delete here must never mask the customer-facing
+        # 503.
+        try:
+            await delete_payload(session, ingestion_id=ingestion_id)
+            await session.commit()
+        except Exception:
+            logger.exception(
+                "orphan payload cleanup failed for ingestion_id=%s", ingestion_id
+            )
         raise ExternalIngestError(
             503, "stream_unavailable", "Ingest stream unavailable"
         ) from exc

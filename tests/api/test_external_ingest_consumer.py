@@ -186,6 +186,42 @@ class TestPermanentFailure:
         assert kwargs["ingestion_id"] == "ingest-marks-failed"
         assert kwargs["reason"] == "nope"
 
+    def test_mark_batch_failed_raising_leaves_entry_unacked(
+        self, fake_redis, monkeypatch
+    ):
+        """Adversarial-review round-2: a DLQ-written entry must NOT be ACKed
+        when the failed-status write raised -- otherwise the batch strands in
+        a non-terminal status while the entry is gone. Leaving it pending
+        lets a later redelivery retry the status write (a duplicate DLQ entry
+        on that retry is accepted operational noise)."""
+        fake_processor = types.ModuleType("dev_health_ops.external_ingest.processor")
+        mark_failed = AsyncMock(side_effect=RuntimeError("pg down"))
+        setattr(fake_processor, "mark_batch_failed", mark_failed)
+        monkeypatch.setitem(
+            sys.modules, "dev_health_ops.external_ingest.processor", fake_processor
+        )
+
+        stream, _entry_id = _xadd_batch(
+            fake_redis, org_id="org-mark-raises", ingestion_id="ingest-mark-raises"
+        )
+        c = _consumer()
+        with patch.object(
+            consumer_mod.ExternalIngestStreamConsumer,
+            "_process_entry_async",
+            AsyncMock(side_effect=PermanentProcessingError("nope")),
+        ):
+            c.consume(max_iterations=1)
+
+        mark_failed.assert_awaited_once()
+        # DLQ entry was written...
+        dlq_entries = fake_redis.xrange("external-ingest:org-mark-raises:dlq")
+        assert len(dlq_entries) == 1
+        # ...but the source entry remains pending (NOT acked) for a retry.
+        pending = fake_redis.xpending_range(
+            stream, consumer_mod.CONSUMER_GROUP, min="-", max="+", count=10
+        )
+        assert len(pending) == 1
+
     def test_missing_processor_module_does_not_crash_consumer(self, fake_redis):
         """Before CHAOS-2697 lands, processor.py doesn't exist -- the
         give-up path must log and continue, not crash the consumer loop."""

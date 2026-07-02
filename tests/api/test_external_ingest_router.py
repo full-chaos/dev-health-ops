@@ -63,13 +63,21 @@ async def _default_fake_upsert_payload(*args, **kwargs) -> None:
     return None
 
 
+class _FakeSession:
+    """Commit-only stand-in: accept_batch calls ``session.commit()`` directly
+    after the (mocked) ``upsert_payload``, so the fake must expose it."""
+
+    async def commit(self) -> None:
+        return None
+
+
 async def _fake_postgres_session_dep():
     # Router-contract tests don't need a database (module docstring) --
     # upsert_payload is mocked by default (see _default_fake_upsert_payload)
-    # so this session object is never actually used for real I/O; only the
+    # so this session object is never used for real I/O; only the
     # payload-persistence integration tests (test_external_ingest_router_
     # payload_persistence.py) exercise a real session.
-    yield None
+    yield _FakeSession()
 
 
 @pytest_asyncio.fixture
@@ -322,7 +330,10 @@ async def test_payload_too_large_rejected(client, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_idempotency_header_matching_body_is_accepted(client, monkeypatch):
-    monkeypatch.setattr(router_mod, "enqueue_batch", lambda **kwargs: "stream-x")
+    async def _fake_enqueue(**kwargs) -> str:
+        return "stream-x"
+
+    monkeypatch.setattr(router_mod, "enqueue_batch", _fake_enqueue)
     envelope = _envelope(
         [_record("commit.v1", "c1", VALID_PAYLOADS["commit.v1"])],
         idempotency_key="key-1",
@@ -362,6 +373,37 @@ async def test_stream_unavailable_returns_503(client, monkeypatch):
 
     assert resp.status_code == 503
     assert resp.json()["error"]["code"] == "stream_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_enqueue_failure_deletes_orphan_payload(client, monkeypatch):
+    """Adversarial-review round-2: a 503 (stream unavailable) must not leave
+    the just-committed payload row behind -- each accept mints a fresh
+    ingestion_id in the interim flow, so customer retries of a 503 would
+    otherwise accumulate one orphan multi-MB row per attempt."""
+    upserted: list[str] = []
+    deleted: list[str] = []
+
+    async def _fake_upsert(session, *, ingestion_id, **kwargs):
+        upserted.append(str(ingestion_id))
+
+    async def _fake_delete(session, *, ingestion_id):
+        deleted.append(str(ingestion_id))
+
+    def _raise(**kwargs):
+        raise StreamUnavailableError("boom")
+
+    monkeypatch.setattr(router_mod, "upsert_payload", _fake_upsert)
+    monkeypatch.setattr(router_mod, "delete_payload", _fake_delete)
+    monkeypatch.setattr(router_mod, "enqueue_batch", _raise)
+    envelope = _envelope([_record("commit.v1", "c1", VALID_PAYLOADS["commit.v1"])])
+
+    resp = await client.post(f"{BASE}/batches", json=envelope)
+
+    assert resp.status_code == 503
+    assert resp.json()["error"]["code"] == "stream_unavailable"
+    assert len(upserted) == 1
+    assert deleted == upserted  # the orphan row was cleaned up
 
 
 @pytest.mark.asyncio

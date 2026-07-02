@@ -93,20 +93,37 @@ def _repopulate_from_linked_integration() -> None:
     simply keep ``credential_id IS NULL``, matching "no linked integration"
     semantics.
 
-    A correlated subquery (not ``UPDATE ... FROM``) so this runs unchanged on
-    SQLite (used to unit-test this migration) and Postgres alike.
+    Built as a SQLAlchemy Core expression via lightweight ``sa.table()``/
+    ``sa.column()`` proxies (the documented pattern for data migrations that
+    can't import the real ORM models) rather than an interpolated SQL string,
+    so a static SQL-injection scanner has no string-built query to flag --
+    ``_TABLE``/``_COLUMN`` are module constants, not user input, but this
+    avoids the pattern entirely instead of suppressing the finding. A
+    correlated scalar subquery (not ``UPDATE ... FROM``) so this compiles
+    identically on SQLite (used to unit-test this migration) and Postgres.
     """
+    sync_configurations = sa.table(
+        _TABLE,
+        sa.column("integration_id"),
+        sa.column(_COLUMN),
+    )
+    integrations = sa.table(
+        "integrations",
+        sa.column("id"),
+        sa.column("credential_id"),
+    )
+    linked_credential = (
+        sa.select(integrations.c.credential_id)
+        .where(integrations.c.id == sync_configurations.c.integration_id)
+        .scalar_subquery()
+    )
+    linked_integration_ids = sa.select(integrations.c.id).where(
+        integrations.c.credential_id.is_not(None)
+    )
     op.execute(
-        sa.text(
-            f"UPDATE {_TABLE} "
-            f"SET {_COLUMN} = ("
-            f"    SELECT credential_id FROM integrations "
-            f"    WHERE integrations.id = {_TABLE}.integration_id"
-            f") "
-            f"WHERE integration_id IN ("
-            f"    SELECT id FROM integrations WHERE credential_id IS NOT NULL"
-            f")"
-        )
+        sa.update(sync_configurations)
+        .where(sync_configurations.c.integration_id.in_(linked_integration_ids))
+        .values({_COLUMN: linked_credential})
     )
 
 

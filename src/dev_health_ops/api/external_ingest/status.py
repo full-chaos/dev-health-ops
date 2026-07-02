@@ -44,6 +44,10 @@ from dev_health_ops.api.middleware.rate_limit import (
     get_ingest_token_key,
     limiter,
 )
+from dev_health_ops.external_ingest.recompute_status import (
+    RecomputeJobRow,
+    get_recompute_jobs,
+)
 from dev_health_ops.models.external_ingest import (
     MAX_STORED_REJECTIONS_PER_BATCH,
     TERMINAL_STATUSES,
@@ -124,6 +128,13 @@ class BatchRow:
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None
+    # CHAOS-2699 (master-spec CC21): bounded-recompute visibility, added by
+    # migration 0034.
+    recompute_status: str
+    recompute_scope: dict[str, Any] | None
+    recompute_dispatched_at: datetime | None
+    recompute_completed_at: datetime | None
+    recompute_error: str | None
 
 
 @dataclass(frozen=True)
@@ -193,6 +204,11 @@ def _row_to_batch(m: RowMapping) -> BatchRow:
         created_at=_parse_dt_required(m["created_at"]),
         updated_at=_parse_dt_required(m["updated_at"]),
         completed_at=_parse_dt(m["completed_at"]),
+        recompute_status=m["recompute_status"],
+        recompute_scope=_parse_json(m["recompute_scope"]),
+        recompute_dispatched_at=_parse_dt(m["recompute_dispatched_at"]),
+        recompute_completed_at=_parse_dt(m["recompute_completed_at"]),
+        recompute_error=m["recompute_error"],
     )
 
 
@@ -306,6 +322,15 @@ async def create_batch(
         "created_at": now,
         "updated_at": now,
         "completed_at": None,
+        # CHAOS-2699: explicit, not relied-upon-via-server_default (matches
+        # this file's created_at/updated_at/completed_at convention) --
+        # every INSERT this function issues starts a batch with no
+        # recompute decision made yet.
+        "recompute_status": "not_applicable",
+        "recompute_scope": None,
+        "recompute_dispatched_at": None,
+        "recompute_completed_at": None,
+        "recompute_error": None,
     }
     insert_sql = text(
         f"""
@@ -314,13 +339,17 @@ async def create_batch(
             source_instance, producer, producer_version, schema_version,
             window_started_at, window_ended_at, status, attempts,
             items_received, items_accepted, items_rejected, record_counts,
-            error_summary, created_at, updated_at, completed_at
+            error_summary, created_at, updated_at, completed_at,
+            recompute_status, recompute_scope, recompute_dispatched_at,
+            recompute_completed_at, recompute_error
         ) VALUES (
             :ingestion_id, :org_id, :idempotency_key, :payload_hash, :source_system,
             :source_instance, :producer, :producer_version, :schema_version,
             :window_started_at, :window_ended_at, :status, :attempts,
             :items_received, :items_accepted, :items_rejected, :record_counts,
-            :error_summary, :created_at, :updated_at, :completed_at
+            :error_summary, :created_at, :updated_at, :completed_at,
+            :recompute_status, :recompute_scope, :recompute_dispatched_at,
+            :recompute_completed_at, :recompute_error
         )
         """
     )
@@ -357,6 +386,11 @@ async def create_batch(
         created_at=now,
         updated_at=now,
         completed_at=None,
+        recompute_status="not_applicable",  # DB server_default (migration 0034)
+        recompute_scope=None,
+        recompute_dispatched_at=None,
+        recompute_completed_at=None,
+        recompute_error=None,
     )
 
 
@@ -703,6 +737,37 @@ class RejectedRecordResponse(BaseModel):
     path: str | None = None
 
 
+class RecomputeJobResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    task: str
+    task_id: str | None = Field(default=None, alias="taskId")
+    queue: str
+    repo_id: str | None = Field(default=None, alias="repoId")
+
+
+class RecomputeScopeResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    repo_ids: list[str] = Field(default_factory=list, alias="repoIds")
+    team_ids: list[str] = Field(default_factory=list, alias="teamIds")
+    window_started_at: datetime | None = Field(default=None, alias="windowStartedAt")
+    window_ended_at: datetime | None = Field(default=None, alias="windowEndedAt")
+    capped_days: bool = Field(default=False, alias="cappedDays")
+    capped_repos: bool = Field(default=False, alias="cappedRepos")
+
+
+class RecomputeStatusResponse(BaseModel):
+    """CHAOS-2699 (master-spec CC21). Enum pinned epic-wide:
+    ``not_applicable | pending | dispatched | skipped_no_scope | failed``."""
+
+    model_config = ConfigDict(populate_by_name=True)
+    status: str
+    scope: RecomputeScopeResponse | None = None
+    dispatched_at: datetime | None = Field(default=None, alias="dispatchedAt")
+    completed_at: datetime | None = Field(default=None, alias="completedAt")
+    error: str | None = None
+    jobs: list[RecomputeJobResponse] = Field(default_factory=list)
+
+
 class BatchStatusResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     ingestion_id: uuid.UUID = Field(alias="ingestionId")
@@ -723,8 +788,9 @@ class BatchStatusResponse(BaseModel):
     errors_total: int = Field(alias="errorsTotal")
     errors_limit: int = Field(alias="errorsLimit")
     errors_offset: int = Field(alias="errorsOffset")
-    # NOTE(CHAOS-2699, master-spec CC21): a `recompute_status` block is added
-    # here in wave 3, once migration 0034 lands. Deliberately absent in v1.
+    # CHAOS-2699, master-spec CC21: cross-wave extension -- 2694 ships wave
+    # 2 with no recompute references; this block is added in wave 3.
+    recompute: RecomputeStatusResponse
 
 
 class BatchListItemResponse(BaseModel):
@@ -766,12 +832,46 @@ def _batch_to_list_item(row: BatchRow) -> BatchListItemResponse:
     )
 
 
+def _recompute_scope_response(
+    scope: dict[str, Any] | None,
+) -> RecomputeScopeResponse | None:
+    if scope is None:
+        return None
+    return RecomputeScopeResponse(
+        repo_ids=list(scope.get("repoIds") or []),
+        team_ids=list(scope.get("teamIds") or []),
+        window_started_at=_parse_dt(scope.get("windowStartedAt")),
+        window_ended_at=_parse_dt(scope.get("windowEndedAt")),
+        capped_days=bool(scope.get("cappedDays", False)),
+        capped_repos=bool(scope.get("cappedRepos", False)),
+    )
+
+
+def _batch_to_recompute_response(
+    row: BatchRow, jobs: list[RecomputeJobRow]
+) -> RecomputeStatusResponse:
+    return RecomputeStatusResponse(
+        status=row.recompute_status,
+        scope=_recompute_scope_response(row.recompute_scope),
+        dispatched_at=row.recompute_dispatched_at,
+        completed_at=row.recompute_completed_at,
+        error=row.recompute_error,
+        jobs=[
+            RecomputeJobResponse(
+                task=j.task, task_id=j.task_id, queue=j.queue, repo_id=j.repo_id
+            )
+            for j in jobs
+        ],
+    )
+
+
 def _batch_to_status_response(
     row: BatchRow,
     errors: list[RejectionRow],
     errors_total: int,
     errors_limit: int,
     errors_offset: int,
+    recompute_jobs: list[RecomputeJobRow],
 ) -> BatchStatusResponse:
     return BatchStatusResponse(
         ingestion_id=row.ingestion_id,
@@ -804,6 +904,7 @@ def _batch_to_status_response(
         errors_total=errors_total,
         errors_limit=errors_limit,
         errors_offset=errors_offset,
+        recompute=_batch_to_recompute_response(row, recompute_jobs),
     )
 
 
@@ -871,6 +972,13 @@ async def get_batch_status(
         limit=error_limit,
         offset=error_offset,
     )
+    recompute_jobs = await get_recompute_jobs(
+        session,
+        org_id=ctx.org_id,
+        source_system=batch.source_system,
+        source_instance=batch.source_instance,
+        dispatched_at=batch.recompute_dispatched_at,
+    )
     return _batch_to_status_response(
-        batch, errors, errors_total, error_limit, error_offset
+        batch, errors, errors_total, error_limit, error_offset, recompute_jobs
     )

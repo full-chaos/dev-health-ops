@@ -67,6 +67,7 @@ __all__ = [
     "create_batch",
     "mark_processing",
     "mark_stream_unavailable",
+    "reset_for_retry",
     "complete_batch",
     "get_batch",
     "list_batches",
@@ -292,13 +293,17 @@ async def create_batch(
     window_ended_at: datetime | None,
     items_received: int,
 ) -> BatchRow:
-    """INSERT a new ``status='accepted'`` row. Caller (CHAOS-2691's
-    ``POST /batches`` handler, after CHAOS-2693's stream enqueue has already
-    SUCCEEDED -- never write a status row for a batch that failed to enqueue
-    durably) must have already called ``find_existing_batch()`` for the
-    idempotency pre-check. Raises ``DuplicateIdempotencyKeyError`` on a
-    concurrent-insert race. Does NOT commit -- caller commits once the
-    accept sequence's other writes (e.g. the payload row) also succeed."""
+    """INSERT a new ``status='accepted'`` row. This is the FIRST write in
+    the accept sequence (master-spec CC22: idempotency row -> payload row ->
+    COMMIT -> stream enqueue) -- the row is written BEFORE the enqueue is
+    attempted, so a failed enqueue leaves a durable row the caller must
+    transition via ``mark_stream_unavailable()`` (commit-before-raise), and
+    the client's same-key retry resolves as RETRY instead of vanishing.
+    Callers go through ``external_ingest/idempotency.py``'s
+    ``resolve_batch_idempotency()``, which runs the ``find_existing_batch()``
+    pre-check and maps the ``DuplicateIdempotencyKeyError`` race. Does NOT
+    commit -- caller commits once the accept sequence's other writes (the
+    payload row) also succeed."""
     now = datetime.now(timezone.utc)
     params: dict[str, Any] = {
         "ingestion_id": str(ingestion_id),
@@ -450,6 +455,63 @@ async def mark_stream_unavailable(
         from_status=BatchStatus.ACCEPTED,
         to_status=BatchStatus.STREAM_UNAVAILABLE,
     )
+
+
+async def reset_for_retry(
+    session: AsyncSession,
+    *,
+    org_id: str,
+    ingestion_id: uuid.UUID,
+    from_status: str,
+) -> bool:
+    """Re-accept an existing batch row for a RETRY outcome (CHAOS-2695).
+
+    ``status -> accepted``, ``attempts += 1``, and the previous attempt's
+    outcome fields are cleared -- including its rejection rows, which MUST
+    be deleted here or the retry's own ``complete_batch()`` would violate
+    the ``(ingestion_id, record_index)`` unique index when it re-inserts
+    diagnostics for the same records.
+
+    Atomic CAS on the caller's observed ``from_status`` (same pattern as
+    ``complete_batch``): returns ``False`` without touching anything if the
+    row already moved (a concurrent retry won, or a live worker completed a
+    stale-looking batch first) -- the caller should re-read and treat the
+    fresh row as a REPLAY. ``recompute_*`` fields are deliberately left
+    alone (CHAOS-2699 owns them; the worker overwrites them on the retry's
+    completion). Does NOT commit.
+    """
+    now = datetime.now(timezone.utc)
+    cas_result = await session.execute(
+        text(
+            f"""
+            UPDATE {_BATCHES_TABLE}
+            SET status = :status, attempts = attempts + 1,
+                items_accepted = 0, items_rejected = 0,
+                record_counts = NULL, error_summary = NULL,
+                completed_at = NULL, updated_at = :updated_at
+            WHERE org_id = :org_id AND ingestion_id = :ingestion_id
+                AND status = :expected_status
+            """
+        ),
+        {
+            "status": BatchStatus.ACCEPTED.value,
+            "updated_at": now,
+            "org_id": org_id,
+            "ingestion_id": str(ingestion_id),
+            "expected_status": from_status,
+        },
+    )
+    if int(getattr(cas_result, "rowcount", 0) or 0) != 1:
+        return False
+
+    await session.execute(
+        text(
+            f"DELETE FROM {_REJECTIONS_TABLE} "
+            "WHERE org_id = :org_id AND ingestion_id = :ingestion_id"
+        ),
+        {"org_id": org_id, "ingestion_id": str(ingestion_id)},
+    )
+    return True
 
 
 async def complete_batch(

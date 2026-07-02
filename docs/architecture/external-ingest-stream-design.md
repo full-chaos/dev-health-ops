@@ -25,6 +25,16 @@ enqueue, and the retry/reclaim/DLQ machinery.
 > sat inertly on the stream). The epic owner must sequence CHAOS-2693 and
 > CHAOS-2695 into the same deployment, or hold CHAOS-2691/2693 out of any
 > environment that accepts real traffic until CHAOS-2695 merges.
+>
+> **RESOLVED (CHAOS-2695):** the payload upsert was pulled forward into
+> CHAOS-2693's own PR (authorized router amendment: `upsert_payload` +
+> commit before enqueue), and CHAOS-2695's full CC22 rewrite has since
+> landed the idempotency-row-first sequence around it -- see
+> [external-ingest-idempotency-ownership.md](external-ingest-idempotency-ownership.md).
+> Note: on a stream-unavailable 503 the payload row is now deliberately
+> KEPT (the durable `stream_unavailable` status row references it and the
+> same-key RETRY reuses it), superseding the interim orphan-delete this
+> doc's D2 era assumed.
 
 ## Per-org streams, not one shared stream
 

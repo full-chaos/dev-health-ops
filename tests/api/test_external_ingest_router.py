@@ -1,23 +1,29 @@
-"""Tests for the external-ingest REST contract (CHAOS-2691).
+"""Tests for the external-ingest REST contract (CHAOS-2691 + CHAOS-2695).
 
 Covers the brief's test plan: envelope/kind/size validation (D2/D4), the D1
 idempotency header/body match, D6's fail-closed stream-unavailable mapping,
-and D8's schema discovery endpoints. Auth (`require_ingest_scope`'s real,
-DB-backed body -- CHAOS-2712) is exercised end-to-end in
+D8's schema discovery endpoints, and (CHAOS-2695) the CC22 accept flow --
+NEW/REPLAY/CONFLICT/RETRY against a REAL aiosqlite-backed session (only
+``enqueue_batch`` is faked; the status/payload/ownership tables are live, so
+these tests exercise the actual store SQL). Auth (`require_ingest_scope`'s
+real, DB-backed body -- CHAOS-2712) is exercised end-to-end in
 tests/api/external_ingest/test_auth.py; this file overrides the bound scope
-dependencies for every test below so router-contract tests don't need a
-database.
+dependencies for every test below.
 """
 
 from __future__ import annotations
 
 import importlib
 import sys
+import uuid as uuid_mod
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from dev_health_ops.api.external_ingest import status as status_mod
 from dev_health_ops.api.external_ingest.auth import IngestAuthContext
 from dev_health_ops.api.external_ingest.schemas import (
     RECORD_KIND_MODELS,
@@ -25,7 +31,17 @@ from dev_health_ops.api.external_ingest.schemas import (
 )
 from dev_health_ops.api.external_ingest.streams import StreamUnavailableError
 from dev_health_ops.api.main import app
+from dev_health_ops.external_ingest.payload_store import payload_exists
+from dev_health_ops.models.external_ingest import (
+    ExternalIngestBatch,
+    ExternalIngestBatchPayload,
+    ExternalIngestRecomputeJob,
+    ExternalIngestRejection,
+)
+from dev_health_ops.models.git import Base
 from dev_health_ops.models.ingest_auth import IngestSource, IngestSourceMode
+from dev_health_ops.models.integrations import Integration, IntegrationSource
+from tests._helpers import tables_of
 
 # __init__.py exports the APIRouter as "router", shadowing the module name —
 # force-load the actual module so we can reach its internals (the bound
@@ -54,53 +70,70 @@ TEST_CTX = IngestAuthContext(
     source=_TEST_SOURCE,
 )
 
+_TABLES = tables_of(
+    ExternalIngestBatch,
+    ExternalIngestRejection,
+    ExternalIngestBatchPayload,
+    ExternalIngestRecomputeJob,
+    IngestSource,
+    Integration,
+    IntegrationSource,
+)
+
 
 async def _default_fake_enqueue(**kwargs) -> str:
     return "stream-x"
 
 
-async def _default_fake_upsert_payload(*args, **kwargs) -> None:
-    return None
-
-
-class _FakeSession:
-    """Commit-only stand-in: accept_batch calls ``session.commit()`` directly
-    after the (mocked) ``upsert_payload``, so the fake must expose it."""
-
-    async def commit(self) -> None:
-        return None
-
-
-async def _fake_postgres_session_dep():
-    # Router-contract tests don't need a database (module docstring) --
-    # upsert_payload is mocked by default (see _default_fake_upsert_payload)
-    # so this session object is never used for real I/O; only the
-    # payload-persistence integration tests (test_external_ingest_router_
-    # payload_persistence.py) exercise a real session.
-    yield _FakeSession()
+@pytest_asyncio.fixture
+async def session_maker(tmp_path: Path):
+    """Real aiosqlite DB (CHAOS-2695): the accept flow's ownership resolve +
+    idempotency store + payload upsert all run their actual SQL. Seeds the
+    registered write-eligible source row matching TEST_CTX's bound source --
+    ``resolve_effective_mode`` reads external_ingest_sources for it."""
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'external-ingest-router.db'}"
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(
+            lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_TABLES)
+        )
+    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with maker() as session:
+        session.add(
+            IngestSource(
+                org_id="test-org",
+                system="github",
+                instance="acme/api",
+                mode=IngestSourceMode.CUSTOMER_PUSH.value,
+                enabled=True,
+            )
+        )
+        await session.commit()
+    try:
+        yield maker
+    finally:
+        await engine.dispose()
 
 
 @pytest_asyncio.fixture
-async def client(monkeypatch):
+async def client(session_maker, monkeypatch):
     # Overriding require_ingest_scope (the factory) would not intercept
     # anything: router.py binds each scope's closure once at import time via
     # Depends(_require_schema_read)/Depends(_require_ingest_write), and
     # FastAPI's dependency_overrides matches on that exact callable — not on
     # the factory that produced it. Override the bound objects directly so
-    # unit tests never exercise D7's real (WARN-logging) interim auth body.
+    # unit tests never exercise the real DB-backed auth body.
+    async def _session_override():
+        async with session_maker() as session:
+            yield session
+
     app.dependency_overrides[router_mod._require_schema_read] = lambda: TEST_CTX
     app.dependency_overrides[router_mod._require_ingest_write] = lambda: TEST_CTX
-    app.dependency_overrides[router_mod.get_postgres_session_dep] = (
-        _fake_postgres_session_dep
-    )
-    # Amendment (team-lead-authorized router touch, see PR): accept_batch now
-    # persists the payload before enqueueing. Default both to working
-    # async no-ops so every existing contract-level test (envelope/kind/size
-    # validation, schema discovery, etc.) keeps not needing a database;
-    # individual tests below still override enqueue_batch for their own
-    # success/failure scenarios.
+    app.dependency_overrides[router_mod.get_postgres_session_dep] = _session_override
+    # Only the Valkey stream boundary is faked; individual tests override
+    # enqueue_batch again for their own success/failure scenarios.
     monkeypatch.setattr(router_mod, "enqueue_batch", _default_fake_enqueue)
-    monkeypatch.setattr(router_mod, "upsert_payload", _default_fake_upsert_payload)
     # raise_app_exceptions=False: Starlette's ServerErrorMiddleware sends the
     # sanitized 500 response *then* re-raises so ASGI-server-level logging
     # still sees it; without this, httpx's ASGITransport re-raises instead of
@@ -376,25 +409,18 @@ async def test_stream_unavailable_returns_503(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_enqueue_failure_deletes_orphan_payload(client, monkeypatch):
-    """Adversarial-review round-2: a 503 (stream unavailable) must not leave
-    the just-committed payload row behind -- each accept mints a fresh
-    ingestion_id in the interim flow, so customer retries of a 503 would
-    otherwise accumulate one orphan multi-MB row per attempt."""
-    upserted: list[str] = []
-    deleted: list[str] = []
-
-    async def _fake_upsert(session, *, ingestion_id, **kwargs):
-        upserted.append(str(ingestion_id))
-
-    async def _fake_delete(session, *, ingestion_id):
-        deleted.append(str(ingestion_id))
+async def test_enqueue_failure_keeps_payload_and_marks_stream_unavailable(
+    client, session_maker, monkeypatch
+):
+    """CHAOS-2695 supersedes CHAOS-2693's interim orphan-delete: the payload
+    row is now referenced by the durable status row (status
+    ``stream_unavailable``) and the client's same-key retry reuses BOTH via
+    the same ingestion_id -- deleting it could also black-hole an enqueue
+    whose XADD actually landed before the error surfaced."""
 
     def _raise(**kwargs):
         raise StreamUnavailableError("boom")
 
-    monkeypatch.setattr(router_mod, "upsert_payload", _fake_upsert)
-    monkeypatch.setattr(router_mod, "delete_payload", _fake_delete)
     monkeypatch.setattr(router_mod, "enqueue_batch", _raise)
     envelope = _envelope([_record("commit.v1", "c1", VALID_PAYLOADS["commit.v1"])])
 
@@ -402,8 +428,240 @@ async def test_enqueue_failure_deletes_orphan_payload(client, monkeypatch):
 
     assert resp.status_code == 503
     assert resp.json()["error"]["code"] == "stream_unavailable"
-    assert len(upserted) == 1
-    assert deleted == upserted  # the orphan row was cleaned up
+    async with session_maker() as session:
+        batch = await status_mod.find_existing_batch(
+            session,
+            org_id="test-org",
+            source_system="github",
+            source_instance="acme/api",
+            idempotency_key="test-key-1",
+        )
+        assert batch is not None
+        assert batch.status == "stream_unavailable"
+        assert str(batch.ingestion_id) in resp.json()["error"]["message"]
+        assert await payload_exists(
+            session, ingestion_id=batch.ingestion_id, org_id="test-org"
+        )
+
+
+@pytest.mark.asyncio
+async def test_retry_after_stream_unavailable_reuses_ingestion_id(
+    client, session_maker, monkeypatch
+):
+    """RETRY (brief decision 7): a same-key resubmit after a 503 must
+    re-attempt the enqueue on the SAME ingestion_id (attempts += 1), never
+    mint a second row or replay the stale stream_unavailable status."""
+
+    def _raise(**kwargs):
+        raise StreamUnavailableError("boom")
+
+    envelope = _envelope([_record("commit.v1", "c1", VALID_PAYLOADS["commit.v1"])])
+
+    monkeypatch.setattr(router_mod, "enqueue_batch", _raise)
+    first = await client.post(f"{BASE}/batches", json=envelope)
+    assert first.status_code == 503
+
+    enqueued: list[dict] = []
+
+    async def _ok(**kwargs):
+        enqueued.append(kwargs)
+        return "stream-x"
+
+    monkeypatch.setattr(router_mod, "enqueue_batch", _ok)
+    second = await client.post(f"{BASE}/batches", json=envelope)
+
+    assert second.status_code == 202
+    body = second.json()
+    async with session_maker() as session:
+        batch = await status_mod.find_existing_batch(
+            session,
+            org_id="test-org",
+            source_system="github",
+            source_instance="acme/api",
+            idempotency_key="test-key-1",
+        )
+    assert batch is not None
+    assert body["ingestionId"] == str(batch.ingestion_id)
+    assert batch.status == "accepted"
+    assert batch.attempts == 2
+    assert len(enqueued) == 1
+    assert enqueued[0]["ingestion_id"] == str(batch.ingestion_id)
+
+
+@pytest.mark.asyncio
+async def test_accept_persists_batch_row_with_hash_and_producer(client, session_maker):
+    envelope = _envelope([_record("commit.v1", "c1", VALID_PAYLOADS["commit.v1"])])
+    envelope["source"]["producer"] = "acme-ci"
+    envelope["source"]["producerVersion"] = "1.2.3"
+
+    resp = await client.post(f"{BASE}/batches", json=envelope)
+
+    assert resp.status_code == 202
+    async with session_maker() as session:
+        batch = await status_mod.get_batch(
+            session,
+            org_id="test-org",
+            ingestion_id=uuid_mod.UUID(resp.json()["ingestionId"]),
+        )
+    assert batch is not None
+    assert batch.status == "accepted"
+    assert batch.attempts == 1
+    assert len(batch.payload_hash) == 64  # sha256 hex
+    assert batch.producer == "acme-ci"
+    assert batch.producer_version == "1.2.3"
+    assert batch.items_received == 1
+
+
+@pytest.mark.asyncio
+async def test_replay_same_key_same_payload_returns_200_status_envelope(client):
+    """REPLAY -> 200 (not 202) with the full GET /batches/{id}-shaped body
+    (brief decision 8) and no second enqueue/row."""
+    envelope = _envelope([_record("commit.v1", "c1", VALID_PAYLOADS["commit.v1"])])
+
+    first = await client.post(f"{BASE}/batches", json=envelope)
+    assert first.status_code == 202
+
+    second = await client.post(f"{BASE}/batches", json=envelope)
+
+    assert second.status_code == 200
+    body = second.json()
+    assert body["ingestionId"] == first.json()["ingestionId"]
+    assert body["status"] == "accepted"
+    assert body["attempts"] == 1  # replay never increments
+    assert body["itemsReceived"] == 1
+    assert "recompute" in body  # full status envelope, not the 202 shape
+    assert "stream" not in body
+
+
+@pytest.mark.asyncio
+async def test_replay_is_field_order_insensitive(client):
+    """Canonicalization (brief decisions 1-2): reordering JSON keys must
+    hash identically -> REPLAY, not CONFLICT."""
+    record = _record("commit.v1", "c1", VALID_PAYLOADS["commit.v1"])
+    envelope = _envelope([record])
+    first = await client.post(f"{BASE}/batches", json=envelope)
+    assert first.status_code == 202
+
+    reordered = {
+        "records": [
+            {
+                "payload": dict(reversed(list(record["payload"].items()))),
+                "externalId": record["externalId"],
+                "kind": record["kind"],
+            }
+        ],
+        "source": envelope["source"],
+        "idempotencyKey": envelope["idempotencyKey"],
+        "schemaVersion": envelope["schemaVersion"],
+    }
+    second = await client.post(f"{BASE}/batches", json=reordered)
+
+    assert second.status_code == 200
+    assert second.json()["ingestionId"] == first.json()["ingestionId"]
+
+
+@pytest.mark.asyncio
+async def test_conflict_same_key_different_payload_409(client):
+    envelope = _envelope([_record("commit.v1", "c1", VALID_PAYLOADS["commit.v1"])])
+    first = await client.post(f"{BASE}/batches", json=envelope)
+    assert first.status_code == 202
+
+    different = _envelope(
+        [
+            _record(
+                "commit.v1",
+                "OTHER",
+                {**VALID_PAYLOADS["commit.v1"], "hash": "fff9999999"},
+            )
+        ]
+    )
+    second = await client.post(f"{BASE}/batches", json=different)
+
+    assert second.status_code == 409
+    assert second.json()["error"]["code"] == "idempotency_conflict"
+
+
+@pytest.mark.asyncio
+async def test_same_key_different_instance_is_independent(
+    client, session_maker, monkeypatch
+):
+    """The idempotency namespace is (org, system, instance, key) -- reusing
+    a key string against a DIFFERENT registered instance is a fresh NEW
+    batch, not a conflict (brief §2)."""
+    async with session_maker() as session:
+        session.add(
+            IngestSource(
+                org_id="test-org",
+                system="github",
+                instance="acme/other",
+                mode=IngestSourceMode.CUSTOMER_PUSH.value,
+                enabled=True,
+            )
+        )
+        await session.commit()
+    other_ctx = IngestAuthContext(
+        org_id="test-org",
+        scopes=frozenset({"ingest:write"}),
+        source=IngestSource(
+            org_id="test-org",
+            system="github",
+            instance="acme/other",
+            mode=IngestSourceMode.CUSTOMER_PUSH.value,
+            enabled=True,
+        ),
+    )
+
+    first = await client.post(
+        f"{BASE}/batches",
+        json=_envelope([_record("commit.v1", "c1", VALID_PAYLOADS["commit.v1"])]),
+    )
+    assert first.status_code == 202
+
+    app.dependency_overrides[router_mod._require_ingest_write] = lambda: other_ctx
+    try:
+        other_envelope = _envelope(
+            [_record("commit.v1", "c1", VALID_PAYLOADS["commit.v1"])]
+        )
+        other_envelope["source"]["instance"] = "acme/other"
+        second = await client.post(f"{BASE}/batches", json=other_envelope)
+    finally:
+        app.dependency_overrides[router_mod._require_ingest_write] = lambda: TEST_CTX
+
+    assert second.status_code == 202
+    assert second.json()["ingestionId"] != first.json()["ingestionId"]
+
+
+@pytest.mark.asyncio
+async def test_accept_rejected_when_fullchaos_actively_owns_instance(
+    client, session_maker
+):
+    """Accept-time one-active-owner re-check (CC5/CC14 defense in depth): a
+    managed sync source connected to the same instance AFTER registration
+    must 403 even though the token still binds to a write-eligible row."""
+    async with session_maker() as session:
+        integration = Integration(
+            org_id="test-org", provider="GitHub", name="managed-github"
+        )
+        session.add(integration)
+        await session.flush()
+        session.add(
+            IntegrationSource(
+                org_id="test-org",
+                integration_id=integration.id,
+                provider="GitHub",  # mixed case on purpose: func.lower matching
+                source_type="repository",
+                external_id="acme/api",
+                name="api",
+                full_name="acme/api",
+            )
+        )
+        await session.commit()
+
+    envelope = _envelope([_record("commit.v1", "c1", VALID_PAYLOADS["commit.v1"])])
+    resp = await client.post(f"{BASE}/batches", json=envelope)
+
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "source_owned_by_fullchaos_sync"
 
 
 @pytest.mark.asyncio

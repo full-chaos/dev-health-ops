@@ -1,10 +1,14 @@
-"""External-ingest REST contract: 4 endpoints (CHAOS-2691).
+"""External-ingest REST contract: 4 endpoints (CHAOS-2691 + CHAOS-2695).
 
-``POST /batches`` only checks envelope shape + the record-kind allowlist
-(400 on any unknown kind) — deep per-record validation happens eagerly in
-``POST /validate`` and durably in the CHAOS-2697 worker, so a customer's
-momentary schema drift on a handful of records doesn't drop an entire batch
-(see docs/architecture/external-ingest-rest-contract.md). ``GET /schemas*``
+``POST /batches`` checks envelope shape + the record-kind allowlist (400 on
+any unknown kind), then runs the full CC22 accept sequence — token source
+binding, one-active-owner check, NEW/REPLAY/CONFLICT/RETRY idempotency
+(``idempotency.py``/``external_ingest/ownership.py``, CHAOS-2695) — before
+the durable payload write + pointer enqueue. Deep per-record validation
+happens eagerly in ``POST /validate`` and durably in the CHAOS-2697 worker,
+so a customer's momentary schema drift on a handful of records doesn't drop
+an entire batch (see docs/architecture/external-ingest-rest-contract.md and
+docs/architecture/external-ingest-idempotency-ownership.md). ``GET /schemas*``
 (CHAOS-2692) is generated from the same ``schemas.py`` Pydantic models via
 ``schema_registry.py`` — a versioned bundle with ``$defs``, per-record-kind
 ``$ref``s + examples, and an ETag; this module never redeclares those
@@ -13,12 +17,13 @@ models. See docs/architecture/adr-005-external-ingest-schema-discovery.md.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Annotated
-from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,11 +36,22 @@ from dev_health_ops.api.middleware.rate_limit import (
     get_ingest_token_key,
     limiter,
 )
-from dev_health_ops.external_ingest.payload_store import delete_payload, upsert_payload
+from dev_health_ops.external_ingest.ownership import (
+    EffectiveMode,
+    resolve_effective_mode,
+)
+from dev_health_ops.external_ingest.payload_store import upsert_payload
+from dev_health_ops.external_ingest.recompute_status import get_recompute_jobs
 from dev_health_ops.external_ingest.validate import validate_records
 
 from .auth import IngestAuthContext, require_ingest_scope, require_matching_source
 from .errors import ExternalIngestError
+from .idempotency import (
+    IdempotencyOutcomeKind,
+    IngestTemporarilyUnavailableError,
+    compute_payload_hash,
+    resolve_batch_idempotency,
+)
 from .schema_registry import compute_etag, get_bundle, list_versions
 from .schemas import (
     MAX_BODY_BYTES_DEFAULT,
@@ -45,6 +61,14 @@ from .schemas import (
     BatchAcceptedResponse,
     BatchEnvelope,
     ValidationResponse,
+)
+from .status import (
+    BatchRow,
+    _batch_to_status_response,
+    get_batch,
+    list_rejections,
+    mark_stream_unavailable,
+    reset_for_retry,
 )
 from .streams import StreamUnavailableError, enqueue_batch
 
@@ -245,6 +269,57 @@ async def validate_batch(
     )
 
 
+def _ownership_error(
+    mode: EffectiveMode, system: str, instance: str
+) -> ExternalIngestError:
+    """Map a non-customer_push effective mode to its brief §7 error."""
+    if mode == "unclaimed":
+        return ExternalIngestError(
+            403,
+            "source_not_registered",
+            f"No ingest source is registered for system='{system}' "
+            f"instance='{instance}' in this organization. Register it under "
+            "/org/admin/integrations before pushing.",
+        )
+    if mode == "disabled":
+        return ExternalIngestError(
+            403,
+            "source_disabled",
+            f"Ingest source '{system}:{instance}' is disabled for this organization.",
+        )
+    return ExternalIngestError(
+        403,
+        "source_owned_by_fullchaos_sync",
+        f"Source '{system}:{instance}' is currently managed by "
+        "FullChaos-hosted sync. Disable managed sync for this source before "
+        "pushing customer data, or contact support.",
+    )
+
+
+async def _replay_status_response(
+    session: AsyncSession, org_id: str, batch: BatchRow
+) -> JSONResponse:
+    """REPLAY -> 200 OK with the FULL current-status envelope (brief decision
+    8): the replayed batch may already be completed/partial, and the narrow
+    202-accepted shape would misreport it. Same body as GET /batches/{id}
+    (first error page, default limits) so ``dev-hops push batch --poll`` can
+    short-circuit in one round trip."""
+    errors, errors_total = await list_rejections(
+        session, org_id=org_id, ingestion_id=batch.ingestion_id, limit=50, offset=0
+    )
+    recompute_jobs = await get_recompute_jobs(
+        session,
+        org_id=org_id,
+        source_system=batch.source_system,
+        source_instance=batch.source_instance,
+        dispatched_at=batch.recompute_dispatched_at,
+    )
+    body = _batch_to_status_response(batch, errors, errors_total, 50, 0, recompute_jobs)
+    return JSONResponse(
+        status_code=200, content=json.loads(body.model_dump_json(by_alias=True))
+    )
+
+
 @router.post("/batches", response_model=BatchAcceptedResponse, status_code=202)
 @limiter.limit(INGEST_BATCH_LIMIT, key_func=get_ingest_token_key)
 async def accept_batch(
@@ -252,7 +327,11 @@ async def accept_batch(
     session: Annotated[AsyncSession, Depends(get_postgres_session_dep)],
     ctx: IngestAuthContext = Depends(_require_ingest_write),
     idempotency_key_header: str | None = Header(default=None, alias="Idempotency-Key"),
-) -> BatchAcceptedResponse:
+) -> Response:
+    """Full CC22 accept sequence (CHAOS-2695): envelope checks -> token
+    source binding -> ownership -> idempotency (FIRST Postgres write) ->
+    payload upsert -> COMMIT -> pointer enqueue. See
+    docs/architecture/external-ingest-idempotency-ownership.md."""
     raw = await _read_body_enforcing_size_limit(request)
     envelope = _parse_envelope_or_400(raw)
     _check_idempotency_header_matches_body(envelope, idempotency_key_header)
@@ -266,18 +345,89 @@ async def accept_batch(
     # source_mismatch / source_disabled).
     require_matching_source(ctx, envelope.source.system, envelope.source.instance)
 
-    ingestion_id = str(uuid4())
-    window = envelope.window
+    # One-active-owner re-check at accept time (CC5/CC14 defense in depth):
+    # require_matching_source only proves the token binds to a registered,
+    # write-eligible source row -- it cannot see a managed sync source that
+    # was connected to the SAME instance AFTER registration (nothing on the
+    # api/admin/routers/sync.py side knows about external_ingest_sources).
+    mode = await resolve_effective_mode(
+        session,
+        org_id=ctx.org_id,
+        system=envelope.source.system,
+        instance=envelope.source.instance,
+    )
+    if mode != "customer_push":
+        raise _ownership_error(mode, envelope.source.system, envelope.source.instance)
 
-    # Persist the raw payload BEFORE enqueueing the pointer (D2/CC9): the
-    # stream entry never carries payload bytes, so a worker fetching by
-    # ingestion_id must always find a durable row. Committed here, ahead of
-    # enqueue_batch()'s own fail-closed payload-durability check (streams.py)
-    # -- that check opens an independent read after this commit, so it must
-    # already be visible. This is the interim (pre-CHAOS-2695) accept flow:
-    # no idempotency/ownership resolution or status-row write yet (CHAOS-2695
-    # wave 4 owns that full CC22 rewrite) -- adding only the payload
-    # persistence this issue (CHAOS-2693) owns.
+    window = envelope.window
+    payload_hash = compute_payload_hash(envelope)
+    try:
+        # FIRST Postgres write of the accept sequence (CC22) -- the unique
+        # idempotency index is the serialization point for concurrent
+        # same-key accepts.
+        outcome = await resolve_batch_idempotency(
+            session,
+            org_id=ctx.org_id,
+            source_system=envelope.source.system,
+            source_instance=envelope.source.instance,
+            idempotency_key=envelope.idempotency_key,
+            payload_hash=payload_hash,
+            schema_version=envelope.schema_version,
+            producer=envelope.source.producer,
+            producer_version=envelope.source.producer_version,
+            window_started_at=window.started_at if window else None,
+            window_ended_at=window.ended_at if window else None,
+            items_received=len(envelope.records),
+        )
+    except IngestTemporarilyUnavailableError as exc:
+        raise ExternalIngestError(
+            503,
+            "ingest_temporarily_unavailable",
+            "A concurrent request for the same idempotency key is in progress. Retry.",
+        ) from exc
+
+    if outcome.kind is IdempotencyOutcomeKind.CONFLICT:
+        raise ExternalIngestError(
+            409,
+            "idempotency_conflict",
+            f"Idempotency key '{envelope.idempotency_key}' was already used "
+            f"for source '{envelope.source.system}:{envelope.source.instance}' "
+            "with a different payload. Use a new idempotencyKey, or retry "
+            "with the exact original payload to get the cached status.",
+        )
+    if outcome.kind is IdempotencyOutcomeKind.REPLAY:
+        return await _replay_status_response(session, ctx.org_id, outcome.batch)
+
+    batch = outcome.batch
+    ingestion_id = str(batch.ingestion_id)
+
+    if outcome.kind is IdempotencyOutcomeKind.RETRY:
+        # Re-accept the SAME ingestion_id (attempts += 1, prior attempt's
+        # outcome fields cleared). CAS on the status we classified against:
+        # losing it means a concurrent retry won or a live worker finished a
+        # stale-looking batch first -- either way the fresh row is the truth,
+        # answer as a REPLAY instead of double-accepting.
+        won = await reset_for_retry(
+            session,
+            org_id=ctx.org_id,
+            ingestion_id=batch.ingestion_id,
+            from_status=batch.status,
+        )
+        if not won:
+            fresh = await get_batch(
+                session, org_id=ctx.org_id, ingestion_id=batch.ingestion_id
+            )
+            assert fresh is not None  # the row existed; transitions never delete
+            return await _replay_status_response(session, ctx.org_id, fresh)
+
+    # Persist the raw payload in the SAME transaction as the status row
+    # (D2/CC9/CC22): the stream entry never carries payload bytes, so a
+    # worker fetching by ingestion_id must always find a durable row. The
+    # commit lands BEFORE enqueue_batch()'s own fail-closed
+    # payload-durability check (streams.py), which opens an independent
+    # read. On RETRY this refreshes the (hash-identical) bytes -- the
+    # ``failed`` case may have had its payload already deleted by the
+    # worker's terminal cleanup (D7).
     await upsert_payload(
         session,
         ingestion_id=ingestion_id,
@@ -300,30 +450,33 @@ async def accept_batch(
             window_ended_at=window.ended_at if window else None,
         )
     except StreamUnavailableError as exc:
-        # Adversarial-review round-2: without cleanup, every customer retry of
-        # a 503 leaves another committed multi-MB payload row behind (each
-        # accept mints a fresh ingestion_id in this interim flow, so nothing
-        # ever reuses or prunes them). Best-effort delete keeps "payload row
-        # exists" ~equivalent to "a pointer may exist". Residual orphans from
-        # a crash between commit and enqueue remain possible -- the
-        # CHAOS-2769 reconciler / CHAOS-2695 status rows are the systematic
-        # answer; a failed delete here must never mask the customer-facing
-        # 503.
-        try:
-            await delete_payload(session, ingestion_id=ingestion_id)
-            await session.commit()
-        except Exception:
-            logger.exception(
-                "orphan payload cleanup failed for ingestion_id=%s", ingestion_id
-            )
+        # The batch row is durable, so record the failed enqueue on it and
+        # commit BEFORE raising (mark_stream_unavailable's contract) -- the
+        # client's same-key retry then resolves as RETRY against the same
+        # ingestion_id. The payload row is deliberately KEPT (supersedes
+        # CHAOS-2693's interim orphan-delete: it is now referenced by the
+        # status row, the retry reuses it, and deleting it could black-hole
+        # an enqueue whose XADD actually landed before the error surfaced);
+        # never-retried leftovers are CHAOS-2769's reconciler's job.
+        await mark_stream_unavailable(
+            session, org_id=ctx.org_id, ingestion_id=batch.ingestion_id
+        )
+        await session.commit()
         raise ExternalIngestError(
-            503, "stream_unavailable", "Ingest stream unavailable"
+            503,
+            "stream_unavailable",
+            "The durable ingest stream is temporarily unavailable. The batch "
+            f"was recorded as '{ingestion_id}'; retry with the same "
+            "idempotencyKey once available.",
         ) from exc
 
-    return BatchAcceptedResponse(
-        ingestion_id=ingestion_id,
-        items_received=len(envelope.records),
-        stream=stream,
+    return JSONResponse(
+        status_code=202,
+        content=BatchAcceptedResponse(
+            ingestion_id=ingestion_id,
+            items_received=len(envelope.records),
+            stream=stream,
+        ).model_dump(by_alias=True),
     )
 
 

@@ -19,6 +19,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from dev_health_ops.api.external_ingest.schemas import SCHEMA_VERSION
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.audit import AuditLog
 from dev_health_ops.models.git import Base
@@ -808,3 +809,220 @@ async def test_full_lifecycle_produces_expected_audit_rows(session_maker, client
     assert actions.count("ingest_source_registered") == 1
     assert actions.count("ingest_token_created") == 1
     assert actions.count("ingest_token_rotated") == 1
+
+
+@pytest.mark.asyncio
+async def test_create_source_case_variant_duplicate_409(client):
+    """CHAOS-2695 adversarial-review: provider instance identifiers are
+    case-insensitive, so a case-variant re-registration must 409 -- otherwise
+    two enabled sources own the same logical repository under split
+    one-active-owner / idempotency namespaces."""
+    ac, _ = client
+    first = await _create_source(ac, system="github", instance="Acme/API")
+    assert first.status_code == 201
+
+    duplicate = await _create_source(ac, system="github", instance="acme/api")
+
+    assert duplicate.status_code == 409
+    assert "case-insensitive" in duplicate.json()["detail"]
+
+    # A genuinely different instance still registers fine.
+    other = await _create_source(ac, system="github", instance="acme/other")
+    assert other.status_code == 201
+
+
+# ---------------------------------------------------------------------------
+# Validate proxy (CHAOS-2695) -- session-auth twin of the data-plane
+# POST /validate for the web console's Screen 5 (master-spec CC25:
+# validate-only; no console-push proxy exists).
+# ---------------------------------------------------------------------------
+
+_VALID_COMMIT_PAYLOAD = {
+    "repositoryExternalId": "acme/api",
+    "hash": "abc1234567",
+    "authorWhen": "2026-06-25T00:00:00Z",
+}
+
+
+def _validate_envelope(records: list[dict]) -> dict:
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "idempotencyKey": "console-validate-1",
+        "source": {
+            "type": "customer_push",
+            "system": "github",
+            "instance": "acme/api",
+        },
+        "records": records,
+    }
+
+
+async def _registered_source_id(ac) -> str:
+    resp = await _create_source(ac, system="github", instance="acme/api")
+    assert resp.status_code == 201
+    return resp.json()["id"]
+
+
+@pytest.mark.asyncio
+async def test_validate_proxy_valid_payload(client):
+    ac, _ = client
+    source_id = await _registered_source_id(ac)
+
+    resp = await ac.post(
+        f"/api/v1/admin/customer-push/sources/{source_id}/validate",
+        json=_validate_envelope(
+            [
+                {
+                    "kind": "commit.v1",
+                    "externalId": "abc1234567",
+                    "payload": _VALID_COMMIT_PAYLOAD,
+                }
+            ]
+        ),
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    # snake_case admin-plane contract (web CustomerPushValidateResponse)
+    assert body == {
+        "valid": True,
+        "items_accepted": 1,
+        "items_rejected": 0,
+        "errors": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_validate_proxy_reports_per_record_errors_with_external_id(client):
+    ac, _ = client
+    source_id = await _registered_source_id(ac)
+
+    bad_commit = {k: v for k, v in _VALID_COMMIT_PAYLOAD.items() if k != "hash"}
+    resp = await ac.post(
+        f"/api/v1/admin/customer-push/sources/{source_id}/validate",
+        json=_validate_envelope(
+            [
+                {
+                    "kind": "commit.v1",
+                    "externalId": "good-1",
+                    "payload": _VALID_COMMIT_PAYLOAD,
+                },
+                {"kind": "commit.v1", "externalId": "bad-2", "payload": bad_commit},
+            ]
+        ),
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["valid"] is False
+    assert body["items_accepted"] == 1
+    assert body["items_rejected"] == 1
+    (error,) = body["errors"]
+    assert error["index"] == 1
+    assert error["kind"] == "commit.v1"
+    # Enriched from the record wrapper (ValidationErrorItem itself has no
+    # external_id) for console-table correlation.
+    assert error["external_id"] == "bad-2"
+    assert error["code"] == "missing_required_field"
+    assert error["path"].startswith("records[1].payload")
+
+
+@pytest.mark.asyncio
+async def test_validate_proxy_unknown_kind_reported_per_record(client):
+    ac, _ = client
+    source_id = await _registered_source_id(ac)
+
+    resp = await ac.post(
+        f"/api/v1/admin/customer-push/sources/{source_id}/validate",
+        json=_validate_envelope(
+            [{"kind": "deployment.v1", "externalId": "d1", "payload": {}}]
+        ),
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["valid"] is False
+    assert body["errors"][0]["code"] == "unknown_kind"
+
+
+@pytest.mark.asyncio
+async def test_validate_proxy_envelope_failure_is_200_result(client):
+    """Envelope-level failures render as validation RESULTS (200,
+    valid:false), never 4xx -- the console panel renders these rows, and the
+    web mock contract pinned this before the endpoint landed."""
+    ac, _ = client
+    source_id = await _registered_source_id(ac)
+
+    resp = await ac.post(
+        f"/api/v1/admin/customer-push/sources/{source_id}/validate",
+        json={"schemaVersion": SCHEMA_VERSION, "records": []},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["valid"] is False
+    assert body["items_accepted"] == 0
+    assert body["items_rejected"] == 0
+    assert body["errors"]
+    assert all(err["code"] == "invalid_envelope" for err in body["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_proxy_malformed_json_is_200_result(client):
+    ac, _ = client
+    source_id = await _registered_source_id(ac)
+
+    resp = await ac.post(
+        f"/api/v1/admin/customer-push/sources/{source_id}/validate",
+        content=b"{not json",
+        headers={"content-type": "application/json"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["valid"] is False
+    assert body["errors"][0]["code"] == "invalid_envelope"
+
+
+@pytest.mark.asyncio
+async def test_validate_proxy_wrong_schema_version_is_200_result(client):
+    ac, _ = client
+    source_id = await _registered_source_id(ac)
+
+    envelope = _validate_envelope(
+        [
+            {
+                "kind": "commit.v1",
+                "externalId": "abc1234567",
+                "payload": _VALID_COMMIT_PAYLOAD,
+            }
+        ]
+    )
+    envelope["schemaVersion"] = "external-ingest.v99"
+    resp = await ac.post(
+        f"/api/v1/admin/customer-push/sources/{source_id}/validate", json=envelope
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["valid"] is False
+    assert body["errors"][0]["code"] == "unsupported_schema_version"
+    assert body["errors"][0]["path"] == "schemaVersion"
+
+
+@pytest.mark.asyncio
+async def test_validate_proxy_unknown_source_404(client):
+    ac, _ = client
+    resp = await ac.post(
+        f"/api/v1/admin/customer-push/sources/{uuid.uuid4()}/validate",
+        json=_validate_envelope(
+            [
+                {
+                    "kind": "commit.v1",
+                    "externalId": "abc1234567",
+                    "payload": _VALID_COMMIT_PAYLOAD,
+                }
+            ]
+        ),
+    )
+    assert resp.status_code == 404

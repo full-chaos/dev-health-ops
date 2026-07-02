@@ -293,6 +293,7 @@ def run_investment_materialize_chunk(
     llm_batch_min_items: int | None = None,
     llm_batch_poll_interval_seconds: float | None = None,
     llm_batch_timeout_seconds: float | None = None,
+    max_component_nodes: int | None = None,
 ) -> dict:
     from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.llm import LLMAuthError, LLMError, resolve_provider_name
@@ -382,6 +383,10 @@ def run_investment_materialize_chunk(
             llm_batch_timeout_seconds=resolve_llm_batch_timeout_seconds(
                 llm_batch_timeout_seconds
             ),
+            # Frozen by the dispatcher: chunk workers must split components with
+            # the SAME cap the dispatcher enumerated with, or component_indexes
+            # would name different work units (CHAOS-2775 codex round 2).
+            max_component_nodes=max_component_nodes,
         )
         stats = run_async(materialize_investments(config))
 
@@ -435,6 +440,9 @@ def finalize_investment_materialize_partitioned(
         "llm_output_tokens": 0,
         "llm_failures": 0,
         "llm_failure_counts": {},
+        "oversized_components": 0,
+        "dropped_edges": 0,
+        "dropped_nodes": 0,
     }
     try:
         for result in chunk_results or []:
@@ -449,6 +457,13 @@ def finalize_investment_materialize_partitioned(
                 "llm_failures",
             ):
                 totals[key] += int(stats.get(key, 0) or 0)
+            # Split stats are aggregated by MAX, not summed: every chunk
+            # rebuilds the FULL component list (then materializes only its
+            # component_indexes slice), so each chunk reports the same
+            # graph-wide split counters — summing would multiply them by the
+            # chunk count (CHAOS-2775 codex round 2).
+            for key in ("oversized_components", "dropped_edges", "dropped_nodes"):
+                totals[key] = max(totals[key], int(stats.get(key, 0) or 0))
             for failure_class, count in dict(
                 stats.get("llm_failure_counts", {})
             ).items():
@@ -498,6 +513,9 @@ def dispatch_investment_materialize_partitioned(
     llm_batch_timeout_seconds: float | None = None,
 ) -> dict:
     from dev_health_ops.metrics.sinks.factory import create_sink
+    from dev_health_ops.work_graph.investment.constants import (
+        resolve_max_component_nodes,
+    )
     from dev_health_ops.work_graph.investment.materialize import (
         _build_components,
         _resolve_repo_ids,
@@ -511,6 +529,14 @@ def dispatch_investment_materialize_partitioned(
     # Hoisted to guarantee definite assignment on every return path (CodeQL).
     run_membership = not (repo_ids or team_ids or from_date or to_date)
 
+    # Resolve the component-size cap ONCE and freeze it for the whole
+    # partitioned run: chunk workers rebuild the component list from a fresh
+    # fetch, and component_indexes are positional — if a chunk worker resolved
+    # a different INVESTMENT_MAX_COMPONENT_NODES from its own env, the split
+    # would differ and index N would name a different work unit
+    # (CHAOS-2775 codex round 2).
+    frozen_max_component_nodes = resolve_max_component_nodes()
+
     db_url = db_url or _get_db_url()
     sink = create_sink(db_url)
     try:
@@ -521,7 +547,9 @@ def dispatch_investment_materialize_partitioned(
         edges = fetch_work_graph_edges(
             sink, repo_ids=resolved_repo_ids, org_id=org_id or ""
         )
-        components = _build_components(edges)
+        components = _build_components(
+            edges, max_component_nodes=frozen_max_component_nodes
+        )
     finally:
         sink.close()
 
@@ -564,6 +592,7 @@ def dispatch_investment_materialize_partitioned(
             "computed_at": computed_at,
             "component_indexes": chunk_indexes,
             "chunk_index": chunk_index,
+            "max_component_nodes": frozen_max_component_nodes,
         }
         if allow_unscoped:
             chunk_kwargs["allow_unscoped"] = True

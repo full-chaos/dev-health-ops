@@ -58,6 +58,10 @@ from dev_health_ops.work_graph.investment.categorize import (
     categorize_text_bundle_completion,
     fallback_outcome,
 )
+from dev_health_ops.work_graph.investment.components import (
+    ComponentBuildStats,
+    build_components,
+)
 from dev_health_ops.work_graph.investment.constants import (
     MEMBERSHIP_WEIGHT_THRESHOLD,
     MIN_EVIDENCE_CHARS,
@@ -770,6 +774,13 @@ class MaterializeConfig:
     llm_batch_min_items: int = 25
     llm_batch_poll_interval_seconds: float = 30.0
     llm_batch_timeout_seconds: float = 3000.0
+    # Frozen component-size cap for partitioned runs: the dispatcher resolves
+    # the cap ONCE and passes it to every chunk so dispatcher and chunk workers
+    # can never disagree via divergent INVESTMENT_MAX_COMPONENT_NODES env
+    # (component_indexes are positional — a cap mismatch would re-split
+    # differently and index N would name a different work unit). None = resolve
+    # from env/default locally (single-process runs).
+    max_component_nodes: int | None = None
 
     def __post_init__(self) -> None:
         if self.llm_batch_mode not in _LLM_BATCH_MODES:
@@ -786,42 +797,19 @@ class MaterializeConfig:
 
 def _build_components(
     edges: list[dict[str, object]],
+    *,
+    stats: ComponentBuildStats | None = None,
+    max_component_nodes: int | None = None,
 ) -> list[tuple[list[NodeKey], list[dict[str, object]]]]:
-    adjacency: dict[NodeKey, list[NodeKey]] = {}
-    edges_by_node: dict[NodeKey, list[dict[str, object]]] = {}
+    """Connected-component work units, with the CHAOS-2775 oversized-component
+    split applied.
 
-    for edge in edges:
-        source = (str(edge.get("source_type")), str(edge.get("source_id")))
-        target = (str(edge.get("target_type")), str(edge.get("target_id")))
-        adjacency.setdefault(source, []).append(target)
-        adjacency.setdefault(target, []).append(source)
-        edges_by_node.setdefault(source, []).append(edge)
-        edges_by_node.setdefault(target, []).append(edge)
-
-    visited: set[NodeKey] = set()
-    components: list[tuple[list[NodeKey], list[dict[str, object]]]] = []
-
-    for node in adjacency:
-        if node in visited:
-            continue
-        stack = [node]
-        visited.add(node)
-        component_nodes: list[NodeKey] = []
-        component_edges: dict[str, dict[str, object]] = {}
-        while stack:
-            current = stack.pop()
-            component_nodes.append(current)
-            for edge in edges_by_node.get(current, []):
-                edge_id = str(edge.get("edge_id") or "")
-                if edge_id and edge_id not in component_edges:
-                    component_edges[edge_id] = edge
-            for neighbor in adjacency.get(current, []):
-                if neighbor in visited:
-                    continue
-                visited.add(neighbor)
-                stack.append(neighbor)
-        components.append((component_nodes, list(component_edges.values())))
-    return components
+    Thin adapter over the SHARED ``components.build_components`` so the
+    materializer, the dispatch enumerator (``workers.work_graph_tasks``), and the
+    membership backfill all group nodes identically — a divergence would break
+    ``work_unit_id`` hashing across the LLM and no-LLM paths.
+    """
+    return build_components(edges, stats=stats, max_component_nodes=max_component_nodes)
 
 
 def _flatten_nodes(
@@ -1109,13 +1097,23 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
         edges = fetch_work_graph_edges(
             sink, repo_ids=repo_ids, org_id=config.org_id or ""
         )
-        components = _build_components(edges)
+        component_stats = ComponentBuildStats()
+        components = _build_components(
+            edges,
+            stats=component_stats,
+            max_component_nodes=config.max_component_nodes,
+        )
         total_components = len(components)
         if not components:
             logger.info(
                 "No work graph components found for investment materialization."
             )
-            return {"components": 0, "records": 0, "quotes": 0}
+            return {
+                "components": 0,
+                "records": 0,
+                "quotes": 0,
+                **component_stats.as_dict(),
+            }
         if config.component_indexes is not None:
             wanted_indexes = set(config.component_indexes)
             components = [
@@ -1709,6 +1707,7 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
             "llm_output_tokens": llm_output_tokens,
             "llm_failures": sum(llm_failure_counts.values()),
             "llm_failure_counts": dict(llm_failure_counts),
+            **component_stats.as_dict(),
         }
     finally:
         sink.close()

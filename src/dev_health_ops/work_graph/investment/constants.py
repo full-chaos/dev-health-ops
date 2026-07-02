@@ -13,6 +13,16 @@ MIN_EVIDENCE_CHARS = 300
 # (e.g. a changelog PR) can percolate thousands of issues/PRs/commits into one
 # component that dominates the Investment allocation chart. Env-overridable via
 # ``INVESTMENT_MAX_COMPONENT_NODES``.
+#
+# OPERATIONAL INVARIANT: work_unit_id is a hash of component membership, so the
+# cap must resolve identically for the LLM materialize run and the LATER no-LLM
+# membership projection (backfill.py) that projects from its investments — set
+# INVESTMENT_MAX_COMPONENT_NODES identically on every worker/beat/CLI host (or
+# nowhere). Within one partitioned run the dispatcher freezes the resolved cap
+# into every chunk, but the projection is a separate process invocation and
+# re-resolves from env; a divergent value there re-splits differently, computes
+# different work_unit_ids, and silently skips those units' membership
+# (tracked as follow-up CHAOS-2779).
 INVESTMENT_MAX_COMPONENT_NODES = 150
 
 

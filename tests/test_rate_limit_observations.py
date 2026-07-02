@@ -367,6 +367,90 @@ def test_observation_route_family_ambiguous_for_linear_work_items(
     assert observation.dimension == "graphql_cost"
 
 
+def test_observation_sanitizes_non_finite_retry_after_seconds(db_session, monkeypatch):
+    """CHAOS-2760 cooldown-gating review finding: a provider-supplied
+    ``retry_after_seconds`` that is inf/NaN/negative must never persist
+    verbatim. The cooldown-gating reader's ``timedelta(seconds=...)``
+    arithmetic raises on a non-finite value; the reader has its own
+    fail-open guard for that (``sync/budget_guard.py``), but a corrupt value
+    should never be written to the observation store in the first place.
+    """
+    from dev_health_ops.exceptions import RateLimitException
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(db_session)  # provider=github, dataset_key=commits
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    _clean_env(monkeypatch)
+
+    def rate_limited(ctx, runtime):
+        raise RateLimitException(
+            "GitHub primary rate limit exceeded",
+            retry_after_seconds=float("inf"),
+            signal=RateLimitSignal(
+                provider="github",
+                dimension=BudgetDimension.REST_CORE,
+                retry_after_seconds=float("inf"),
+                reason="primary",
+            ),
+        )
+
+    monkeypatch.setattr(dataset_adapters, "run_dataset_unit", rate_limited)
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    assert result["status"] == "rate_limited_deferred"
+    observation = db_session.query(ProviderRateLimitObservation).one()
+    assert observation.retry_after_seconds is None
+
+
+def test_observation_clamps_excessive_retry_after_seconds(db_session, monkeypatch):
+    """A finite but absurd ``retry_after_seconds`` is clamped to the same
+    wall-clock budget the deferral planner enforces
+    (``RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS``), not persisted verbatim -- a
+    provider asking for a longer wait than the run would ever honor is not
+    worth keeping as-is in the durable store.
+    """
+    from dev_health_ops.exceptions import RateLimitException
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.rate_limit_defer import (
+        RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS,
+    )
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(db_session)
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    _clean_env(monkeypatch)
+
+    absurd_delay = float(RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS * 100)
+
+    def rate_limited(ctx, runtime):
+        raise RateLimitException(
+            "GitHub primary rate limit exceeded",
+            retry_after_seconds=absurd_delay,
+            signal=RateLimitSignal(
+                provider="github",
+                dimension=BudgetDimension.REST_CORE,
+                retry_after_seconds=absurd_delay,
+                reason="primary",
+            ),
+        )
+
+    monkeypatch.setattr(dataset_adapters, "run_dataset_unit", rate_limited)
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    assert result["status"] == "rate_limited_deferred"
+    observation = db_session.query(ProviderRateLimitObservation).one()
+    assert observation.retry_after_seconds == float(RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS)
+
+
 def test_route_family_resolution_keeps_unique_match_and_refuses_to_guess():
     """Unit test of the confidence-gated route-family attribution (CHAOS-2758
     review fix): dimension alone does not disambiguate multi-family units, so

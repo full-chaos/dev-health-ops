@@ -451,6 +451,13 @@ async def _execute_breakdown_query(
 
     sql, params = compile_breakdown(request, org_id, timeout, filters=filters)
 
+    # CHAOS-2765: breakdown reads compile the CHAOS-2764 membership-scoped
+    # work-unit CTE just like timeseries/coverage/sankey, so the stale-scope
+    # counter must cover this surface too. Mirror _execute_timeseries_query:
+    # emit before execution when the investment (scoped) path is active. The
+    # recorder is internally fail-open, so it never blocks the read.
+    if use_investment:
+        await record_stale_investment_membership_scope(client, org_id=org_id)
     rows = await query_dicts(client, sql, params)
 
     # Resolve repo/team dimension keys to human display names server-side so the

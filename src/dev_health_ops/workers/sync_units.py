@@ -41,6 +41,7 @@ Observability (CHAOS-2519):
 from __future__ import annotations
 
 import logging
+import math
 import os
 import threading
 import uuid
@@ -91,7 +92,10 @@ from dev_health_ops.sync.watermarks import set_watermark
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.post_sync_dispatch import build_post_sync_dispatch_payload
 from dev_health_ops.workers.queues import _cost_class_queues_enabled
-from dev_health_ops.workers.rate_limit_defer import plan_rate_limit_deferral
+from dev_health_ops.workers.rate_limit_defer import (
+    RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS,
+    plan_rate_limit_deferral,
+)
 from dev_health_ops.workers.sync_bootstrap import (
     ProviderRuntimeCache,
     SyncTaskBootstrap,
@@ -637,6 +641,30 @@ def _normalized_rate_limit_reason(exc: BaseException) -> str:
     return _UNKNOWN_RATE_LIMIT_REASON
 
 
+def _sanitize_retry_after_seconds(value: float | None) -> float | None:
+    """Validate a provider-supplied retry-after value before persisting it
+    (CHAOS-2760 review finding). A malformed value here -- a provider bug, a
+    header-parsing edge case, or a literal inf/NaN -- would otherwise flow
+    straight into the durable observation store, where the cooldown-gating
+    consumer's ``timedelta(seconds=...)`` arithmetic raises on a non-finite
+    value; the reader has its own fail-open guard for that
+    (``sync/budget_guard.py``), but a corrupt value should never be written
+    in the first place. Never NaN/inf, never negative, and capped at the
+    same wall-clock budget (``RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS``) the
+    deferral planner enforces -- a provider asking for a longer wait than
+    the run would ever honor is not worth persisting verbatim either.
+    """
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric) or numeric < 0:
+        return None
+    return min(numeric, float(RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS))
+
+
 def _build_rate_limit_observation(
     *,
     unit: SyncRunUnit,
@@ -666,6 +694,7 @@ def _build_rate_limit_observation(
     retry_after_seconds = getattr(exc, "retry_after_seconds", None)
     if retry_after_seconds is None and signal is not None:
         retry_after_seconds = signal.retry_after_seconds
+    retry_after_seconds = _sanitize_retry_after_seconds(retry_after_seconds)
     route_family, route_family_attribution = _route_family_and_attribution(
         budget_audit, dimension
     )
@@ -796,6 +825,35 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         )
         capped_ids = frozenset((*capped_ids, *budget_result.deferred_unit_ids))
 
+        # CHAOS-2760 TOCTOU closure (review finding): enforce_run's cooldown
+        # snapshot can go stale by the time we reach the claim below —
+        # budget admission does real DB work (re-estimating every active
+        # unit in the bucket) in between, during which a sibling unit's 429
+        # can commit a brand-new observation this pass never saw. Re-check
+        # once more, right here, as the LAST read before the atomic claim —
+        # reusing the estimates enforce_run already computed, no
+        # re-estimation / credential decryption. reconfirm_cooldowns fully
+        # defers/terminalizes any match it catches (same write path
+        # enforce_run's own cooldown loop uses) — a bare exclusion here
+        # would leave the unit PLANNED with no deferral-budget bookkeeping
+        # and livelock the run on a bare ~60s redispatch countdown (review
+        # finding, round 2).
+        reconfirm_result = BudgetGuard.reconfirm_cooldowns(
+            session,
+            sync_run_id,
+            units=budget_result.candidate_units,
+            estimates_by_unit=budget_result.estimates_by_unit,
+            already_excluded_ids=capped_ids,
+            jitter_seconds=budget_result.jitter_seconds,
+        )
+        capped_ids = frozenset((*capped_ids, *reconfirm_result.excluded_unit_ids))
+        next_deferred_at = budget_result.next_deferred_at
+        if reconfirm_result.next_deferred_at is not None and (
+            next_deferred_at is None
+            or reconfirm_result.next_deferred_at < next_deferred_at
+        ):
+            next_deferred_at = reconfirm_result.next_deferred_at
+
         units = _claim_units(session, run_uuid, capped_ids=capped_ids)
         signatures = []
         for unit in units:
@@ -831,10 +889,8 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         callback.set(queue="sync")
         try:
             chord(group(signatures), callback).apply_async()
-            if budget_result.next_deferred_at is not None:
-                _schedule_redispatch(
-                    sync_run_id, available_at=budget_result.next_deferred_at
-                )
+            if next_deferred_at is not None:
+                _schedule_redispatch(sync_run_id, available_at=next_deferred_at)
             elif capped_ids:
                 _schedule_redispatch(sync_run_id)
         except Exception as exc:
@@ -1106,6 +1162,14 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     duration_seconds=duration_seconds,
                     result=result_payload,
                     error=None,
+                    # Review finding (round 3): SUCCESS ends any rate-limit
+                    # episode this unit was in -- clear the shared deferral
+                    # bookkeeping so a stale first_seen_at from an EARLIER,
+                    # resolved episode can never be misread as still-ongoing
+                    # by the cooldown gate's wall-clock-exhaustion check
+                    # (sync/budget_guard.py _rate_limit_deferral_exhausted).
+                    rate_limit_deferrals=0,
+                    rate_limit_first_seen_at=None,
                     lease_owner=None,
                     lease_expires_at=None,
                     last_heartbeat_at=completed_at,
@@ -1494,6 +1558,13 @@ def _stamp_sync_unit_soft_timeout(
                     ),
                     last_retry_reason="soft_timeout",
                     retry_exhausted_at=None,
+                    # Review finding (round 3): a soft-timeout retry is NOT a
+                    # rate-limit episode -- clear any stale
+                    # rate_limit_deferrals/first_seen_at carried over from an
+                    # earlier, resolved rate-limit episode (same reasoning as
+                    # the budget-guard deferral clear).
+                    rate_limit_deferrals=0,
+                    rate_limit_first_seen_at=None,
                     lease_owner=None,
                     lease_expires_at=None,
                     last_heartbeat_at=completed_at,

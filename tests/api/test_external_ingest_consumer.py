@@ -334,8 +334,13 @@ class TestReclaim:
         assert len(pending_before) == 1
         assert pending_before[0]["times_delivered"] == 1
 
-        # Second pass: reclaim_stale() picks it up (idle=0 means everything
-        # is eligible), process_entry now succeeds.
+        # Second pass: reclaim_stale() picks it up, process_entry now
+        # succeeds. The sleep is load-bearing: fakeredis's XPENDING IDLE
+        # filter requires actual elapsed wall-clock ms (idle=0 does NOT mean
+        # "always eligible" -- see the identical note in the give-up test
+        # below); back-to-back consume() calls can land in the same 0ms tick
+        # under -n-distributed parallel load, making reclaim find nothing.
+        time.sleep(0.01)
         with patch.object(
             consumer_mod.ExternalIngestStreamConsumer,
             "_process_entry_async",
@@ -414,6 +419,53 @@ class TestReclaim:
         mark_failed.assert_awaited_once()
         _args, kwargs = mark_failed.call_args
         assert kwargs["reason"] == "max_deliveries_exceeded"
+
+    def test_give_up_with_failing_mark_batch_failed_leaves_entry_unacked(
+        self, fake_redis, monkeypatch
+    ):
+        """CHAOS-2697 adversarial-review HIGH: the sync give-up path
+        (``reclaim_stale() -> move_to_dlq``) must NOT ACK when the DLQ write
+        succeeded but ``mark_batch_failed`` raised -- ACKing would strand the
+        batch in a non-terminal status with its only retry handle gone (a
+        ``processing`` row REPLAYs, never RETRYs). Sync twin of
+        ``test_mark_batch_failed_raising_leaves_entry_unacked`` above."""
+        monkeypatch.setattr(
+            consumer_mod.ExternalIngestStreamConsumer,
+            "_resolve_mark_batch_failed",
+            staticmethod(_REAL_RESOLVE_MARK_BATCH_FAILED),
+        )
+        fake_processor = types.ModuleType("dev_health_ops.external_ingest.processor")
+        mark_failed = AsyncMock(side_effect=RuntimeError("pg down"))
+        setattr(fake_processor, "mark_batch_failed", mark_failed)
+        monkeypatch.setitem(
+            sys.modules, "dev_health_ops.external_ingest.processor", fake_processor
+        )
+
+        stream, entry_id = _xadd_batch(fake_redis, org_id="org-giveup-markfail")
+        c = _consumer(reclaim_idle_ms=0, max_deliveries=1)
+
+        with patch.object(
+            consumer_mod.ExternalIngestStreamConsumer,
+            "_process_entry_async",
+            AsyncMock(side_effect=RuntimeError("still broken")),
+        ):
+            # iter 1: fresh read, delivery #1, fails transiently, pending.
+            c.consume(max_iterations=1)
+            # iter 2: reclaim_stale sees delivery #1 >= max_deliveries(1) ->
+            # give-up -> DLQ write SUCCEEDS but mark_batch_failed raises ->
+            # move_to_dlq must return False -> entry must stay pending.
+            time.sleep(0.01)
+            c.consume(max_iterations=1)
+
+        mark_failed.assert_awaited_once()
+        dlq_entries = fake_redis.xrange("external-ingest:org-giveup-markfail:dlq")
+        assert len(dlq_entries) == 1  # the DLQ record itself was written...
+        pending = fake_redis.xpending_range(
+            stream, consumer_mod.CONSUMER_GROUP, min="-", max="+", count=10
+        )
+        # ...but the source entry keeps its retry handle for the status write.
+        assert len(pending) == 1
+        assert pending[0]["message_id"] == entry_id
 
 
 class TestPerOrgDlqIsolation:

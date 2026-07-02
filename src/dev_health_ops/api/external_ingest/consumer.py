@@ -156,11 +156,16 @@ class ExternalIngestStreamConsumer(StreamConsumer):
         is a SYNC call site, outside of any running event loop -- safe to
         use :func:`run_async` for the ``mark_batch_failed`` side effect.
 
-        Returns whether the DLQ write itself succeeded (base class contract,
-        adversarial-review finding): the caller (``reclaim_stale``) must NOT
-        ack the source entry when this is ``False``, or a DLQ write failure
-        (e.g. a transient Redis blip) would silently lose the entry with no
-        DLQ record at all.
+        Returns whether it is safe to ACK the source entry (base class
+        contract): requires BOTH the DLQ write to succeed (adversarial-review
+        finding: a swallowed DLQ-write failure must not silently drop the
+        entry with no DLQ record) AND, when an ingestion_id is present, the
+        failed-status write to be safe (CHAOS-2697 adversarial review: this
+        sync path previously ignored the mark result while its async twin
+        ``_dlq_entry_async`` gated on it -- ACKing past a raised
+        ``mark_batch_failed`` strands the batch in a non-terminal status with
+        the entry gone, and a ``processing`` row REPLAYs rather than RETRYs,
+        leaving the customer no recovery handle at all).
         """
         data = self._fetch_entry_fields(rc, stream_key, entry_id)
         org_id, dlq_written = self._xadd_dlq_entry(
@@ -168,9 +173,10 @@ class ExternalIngestStreamConsumer(StreamConsumer):
         )
         ingestion_id = data.get("ingestion_id")
         if dlq_written and ingestion_id:
-            self._mark_batch_failed_best_effort(
+            marked_ok = self._mark_batch_failed_best_effort(
                 org_id=org_id, ingestion_id=ingestion_id, reason=reason
             )
+            return dlq_written and marked_ok
         return dlq_written
 
     async def _dlq_entry_async(
@@ -258,10 +264,20 @@ class ExternalIngestStreamConsumer(StreamConsumer):
 
     def _mark_batch_failed_best_effort(
         self, *, org_id: str, ingestion_id: str, reason: str
-    ) -> None:
+    ) -> bool:
         """Sync path: used by :meth:`move_to_dlq`, itself only ever called
         outside a running event loop (the shared base's synchronous
-        ``reclaim_stale()``)."""
+        ``reclaim_stale()``).
+
+        Returns whether it is safe to ACK the source entry with respect to
+        status marking -- the same contract as
+        :meth:`_mark_batch_failed_best_effort_async` (see its docstring for
+        the full rationale): ``True`` when the batch was marked failed OR the
+        seam is unresolvable; ``False`` ONLY when a resolvable
+        ``mark_batch_failed`` raised, so the caller leaves the entry un-ACKed
+        for a status-write retry on a later reclaim cycle (CHAOS-2697
+        adversarial review -- this path previously swallowed the failure and
+        let ``reclaim_stale()`` ACK the batch's only retry handle away)."""
         mark_batch_failed = self._resolve_mark_batch_failed()
         if mark_batch_failed is None:
             logger.warning(
@@ -270,24 +286,27 @@ class ExternalIngestStreamConsumer(StreamConsumer):
                 ingestion_id,
                 org_id,
             )
-            return
+            return True
         try:
             result = mark_batch_failed(
                 ingestion_id=ingestion_id, org_id=org_id, reason=reason
             )
             if inspect.isawaitable(result):
-                # mark_batch_failed's concrete return type is unknown until
-                # CHAOS-2697 defines it; inspect.isawaitable narrows to the
-                # broader Awaitable protocol, but run_async expects a
-                # Coroutine specifically -- an async def's return value
-                # always is one at runtime.
+                # inspect.isawaitable narrows to the broader Awaitable
+                # protocol, but run_async expects a Coroutine specifically --
+                # an async def's return value always is one at runtime. The
+                # isawaitable guard also tolerates test fakes that return
+                # plain values.
                 run_async(cast(Coroutine[Any, Any, Any], result))
         except Exception:
             logger.exception(
-                "mark_batch_failed failed for ingestion_id=%s org=%s",
+                "mark_batch_failed failed for ingestion_id=%s org=%s -- "
+                "leaving source entry un-ACKed for a status-write retry",
                 ingestion_id,
                 org_id,
             )
+            return False
+        return True
 
     async def _mark_batch_failed_best_effort_async(
         self, *, org_id: str, ingestion_id: str, reason: str

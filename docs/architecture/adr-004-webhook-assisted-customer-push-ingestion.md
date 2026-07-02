@@ -239,8 +239,8 @@ No new server-side idempotency mechanism is introduced. A relay derives the
 
 | Provider | Idempotency key derivation |
 |---|---|
-| GitHub | `X-GitHub-Delivery` header value, verbatim. Already a UUID, globally unique per delivery attempt from GitHub's side. GitHub *retries* re-send the same delivery ID, so this is correct as an idempotency key — it is not per-retry-unique. |
-| GitLab | No universal delivery GUID across GitLab webhook payload types, **and the available fields differ per event type** — there is no single blanket formula that fits every event. `event_header` below is the `X-Gitlab-Event` header value; `project_id` is `object_attributes.project_id` or top-level `project.id`, whichever the event provides. Per the two v1 first-wave events (see "Provider feasibility"): <br>• **Merge Request Hook** — `object_attributes` documents both `action` and `updated_at`, so derive `sha256(f"{event_header}:{object_kind}:{object_attributes.iid}:{object_attributes.action}:{object_attributes.updated_at}:{project_id}")`. <br>• **Pipeline Hook** — `object_attributes` has no `action`/`updated_at` field; it has `status`, `created_at`, and `finished_at` instead. Derive `sha256(f"{event_header}:{object_kind}:{object_attributes.id}:{object_attributes.status}:{object_attributes.finished_at or object_attributes.created_at}:{project_id}")`. <br>**Do not** reuse either formula verbatim for a GitLab event type not listed here (e.g. Push Hook, Job Hook, when added later) — confirm that event's actual payload fields against current GitLab webhook documentation first, since assuming `action`/`updated_at` exist universally is exactly the mistake this table corrects. The relay must compute the chosen formula itself before calling `/batches`. |
+| GitHub | `X-GitHub-Delivery` header value, verbatim. Already a UUID. Per [GitHub's webhook delivery-failure documentation](https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries), **GitHub does not automatically redeliver failed webhook deliveries** — a dropped delivery is permanently lost unless the source's mandatory reconciliation batch (see "Reconciliation schedule" below) later picks up the same change through a scheduled export. This makes reconciliation load-bearing for GitHub specifically, not just a defense-in-depth nicety. Manual redeliveries triggered via the GitHub UI/API should **not** be assumed to reuse the original `X-GitHub-Delivery` value (unverified either way) — a relay must not rely on delivery-ID stability across a manual redelivery; record-level identity (`externalId` + `updatedAt`, see the note on batch-level vs. record-level idempotency just below this table) is the dedup backstop for that case, independent of whatever value ends up as the batch's `idempotencyKey`. |
+| GitLab | GitLab webhook deliveries carry provider-issued delivery-identity headers (per [GitLab webhook events documentation](https://docs.gitlab.com/ee/user/project/integrations/webhooks.html)): `Idempotency-Key` ("unique ID consistent across webhook retries"), `webhook-id` ("unique message ID consistent across webhook retries"), `webhook-timestamp`, `webhook-signature`, `X-Gitlab-Event-UUID`, and `X-Gitlab-Webhook-UUID`. UI-triggered resends reuse the same `Idempotency-Key`, which is exactly the delivery-identity property a relay needs — this is GitLab's equivalent of GitHub's `X-GitHub-Delivery` and should be preferred over any payload-derived formula. Use this **preference ladder**, taking the first header present on the request: <br>1. `Idempotency-Key` header value, verbatim. <br>2. `webhook-id` header value, verbatim. <br>3. `X-Gitlab-Event-UUID` header value, verbatim. <br>4. **Legacy fallback only** — if none of the above headers are present (older self-managed GitLab instances that predate them), fall back to a payload-derived formula, and note that **the available fields differ per event type** — there is no single blanket formula that fits every event. `event_header` below is the `X-Gitlab-Event` header value; `project_id` is `object_attributes.project_id` or top-level `project.id`, whichever the event provides. Per the two v1 first-wave events (see "Provider feasibility"): <br>&nbsp;&nbsp;• **Merge Request Hook** — `object_attributes` documents both `action` and `updated_at`, so derive `sha256(f"{event_header}:{object_kind}:{object_attributes.iid}:{object_attributes.action}:{object_attributes.updated_at}:{project_id}")`. <br>&nbsp;&nbsp;• **Pipeline Hook** — `object_attributes` has no `action`/`updated_at` field; it has `status`, `created_at`, and `finished_at` instead. Derive `sha256(f"{event_header}:{object_kind}:{object_attributes.id}:{object_attributes.status}:{object_attributes.finished_at or object_attributes.created_at}:{project_id}")`. <br>&nbsp;&nbsp;**Do not** reuse either legacy formula verbatim for a GitLab event type not listed here (e.g. Push Hook, Job Hook, when added later) — confirm that event's actual payload fields against current GitLab webhook documentation first, since assuming `action`/`updated_at` exist universally is exactly the mistake this fallback tier corrects. The relay must compute whichever tier applies itself before calling `/batches`. |
 | Jira | Derive as `sha256(f"{webhookEvent}:{issue.id}:{timestamp}:{changelog.id or ''}")`. `changelog.id` is present only on `jira:issue_updated`; use an empty string for `jira:issue_created`/`jira:issue_deleted`. |
 | Linear | N/A — deferred, no derivation rule needed for v1. |
 
@@ -285,6 +285,10 @@ not supported for any provider in v1:
 
 - **GitHub**: hourly-or-daily batch reconciliation via `dev-hops push batch`/export,
   cadence depending on customer volume (large pushes exceed the 25 MB webhook payload cap).
+  This is not just a size-cap mitigation: GitHub does not automatically redeliver failed
+  webhook deliveries (see the idempotency-key table above), so reconciliation is the *only*
+  recovery path for a delivery GitHub attempted but the relay never durably received — there
+  is no provider-side retry to fall back on.
 - **GitLab**: hourly-or-daily batch reconciliation, because push events truncate to the
   newest 20 commits for pushes over that size.
 - **Jira**: daily work-item and transition reconciliation (webhooks over 25 MB are dropped
@@ -349,7 +353,17 @@ CHAOS-2713's brief during this evaluation):
   not independently re-verified against live GitHub/GitLab/Jira API documentation in this
   pass (no network access to those hosts was exercised here). The code-level claims in this
   ADR (secrets, dispatch, idempotency, provider enum) were independently re-verified against
-  the current worktree, per the citations above.
+  the current worktree, per the citations above. Two claims in the idempotency-key table above
+  are exceptions, independently verified against live provider documentation during review:
+  the GitLab delivery-header preference ladder, confirmed against
+  [GitLab's webhook events documentation](https://docs.gitlab.com/ee/user/project/integrations/webhooks.html)
+  (an earlier draft of this ADR incorrectly rejected a header-based approach for GitLab as
+  unverifiable — corrected once the header names were confirmed against that page); and the
+  GitHub no-auto-redelivery claim, confirmed against
+  [GitHub's handling-failed-webhook-deliveries documentation](https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries)
+  (an earlier draft incorrectly asserted GitHub *retries* failed deliveries with the same
+  delivery ID — GitHub does not auto-retry at all, which is corrected in the table and makes
+  reconciliation load-bearing for GitHub rather than defense-in-depth only).
 - **Coordination risk with CHAOS-2712**: if CHAOS-2712 lands its source-registration API
   surface before reading this ADR's `webhookMode`/`webhookSecretId` field spec, it risks
   designing an inconsistent shape even though the underlying DDL columns are already

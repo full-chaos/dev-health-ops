@@ -20,11 +20,12 @@ Data note: the column's values are redundant with (and, for planner-managed
 configs, always assigned from) ``Integration.credential_id`` via each config's
 ``integration_id`` FK, so no backfill/migration of live data is needed before
 dropping it. The downgrade recreates the column (nullable, FK'd back to
-``integration_credentials``) but does **not** repopulate historical values --
-this is a deliberate, documented lossy downgrade of a column that was already
-provably redundant; the current mapping can be reconstructed post-downgrade
-via ``UPDATE sync_configurations sc SET credential_id = i.credential_id FROM
-integrations i WHERE i.id = sc.integration_id`` if ever needed.
+``integration_credentials``) and repopulates it from each config's linked
+``Integration.credential_id`` (a correlated-subquery ``UPDATE``, run BEFORE
+the FK is re-added so a stale/dangling ``integration_id`` can't violate it) --
+old code reading the restored column sees the same value the sanctioned
+surface would have resolved, rather than every row silently going NULL and
+widening any code still reading the legacy column (codex review, CHAOS-2762).
 
 Revision ID: 0032
 Revises: 0031
@@ -63,6 +64,7 @@ def downgrade() -> None:
         _TABLE,
         sa.Column(_COLUMN, UUID(as_uuid=True), nullable=True),
     )
+    _repopulate_from_linked_integration()
     existing_fks = {fk["name"] for fk in _foreign_keys(_TABLE)}
     fk_name = f"fk_{_TABLE}_{_COLUMN}_{_TARGET_TABLE}"
     if fk_name not in existing_fks and _COLUMN not in {
@@ -76,6 +78,36 @@ def downgrade() -> None:
             ["id"],
             ondelete="SET NULL",
         )
+
+
+def _repopulate_from_linked_integration() -> None:
+    """Backfill the recreated column from each config's linked Integration.
+
+    Codex review (CHAOS-2762 finding #2): a bare re-add left every row NULL on
+    rollback, silently changing behavior for anything still reading the
+    legacy column (e.g. a not-yet-rolled-back-deploy's ``workers
+    /team_drift_sync.py``) even though the true, current mapping is fully
+    recoverable from ``Integration.credential_id``. Runs BEFORE the FK is
+    re-added, so a stale/dangling ``integration_id`` (no matching
+    ``integrations`` row) cannot violate the new constraint -- such rows
+    simply keep ``credential_id IS NULL``, matching "no linked integration"
+    semantics.
+
+    A correlated subquery (not ``UPDATE ... FROM``) so this runs unchanged on
+    SQLite (used to unit-test this migration) and Postgres alike.
+    """
+    op.execute(
+        sa.text(
+            f"UPDATE {_TABLE} "
+            f"SET {_COLUMN} = ("
+            f"    SELECT credential_id FROM integrations "
+            f"    WHERE integrations.id = {_TABLE}.integration_id"
+            f") "
+            f"WHERE integration_id IN ("
+            f"    SELECT id FROM integrations WHERE credential_id IS NOT NULL"
+            f")"
+        )
+    )
 
 
 def _add_column_if_missing(table_name: str, column: sa.Column) -> None:

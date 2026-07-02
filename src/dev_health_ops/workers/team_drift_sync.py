@@ -105,28 +105,54 @@ def _configured_provider_syncs(org_id: str) -> list[_DriftSyncConfig]:
         for row in rows:
             provider = str(row.provider or "").strip().lower()
             credential = None
+            credential_missing = False
             # CHAOS-2762: SyncConfiguration carries no credential of its own --
             # resolve through the linked Integration (the single sanctioned
             # surface reached via integration_id), never a per-row column.
-            credential_id = None
+            # Mirrors sync/planner.py's _resolve_credential_stamp exactly:
+            # Integration.credential_id NULL -> env auth (below); non-NULL ->
+            # the credential MUST be an active, same-org, same-provider row or
+            # this config fails closed rather than silently falling back to
+            # env auth. Falling back on a missing/inactive credential would
+            # let this worker authenticate where the planner would reject
+            # outright -- a capacity increase through this second surface,
+            # exactly what the epic invariant forbids.
             if row.integration_id is not None:
                 integration = (
                     session.query(Integration)
-                    .filter(Integration.id == row.integration_id)
-                    .one_or_none()
-                )
-                credential_id = (
-                    integration.credential_id if integration is not None else None
-                )
-            if credential_id is not None:
-                credential = (
-                    session.query(IntegrationCredential)
                     .filter(
-                        IntegrationCredential.id == credential_id,
-                        IntegrationCredential.org_id == org_id,
+                        Integration.id == row.integration_id,
+                        Integration.org_id == org_id,
                     )
                     .one_or_none()
                 )
+                if integration is None:
+                    # Dangling / out-of-org integration_id -- fail closed.
+                    credential_missing = True
+                elif integration.credential_id is not None:
+                    credential = (
+                        session.query(IntegrationCredential)
+                        .filter(
+                            IntegrationCredential.id == integration.credential_id,
+                            IntegrationCredential.org_id == org_id,
+                            IntegrationCredential.provider == provider,
+                            IntegrationCredential.is_active.is_(True),
+                        )
+                        .one_or_none()
+                    )
+                    if credential is None:
+                        credential_missing = True
+            if credential_missing:
+                logger.warning(
+                    "Skipping team drift sync for provider=%s org_id=%s config=%s: "
+                    "linked Integration's credential is missing, inactive, or "
+                    "provider-mismatched -- failing closed (CHAOS-2762 planner "
+                    "parity) rather than falling back to environment auth",
+                    provider,
+                    org_id,
+                    row.name,
+                )
+                continue
             credentials = (
                 _credential_mapping(credential)
                 if credential is not None

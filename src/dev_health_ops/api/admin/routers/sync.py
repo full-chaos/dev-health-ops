@@ -95,28 +95,35 @@ def _mark_backfill_job_failed(
     sync_session.flush()
 
 
-def _sync_config_integration_credential_id(sync_session, config) -> uuid.UUID | None:
+def _sync_config_integration_credential_id(
+    sync_session, config, org_id: str
+) -> uuid.UUID | None:
     """Resolve the credential a config's LINKED integration actually uses.
 
     ``SyncConfiguration`` carries no credential of its own (CHAOS-2762) --
     ``Integration.credential_id`` (reached via ``config.integration_id``) is
     the single sanctioned surface. Returns ``None`` when the config has no
     linked integration (a pre-planner legacy row; the trigger/backfill
-    endpoints already reject those with "no linked integration" downstream).
+    endpoints already reject those with "no linked integration" downstream)
+    OR when the linked integration does not belong to ``org_id``: an
+    out-of-org ``integration_id`` (corrupt data / manual tampering) must never
+    leak another org's credential, so it is treated as no-credential -- the
+    same org-scoping ``sync/planner.py``'s ``_load_integration`` enforces.
     """
     integration_id = getattr(config, "integration_id", None)
     if integration_id is None:
         return None
     integration = (
         sync_session.query(Integration)
-        .filter(Integration.id == integration_id)
+        .filter(Integration.id == integration_id, Integration.org_id == org_id)
         .one_or_none()
     )
     return getattr(integration, "credential_id", None) if integration else None
 
 
 def _preflight_planner_credential(sync_session, config) -> None:
-    credential_id = _sync_config_integration_credential_id(sync_session, config)
+    org_id = str(getattr(config, "org_id"))
+    credential_id = _sync_config_integration_credential_id(sync_session, config, org_id)
     if credential_id is None:
         return
     from dev_health_ops.models.settings import IntegrationCredential
@@ -125,7 +132,7 @@ def _preflight_planner_credential(sync_session, config) -> None:
         sync_session.query(IntegrationCredential)
         .filter(
             IntegrationCredential.id == credential_id,
-            IntegrationCredential.org_id == getattr(config, "org_id"),
+            IntegrationCredential.org_id == org_id,
         )
         .one_or_none()
     )
@@ -211,31 +218,38 @@ class _MutableSyncConfiguration(Protocol):
 
 
 async def _integration_credential_id_for_config(
-    session: AsyncSession, config: object
+    session: AsyncSession, config: object, org_id: str
 ) -> uuid.UUID | None:
     """Async counterpart of ``_sync_config_integration_credential_id``.
 
     Resolves the ``credential_id`` of a config's linked ``Integration`` --
     the single sanctioned surface (CHAOS-2762) -- for building API responses.
+    Scoped to ``org_id`` so an out-of-org ``integration_id`` (corrupt data)
+    can never leak another org's credential UUID into this response; treated
+    as no-credential, same as the planner's org-scoped integration lookup.
     """
     integration_id = getattr(config, "integration_id", None)
     if integration_id is None:
         return None
     result = await session.execute(
-        select(Integration.credential_id).where(Integration.id == integration_id)
+        select(Integration.credential_id).where(
+            Integration.id == integration_id, Integration.org_id == org_id
+        )
     )
     return result.scalar_one_or_none()
 
 
 async def _integration_credential_ids_for_configs(
-    session: AsyncSession, configs: Sequence[object]
+    session: AsyncSession, configs: Sequence[object], org_id: str
 ) -> dict[str, uuid.UUID | None]:
     """Batch variant of ``_integration_credential_id_for_config`` for list responses.
 
     ONE query for the whole page via ``Integration.id.in_(...)`` -- callers
     must use this (not a per-row ``_integration_credential_id_for_config``
     call in a loop) when building a list response, or credential resolution
-    becomes an N+1 over ``Integration``.
+    becomes an N+1 over ``Integration``. Also scoped to ``org_id`` (see
+    ``_integration_credential_id_for_config``) so an out-of-org
+    ``integration_id`` never leaks another org's credential.
     """
     integration_ids = {
         getattr(config, "integration_id")
@@ -246,7 +260,7 @@ async def _integration_credential_ids_for_configs(
         return {}
     result = await session.execute(
         select(Integration.id, Integration.credential_id).where(
-            Integration.id.in_(integration_ids)
+            Integration.org_id == org_id, Integration.id.in_(integration_ids)
         )
     )
     return {
@@ -763,7 +777,7 @@ async def _replace_planner_repository_selection(
     mutable_config.sync_options = sync_options
 
     existing_credential_id = await _integration_credential_id_for_config(
-        session, config
+        session, config, org_id
     )
     batch_payload = SyncConfigBatchCreate(
         name=str(getattr(config, "name")),
@@ -1039,7 +1053,7 @@ async def list_sync_configs(
         children_counts = {str(pid): cnt for pid, cnt in rows}
 
     credential_ids_by_integration = await _integration_credential_ids_for_configs(
-        session, configs
+        session, configs, org_id
     )
 
     results = []
@@ -1478,7 +1492,7 @@ async def get_sync_config(
     config = await svc.get_by_id(config_id)
     if config is None:
         raise HTTPException(status_code=404, detail="Sync configuration not found")
-    credential_id = await _integration_credential_id_for_config(session, config)
+    credential_id = await _integration_credential_id_for_config(session, config, org_id)
     return _sync_config_to_response(config, credential_id=credential_id)
 
 
@@ -1656,7 +1670,9 @@ async def update_sync_config(
                 await _upsert_scheduled_job(session, child, org_id)
             await session.flush()
 
-    credential_id = await _integration_credential_id_for_config(session, updated)
+    credential_id = await _integration_credential_id_for_config(
+        session, updated, org_id
+    )
     return _sync_config_to_response(updated, credential_id=credential_id)
 
 

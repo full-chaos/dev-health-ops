@@ -851,6 +851,72 @@ async def test_sync_configs_sharing_integration_read_consistent_credential_id(
 
 
 @pytest.mark.asyncio
+async def test_sync_config_credential_id_is_null_for_out_of_org_integration_link(
+    client, session_maker
+):
+    """CHAOS-2762 regression (codex finding #3): a ``SyncConfiguration`` whose
+    ``integration_id`` points at an ``Integration`` belonging to a DIFFERENT
+    org (corrupt data / manual tampering -- there is no org constraint on
+    that FK) must never leak that other org's ``credential_id`` into this
+    org's API response. The read-through helpers are org-scoped, so an
+    out-of-org link resolves to null exactly like "no linked integration"
+    rather than exposing another tenant's credential UUID.
+    """
+    ac, seeded_state = client
+    org_id = seeded_state["org_id"]
+    other_org_id = str(uuid.uuid4())
+
+    async with session_maker() as session:
+        other_org_credential = IntegrationCredential(
+            provider="github",
+            name="other-org-cred",
+            org_id=other_org_id,
+            credentials_encrypted="enc-other-org",
+            is_active=True,
+        )
+        session.add(other_org_credential)
+        await session.flush()
+
+        other_org_integration = Integration(
+            org_id=other_org_id,
+            provider="github",
+            name="other-org-integration",
+            config={},
+            is_active=True,
+        )
+        other_org_integration.credential_id = other_org_credential.id
+        session.add(other_org_integration)
+        await session.flush()
+
+        # Corrupt/tampered link: a config that belongs to THIS org but whose
+        # integration_id points at ANOTHER org's Integration.
+        config = SyncConfiguration(
+            org_id=org_id,
+            name="cross-org-link",
+            provider="github",
+            sync_targets=["git"],
+            sync_options={},
+            integration_id=other_org_integration.id,
+        )
+        session.add(config)
+        await session.commit()
+        config_id = str(config.id)
+
+    get_resp = await ac.get(f"/api/v1/admin/sync-configs/{config_id}")
+    assert get_resp.status_code == 200
+    assert get_resp.json()["credential_id"] is None, (
+        "an out-of-org integration_id must never leak another org's credential_id"
+    )
+
+    list_resp = await ac.get("/api/v1/admin/sync-configs")
+    assert list_resp.status_code == 200
+    [listed] = [c for c in list_resp.json() if c["id"] == config_id]
+    assert listed["credential_id"] is None, (
+        "the list endpoint's batched read-through must be org-scoped too"
+    )
+
+
+@pytest.mark.asyncio
 async def test_update_sync_config_changes_is_active(client):
     ac, _ = client
 

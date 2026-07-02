@@ -374,16 +374,24 @@ far-future `reset_at` cannot park a unit past the point the shared
 rate-limit-deferral budget says to terminalize instead
 (`test_cooldown_available_at_respects_wall_clock_clamp`,
 `test_cooldown_wall_clock_budget_exhausted_terminalizes_rather_than_sleeping_past_clamp`).
-A unit whose estimates span multiple route families is deferred if **any**
-one is cooling down (mirrors the existing would-defer-any-estimate budget
-semantics) and, when more than one matches, waits for the last one to clear.
+The jitter itself is added AFTER `not_before`, so it is clamped a second
+time against the wall-clock deadline
+(`first_seen_at + RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS`) — jitter stacked on an
+already-clamped `not_before` must not itself push `available_at` past the
+deadline (review finding, round 2). A unit whose estimates span multiple
+route families is deferred if **any** one is cooling down (mirrors the
+existing would-defer-any-estimate budget semantics) and, when more than one
+matches, waits for the last one to clear.
 
 **One indexed query per dispatch pass, never per unit — plus one cheap
-re-check immediately before the claim.** `enforce_run` issues a single
+re-check immediately before the claim, which fully defers/terminalizes any
+match it catches.** `enforce_run` issues a single
 `provider_rate_limit_observations` query, scoped to the dispatch pass's
 candidate `(org_id, provider, integration_id)` tuples and a bounded recency
-window (`SYNC_RATE_LIMIT_COOLDOWN_LOOKBACK_SECONDS`, default 2h — long
-enough to cover a chunked GitHub primary-limit reset), using the `ws-d`
+window (`SYNC_RATE_LIMIT_COOLDOWN_LOOKBACK_SECONDS`, default
+`RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS` plus the max configured jitter plus a
+300s skew margin — deliberately NOT equal to the wall-clock budget alone;
+see the termination note below), using the `ws-d`
 `(provider, integration_id, route_family, observed_at)` index
 (`test_single_observation_query_per_dispatch_pass`). Because `enforce_run`
 itself does further DB work after that read (budget admission,
@@ -393,15 +401,46 @@ without a second look `_claim_units` would dispatch straight into it. Review
 finding, closed: `dispatch_sync_run` calls `BudgetGuard.reconfirm_cooldowns`
 — the SAME cheap query and matching logic, reusing the estimates
 `enforce_run` already computed (no re-estimation, no credential decryption)
-— as the LAST read before the atomic claim, folding any newly-caught unit
-into the claim's excluded-id set
-(`test_concurrent_observation_between_enforce_run_and_claim_still_defers_sibling`).
-This is not full serializability — a commit landing in the residual
-microsecond gap between that re-check and the claim's own `UPDATE` could
-still slip through — but it collapses the exposure window from "however
-long budget admission takes" down to back-to-back statements, consistent
-with how the rest of the dispatch path tolerates narrow races via CAS
-predicates rather than `SERIALIZABLE` transactions.
+— as the LAST read before the atomic claim. A match here is NOT a bare
+exclusion: it goes through the exact same `_apply_cooldown_deferral` /
+`_terminalize_rate_limit_exhausted` write path `enforce_run`'s own cooldown
+loop uses — full `RETRYING` + `available_at` + `rate_limit_deferrals`
+bookkeeping, or termination on budget exhaustion — folding the result into
+the claim's excluded-id set AND `next_deferred_at` for the redispatch
+re-arm. A bare PLANNED exclusion (the original CHAOS-2760 review-round-1
+shape) left the unit with zero deferral-budget bookkeeping and livelocked
+the run redispatching on a bare ~60s countdown forever, re-triggering the
+same exclusion indefinitely without ever counting toward termination
+(review finding, round 2) —
+(`test_concurrent_observation_between_enforce_run_and_claim_still_defers_sibling`,
+`test_late_reconfirm_match_short_reset_window_defers_with_full_bookkeeping`,
+`test_late_reconfirm_match_long_reset_window_clamps_to_wall_clock_deadline`,
+`test_reconfirm_cooldowns_terminalizes_exhausted_match_directly`). This is
+not full serializability — a commit landing in the residual microsecond gap
+between that re-check and the claim's own `UPDATE` could still slip through
+— but it collapses the exposure window from "however long budget admission
+takes" down to back-to-back statements, consistent with how the rest of the
+dispatch path tolerates narrow races via CAS predicates rather than
+`SERIALIZABLE` transactions.
+
+**Termination does not depend on re-reading the observation.** A unit
+deferred by this gate gets `available_at` clamped to the wall-clock budget,
+so it becomes due again at roughly the SAME age its causing observation's
+`observed_at` has reached — a lookback window equal to
+`RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS` would age the row out of visibility at
+almost exactly the instant termination should fire instead, making the
+observation invisible right when it matters most (review finding, round 2).
+Two-part fix: (a) the lookback window carries slack beyond the bare
+wall-clock budget (jitter max + a generous skew margin — see above), so a
+row that is merely a little older than the budget stays visible
+(`test_cooldown_lookback_window_has_slack_beyond_wall_clock_budget`); (b) as
+a belt-and-suspenders backstop that does not depend on that window at all,
+every candidate with rate-limit-deferral history is ALSO checked directly
+against its own persisted `rate_limit_deferrals`/`rate_limit_first_seen_at`
+(`_rate_limit_deferral_exhausted`) — if the shared budget is already spent,
+it terminalizes from that state alone, with or without a currently-visible
+cooldown observation
+(`test_cooldown_observation_aged_past_lookback_terminalizes_from_unit_state`).
 
 **Fail-open on a broken read, including a single malformed row.** Any error
 querying the observation store (migration not yet applied on a rolling

@@ -753,11 +753,17 @@ def test_concurrent_observation_between_enforce_run_and_claim_still_defers_sibli
 
     db_session.refresh(second)
     assert result["queued_units"] == 0
-    # Left exactly as enforce_run's own pass found it -- reconfirm_cooldowns
-    # only EXCLUDES from this pass's claim, it does not stamp RETRYING
-    # itself (the next enforce_run pass formally defers it with full
-    # bookkeeping).
-    assert second.status == SyncRunUnitStatus.PLANNED.value
+    # reconfirm_cooldowns fully defers the match with the SAME write path
+    # enforce_run's own cooldown loop uses (review finding, round 2) -- not
+    # a bare PLANNED exclusion, which would livelock the run on a bare ~60s
+    # redispatch countdown without ever counting against the shared
+    # rate-limit-deferral budget.
+    assert second.status == SyncRunUnitStatus.RETRYING.value
+    assert second.result is not None
+    assert second.result["error_category"] == "rate_limit_cooldown_deferred"
+    assert second.rate_limit_deferrals == 1
+    assert second.available_at is not None
+    assert abs((_aware(second.available_at) - reset_at).total_seconds()) < 10
 
 
 def test_cooldown_available_at_respects_wall_clock_clamp(db_session, monkeypatch):
@@ -767,6 +773,13 @@ def test_cooldown_available_at_respects_wall_clock_clamp(db_session, monkeypatch
     plan_rate_limit_deferral's own not_before clamp must be authoritative,
     or a far-future reset_at parks the unit for hours past the point the
     policy promises terminalization.
+
+    Deliberately uses a NONZERO jitter (review finding, round 2: the
+    original version of this test forced jitter=0, which happened to mask
+    the follow-on bug where jitter is added AFTER the clamp and can itself
+    push available_at past the wall-clock deadline). With not_before
+    already sitting at the clamp boundary, jitter added on top must be
+    clamped back down, not allowed to overshoot.
     """
     from dev_health_ops.workers import sync_units
     from dev_health_ops.workers.rate_limit_defer import (
@@ -797,19 +810,34 @@ def test_cooldown_available_at_respects_wall_clock_clamp(db_session, monkeypatch
     )
     db_session.flush()
 
+    jitter_seconds = 120
     _patch_db_session(monkeypatch, db_session)
     _patch_worker_enqueues(monkeypatch)
-    monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
+    monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", str(jitter_seconds))
 
     sync_units.dispatch_sync_run(str(run.id))
 
     db_session.refresh(second)
     assert second.status == SyncRunUnitStatus.RETRYING.value
     assert second.available_at is not None
-    clamp_boundary = now + timedelta(seconds=RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS)
-    # Lands at the wall-clock clamp boundary, nowhere near the raw reset_at.
-    assert abs((_aware(second.available_at) - clamp_boundary).total_seconds()) < 2
+    deadline = now + timedelta(seconds=RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS)
+    # Never past the wall-clock deadline, even with jitter added on top of
+    # an already-clamped not_before -- a small tolerance only for the clock
+    # drift between this test's `now` and dispatch_sync_run's own `now`.
+    assert _aware(second.available_at) <= deadline + timedelta(seconds=1)
+    # And not clamped away to something implausibly early either.
+    assert _aware(second.available_at) >= deadline - timedelta(
+        seconds=jitter_seconds + 5
+    )
     assert (reset_at - _aware(second.available_at)).total_seconds() > 3600
+
+    # next_deferred_at (the redispatch re-arm) inherits the same clamp.
+    outbox = (
+        db_session.query(SyncDispatchOutbox)
+        .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_DISPATCH)
+        .one()
+    )
+    assert _aware(outbox.available_at) <= deadline + timedelta(seconds=1)
 
 
 def test_cooldown_wall_clock_budget_exhausted_terminalizes_rather_than_sleeping_past_clamp(  # noqa: E501
@@ -916,3 +944,330 @@ def test_cooldown_read_survives_malformed_observation_row(
         record.getMessage() == "dispatch_sync_run.cooldown_observation_row_malformed"
         for record in caplog.records
     )
+
+
+# ---------------------------------------------------------------------------
+# Codex adversarial review round 2 findings
+# ---------------------------------------------------------------------------
+
+
+def test_late_reconfirm_match_short_reset_window_defers_with_full_bookkeeping(
+    db_session, monkeypatch
+):
+    """HIGH finding, round 2: a unit caught ONLY by the late reconfirm pass
+    (not enforce_run's own snapshot) with a SHORT, well-within-budget reset
+    window must get the SAME full deferral bookkeeping a same-pass match
+    would -- available_at, rate_limit_deferrals, error_category, and the
+    next_deferred_at re-arm -- not a bare PLANNED exclusion.
+    """
+    from dev_health_ops.sync.budget_guard import BudgetGuard
+    from dev_health_ops.workers import sync_units
+
+    run, first = _seed_run(db_session)
+    first.status = SyncRunUnitStatus.SUCCESS.value
+    second = _sibling_unit(
+        run, first, dataset_key="commits", processor_flags={"sync_git": True}
+    )
+    run.total_units = 2
+    db_session.add(second)
+    db_session.flush()
+
+    reset_at = datetime.now(timezone.utc) + timedelta(seconds=90)
+    real_reconfirm = BudgetGuard.reconfirm_cooldowns
+
+    def _reconfirm_after_concurrent_commit(*args, **kwargs):
+        db_session.add(
+            _observation(
+                run,
+                first,
+                route_family="git",
+                dimension="rest_core",
+                reset_at=reset_at,
+                observed_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+            )
+        )
+        db_session.flush()
+        return real_reconfirm(*args, **kwargs)
+
+    monkeypatch.setattr(
+        BudgetGuard,
+        "reconfirm_cooldowns",
+        staticmethod(_reconfirm_after_concurrent_commit),
+    )
+    _patch_db_session(monkeypatch, db_session)
+    _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
+
+    sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(second)
+    assert second.status == SyncRunUnitStatus.RETRYING.value
+    assert second.result is not None
+    assert second.result["error_category"] == "rate_limit_cooldown_deferred"
+    assert second.rate_limit_deferrals == 1
+    assert second.rate_limit_first_seen_at is not None
+    assert second.available_at is not None
+    assert abs((_aware(second.available_at) - reset_at).total_seconds()) < 5
+
+    outbox = (
+        db_session.query(SyncDispatchOutbox)
+        .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_DISPATCH)
+        .one()
+    )
+    assert abs((_aware(outbox.available_at) - reset_at).total_seconds()) < 5
+
+
+def test_late_reconfirm_match_long_reset_window_clamps_to_wall_clock_deadline(
+    db_session, monkeypatch
+):
+    """HIGH finding, round 2: a unit caught only by the late reconfirm pass
+    with a LONG reset window (well beyond the wall-clock deferral budget)
+    still gets the SAME clamp-to-deadline treatment a same-pass match
+    would: available_at lands at the deadline, not the raw far-future
+    reset_at, and the unit is DEFERRED (not yet exhausted) with full
+    bookkeeping -- proving the late path reuses the exact same
+    _apply_cooldown_deferral clamp logic, not a second, weaker one.
+    """
+    from dev_health_ops.sync.budget_guard import BudgetGuard
+    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers.rate_limit_defer import (
+        RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS,
+    )
+
+    run, first = _seed_run(db_session)
+    first.status = SyncRunUnitStatus.SUCCESS.value
+    second = _sibling_unit(
+        run, first, dataset_key="commits", processor_flags={"sync_git": True}
+    )
+    run.total_units = 2
+    db_session.add(second)
+    db_session.flush()
+
+    now = datetime.now(timezone.utc)
+    reset_at = now + timedelta(seconds=RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS * 5)
+    real_reconfirm = BudgetGuard.reconfirm_cooldowns
+
+    def _reconfirm_after_concurrent_commit(*args, **kwargs):
+        db_session.add(
+            _observation(
+                run,
+                first,
+                route_family="git",
+                dimension="rest_core",
+                reset_at=reset_at,
+                observed_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+            )
+        )
+        db_session.flush()
+        return real_reconfirm(*args, **kwargs)
+
+    monkeypatch.setattr(
+        BudgetGuard,
+        "reconfirm_cooldowns",
+        staticmethod(_reconfirm_after_concurrent_commit),
+    )
+    _patch_db_session(monkeypatch, db_session)
+    _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
+
+    sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(second)
+    assert second.status == SyncRunUnitStatus.RETRYING.value
+    assert second.result is not None
+    assert second.result["error_category"] == "rate_limit_cooldown_deferred"
+    assert second.rate_limit_deferrals == 1
+    deadline = now + timedelta(seconds=RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS)
+    assert second.available_at is not None
+    assert abs((_aware(second.available_at) - deadline).total_seconds()) < 5
+    assert (reset_at - _aware(second.available_at)).total_seconds() > 3600
+
+    outbox = (
+        db_session.query(SyncDispatchOutbox)
+        .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_DISPATCH)
+        .one()
+    )
+    assert abs((_aware(outbox.available_at) - deadline).total_seconds()) < 5
+
+
+def test_reconfirm_cooldowns_terminalizes_exhausted_match_directly(
+    db_session, monkeypatch
+):
+    """HIGH finding, round 2: reconfirm_cooldowns' own cooldown-match branch
+    must terminalize (not just exclude) a unit whose shared rate-limit-
+    deferral budget is already spent -- not a bare PLANNED exclusion that
+    would livelock the run redispatching every ~60s forever without ever
+    counting against the budget.
+
+    Calls BudgetGuard.reconfirm_cooldowns directly rather than going through
+    dispatch_sync_run: an already-exhausted unit is ALSO caught by
+    enforce_run's own pass (the finding-2a wall-clock-exhaustion check runs
+    unconditionally, independent of any observation), so routing this
+    through the full dispatch flow would only prove enforce_run's check
+    fired first, not that reconfirm_cooldowns' OWN termination branch works.
+    This isolates reconfirm_cooldowns' write path specifically.
+    """
+    from dev_health_ops.sync.budget import estimate_provider_budget
+    from dev_health_ops.sync.budget_guard import BudgetGuard
+    from dev_health_ops.workers.rate_limit_defer import RATE_LIMIT_MAX_DEFERRALS
+    from dev_health_ops.workers.sync_bootstrap import SyncTaskBootstrap
+
+    run, first = _seed_run(db_session)
+    first.status = SyncRunUnitStatus.SUCCESS.value
+    second = _sibling_unit(
+        run,
+        first,
+        dataset_key="commits",
+        processor_flags={"sync_git": True},
+        rate_limit_deferrals=RATE_LIMIT_MAX_DEFERRALS,
+        rate_limit_first_seen_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+    )
+    run.total_units = 2
+    db_session.add(second)
+    db_session.flush()
+
+    now = datetime.now(timezone.utc)
+    db_session.add(
+        _observation(
+            run,
+            first,
+            route_family="git",
+            dimension="rest_core",
+            reset_at=now + timedelta(seconds=120),
+            observed_at=now - timedelta(seconds=1),
+        )
+    )
+    db_session.flush()
+
+    ctx = SyncTaskBootstrap.load(db_session, str(second.id))
+    estimates = estimate_provider_budget(ctx)
+
+    result = BudgetGuard.reconfirm_cooldowns(
+        db_session,
+        str(run.id),
+        units=[second],
+        estimates_by_unit={str(second.id): estimates},
+        already_excluded_ids=frozenset(),
+        jitter_seconds=0,
+        now=now,
+    )
+
+    db_session.refresh(second)
+    assert second.status == SyncRunUnitStatus.FAILED.value
+    assert second.result is not None
+    assert second.result["error_category"] == "rate_limit_cooldown_exhausted"
+    assert str(second.id) in result.excluded_unit_ids
+    assert result.next_deferred_at is None
+
+
+def test_cooldown_observation_aged_past_lookback_terminalizes_from_unit_state(
+    db_session, monkeypatch
+):
+    """MEDIUM finding, round 2, part (a): termination must not depend on
+    re-reading the observation. Even when the causing observation is FAR
+    older than any plausible lookback window (so _active_cooldowns
+    genuinely cannot see it), a due unit whose own
+    rate_limit_deferrals/rate_limit_first_seen_at already show the shared
+    wall-clock deferral budget spent terminalizes from its own persisted
+    state -- it must not just quietly dispatch because the causing row
+    happened to fall out of the lookback window.
+    """
+    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers.rate_limit_defer import (
+        RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS,
+    )
+
+    run, first = _seed_run(db_session)
+    first.status = SyncRunUnitStatus.SUCCESS.value
+    now = datetime.now(timezone.utc)
+    second = _sibling_unit(
+        run,
+        first,
+        dataset_key="commits",
+        processor_flags={"sync_git": True},
+        status=SyncRunUnitStatus.RETRYING.value,
+        rate_limit_deferrals=1,
+        rate_limit_first_seen_at=now
+        - timedelta(seconds=RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS + 30),
+    )
+    second.available_at = now - timedelta(seconds=1)  # due
+    run.total_units = 2
+    db_session.add(second)
+    db_session.flush()
+
+    # The causing observation is a full day old -- genuinely invisible to
+    # _active_cooldowns under ANY reasonable lookback window.
+    db_session.add(
+        _observation(
+            run,
+            first,
+            route_family="git",
+            dimension="rest_core",
+            reset_at=now + timedelta(hours=5),
+            observed_at=now - timedelta(days=1),
+        )
+    )
+    db_session.flush()
+
+    _patch_db_session(monkeypatch, db_session)
+    _patch_worker_enqueues(monkeypatch)
+
+    sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(second)
+    assert second.status == SyncRunUnitStatus.FAILED.value
+    assert second.result is not None
+    assert second.result["error_category"] == "rate_limit_cooldown_exhausted"
+
+
+def test_cooldown_lookback_window_has_slack_beyond_wall_clock_budget(
+    db_session, monkeypatch
+):
+    """MEDIUM finding, round 2, part (b): the observation lookback window
+    must NOT equal RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS exactly. An observation
+    whose age is JUST past the OLD (bare-wall-clock-budget) boundary must
+    still be visible under the widened default, deferring a FRESH sibling
+    normally -- not letting it silently dispatch just because the row
+    happened to be a couple of minutes past that old cliff edge.
+    """
+    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers.rate_limit_defer import (
+        RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS,
+    )
+
+    run, first = _seed_run(db_session)
+    first.status = SyncRunUnitStatus.SUCCESS.value
+    second = _sibling_unit(
+        run, first, dataset_key="commits", processor_flags={"sync_git": True}
+    )
+    run.total_units = 2
+    db_session.add(second)
+    db_session.flush()
+
+    now = datetime.now(timezone.utc)
+    # 90s past the OLD (bare wall-clock-budget) lookback boundary -- must
+    # still fall within the widened default (budget + jitter_max + a
+    # generous skew margin, comfortably more than 90s of slack).
+    db_session.add(
+        _observation(
+            run,
+            first,
+            route_family="git",
+            dimension="rest_core",
+            reset_at=now + timedelta(minutes=5),
+            observed_at=now - timedelta(seconds=RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS + 90),
+        )
+    )
+    db_session.flush()
+
+    _patch_db_session(monkeypatch, db_session)
+    _patch_worker_enqueues(monkeypatch)
+
+    sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(second)
+    # Deferred normally (still visible, and a FRESH unit so not exhausted)
+    # -- NOT dispatched, NOT terminalized.
+    assert second.status == SyncRunUnitStatus.RETRYING.value
+    assert second.result is not None
+    assert second.result["error_category"] == "rate_limit_cooldown_deferred"

@@ -832,19 +832,27 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         # can commit a brand-new observation this pass never saw. Re-check
         # once more, right here, as the LAST read before the atomic claim —
         # reusing the estimates enforce_run already computed, no
-        # re-estimation / credential decryption.
-        capped_ids = frozenset(
-            (
-                *capped_ids,
-                *BudgetGuard.reconfirm_cooldowns(
-                    session,
-                    sync_run_id,
-                    units=budget_result.candidate_units,
-                    estimates_by_unit=budget_result.estimates_by_unit,
-                    already_excluded_ids=capped_ids,
-                ),
-            )
+        # re-estimation / credential decryption. reconfirm_cooldowns fully
+        # defers/terminalizes any match it catches (same write path
+        # enforce_run's own cooldown loop uses) — a bare exclusion here
+        # would leave the unit PLANNED with no deferral-budget bookkeeping
+        # and livelock the run on a bare ~60s redispatch countdown (review
+        # finding, round 2).
+        reconfirm_result = BudgetGuard.reconfirm_cooldowns(
+            session,
+            sync_run_id,
+            units=budget_result.candidate_units,
+            estimates_by_unit=budget_result.estimates_by_unit,
+            already_excluded_ids=capped_ids,
+            jitter_seconds=budget_result.jitter_seconds,
         )
+        capped_ids = frozenset((*capped_ids, *reconfirm_result.excluded_unit_ids))
+        next_deferred_at = budget_result.next_deferred_at
+        if reconfirm_result.next_deferred_at is not None and (
+            next_deferred_at is None
+            or reconfirm_result.next_deferred_at < next_deferred_at
+        ):
+            next_deferred_at = reconfirm_result.next_deferred_at
 
         units = _claim_units(session, run_uuid, capped_ids=capped_ids)
         signatures = []
@@ -881,10 +889,8 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         callback.set(queue="sync")
         try:
             chord(group(signatures), callback).apply_async()
-            if budget_result.next_deferred_at is not None:
-                _schedule_redispatch(
-                    sync_run_id, available_at=budget_result.next_deferred_at
-                )
+            if next_deferred_at is not None:
+                _schedule_redispatch(sync_run_id, available_at=next_deferred_at)
             elif capped_ids:
                 _schedule_redispatch(sync_run_id)
         except Exception as exc:

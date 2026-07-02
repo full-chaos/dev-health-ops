@@ -21,6 +21,7 @@ from dev_health_ops.models import (
 from dev_health_ops.sync.budget import BudgetEstimate, estimate_provider_budget
 from dev_health_ops.workers.rate_limit_defer import (
     RATE_LIMIT_DEFAULT_COUNTDOWN_SECONDS,
+    RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS,
     plan_rate_limit_deferral,
 )
 from dev_health_ops.workers.sync_bootstrap import SyncTaskBootstrap
@@ -56,6 +57,20 @@ class BudgetGuardResult:
     estimates_by_unit: dict[str, tuple[BudgetEstimate, ...]] = field(
         default_factory=dict
     )
+    # The SAME jitter config this pass used for its own cooldown deferrals,
+    # so ``reconfirm_cooldowns`` (called separately, after this returns)
+    # applies byte-identical jitter rather than re-reading the env var and
+    # risking drift if it changed mid-pass.
+    jitter_seconds: int = 5
+
+
+@dataclass(frozen=True)
+class CooldownReconfirmResult:
+    """Result of :meth:`BudgetGuard.reconfirm_cooldowns` -- the late,
+    pre-claim re-check (CHAOS-2760 TOCTOU closure)."""
+
+    excluded_unit_ids: frozenset[str] = frozenset()
+    next_deferred_at: datetime | None = None
 
 
 class BudgetGuard:
@@ -179,11 +194,12 @@ class BudgetGuard:
             candidates=units,
             now=enforced_at,
         )
-        if cooldown_by_family or cooldown_by_dimension:
-            for unit in units:
-                estimates = estimates_by_unit[str(unit.id)]
-                if not estimates:
-                    continue
+        for unit in units:
+            estimates = estimates_by_unit[str(unit.id)]
+            if not estimates:
+                continue
+            cooldown_expiry = None
+            if cooldown_by_family or cooldown_by_dimension:
                 cooldown_expiry = _matching_cooldown_expiry(
                     estimates,
                     org_id=str(unit.org_id),
@@ -192,28 +208,42 @@ class BudgetGuard:
                     cooldown_by_family=cooldown_by_family,
                     cooldown_by_dimension=cooldown_by_dimension,
                 )
-                if cooldown_expiry is None:
-                    continue
+            log_ctx = _unit_log_context(sync_run_id, unit)
+            if cooldown_expiry is not None:
                 outcome = _apply_cooldown_deferral(
                     session,
                     unit,
                     cooldown_expiry=cooldown_expiry,
                     jitter_seconds=jitter_seconds,
                     now=enforced_at,
-                    log_ctx=_unit_log_context(sync_run_id, unit),
+                    log_ctx=log_ctx,
                 )
-                if outcome is None:
-                    # CAS lost the race (unit moved on concurrently) — leave
-                    # it for the budget loop / _claim_units to sort out, same
-                    # as a lost _defer_unit_for_budget race.
-                    continue
-                cooldown_handled_unit_ids.add(str(unit.id))
-                available_at, terminalized = outcome
-                if terminalized:
-                    continue
-                deferred_unit_ids.add(str(unit.id))
-                if next_deferred_at is None or available_at < next_deferred_at:
-                    next_deferred_at = available_at
+            elif _rate_limit_deferral_exhausted(unit, now=enforced_at):
+                # Review finding: termination must not depend on a
+                # currently-visible cooldown observation -- the lookback
+                # window can age the causing row out of visibility at
+                # roughly the SAME instant the unit's own wall-clock
+                # deferral budget expires. Terminalize from the unit's own
+                # persisted rate_limit_deferrals/rate_limit_first_seen_at
+                # state instead of letting it dispatch and burn a worker
+                # slot only to rediscover the same exhaustion in-worker.
+                outcome = _terminalize_rate_limit_exhausted(
+                    session, unit, now=enforced_at, log_ctx=log_ctx
+                )
+            else:
+                continue
+            if outcome is None:
+                # CAS lost the race (unit moved on concurrently) — leave
+                # it for the budget loop / _claim_units to sort out, same
+                # as a lost _defer_unit_for_budget race.
+                continue
+            cooldown_handled_unit_ids.add(str(unit.id))
+            available_at, terminalized = outcome
+            if terminalized:
+                continue
+            deferred_unit_ids.add(str(unit.id))
+            if next_deferred_at is None or available_at < next_deferred_at:
+                next_deferred_at = available_at
 
         consumed_by_bucket = _active_budget_consumption(
             session,
@@ -289,6 +319,7 @@ class BudgetGuard:
             next_deferred_at=next_deferred_at,
             candidate_units=tuple(units),
             estimates_by_unit=estimates_by_unit,
+            jitter_seconds=jitter_seconds,
         )
 
     @staticmethod
@@ -299,8 +330,9 @@ class BudgetGuard:
         units: Iterable[SyncRunUnit],
         estimates_by_unit: Mapping[str, tuple[BudgetEstimate, ...]],
         already_excluded_ids: frozenset[str],
+        jitter_seconds: int,
         now: datetime | None = None,
-    ) -> frozenset[str]:
+    ) -> CooldownReconfirmResult:
         """Close the TOCTOU window between ``enforce_run``'s cooldown
         snapshot and the atomic claim (CHAOS-2760 review finding).
 
@@ -318,25 +350,44 @@ class BudgetGuard:
         (``_matching_cooldown_expiry`` -- byte-identical semantics,
         including the ambiguous-dimension fallback) against the estimates
         ``enforce_run`` already computed (no re-estimation, no credential
-        decryption), as the LAST read before the claim. It does not
-        re-stamp RETRYING/FAILED here -- it only returns the unit ids to
-        additionally exclude from this pass's claim; a unit caught only by
-        this late check is simply left PLANNED/RETRYING-due for the next
-        ``enforce_run`` pass, which will formally defer/terminalize it with
-        full budget bookkeeping. This does not achieve full serializability
-        (a commit landing in the few-microsecond gap between this query and
-        the claim's own UPDATE could still slip through), but it collapses
-        the window from "however long budget admission takes" down to
-        "back-to-back statements", consistent with how the rest of this
-        module tolerates narrow races via CAS predicates rather than
-        SERIALIZABLE transactions.
+        decryption), as the LAST read before the claim.
+
+        A unit caught here is NOT merely excluded -- review finding (round
+        2): a bare exclusion left it PLANNED with no ``RETRYING`` stamp, no
+        ``available_at``, and no ``rate_limit_deferrals`` increment, which
+        both breaks the "cooldown deferrals count against the shared
+        rate-limit budget" binding decision AND livelocks the run (a
+        PLANNED unit is "dispatchable" for ``_pending_unit_counts``, so it
+        redispatches on a bare ~60s countdown forever, re-triggering this
+        same exclusion indefinitely without ever accumulating enough
+        deferrals to terminalize). Every match here goes through the exact
+        same write path ``enforce_run``'s own cooldown loop uses
+        (``_apply_cooldown_deferral`` / ``_terminalize_rate_limit_exhausted``
+        for the wall-clock-exhausted-without-a-visible-observation case) --
+        one deferral semantics, reused by both call sites, not a second,
+        weaker one.
+
+        Returns the unit ids to additionally exclude from this pass's claim
+        (deferred AND terminalized -- terminalized units are already
+        ``FAILED`` and would not match ``_claim_units``' predicate anyway,
+        but including them keeps the exclusion set self-documenting) plus
+        the earliest new ``available_at``, so the caller can fold it into
+        ``next_deferred_at`` for the ``_schedule_redispatch`` re-arm.
+
+        This does not achieve full serializability (a commit landing in the
+        few-microsecond gap between this query and the claim's own
+        ``UPDATE`` could still slip through), but it collapses the window
+        from "however long budget admission takes" down to "back-to-back
+        statements", consistent with how the rest of this module tolerates
+        narrow races via CAS predicates rather than ``SERIALIZABLE``
+        transactions.
         """
         checked_at = now or datetime.now(timezone.utc)
         candidates = [
             unit for unit in units if str(unit.id) not in already_excluded_ids
         ]
         if not candidates:
-            return frozenset()
+            return CooldownReconfirmResult()
 
         cooldown_by_family, cooldown_by_dimension = _active_cooldowns(
             session,
@@ -344,32 +395,63 @@ class BudgetGuard:
             candidates=candidates,
             now=checked_at,
         )
-        if not cooldown_by_family and not cooldown_by_dimension:
-            return frozenset()
 
-        matched: set[str] = set()
+        excluded: set[str] = set()
+        next_deferred_at: datetime | None = None
         for unit in candidates:
             estimates = estimates_by_unit.get(str(unit.id), ())
             if not estimates:
                 continue
-            expiry = _matching_cooldown_expiry(
-                estimates,
-                org_id=str(unit.org_id),
-                provider=str(unit.provider),
-                integration_id=unit.integration_id,
-                cooldown_by_family=cooldown_by_family,
-                cooldown_by_dimension=cooldown_by_dimension,
-            )
-            if expiry is not None:
-                matched.add(str(unit.id))
-                logger.info(
-                    "dispatch_sync_run.rate_limit_cooldown_reconfirmed_exclusion",
-                    extra={
-                        "sync_run_id": sync_run_id,
-                        "unit_id": str(unit.id),
-                    },
+            cooldown_expiry = None
+            if cooldown_by_family or cooldown_by_dimension:
+                cooldown_expiry = _matching_cooldown_expiry(
+                    estimates,
+                    org_id=str(unit.org_id),
+                    provider=str(unit.provider),
+                    integration_id=unit.integration_id,
+                    cooldown_by_family=cooldown_by_family,
+                    cooldown_by_dimension=cooldown_by_dimension,
                 )
-        return frozenset(matched)
+            log_ctx = _unit_log_context(sync_run_id, unit)
+            if cooldown_expiry is not None:
+                outcome = _apply_cooldown_deferral(
+                    session,
+                    unit,
+                    cooldown_expiry=cooldown_expiry,
+                    jitter_seconds=jitter_seconds,
+                    now=checked_at,
+                    log_ctx=log_ctx,
+                )
+            elif _rate_limit_deferral_exhausted(unit, now=checked_at):
+                outcome = _terminalize_rate_limit_exhausted(
+                    session, unit, now=checked_at, log_ctx=log_ctx
+                )
+            else:
+                continue
+            if outcome is None:
+                # CAS lost the race -- unit moved on concurrently since the
+                # candidate snapshot was built; leave it for _claim_units to
+                # sort out on its own terms.
+                continue
+            excluded.add(str(unit.id))
+            available_at, terminalized = outcome
+            logger.info(
+                "dispatch_sync_run.rate_limit_cooldown_reconfirmed",
+                extra={
+                    "sync_run_id": sync_run_id,
+                    "unit_id": str(unit.id),
+                    "terminalized": terminalized,
+                },
+            )
+            if not terminalized and (
+                next_deferred_at is None or available_at < next_deferred_at
+            ):
+                next_deferred_at = available_at
+
+        return CooldownReconfirmResult(
+            excluded_unit_ids=frozenset(excluded),
+            next_deferred_at=next_deferred_at,
+        )
 
 
 def _dispatch_candidate_units(
@@ -536,10 +618,24 @@ def _cooldown_expiry(observation: ProviderRateLimitObservation) -> datetime:
 
 def _cooldown_lookback_seconds() -> int:
     # Bounds the observation query to a recency window so the lookup stays
-    # cheap regardless of the table's 14-day (default) retention. 2h matches
-    # RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS -- the longest a real cooldown
-    # (chunked provider resets included) can legitimately still be active.
-    return _env_int("SYNC_RATE_LIMIT_COOLDOWN_LOOKBACK_SECONDS", 2 * 60 * 60)
+    # cheap regardless of the table's 14-day (default) retention.
+    #
+    # Review finding (round 2): the default must NOT equal
+    # RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS exactly. A unit deferred by this
+    # gate gets available_at clamped to that same wall-clock budget, so it
+    # becomes due again at roughly the SAME age its causing observation's
+    # observed_at has reached -- an equal lookback would age the row out of
+    # visibility at EXACTLY the instant termination should kick in instead,
+    # making the observation invisible right when it matters most. Padded
+    # with the max configured jitter (available_at's own slop) plus a
+    # generous flat skew margin (clock drift / processing latency between
+    # whatever wrote the row and whatever reads it). _rate_limit_deferral_
+    # exhausted() is the belt to this suspenders' braces: termination itself
+    # never depends on this window either way.
+    jitter_max = _env_int("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", 5)
+    skew_margin = _env_int("SYNC_RATE_LIMIT_COOLDOWN_LOOKBACK_SKEW_SECONDS", 300)
+    default = RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS + jitter_max + skew_margin
+    return _env_int("SYNC_RATE_LIMIT_COOLDOWN_LOOKBACK_SECONDS", default)
 
 
 def _active_cooldowns(
@@ -692,6 +788,85 @@ def _cooldown_claim_predicate(now: datetime) -> Any:
     )
 
 
+def _rate_limit_deferral_exhausted(unit: SyncRunUnit, *, now: datetime) -> bool:
+    """True when this unit's SHARED rate-limit-deferral budget
+    (``RATE_LIMIT_MAX_DEFERRALS`` / ``RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS``) is
+    already spent, computed purely from the unit's OWN persisted state --
+    independent of whether an observation is currently visible via
+    ``_active_cooldowns`` (review finding: the lookback window can age a
+    real cooldown's causing observation out of visibility at roughly the
+    SAME wall-clock instant the deferral budget itself expires, since
+    ``available_at`` for a cooldown-gated unit is itself derived from that
+    same clamp -- termination must not depend on re-reading the store).
+
+    A fresh unit (``rate_limit_deferrals == 0`` and
+    ``rate_limit_first_seen_at is None``) is never "exhausted" -- this only
+    fires for a unit with genuine prior rate-limit-deferral history (from
+    EITHER this gate or the in-worker 429 path; they share the same
+    columns).
+    """
+    if unit.rate_limit_deferrals <= 0 and unit.rate_limit_first_seen_at is None:
+        return False
+    return (
+        plan_rate_limit_deferral(
+            retry_after_seconds=None,
+            attempts=unit.rate_limit_deferrals,
+            first_seen_at=unit.rate_limit_first_seen_at.isoformat()
+            if unit.rate_limit_first_seen_at
+            else None,
+            now=now,
+        )
+        is None
+    )
+
+
+def _terminalize_rate_limit_exhausted(
+    session: Any,
+    unit: SyncRunUnit,
+    *,
+    now: datetime,
+    log_ctx: dict[str, Any],
+) -> tuple[datetime, bool] | None:
+    """Terminally fail a unit whose shared rate-limit-deferral budget is
+    spent (CHAOS-2742 binding decision: run-liveness beats optimism).
+
+    Shared by :func:`_apply_cooldown_deferral` (when
+    ``plan_rate_limit_deferral`` returns ``None`` for a unit matched by a
+    currently-visible cooldown) and the wall-clock-exhaustion-without-a-
+    visible-observation path in ``enforce_run`` / ``reconfirm_cooldowns``
+    (review finding) -- one CAS, one code path, for both triggers.
+
+    Returns ``(now, True)`` on a successful CAS transition, or ``None`` if
+    the CAS lost the race (the unit moved on concurrently).
+    """
+    claim_predicate = _cooldown_claim_predicate(now)
+    result: Any = session.execute(
+        update(SyncRunUnit)
+        .where(SyncRunUnit.id == unit.id, claim_predicate)
+        .values(
+            status=SyncRunUnitStatus.FAILED.value,
+            error="rate limit cooldown deferral budget exhausted",
+            result={
+                "error_category": _RATE_LIMIT_COOLDOWN_EXHAUSTED_CATEGORY,
+                "rate_limit_deferrals": unit.rate_limit_deferrals,
+            },
+            lease_owner=None,
+            lease_expires_at=None,
+            last_heartbeat_at=now,
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if int(result.rowcount or 0) == 0:
+        return None
+    unit.status = SyncRunUnitStatus.FAILED.value
+    logger.warning(
+        "dispatch_sync_run.rate_limit_cooldown_exhausted",
+        extra={**log_ctx, "rate_limit_deferrals": unit.rate_limit_deferrals},
+    )
+    return now, True
+
+
 def _apply_cooldown_deferral(
     session: Any,
     unit: SyncRunUnit,
@@ -726,46 +901,31 @@ def _apply_cooldown_deferral(
         else None,
         now=now,
     )
-    claim_predicate = _cooldown_claim_predicate(now)
 
     if deferral is None:
-        result: Any = session.execute(
-            update(SyncRunUnit)
-            .where(SyncRunUnit.id == unit.id, claim_predicate)
-            .values(
-                status=SyncRunUnitStatus.FAILED.value,
-                error="rate limit cooldown deferral budget exhausted",
-                result={
-                    "error_category": _RATE_LIMIT_COOLDOWN_EXHAUSTED_CATEGORY,
-                    "rate_limit_deferrals": unit.rate_limit_deferrals,
-                },
-                lease_owner=None,
-                lease_expires_at=None,
-                last_heartbeat_at=now,
-                updated_at=now,
-            )
-            .execution_options(synchronize_session=False)
+        return _terminalize_rate_limit_exhausted(
+            session, unit, now=now, log_ctx=log_ctx
         )
-        if int(result.rowcount or 0) == 0:
-            return None
-        unit.status = SyncRunUnitStatus.FAILED.value
-        logger.warning(
-            "dispatch_sync_run.rate_limit_cooldown_exhausted",
-            extra={**log_ctx, "rate_limit_deferrals": unit.rate_limit_deferrals},
-        )
-        return now, True
 
+    claim_predicate = _cooldown_claim_predicate(now)
     # Use plan_rate_limit_deferral's OWN not_before, not cooldown_expiry
     # directly: not_before already clamps to the remaining
     # RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS wall-clock budget (review finding --
     # a far-future reset_at must not park a unit past the point the shared
     # deferral budget says to terminalize instead). Add the SAME jitter the
-    # budget-defer path uses, since not_before itself carries none.
+    # budget-defer path uses, since not_before itself carries none -- but
+    # clamp the JITTERED result too (review finding, round 2): jitter added
+    # on top of an ALREADY-clamped not_before can itself push available_at
+    # past the wall-clock deadline. first_seen_at is the deadline's anchor.
     not_before = datetime.fromisoformat(deferral.not_before)
-    available_at = not_before + timedelta(
-        seconds=random.uniform(0, float(jitter_seconds))  # noqa: S311
-    )
     first_seen_at = datetime.fromisoformat(deferral.first_seen_at)
+    wall_clock_deadline = first_seen_at + timedelta(
+        seconds=RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS
+    )
+    available_at = min(
+        not_before + timedelta(seconds=random.uniform(0, float(jitter_seconds))),  # noqa: S311
+        wall_clock_deadline,
+    )
     result = session.execute(
         update(SyncRunUnit)
         .where(SyncRunUnit.id == unit.id, claim_predicate)

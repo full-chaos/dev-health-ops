@@ -51,6 +51,7 @@ from .licensing import (
     OrgLicense,
 )
 from .org_invite import OrgInvite
+from .rate_limit_observations import ProviderRateLimitObservation
 from .refresh_token import RefreshToken
 from .refunds import Refund, RefundStatus
 from .reports import (
@@ -145,6 +146,7 @@ __all__ = [
     "OrgIPAllowlist",
     "OrgLicense",
     "OrgRetentionPolicy",
+    "ProviderRateLimitObservation",
     "Refund",
     "RefundStatus",
     "RefreshToken",

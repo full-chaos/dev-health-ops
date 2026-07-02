@@ -214,6 +214,16 @@ beat_schedule = {
         "schedule": crontab(hour=3, minute=30),
         "options": {"queue": "default"},
     },
+    # Retention for the durable rate-limit observation store (CHAOS-2758).
+    # Env-tunable via SYNC_RATE_LIMIT_OBSERVATION_RETENTION_DAYS (default 14,
+    # see workers/sync_reconciler.py). Scheduled off-peak, clear of the other
+    # nightly jobs (1:00 metrics, 1:30 release-impact, 2:00 recommendations,
+    # 3:30 membership backfill).
+    "prune-rate-limit-observations": {
+        "task": "dev_health_ops.workers.tasks.prune_rate_limit_observations",
+        "schedule": crontab(hour=5, minute=0),
+        "options": {"queue": "sync"},
+    },
 }
 
 # Result settings

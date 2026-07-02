@@ -59,6 +59,7 @@ from dev_health_ops.models import (
     BackfillJob,
     JobRun,
     JobRunStatus,
+    ProviderRateLimitObservation,
     SyncComputeCheckpoint,
     SyncComputeCheckpointStatus,
     SyncComputeType,
@@ -535,6 +536,96 @@ def _merge_partial_observations_into_result(
     merged.update(observations)
     result["observations"] = merged
     _promote_result_observation_fields(result)
+
+
+def _route_family_for_rate_limit(
+    budget_audit: list[dict[str, Any]] | None, dimension: str | None
+) -> str | None:
+    """Resolve the route family a rate-limit observation attributes to.
+
+    A unit's budget estimate can carry multiple (route_family, dimension)
+    pairs -- e.g. GitHub PR datasets emit ``prs``/``rest_core`` alongside
+    ``pr_social``/``graphql_cost`` and ``pr_social``/``secondary_abuse_risk``
+    (``providers/github/budget.py``). The rate-limit signal's ``dimension`` --
+    populated by the provider client at the classification site, i.e. which
+    kind of call actually hit the limit -- picks the matching estimate.
+
+    One unit can therefore map to multiple route families; this picks the
+    single *primary* one rather than writing one row per matched family
+    (CHAOS-2758 decision). When the dimension is absent or matches nothing in
+    the audit, fall back to the first estimate: every provider estimator
+    emits its dataset-primary family first (see
+    ``providers/<provider>/budget.py``), so first-emitted approximates
+    "primary" for that fallback case.
+    """
+    if not budget_audit:
+        return None
+    if dimension is not None:
+        for entry in budget_audit:
+            bucket = entry.get("bucket") if isinstance(entry, Mapping) else None
+            if isinstance(bucket, Mapping) and bucket.get("dimension") == dimension:
+                route_family = entry.get("route_family")
+                if route_family:
+                    return str(route_family)
+    first = budget_audit[0]
+    if isinstance(first, Mapping):
+        route_family = first.get("route_family")
+        if route_family:
+            return str(route_family)
+    return None
+
+
+def _build_rate_limit_observation(
+    *,
+    unit: SyncRunUnit,
+    provider: str,
+    exc: BaseException,
+    budget_audit: list[dict[str, Any]] | None,
+    observed_at: datetime,
+) -> ProviderRateLimitObservation:
+    """Build the durable observation row for a rate-limit deferral (CHAOS-2758).
+
+    Only normalized fields are persisted -- never raw provider headers (leak /
+    bloat risk). ``integration_id``/``sync_run_id``/``sync_run_unit_id`` come
+    from the unit row already loaded in this task (never re-resolved from
+    mutable ``Integration`` state); ``route_family``/``dimension`` come from
+    the budget estimate ALREADY computed for this unit at dispatch time --
+    never re-estimated (estimators require credential decryption). The
+    ``RateLimitSignal`` (CHAOS-2753) may be absent on legacy-connector
+    exceptions raised without one; every field degrades gracefully to the
+    unit/exception context in that case.
+    """
+    signal = getattr(exc, "signal", None)
+    dimension = (
+        signal.dimension.value
+        if signal is not None and signal.dimension is not None
+        else None
+    )
+    retry_after_seconds = getattr(exc, "retry_after_seconds", None)
+    if retry_after_seconds is None and signal is not None:
+        retry_after_seconds = signal.retry_after_seconds
+    reason = None
+    if signal is not None and signal.reason:
+        reason = signal.reason
+    if reason is None:
+        reason = str(exc) or None
+    return ProviderRateLimitObservation(
+        org_id=str(unit.org_id),
+        provider=(
+            signal.provider if signal is not None and signal.provider else provider
+        ),
+        host=signal.host if signal is not None else None,
+        integration_id=unit.integration_id,
+        sync_run_id=unit.sync_run_id,
+        sync_run_unit_id=unit.id,
+        route_family=_route_family_for_rate_limit(budget_audit, dimension),
+        dimension=dimension,
+        retry_after_seconds=retry_after_seconds,
+        reset_at=signal.reset_at if signal is not None else None,
+        reason=reason,
+        request_id=signal.request_id if signal is not None else None,
+        observed_at=observed_at,
+    )
 
 
 @celery_app.task(queue="sync", name="dev_health_ops.workers.tasks.dispatch_sync_run")
@@ -1078,6 +1169,20 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     "unit_id": unit_id,
                     "reason": "lease_lost",
                 }
+            # Durable observation store (CHAOS-2758): inserted only after the
+            # CAS above confirms the RETRYING stamp actually landed, and in
+            # the SAME session/transaction as that stamp, so the observation
+            # and the deferral commit together or not at all (never an
+            # orphan row for a deferral that didn't happen, and vice versa).
+            session.add(
+                _build_rate_limit_observation(
+                    unit=unit,
+                    provider=ctx.provider,
+                    exc=exc,
+                    budget_audit=budget_audit,
+                    observed_at=now,
+                )
+            )
             if sync_run_id is not None:
                 # Earlier-wins upsert (CHAOS-2647): we deliberately do NOT
                 # force-set available_at=not_before here. A revived past dispatch

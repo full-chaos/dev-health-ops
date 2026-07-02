@@ -119,6 +119,28 @@ def test_signal_reset_at_normalized_to_utc() -> None:
     assert naive.reset_at.tzinfo is timezone.utc
 
 
+def test_signal_reset_at_from_iso8601_for_jira() -> None:
+    # Jira's X-RateLimit-Reset is an ISO 8601 timestamp (Atlassian Cloud
+    # rate-limiting docs), not epoch seconds/millis like GitHub/GitLab/Linear
+    # (CHAOS-2758 verification of the previously-unverified epoch unit).
+    sig = RateLimitSignal(
+        provider="jira",
+        reset_at=RateLimitSignal.reset_at_from_iso8601("2025-10-08T15:00:00Z"),
+    )
+    assert sig.reset_at == datetime(2025, 10, 8, 15, 0, 0, tzinfo=timezone.utc)
+
+    # An explicit offset is honored and normalized to UTC.
+    offset = RateLimitSignal.reset_at_from_iso8601("2025-10-08T16:00:00+01:00")
+    assert offset == datetime(2025, 10, 8, 15, 0, 0, tzinfo=timezone.utc)
+
+    # Absent / malformed / wrong-type values degrade to None (Retry-After
+    # stays authoritative regardless).
+    assert RateLimitSignal.reset_at_from_iso8601(None) is None
+    assert RateLimitSignal.reset_at_from_iso8601("") is None
+    assert RateLimitSignal.reset_at_from_iso8601("not-a-timestamp") is None
+    assert RateLimitSignal.reset_at_from_iso8601(1_700_000_000) is None
+
+
 def test_legacy_connector_rate_limit_subclasses_root() -> None:
     """The class-split bug fix: base.RateLimitException IS-A root RateLimitException."""
     from dev_health_ops.connectors.base import (

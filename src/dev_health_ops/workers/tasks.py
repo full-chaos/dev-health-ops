@@ -17,7 +17,10 @@ from dev_health_ops.workers.recommendations_tasks import run_recommendations_job
 from dev_health_ops.workers.reference_discovery import run_sync_reference_discovery
 from dev_health_ops.workers.report_scheduler import dispatch_scheduled_reports
 from dev_health_ops.workers.report_task import execute_saved_report
-from dev_health_ops.workers.sync_reconciler import reconcile_sync_dispatch
+from dev_health_ops.workers.sync_reconciler import (
+    prune_rate_limit_observations,
+    reconcile_sync_dispatch,
+)
 from dev_health_ops.workers.sync_scheduler import dispatch_scheduled_syncs
 from dev_health_ops.workers.sync_units import (
     dispatch_sync_run,
@@ -67,6 +70,7 @@ __all__ = [
     "monitor_queue_depths",
     "phone_home_heartbeat",
     "process_webhook_event",
+    "prune_rate_limit_observations",
     "reconcile_sync_dispatch",
     "dispatch_membership_backfill",
     "run_capacity_forecast_job",

@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 
 from dev_health_ops.models import (
     BackfillJob,
     JobRun,
     JobRunStatus,
+    ProviderRateLimitObservation,
     SyncDispatchOutbox,
     SyncRun,
     SyncRunPostDispatch,
@@ -25,6 +27,63 @@ from dev_health_ops.workers.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 _WORKER_LOST_RETRY_EXHAUSTED_CATEGORY = "worker_lost_retry_exhausted"
+
+_DEFAULT_RATE_LIMIT_OBSERVATION_RETENTION_DAYS = 14
+
+
+def _rate_limit_observation_retention_days() -> int:
+    try:
+        days = int(
+            os.getenv(
+                "SYNC_RATE_LIMIT_OBSERVATION_RETENTION_DAYS",
+                str(_DEFAULT_RATE_LIMIT_OBSERVATION_RETENTION_DAYS),
+            )
+        )
+    except ValueError:
+        return _DEFAULT_RATE_LIMIT_OBSERVATION_RETENTION_DAYS
+    return max(0, days)
+
+
+@celery_app.task(
+    queue="sync",
+    name="dev_health_ops.workers.tasks.prune_rate_limit_observations",
+)
+def prune_rate_limit_observations(retention_days: int | None = None) -> dict[str, Any]:
+    """Delete durable rate-limit observations older than the retention window.
+
+    Beat-scheduled (``workers/config.py``), env-tunable via
+    ``SYNC_RATE_LIMIT_OBSERVATION_RETENTION_DAYS`` (default
+    :data:`_DEFAULT_RATE_LIMIT_OBSERVATION_RETENTION_DAYS`). This table has no
+    ClickHouse mirror or archival path (CHAOS-2758) -- expired rows are
+    deleted outright, matching the "observation, not audit log" scope agreed
+    for CHAOS-2742.
+    """
+    from dev_health_ops.db import get_postgres_session_sync
+
+    days = (
+        retention_days
+        if retention_days is not None
+        else _rate_limit_observation_retention_days()
+    )
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(0, int(days)))
+    with get_postgres_session_sync() as session:
+        result: Any = session.execute(
+            delete(ProviderRateLimitObservation).where(
+                ProviderRateLimitObservation.observed_at < cutoff
+            )
+        )
+        deleted = int(getattr(result, "rowcount", 0) or 0)
+        session.flush()
+    logger.info(
+        "prune_rate_limit_observations.completed",
+        extra={
+            "deleted": deleted,
+            "retention_days": days,
+            "cutoff": cutoff.isoformat(),
+        },
+    )
+    return {"status": "completed", "deleted": deleted, "retention_days": days}
+
 
 # Relay contract (CHAOS-2581 / CHAOS-2596): dispatch_sync_run and
 # finalize_sync_run wakeups remain durable at-least-once because their consumers

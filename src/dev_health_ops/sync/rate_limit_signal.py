@@ -77,6 +77,26 @@ class RateLimitSignal:
             return None
         return datetime.fromtimestamp(epoch_ms / 1000.0, tz=timezone.utc)
 
+    @staticmethod
+    def reset_at_from_iso8601(value: object) -> datetime | None:
+        """Build a UTC ``reset_at`` from an ISO 8601 timestamp string (Jira).
+
+        Verified against Atlassian's Jira Cloud rate-limiting docs
+        (developer.atlassian.com/cloud/jira/platform/rate-limiting/):
+        ``X-RateLimit-Reset`` is documented as "ISO 8601 timestamp when the
+        current window resets" (e.g. ``2025-10-08T15:00:00Z``) -- an absolute
+        UTC instant, NOT an epoch-seconds/-millis integer like GitHub/GitLab
+        (``Retry-After`` remains the authoritative delay for Jira; this is
+        only a supplementary hint, and parsing failures degrade to ``None``
+        gracefully rather than raising).
+        """
+        if not isinstance(value, str) or not value.strip():
+            return None
+        try:
+            return datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
     def to_dict(self) -> dict[str, object | None]:
         return {
             "provider": self.provider,

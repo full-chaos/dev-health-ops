@@ -88,6 +88,13 @@ Python-side `UNION ALL` across `teams FINAL`, `user_metrics_daily`, and
 the GraphQL surface and should be converged onto the same shared helper
 in a follow-up. New consumers should use the GraphQL `catalog` field.
 
+Developer values from this endpoint are intentionally limited to
+email-shaped `user_metrics_daily.author_email` values. The underlying
+metrics table can contain fallback identities such as provider handles
+or display names for issue-only contributors, but `who.developers` is an
+exact git author-email filter and the picker must not offer identities
+that cannot match that predicate.
+
 ## Files
 
 - `src/dev_health_ops/api/graphql/sql/templates.py` : `catalog_values_team_template()`

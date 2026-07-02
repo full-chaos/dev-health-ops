@@ -315,6 +315,22 @@ services:
       - ingest
       - --concurrency=1
 
+  # CHAOS-2693 D8/master-spec CC11: dedicated queue/container. DEPLOYMENT
+  # INVARIANT: exactly ONE replica at --concurrency=1 (reclaim/redelivery
+  # assumes a single logical consumer identity draining the PEL).
+  worker-external-ingest:
+    <<: *worker-base
+    container_name: dev-health-worker-external-ingest
+    command:
+      - -A
+      - dev_health_ops.workers.celery_app
+      - worker
+      - --loglevel=info
+      - --disable-prefetch
+      - -Q
+      - external-ingest
+      - --concurrency=1
+
   worker-heavy:
     <<: *worker-base
     container_name: dev-health-worker-heavy

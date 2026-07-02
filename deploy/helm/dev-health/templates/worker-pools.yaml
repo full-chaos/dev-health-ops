@@ -74,6 +74,77 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
 {{- end }}
+{{- if .Values.workerExternalIngest.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dev-health.fullname" . }}-worker-external-ingest
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "worker-external-ingest" "context" $) | nindent 4 }}
+spec:
+  progressDeadlineSeconds: {{ .Values.workerExternalIngest.progressDeadlineSeconds }}
+  replicas: {{ .Values.workerExternalIngest.replicas }}
+  selector:
+    matchLabels:
+      {{- include "dev-health.componentSelectorLabels" (dict "component" "worker-external-ingest" "context" $) | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "dev-health.componentSelectorLabels" (dict "component" "worker-external-ingest" "context" $) | nindent 8 }}
+    spec:
+      terminationGracePeriodSeconds: {{ .Values.workerExternalIngest.terminationGracePeriodSeconds }}
+      {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "dev-health.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: worker-external-ingest
+          image: {{ include "dev-health.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          command:
+            - celery
+            - -A
+            - dev_health_ops.workers.celery_app
+            - worker
+            - --loglevel={{ .Values.workerExternalIngest.logLevel }}
+            - --disable-prefetch
+            - -Q
+            - {{ .Values.workerExternalIngest.queues }}
+            - --concurrency={{ .Values.workerExternalIngest.concurrency }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "dev-health.configMapName" . }}
+            - secretRef:
+                name: {{ include "dev-health.secretName" . }}
+          {{- with .Values.worker.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.workerExternalIngest.resources | nindent 12 }}
+      {{- with .Values.workerExternalIngest.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.workerExternalIngest.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.workerExternalIngest.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
 {{- if .Values.workerHeavy.enabled }}
 ---
 apiVersion: apps/v1

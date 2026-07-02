@@ -151,6 +151,32 @@ workerIngest:
   tolerations: []
   affinity: {}
 
+# External-ingest pool (CHAOS-2693 D8/master-spec CC11): isolated single
+# slot for the customer-push durable-stream consumer, dedicated queue (not
+# shared with workerIngest) so a slow external customer can't starve
+# internal ingest/telemetry, nor vice versa. Fixed-replica (no
+# autoscaling) -- DEPLOYMENT INVARIANT: exactly ONE replica at
+# concurrency 1; the reclaim/redelivery design assumes a single logical
+# consumer identity draining the PEL.
+workerExternalIngest:
+  enabled: true
+  replicas: 1
+  queues: "external-ingest"
+  concurrency: 1
+  logLevel: info
+  terminationGracePeriodSeconds: 3700
+  progressDeadlineSeconds: 7600
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # Heavy pool (CHAOS-2278 / CHAOS-2517): batch compute (metrics, backfill) +
 # heavy cost-class sync sub-queues, isolated from latency-sensitive work.
 workerHeavy:

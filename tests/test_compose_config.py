@@ -642,7 +642,7 @@ def _helm_worker_queues(values_path: Path) -> set[str]:
     """Union of queue lists across every enabled worker pool in helm values."""
     values = _load_yaml(values_path)
     consumed: set[str] = set()
-    for pool in ("worker", "workerIngest", "workerHeavy"):
+    for pool in ("worker", "workerIngest", "workerExternalIngest", "workerHeavy"):
         cfg = values.get(pool) or {}
         if cfg.get("enabled") is False:
             continue

@@ -117,6 +117,55 @@ before ClickHouse has compacted older ReplacingMergeTree versions.
 
 ---
 
+## Membership projection & completion marker — write side (CHAOS-2433 / CHAOS-2776)
+
+The read-side scope guard above arms only when the latest complete
+`work_unit_membership_runs` marker is **at least as recent as** every
+`work_unit_investments` row. That marker is published exclusively by the no-LLM
+**membership projection** (`work_graph.investment.backfill.backfill_memberships`),
+which runs in three places:
+
+- **post-sync** (the fresh-data path): `run_work_graph_build` →
+  `dispatch_investment_materialize_partitioned` (LLM materialize, chunked chord)
+  → its finalizer runs the projection.
+- **daily floor cadence** (03:30 UTC): `dispatch_membership_backfill` fans out a
+  cheap `build → project` chain per active org.
+- **operator CLI**: `dev-hops investment materialize` runs the projection inline
+  after a successful materialize.
+
+**The projection is full-coverage by construction.** It iterates the *entire*
+current work graph and projects membership from the latest persisted investments
+per unit (`argMax(computed_at)`), so its coverage is **independent of any
+materialize window**. A `--from`/`--to`/`--window-days` bound only limits which
+WorkUnits receive *new* LLM investment rows; it does **not** limit which units the
+projection republishes. The marker is stamped with the run's **completion time**
+(`now()` at marker write, not run start) so overlapping runs resolve by which
+finished last.
+
+**Publish gate = SCOPE, not window (CHAOS-2776).** Whether a run publishes the
+org-wide marker is decided solely by whether it is **repo/team-scoped**:
+
+| Run shape | Publishes org-wide marker? | Why |
+| --------- | -------------------------- | --- |
+| Org-wide, no window | ✅ | Full coverage. |
+| Org-wide, windowed (`--from`/`--to`, or the post-sync sync window) | ✅ | Projection coverage is window-independent, so it is still full-coverage. |
+| Repo- or team-scoped | ❌ | A scoped projection covers only in-scope units; publishing it as the org's latest marker would blank every other repo for unscoped reads. Scoped runs rely on the daily org-wide projection to republish. |
+
+**CHAOS-2776 bug & fix.** Previously both the Celery finalizer
+(`finalize_investment_materialize_partitioned` via
+`dispatch_investment_materialize_partitioned`) and the CLI *also* skipped the
+projection for **windowed** runs. But the post-sync dispatcher *always* forwards
+the sync window as `from_date`/`to_date`, so the finalizer **never** projected
+after a post-sync materialize. The marker then lagged the freshly-written
+investments, the read guard fell back to `unscoped_fallback` (emitting
+`investment_membership_scope_stale`), and stale work-unit generations flooded the
+Investment charts until the next daily 03:30 projection — which the next sync
+immediately re-disarmed. The fix gates the projection on **scope only**
+(`not (repo_ids or team_ids)`), so windowed org-wide runs project and re-arm the
+guard on every sync.
+
+---
+
 ## Related
 
 - [Investment Categorization Pipeline](investment-categorization-pipeline.md) — how rows are produced

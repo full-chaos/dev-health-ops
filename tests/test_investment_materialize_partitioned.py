@@ -141,7 +141,15 @@ def test_dispatch_partitioned_materialize_uses_env_batch_defaults(monkeypatch) -
     assert chunk_kwargs["llm_batch_timeout_seconds"] == 123.0
 
 
-def test_dispatch_partitioned_materialize_skips_marker_for_windowed_run() -> None:
+def test_dispatch_partitioned_materialize_runs_marker_for_windowed_org_wide_run() -> (
+    None
+):
+    """CHAOS-2776: a WINDOWED but UNSCOPED run (org-wide, from/to only) must still
+    project membership in the finalizer. The projection is full-coverage by
+    construction (independent of the materialize window), so this republishes the
+    org-wide marker and re-arms the read-path stale-generation guard. This is the
+    post-sync path — the dispatcher always forwards the sync window — so before
+    the fix the projection never ran after a post-sync materialize."""
     with (
         patch(
             "dev_health_ops.metrics.sinks.factory.create_sink",
@@ -159,7 +167,7 @@ def test_dispatch_partitioned_materialize_skips_marker_for_windowed_run() -> Non
     ):
         mock_chord.return_value = MagicMock()
         task = cast(Any, dispatch_investment_materialize_partitioned)
-        task.run(
+        result = task.run(
             db_url="clickhouse://x",
             org_id="org-1",
             from_date="2026-01-01",
@@ -167,7 +175,77 @@ def test_dispatch_partitioned_materialize_skips_marker_for_windowed_run() -> Non
         )
 
     callback = mock_chord.call_args.args[1]
+    assert callback.sig_kwargs["kwargs"]["run_membership_backfill_after"] is True
+    assert result["membership_in_finalizer"] is True
+
+
+def test_dispatch_partitioned_materialize_skips_marker_for_repo_scoped_run() -> None:
+    """A repo-SCOPED run must NOT project the org-wide marker (it would only cover
+    in-scope units and blank other repos for unscoped reads)."""
+    with (
+        patch(
+            "dev_health_ops.metrics.sinks.factory.create_sink",
+            return_value=_FakeSink(),
+        ),
+        patch(
+            "dev_health_ops.work_graph.investment.queries.fetch_work_graph_edges",
+            return_value=[_edge(1)],
+        ),
+        patch(
+            "dev_health_ops.workers.work_graph_tasks.celery_app.signature",
+            side_effect=_signature_factory,
+        ),
+        patch("dev_health_ops.workers.work_graph_tasks.chord") as mock_chord,
+    ):
+        mock_chord.return_value = MagicMock()
+        task = cast(Any, dispatch_investment_materialize_partitioned)
+        result = task.run(
+            db_url="clickhouse://x",
+            org_id="org-1",
+            repo_ids=["repo-1"],
+            from_date="2026-01-01",
+            to_date="2026-01-02",
+        )
+
+    callback = mock_chord.call_args.args[1]
     assert callback.sig_kwargs["kwargs"]["run_membership_backfill_after"] is False
+    assert result["membership_in_finalizer"] is False
+
+
+def test_dispatch_partitioned_materialize_skips_marker_for_team_scoped_run() -> None:
+    """A team-SCOPED run must NOT project the org-wide marker."""
+    with (
+        patch(
+            "dev_health_ops.metrics.sinks.factory.create_sink",
+            return_value=_FakeSink(),
+        ),
+        # team_ids resolve to concrete repo_ids inside the materialize module; patch
+        # there because dispatch imports _resolve_repo_ids locally from that module.
+        patch(
+            "dev_health_ops.work_graph.investment.materialize._resolve_repo_ids",
+            return_value=["repo-1"],
+        ),
+        patch(
+            "dev_health_ops.work_graph.investment.queries.fetch_work_graph_edges",
+            return_value=[_edge(1)],
+        ),
+        patch(
+            "dev_health_ops.workers.work_graph_tasks.celery_app.signature",
+            side_effect=_signature_factory,
+        ),
+        patch("dev_health_ops.workers.work_graph_tasks.chord") as mock_chord,
+    ):
+        mock_chord.return_value = MagicMock()
+        task = cast(Any, dispatch_investment_materialize_partitioned)
+        result = task.run(
+            db_url="clickhouse://x",
+            org_id="org-1",
+            team_ids=["team-1"],
+        )
+
+    callback = mock_chord.call_args.args[1]
+    assert callback.sig_kwargs["kwargs"]["run_membership_backfill_after"] is False
+    assert result["membership_in_finalizer"] is False
 
 
 def test_materialize_chunk_checkpoint_skips_completed_chunk() -> None:
@@ -294,3 +372,23 @@ def test_finalize_aggregates_split_stats_by_max_not_sum() -> None:
     assert result["oversized_components"] == 2
     assert result["dropped_edges"] == 9
     assert result["dropped_nodes"] == 3
+
+
+def test_partitioned_finalizer_skips_membership_when_flag_false() -> None:
+    """A scoped run's finalizer (run_membership_backfill_after=False) aggregates
+    stats but must NOT project membership (no org-wide marker published)."""
+    with patch(
+        "dev_health_ops.work_graph.investment.backfill.backfill_memberships",
+    ) as backfill:
+        task = cast(Any, finalize_investment_materialize_partitioned)
+        result = task.run(
+            [{"stats": {"records": 2}}],
+            db_url="clickhouse://x",
+            org_id="org-1",
+            run_id="run-1",
+            run_membership_backfill_after=False,
+        )
+
+    assert result["records"] == 2
+    assert "membership" not in result
+    backfill.assert_not_called()

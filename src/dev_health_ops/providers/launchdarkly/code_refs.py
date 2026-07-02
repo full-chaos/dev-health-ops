@@ -103,12 +103,19 @@ def _normalize_path(path: str, branch_name: str) -> str:
 
 
 def _raise_for_status(response: httpx.Response) -> None:
+    # Deferred import mirrors the budget-resolver imports below: avoids a
+    # module-load-order cycle with providers/launchdarkly/client.py (CHAOS-2761
+    # review finding -- share the canonical Retry-After parser instead of
+    # re-copying an unguarded `float(...)` that raises on an HTTP-date or
+    # malformed header, which would escape this function entirely and never
+    # produce a `RateLimitException` at all).
+    from dev_health_ops.providers.launchdarkly.client import _parse_retry_after
+
     status = response.status_code
     if status == 401:
         raise AuthenticationException("LaunchDarkly authentication failed")
     if status == 429:
-        retry_after_raw = response.headers.get("Retry-After")
-        retry_after = float(retry_after_raw) if retry_after_raw else None
+        retry_after = _parse_retry_after(response)
         raise RateLimitException(
             "LaunchDarkly rate limit exceeded",
             retry_after_seconds=retry_after,
@@ -182,6 +189,13 @@ class LaunchDarklyCodeReferencesClient:
         *,
         params: dict[str, Any] | None = None,
     ) -> Any:
+        # Shared with providers/launchdarkly/client.py (CHAOS-2761 review
+        # finding): a bare `float(retry_after)` raises ValueError on an
+        # HTTP-date or malformed Retry-After header, which would escape this
+        # retry loop entirely -- _parse_retry_after returns None instead, so
+        # the exponential-backoff `delay` fallback below always applies.
+        from dev_health_ops.providers.launchdarkly.client import _parse_retry_after
+
         client = await self._get_client()
         delay = 1.0
         last_exc: Exception | None = None
@@ -195,8 +209,7 @@ class LaunchDarklyCodeReferencesClient:
                 )
                 if response.status_code == 429 or response.status_code >= 500:
                     if attempt < self.max_retries - 1:
-                        retry_after = response.headers.get("Retry-After")
-                        wait_seconds = float(retry_after) if retry_after else delay
+                        wait_seconds = _parse_retry_after(response) or delay
                         logger.warning(
                             "LaunchDarkly %d on %s (attempt %d/%d), retrying in %.1fs",
                             response.status_code,

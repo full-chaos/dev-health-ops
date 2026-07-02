@@ -47,6 +47,7 @@ def _make_fake_client(
         def __init__(self, *, api_key: str, project_key: str | None = None) -> None:
             self.api_key = api_key
             self.project_key = project_key
+            self._drained = False
 
         async def __aenter__(self) -> _FakeClient:
             return self
@@ -69,6 +70,12 @@ def _make_fake_client(
             return events or []
 
         def drain_usage_observations(self) -> list[dict[str, Any]]:
+            # Mirrors UsageRecorder.drain() clearing its state: a second call
+            # after an earlier successful drain returns [] rather than
+            # re-emitting the same observations (double-counting).
+            if self._drained:
+                return []
+            self._drained = True
             return usage_observations
 
     return _FakeClient
@@ -85,6 +92,7 @@ def _make_fake_code_refs_client(
     class _FakeCodeRefsClient:
         def __init__(self, *, api_key: str) -> None:
             self.api_key = api_key
+            self._drained = False
 
         async def __aenter__(self) -> _FakeCodeRefsClient:
             return self
@@ -100,6 +108,12 @@ def _make_fake_code_refs_client(
             return refs or []
 
         def drain_usage_observations(self) -> list[dict[str, Any]]:
+            # Mirrors UsageRecorder.drain() clearing its state: a second call
+            # after an earlier successful drain returns [] rather than
+            # re-emitting the same observations (double-counting).
+            if self._drained:
+                return []
+            self._drained = True
             return usage_observations
 
     return _FakeCodeRefsClient
@@ -254,3 +268,54 @@ def test_code_references_failure_still_drains_its_own_usage(monkeypatch) -> None
 
     assert result["code_references_error"] is not None
     assert result["observations"]["provider_usage"] == flags_usage + code_refs_usage
+
+
+def test_sink_write_failure_preserves_all_actuals_gathered_so_far(monkeypatch) -> None:
+    """CHAOS-2761 review finding (HIGH): before the fix, only a raise DURING
+    the flags/audit_log fetch attached partial observations -- a failure
+    anywhere downstream (code_refs, normalization, ClickHouse/WorkGraph
+    writes) reached run_sync_unit bare, silently dropping real request counts
+    that had already been recorded and drained. Here the flags/audit_log AND
+    code_refs fetches both succeed (and drain usage) before a ClickHouse sink
+    write fails; both actuals must still survive on the raised exception."""
+    flags_usage = [
+        {
+            "transport": "rest",
+            "route_family": "flags",
+            "dimension": "rest_core",
+            "request_count": 1,
+        }
+    ]
+    code_refs_usage = [
+        {
+            "transport": "rest",
+            "route_family": "code_refs",
+            "dimension": "rest_core",
+            "request_count": 1,
+        }
+    ]
+    monkeypatch.setattr(_CLIENT_PATCH, _make_fake_client(flags_usage))
+    monkeypatch.setattr(_CODE_REFS_PATCH, _make_fake_code_refs_client(code_refs_usage))
+
+    sink = MagicMock()
+    sink.query_dicts.return_value = []
+    sink.write_feature_flags.side_effect = RuntimeError("clickhouse write failed")
+    sink_cls = MagicMock(return_value=sink)
+    builder_cls = MagicMock(return_value=MagicMock())
+
+    with patch(_SINK_PATCH, sink_cls), patch(_BUILDER_PATCH, builder_cls):
+        with pytest.raises(RuntimeError) as excinfo:
+            _sync_launchdarkly_feature_flags(
+                db_url="clickhouse://localhost/default",
+                org_id="org-1",
+                credentials=_credentials(),
+                sync_options={"project_key": "proj"},
+                since_dt=None,
+            )
+
+    observations = read_work_item_partial_observations(excinfo.value)
+    assert observations is not None
+    assert observations["provider_usage"] == flags_usage + code_refs_usage
+    # The finally block must still have closed the sink/builder even though
+    # the write raised.
+    sink.close.assert_called_once()

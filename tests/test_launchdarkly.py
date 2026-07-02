@@ -34,6 +34,9 @@ from dev_health_ops.providers.launchdarkly.code_refs import (
     index_repo_rows,
     parse_code_reference_repositories,
 )
+from dev_health_ops.providers.launchdarkly.code_refs import (
+    _raise_for_status as _code_refs_raise_for_status,
+)
 from dev_health_ops.work_graph.ids import (
     generate_feature_flag_id,
     generate_file_id,
@@ -578,6 +581,100 @@ class TestLaunchDarklyCodeReferences:
             )
         ]
         assert edges[0]["repo_id"] == uuid.UUID(correct_repo_id)
+
+
+class TestLaunchDarklyCodeReferencesRetryAfterParsing:
+    """CHAOS-2761 review finding (MEDIUM): code_refs.py's ``_raise_for_status``
+    and its ``_request`` retry loop used a bare ``float(retry_after)``, which
+    raises ``ValueError`` on an HTTP-date, malformed, or empty Retry-After
+    header -- escaping BEFORE the canonical ``RateLimitException`` was ever
+    built, and (since ``feature_flag_sync`` only swallows ``ConnectorException``
+    for code_refs) failing the entire LaunchDarkly sync while bypassing the
+    worker's rate-limit deferral path entirely. Fixed by sharing
+    ``providers/launchdarkly/client.py``'s ``_parse_retry_after`` (returns
+    ``None`` on anything unparseable instead of raising)."""
+
+    @pytest.mark.parametrize(
+        "retry_after_header",
+        [
+            "7",  # numeric
+            "Wed, 21 Oct 2015 07:28:00 GMT",  # HTTP-date (valid per RFC 7231)
+            "not-a-number",  # garbage
+            "",  # empty string
+        ],
+    )
+    def test_raise_for_status_429_never_raises_value_error(
+        self, retry_after_header: str
+    ) -> None:
+        response = MagicMock()
+        response.status_code = 429
+        response.text = ""
+        response.url = None
+        response.headers = {
+            "Retry-After": retry_after_header,
+            "X-RateLimit-Reset": "0",
+        }
+
+        with pytest.raises(RootRateLimitException) as excinfo:
+            _code_refs_raise_for_status(response)
+
+        assert excinfo.value.signal is not None
+        assert excinfo.value.signal.provider == "launchdarkly"
+        assert excinfo.value.signal.reason == "primary"
+
+    @pytest.mark.asyncio
+    async def test_request_retry_loop_falls_back_to_backoff_on_malformed_retry_after(
+        self,
+    ) -> None:
+        """A malformed Retry-After on a 429 must not raise ValueError mid-retry
+        -- it must fall back to the exponential-backoff delay and retry, same
+        as a missing header."""
+        throttled = MagicMock()
+        throttled.status_code = 429
+        throttled.headers = {"Retry-After": "not-a-number"}
+
+        ok = MagicMock()
+        ok.status_code = 200
+        ok.headers = {}
+        ok.json.return_value = {"items": []}
+
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.is_closed = False
+        mock_client.request = AsyncMock(side_effect=[throttled, ok])
+
+        client = LaunchDarklyCodeReferencesClient(api_key="key", max_retries=2)
+        client._client = mock_client
+
+        refs = await client.list_default_branch_references(project_key="web")
+
+        assert refs == []
+        assert mock_client.request.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_request_exhausted_retries_raise_canonical_rate_limit_exception(
+        self,
+    ) -> None:
+        """Every attempt throttled with a malformed Retry-After still ends in
+        the canonical RateLimitException (via _raise_for_status), never a bare
+        ValueError."""
+        throttled = MagicMock()
+        throttled.status_code = 429
+        throttled.text = ""
+        throttled.url = None
+        throttled.headers = {"Retry-After": "garbage", "X-RateLimit-Reset": "0"}
+
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.is_closed = False
+        mock_client.request = AsyncMock(return_value=throttled)
+
+        client = LaunchDarklyCodeReferencesClient(api_key="key", max_retries=1)
+        client._client = mock_client
+
+        with pytest.raises(RootRateLimitException) as excinfo:
+            await client.list_default_branch_references(project_key="web")
+
+        assert excinfo.value.signal is not None
+        assert excinfo.value.signal.provider == "launchdarkly"
 
 
 # ---------------------------------------------------------------------------

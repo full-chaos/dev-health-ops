@@ -774,6 +774,13 @@ class MaterializeConfig:
     llm_batch_min_items: int = 25
     llm_batch_poll_interval_seconds: float = 30.0
     llm_batch_timeout_seconds: float = 3000.0
+    # Frozen component-size cap for partitioned runs: the dispatcher resolves
+    # the cap ONCE and passes it to every chunk so dispatcher and chunk workers
+    # can never disagree via divergent INVESTMENT_MAX_COMPONENT_NODES env
+    # (component_indexes are positional — a cap mismatch would re-split
+    # differently and index N would name a different work unit). None = resolve
+    # from env/default locally (single-process runs).
+    max_component_nodes: int | None = None
 
     def __post_init__(self) -> None:
         if self.llm_batch_mode not in _LLM_BATCH_MODES:
@@ -792,6 +799,7 @@ def _build_components(
     edges: list[dict[str, object]],
     *,
     stats: ComponentBuildStats | None = None,
+    max_component_nodes: int | None = None,
 ) -> list[tuple[list[NodeKey], list[dict[str, object]]]]:
     """Connected-component work units, with the CHAOS-2775 oversized-component
     split applied.
@@ -801,7 +809,7 @@ def _build_components(
     membership backfill all group nodes identically — a divergence would break
     ``work_unit_id`` hashing across the LLM and no-LLM paths.
     """
-    return build_components(edges, stats=stats)
+    return build_components(edges, stats=stats, max_component_nodes=max_component_nodes)
 
 
 def _flatten_nodes(
@@ -1090,7 +1098,11 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
             sink, repo_ids=repo_ids, org_id=config.org_id or ""
         )
         component_stats = ComponentBuildStats()
-        components = _build_components(edges, stats=component_stats)
+        components = _build_components(
+            edges,
+            stats=component_stats,
+            max_component_nodes=config.max_component_nodes,
+        )
         total_components = len(components)
         if not components:
             logger.info(

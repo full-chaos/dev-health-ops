@@ -322,3 +322,41 @@ def test_resolve_max_component_nodes_precedence(monkeypatch):
     assert resolve_max_component_nodes() == INVESTMENT_MAX_COMPONENT_NODES
     monkeypatch.setenv("INVESTMENT_MAX_COMPONENT_NODES", "0")
     assert resolve_max_component_nodes() == INVESTMENT_MAX_COMPONENT_NODES
+
+
+def test_fetch_dedups_rmt_versions_and_orders_deterministically(monkeypatch):
+    """CHAOS-2775 codex round 2 (MEDIUM + HIGH): the fetch must
+
+    1. argMax-collapse ReplacingMergeTree row versions per edge identity and
+       judge the heuristic filter on the LATEST provenance (a stale pre-merge
+       row must not resurrect an excluded edge), and
+    2. ORDER BY the full identity key so component discovery order — and with
+       it the positional component_indexes used by partitioned dispatch — is
+       identical across dispatcher and chunk workers.
+
+    The HAVING clause must reference the SELECT alias, NOT repeat
+    argMax(provenance, ...): the alias shadows the raw column and
+    re-aggregating raises ILLEGAL_AGGREGATION (184) on ClickHouse 26.x — the
+    same trap documented on LATEST_WORK_UNIT_INVESTMENTS_CTE.
+    """
+    captured: dict[str, Any] = {}
+
+    def fake_query_dicts(_sink, query, params):
+        captured["query"] = query
+        captured["params"] = params
+        return []
+
+    monkeypatch.setattr(q, "query_dicts", fake_query_dicts)
+    sink = cast(BaseMetricsSink, object())
+
+    q.fetch_work_graph_edges(sink, org_id="org-1")
+
+    query = captured["query"]
+    identity = "org_id, source_type, source_id, edge_type, target_type, target_id"
+    assert f"GROUP BY {identity}" in query
+    assert f"ORDER BY {identity}" in query
+    assert "argMax(provenance, last_synced) AS provenance" in query
+    assert "argMax(confidence, last_synced) AS confidence" in query
+    # Alias (not aggregate) in HAVING — ILLEGAL_AGGREGATION regression guard.
+    assert "HAVING provenance != %(heuristic_provenance)s" in query
+    assert "HAVING argMax" not in query

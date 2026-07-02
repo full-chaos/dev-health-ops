@@ -230,3 +230,67 @@ def test_partitioned_finalizer_aggregates_and_runs_membership_once() -> None:
     assert result["llm_failure_counts"] == {"rate_limit": 1}
     assert result["membership"] == {"memberships": 4}
     backfill.assert_called_once()
+
+
+def test_dispatch_freezes_max_component_nodes_into_chunks(monkeypatch) -> None:
+    """CHAOS-2775 codex round 2 (HIGH): the dispatcher resolves the component
+    size cap ONCE and passes it to every chunk. component_indexes are
+    positional over a re-built component list, so a chunk worker resolving a
+    different INVESTMENT_MAX_COMPONENT_NODES from its own env would split
+    differently and index N would name a different work unit."""
+    monkeypatch.setenv("INVESTMENT_MAX_COMPONENT_NODES", "7")
+    with (
+        patch(
+            "dev_health_ops.metrics.sinks.factory.create_sink",
+            return_value=_FakeSink(),
+        ),
+        patch(
+            "dev_health_ops.work_graph.investment.queries.fetch_work_graph_edges",
+            return_value=[_edge(1), _edge(2), _edge(3)],
+        ),
+        patch(
+            "dev_health_ops.workers.work_graph_tasks.celery_app.signature",
+            side_effect=_signature_factory,
+        ),
+        patch("dev_health_ops.workers.work_graph_tasks.chord") as mock_chord,
+    ):
+        mock_chord.return_value = MagicMock()
+        task = cast(Any, dispatch_investment_materialize_partitioned)
+        task.run(db_url="clickhouse://x", org_id="org-1", chunk_size=2)
+
+    header, _callback = mock_chord.call_args.args
+    for sig in header:
+        assert sig.sig_kwargs["kwargs"]["max_component_nodes"] == 7
+
+
+def test_finalize_aggregates_split_stats_by_max_not_sum() -> None:
+    """CHAOS-2775 codex round 2 (LOW): every chunk rebuilds the FULL component
+    list, so each reports the same graph-wide split counters — the finalizer
+    must aggregate them by MAX (summing would multiply by the chunk count)."""
+    chunk_stats = {
+        "records": 1,
+        "quotes": 0,
+        "skipped_existing": 0,
+        "llm_calls": 0,
+        "llm_input_tokens": 0,
+        "llm_output_tokens": 0,
+        "llm_failures": 0,
+        "llm_failure_counts": {},
+        "oversized_components": 2,
+        "dropped_edges": 9,
+        "dropped_nodes": 3,
+    }
+    task = cast(Any, finalize_investment_materialize_partitioned)
+    result = task.run(
+        [{"stats": dict(chunk_stats)}, {"stats": dict(chunk_stats)}],
+        db_url="clickhouse://x",
+        org_id="org-1",
+        run_id="run-1",
+        run_membership_backfill_after=False,
+    )
+
+    # Summable counters still sum; split counters do not.
+    assert result["records"] == 2
+    assert result["oversized_components"] == 2
+    assert result["dropped_edges"] == 9
+    assert result["dropped_nodes"] == 3

@@ -28,7 +28,7 @@ from dev_health_ops.api.middleware.rate_limit import (
 )
 from dev_health_ops.external_ingest.validate import validate_records
 
-from .auth import IngestAuthContext, require_ingest_scope
+from .auth import IngestAuthContext, require_ingest_scope, require_matching_source
 from .errors import ExternalIngestError
 from .schemas import (
     MAX_BODY_BYTES_DEFAULT,
@@ -218,6 +218,12 @@ async def accept_batch(
     _check_schema_version_or_400(envelope)
     _check_all_kinds_known_or_400(envelope)
     _check_batch_size_or_400(envelope)
+    # Adversarial-review fix: require_ingest_scope resolves before the body
+    # is parsed, so it can't check payload source vs. token-bound source
+    # itself -- a source-bound ingest:write token must not be able to push
+    # data for a different source instance in the same org (CC16
+    # source_mismatch / source_disabled).
+    require_matching_source(ctx, envelope.source.system, envelope.source.instance)
 
     ingestion_id = str(uuid4())
     window = envelope.window

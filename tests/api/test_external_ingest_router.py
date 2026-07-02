@@ -2,8 +2,11 @@
 
 Covers the brief's test plan: envelope/kind/size validation (D2/D4), the D1
 idempotency header/body match, D6's fail-closed stream-unavailable mapping,
-D7's interim auth mechanical gate (master-spec CC14), and D8's schema
-discovery endpoints.
+and D8's schema discovery endpoints. Auth (`require_ingest_scope`'s real,
+DB-backed body -- CHAOS-2712) is exercised end-to-end in
+tests/api/external_ingest/test_auth.py; this file overrides the bound scope
+dependencies for every test below so router-contract tests don't need a
+database.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ from dev_health_ops.api.external_ingest.schemas import (
 )
 from dev_health_ops.api.external_ingest.streams import StreamUnavailableError
 from dev_health_ops.api.main import app
+from dev_health_ops.models.ingest_auth import IngestSource, IngestSourceMode
 
 # __init__.py exports the APIRouter as "router", shadowing the module name —
 # force-load the actual module so we can reach its internals (the bound
@@ -32,8 +36,22 @@ router_mod = sys.modules["dev_health_ops.api.external_ingest.router"]
 
 BASE = "/api/v1/external-ingest"
 
+# Matches the (system, instance) every _envelope() below declares -- accept_batch
+# now enforces require_matching_source (CHAOS-2712 adversarial-review fix), so
+# the write-scoped test context needs a bound, write-eligible source or every
+# POST /batches test would 403 source_mismatch.
+_TEST_SOURCE = IngestSource(
+    org_id="test-org",
+    system="github",
+    instance="acme/api",
+    mode=IngestSourceMode.CUSTOMER_PUSH.value,
+    enabled=True,
+)
+
 TEST_CTX = IngestAuthContext(
-    org_id="test-org", scopes={"ingest:write", "ingest:status", "schema:read"}
+    org_id="test-org",
+    scopes=frozenset({"ingest:write", "ingest:status", "schema:read"}),
+    source=_TEST_SOURCE,
 )
 
 
@@ -427,61 +445,73 @@ async def test_get_schema_unknown_version_returns_404(client):
 
 
 # ---------------------------------------------------------------------------
-# Auth (D7 / master-spec CC14) — exercised WITHOUT the dependency override so
-# the real require_ingest_scope body actually runs.
+# Source binding (CHAOS-2712 adversarial-review fix: require_matching_source)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_missing_authorization_header_returns_401(monkeypatch):
-    monkeypatch.setenv("EXTERNAL_INGEST_INSECURE_AUTH", "1")
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as c:
+async def test_batch_for_mismatched_source_rejected_403(client, monkeypatch):
+    monkeypatch.setattr(router_mod, "enqueue_batch", lambda **kwargs: "stream-x")
+    mismatched_ctx = IngestAuthContext(
+        org_id="test-org",
+        scopes=frozenset({"ingest:write"}),
+        source=IngestSource(
+            org_id="test-org",
+            system="github",
+            instance="other/repo",  # envelope declares acme/api -- CHAOS-2712 default
+            mode=IngestSourceMode.CUSTOMER_PUSH.value,
+            enabled=True,
+        ),
+    )
+    app.dependency_overrides[router_mod._require_ingest_write] = lambda: mismatched_ctx
+    try:
         envelope = _envelope([_record("commit.v1", "c1", VALID_PAYLOADS["commit.v1"])])
-        resp = await c.post(
-            f"{BASE}/batches", json=envelope, headers={"X-Org-Id": "org-1"}
-        )
+        resp = await client.post(f"{BASE}/batches", json=envelope)
+    finally:
+        app.dependency_overrides[router_mod._require_ingest_write] = lambda: TEST_CTX
 
-    assert resp.status_code == 401
-    # Auth failures must use the same customer-facing envelope as every other
-    # external-ingest error (master-spec CC16 explicitly includes auth
-    # failures) — a bare HTTPException {"detail": ...} would force customer
-    # SDKs to special-case parsing (adversarial-review finding).
-    assert resp.json()["error"]["code"] == "invalid_token"
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "source_mismatch"
 
 
 @pytest.mark.asyncio
-async def test_missing_org_id_header_returns_400(monkeypatch):
-    monkeypatch.setenv("EXTERNAL_INGEST_INSECURE_AUTH", "1")
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as c:
+async def test_batch_for_unbound_write_token_rejected_403(client):
+    unbound_ctx = IngestAuthContext(
+        org_id="test-org", scopes=frozenset({"ingest:write"}), source=None
+    )
+    app.dependency_overrides[router_mod._require_ingest_write] = lambda: unbound_ctx
+    try:
         envelope = _envelope([_record("commit.v1", "c1", VALID_PAYLOADS["commit.v1"])])
-        resp = await c.post(
-            f"{BASE}/batches",
-            json=envelope,
-            headers={"Authorization": "Bearer dev-token"},
-        )
+        resp = await client.post(f"{BASE}/batches", json=envelope)
+    finally:
+        app.dependency_overrides[router_mod._require_ingest_write] = lambda: TEST_CTX
 
-    assert resp.status_code == 400
-    assert resp.json()["error"]["code"] == "missing_org_header"
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "source_mismatch"
 
 
 @pytest.mark.asyncio
-async def test_interim_auth_hard_fails_without_insecure_flag(monkeypatch):
-    # CC14: mechanical guard — auth 503s unless EXTERNAL_INGEST_INSECURE_AUTH=1
-    # is explicitly set, regardless of otherwise-valid credentials.
-    monkeypatch.delenv("EXTERNAL_INGEST_INSECURE_AUTH", raising=False)
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as c:
+async def test_batch_for_disabled_source_rejected_403(client):
+    disabled_ctx = IngestAuthContext(
+        org_id="test-org",
+        scopes=frozenset({"ingest:write"}),
+        source=IngestSource(
+            org_id="test-org",
+            system="github",
+            instance="acme/api",
+            mode=IngestSourceMode.CUSTOMER_PUSH.value,
+            enabled=False,
+        ),
+    )
+    app.dependency_overrides[router_mod._require_ingest_write] = lambda: disabled_ctx
+    try:
         envelope = _envelope([_record("commit.v1", "c1", VALID_PAYLOADS["commit.v1"])])
-        resp = await c.post(
-            f"{BASE}/batches",
-            json=envelope,
-            headers={"Authorization": "Bearer dev-token", "X-Org-Id": "org-1"},
-        )
+        resp = await client.post(f"{BASE}/batches", json=envelope)
+    finally:
+        app.dependency_overrides[router_mod._require_ingest_write] = lambda: TEST_CTX
 
-    assert resp.status_code == 503
-    assert resp.json()["error"]["code"] == "auth_not_configured"
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "source_disabled"
 
 
 # ---------------------------------------------------------------------------

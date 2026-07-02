@@ -72,7 +72,7 @@ CHAOS-2687 satisfies the budgeting gate for the existing `feature-flags` unit. B
 ## Follow-ups
 
 - Replace fixed request estimates with dynamic estimates driven by project, environment, flag, audit-log, and code-reference fanout.
-- Add GitLab feature-flag budgeting when GitLab feature-flag sync units are enabled.
+- ~~Add GitLab feature-flag budgeting when GitLab feature-flag sync units are enabled.~~ Done: `GitLabBudgetEstimator` already reserves budget for `DatasetKey.FEATURE_FLAGS` (route family `project`, `providers/gitlab/budget.py`), and as of CHAOS-2785 the fetch itself is instrumented too — see [Provider Rate-Limit Policy — GitLab](../providers/rate-limit-policy.md#gitlab) and [Sync usage actuals capture](sync-usage-actuals.md). Dedicated (non-shared) GitLab feature-flag budget families remain a follow-up.
 - Reserve budget for the `projects`, `segments`, and `members` route families once a client fetches them (currently modeled but not emitted or instrumented).
 - Feed the `X-RateLimit-Route-Remaining` low-budget warning into the deferral/cooldown machinery instead of only logging it (see [Provider Rate-Limit Policy — Known gaps](../providers/rate-limit-policy.md#known-gaps)).
 

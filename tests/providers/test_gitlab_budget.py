@@ -210,6 +210,53 @@ def test_gitlab_budget_estimator_normalizes_camel_case_base_url_for_fingerprint(
     assert snake.bucket.credential_fingerprint == camel.bucket.credential_fingerprint
 
 
+def test_gitlab_budget_estimator_resolves_host_from_gitlab_url_credential_key() -> None:
+    """CHAOS-2785 review finding: a self-hosted credential row stored under
+    ``gitlab_url`` (the key ``credentials/resolver.py::
+    gitlab_credentials_from_mapping`` and ``GitLabFeatureFlagsClient``
+    construction resolve first -- see workers/feature_flag_sync.py) must
+    scope the budget bucket to that host, not fall through to gitlab.com."""
+    gitlab_url_only = GitLabBudgetEstimator().estimate(
+        _context(
+            dataset_key="feature-flags",
+            credentials={
+                "token": "secret-token",
+                "gitlab_url": "https://gitlab.example.com",
+            },
+        )
+    )[0]
+
+    assert gitlab_url_only.bucket.host == "gitlab.example.com"
+
+    # Precedence matches gitlab_credentials_from_mapping: gitlab_url wins
+    # over a stale/incorrect url or base_url on the same mapping.
+    gitlab_url_wins = GitLabBudgetEstimator().estimate(
+        _context(
+            dataset_key="feature-flags",
+            credentials={
+                "token": "secret-token",
+                "gitlab_url": "https://gitlab.example.com",
+                "url": "https://gitlab.com",
+                "base_url": "https://gitlab.com",
+            },
+        )
+    )[0]
+
+    assert gitlab_url_wins.bucket.host == "gitlab.example.com"
+
+    url_key_only = GitLabBudgetEstimator().estimate(
+        _context(
+            dataset_key="feature-flags",
+            credentials={
+                "token": "secret-token",
+                "url": "https://gitlab.other-example.com",
+            },
+        )
+    )[0]
+
+    assert url_key_only.bucket.host == "gitlab.other-example.com"
+
+
 def test_gitlab_budget_estimator_scopes_empty_credentials_to_integration() -> None:
     first = GitLabBudgetEstimator().estimate(
         _context(dataset_key="commits", credentials={}, credential_id=None)

@@ -47,6 +47,7 @@ Drains emit two keys on `ProviderBatch.observations` / the unit-result
 | --- | --- | --- |
 | GitHub | REST + GraphQL | `GitHubProvider.ingest` (both keys) |
 | GitLab | REST | `GitLabProvider.ingest` **and** `metrics.work_items.fetch_gitlab_work_items` (the live worker path) |
+| GitLab feature-flags | REST | `_sync_gitlab_feature_flags` (CHAOS-2785): `GitLabFeatureFlagsClient`, drained into `provider_usage` |
 | Jira | REST | `JiraProvider.ingest` (legacy + atlassian paths) and the `job_work_items` client drain |
 | Linear | GraphQL | `LinearClient` per-POST counting (`X-RateLimit-Requests-*` capture) drained via `job_work_items` |
 | LaunchDarkly | REST | `_sync_launchdarkly_feature_flags` (CHAOS-2761): `LaunchDarklyClient` (flags, audit_log) + `LaunchDarklyCodeReferencesClient` (code_refs), both drained into `provider_usage` |
@@ -84,7 +85,8 @@ attribution would require richer operation labels at the client call sites.
    needs a canonical-provider migration off PyGithub/python-gitlab (much
    larger than a follow-up-ticket-sized change — see [Provider Rate-Limit
    Policy — Known gaps](../providers/rate-limit-policy.md#known-gaps)) and is
-   deferred to its own tracked effort.
+   deferred to its own tracked effort (CHAOS-2773 CS17 for the remaining
+   GitLab code-dataset methods specifically).
 
 > **Resolved (CHAOS-2761):** LaunchDarkly flag/audit-log actuals — previously
 > gap #1 here, blocked on the frozen `connectors/launchdarkly.py` path — are
@@ -92,3 +94,13 @@ attribution would require richer operation labels at the client call sites.
 > `providers/launchdarkly/client.py::LaunchDarklyClient`, and the pre-existing
 > canonical `code_refs.py` client was wired to the same shared recorder. See
 > [LaunchDarkly sync budgeting](launchdarkly-sync-budgeting.md).
+
+> **Resolved (CHAOS-2785):** GitLab feature-flag actuals — `get_feature_flags`
+> / `get_project_name`, previously on the frozen `connectors/gitlab.py`
+> `GitLabConnector` riding the un-instrumented `connectors/utils/rest.py`, are
+> now instrumented via the canonical `providers/gitlab/feature_flags.py::
+> GitLabFeatureFlagsClient`, wired to the shared CHAOS-2754 recorder
+> (resolving under the existing `project` route family). The remaining GitLab
+> code-dataset methods on the connector (`commits`, `files`, `blame`, `cicd`,
+> `tests`, `deployments`, `security`) are unaffected and remain frozen
+> pending CHAOS-2773 CS17.

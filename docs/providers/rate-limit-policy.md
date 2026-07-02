@@ -100,6 +100,7 @@ cooperating layers:
    | GitHub REST connector | 3 (`retry_with_backoff(max_retries=3)`) | `connectors/github.py` |
    | GitHub GraphQL client | 5 (`max_retries=5`) | `connectors/utils/graphql.py` |
    | GitLab REST connector | 3 (`retry_with_backoff(max_retries=3)`) | `connectors/gitlab.py` |
+   | GitLab feature-flags (canonical) | 5 (`max_retries=5`) | `providers/gitlab/feature_flags.py` |
    | Jira client (JQL + enrichment) | 4 (`max_retries_429=3` → `+1` initial) | `providers/jira/client.py` |
    | Jira Atlassian REST compat | 5 (`RESTClient(max_retries=5)`) | `connectors/utils/rest.py` |
    | Linear | 5 (`DEFAULT_MAX_ATTEMPTS`) | `providers/linear/client.py` |
@@ -753,8 +754,29 @@ once beyond what DispatchGuard's concurrency cap already allows
   re-raised as a non-retryable `AuthenticationException` so the retry decorator
   does not spin on an unfixable error (`connectors/gitlab.py`, mirroring
   GitHub's permission-403 handling).
+- **Feature-flag fetch migrated off the frozen connector (CHAOS-2785).**
+  `GitLabConnector.get_feature_flags` / `get_project_name`
+  (`connectors/gitlab.py`) previously carried this same 403/429 convention but
+  through the un-instrumented `connectors/utils/rest.py::GitLabRESTClient`, so
+  the fetch never produced actuals. The feature-flags sync unit now fetches
+  through the canonical `providers/gitlab/feature_flags.py::
+  GitLabFeatureFlagsClient` -- byte-for-byte behavior parity (403 stays
+  non-retryable, 429 stays a retryable `RateLimitException` with signal;
+  pinned by `tests/test_gitlab_feature_flags_client.py`), now wired to the
+  shared CHAOS-2754 recorder. `connectors/gitlab.py` is left in place, unused
+  by the feature-flags sync path; its other (code-dataset) methods are
+  untouched and remain frozen pending the larger CHAOS-2773 CS17 migration
+  below.
+- **Actuals instrumentation (CHAOS-2785).** The feature-flags fetch
+  (`get_feature_flags`, `get_project_name`) records real per-request counts
+  through the shared CHAOS-2754 recorder, resolving under the existing
+  `project` route family the `GitLabBudgetEstimator` already reserves for
+  `DatasetKey.FEATURE_FLAGS` -- no new route family or estimator change was
+  needed, since `GITLAB_USAGE_ROUTE_FAMILIES`' `project` marker (`/projects/`)
+  already matches these operations.
 - **Known gaps.** GitLab feature-flag budgeting shares the `project` REST-core
-  family; dedicated GitLab feature-flag budget families are a follow-up.
+  family; dedicated GitLab feature-flag budget families (distinguishing them
+  from generic project-metadata reads in calibration) remain a follow-up.
 
 #### Route families
 <!-- route-families:gitlab -->
@@ -933,7 +955,11 @@ paper over:
   entirely) than a follow-up-ticket-sized change. LaunchDarkly's equivalent
   gap (flag/audit-log fetches on the frozen connector) was closed in
   [CHAOS-2761](https://linear.app/fullchaos/issue/CHAOS-2761); see
-  [LaunchDarkly](#launchdarkly) above.
+  [LaunchDarkly](#launchdarkly) above. GitLab's feature-flags fetch
+  (`get_feature_flags` / `get_project_name`) is likewise closed as of
+  [CHAOS-2785](https://linear.app/fullchaos/issue/CHAOS-2785) — see
+  [GitLab](#gitlab) above — while the rest of GitLab's frozen
+  code-dataset methods remain unmigrated pending CHAOS-2773 CS17.
 
 
 ## References

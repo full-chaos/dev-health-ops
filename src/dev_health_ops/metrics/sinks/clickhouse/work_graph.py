@@ -342,6 +342,7 @@ class WorkGraphMixin(_ClickHouseSinkBase):
                 "relationship_type_raw",
                 "last_synced",
                 "org_id",
+                "source_id",
             ],
             rows,
         )
@@ -678,6 +679,9 @@ class WorkGraphMixin(_ClickHouseSinkBase):
                     "url": str(get("url") or ""),
                     "last_synced": _dt_to_clickhouse_datetime(synced_at),
                     "org_id": item["org_id"] if is_dict else item.org_id,
+                    # Nullable(UUID) — NULL for native sync, stamped by
+                    # external-ingest sink writes (CHAOS-2698 D1).
+                    "source_id": get("source_id"),
                 }
             )
 
@@ -709,6 +713,7 @@ class WorkGraphMixin(_ClickHouseSinkBase):
             "url",
             "last_synced",
             "org_id",
+            "source_id",
         ]
         for chunk in _chunked(rows, DEFAULT_BATCH_SIZE):
             matrix = [[row[col] for col in column_names] for row in chunk]
@@ -752,6 +757,9 @@ class WorkGraphMixin(_ClickHouseSinkBase):
                     "actor": str(get("actor") or ""),
                     "last_synced": _dt_to_clickhouse_datetime(synced_at),
                     "org_id": item["org_id"] if is_dict else item.org_id,
+                    # Nullable(UUID) — NULL for native sync, stamped by
+                    # external-ingest sink writes (CHAOS-2698 D1).
+                    "source_id": get("source_id"),
                 }
             )
 
@@ -766,6 +774,7 @@ class WorkGraphMixin(_ClickHouseSinkBase):
             "actor",
             "last_synced",
             "org_id",
+            "source_id",
         ]
         for chunk in _chunked(rows, DEFAULT_BATCH_SIZE):
             matrix = [[row[col] for col in column_names] for row in chunk]

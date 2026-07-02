@@ -7,6 +7,8 @@ from typing import Any, TypeVar
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 from .client import query_dicts
+from .investment import LATEST_WORK_UNIT_INVESTMENTS_CTE
+from .investment_membership_scope import record_stale_investment_membership_scope
 
 _LOOKUP_CHUNK_SIZE = 250
 T = TypeVar("T")
@@ -36,43 +38,44 @@ async def fetch_work_unit_investments(
     # ClickHouse may prefer alias over column names in WHERE; always qualify columns
     # to avoid accidentally referencing argMax(...) aliases.
     filters: list[str] = [
-        "work_unit_investments.from_ts < {end_ts:DateTime}",
-        "work_unit_investments.to_ts >= {start_ts:DateTime}",
-        "work_unit_investments.org_id = {org_id:String}",
+        "work_unit_investments.from_ts < %(end_ts)s",
+        "work_unit_investments.to_ts >= %(start_ts)s",
+        "work_unit_investments.org_id = %(org_id)s",
     ]
     if repo_ids:
-        filters.append("work_unit_investments.repo_id IN {repo_ids:Array(String)}")
+        filters.append("work_unit_investments.repo_id IN %(repo_ids)s")
         params["repo_ids"] = repo_ids
     if work_unit_id:
-        filters.append("work_unit_investments.work_unit_id = {work_unit_id:String}")
+        filters.append("work_unit_investments.work_unit_id = %(work_unit_id)s")
         params["work_unit_id"] = work_unit_id
     where_sql = " AND ".join(filters)
     query = f"""
+        WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE}
         SELECT
             work_unit_id,
-            argMax(work_unit_type, work_unit_investments.computed_at) AS work_unit_type,
-            argMax(work_unit_name, work_unit_investments.computed_at) AS work_unit_name,
-            argMax(from_ts, work_unit_investments.computed_at) AS from_ts,
-            argMax(to_ts, work_unit_investments.computed_at) AS to_ts,
-            argMax(repo_id, work_unit_investments.computed_at) AS repo_id,
-            argMax(provider, work_unit_investments.computed_at) AS provider,
-            argMax(effort_metric, work_unit_investments.computed_at) AS effort_metric,
-            argMax(effort_value, work_unit_investments.computed_at) AS effort_value,
-            argMax(theme_distribution_json, work_unit_investments.computed_at) AS theme_distribution_json,
-            argMax(subcategory_distribution_json, work_unit_investments.computed_at) AS subcategory_distribution_json,
-            argMax(structural_evidence_json, work_unit_investments.computed_at) AS structural_evidence_json,
-            argMax(evidence_quality, work_unit_investments.computed_at) AS evidence_quality,
-            argMax(evidence_quality_band, work_unit_investments.computed_at) AS evidence_quality_band,
-            argMax(categorization_status, work_unit_investments.computed_at) AS categorization_status,
-            argMax(categorization_model_version, work_unit_investments.computed_at) AS categorization_model_version,
-            argMax(categorization_run_id, work_unit_investments.computed_at) AS categorization_run_id,
-            max(work_unit_investments.computed_at) AS computed_at
-        FROM work_unit_investments
+            work_unit_type,
+            work_unit_name,
+            from_ts,
+            to_ts,
+            repo_id,
+            provider,
+            effort_metric,
+            effort_value,
+            theme_distribution_json,
+            subcategory_distribution_json,
+            structural_evidence_json,
+            evidence_quality,
+            evidence_quality_band,
+            categorization_status,
+            categorization_model_version,
+            categorization_run_id,
+            latest_computed_at AS computed_at
+        FROM latest_work_unit_investments AS work_unit_investments
         WHERE {where_sql}
-        GROUP BY org_id, work_unit_id
         ORDER BY effort_value DESC, work_unit_id ASC
-        LIMIT {{limit:UInt32}}
+        LIMIT %(limit)s
     """
+    await record_stale_investment_membership_scope(sink, org_id=org_id)
     return await query_dicts(sink, query, params)
 
 

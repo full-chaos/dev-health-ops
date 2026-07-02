@@ -37,11 +37,13 @@ async def test_work_unit_investments_query_qualifies_columns(monkeypatch):
 
     assert "work_unit_investments.from_ts" in captured["query"]
     assert "work_unit_investments.to_ts" in captured["query"]
-    assert "{start_ts:DateTime}" in captured["query"]
-    assert "{end_ts:DateTime}" in captured["query"]
-    assert "%(start_ts)s" not in captured["query"]
-    assert "%(end_ts)s" not in captured["query"]
-    assert "argMax(from_ts, work_unit_investments.computed_at)" in captured["query"]
+    assert "%(start_ts)s" in captured["query"]
+    assert "%(end_ts)s" in captured["query"]
+    assert "{start_ts:DateTime}" not in captured["query"]
+    assert "{end_ts:DateTime}" not in captured["query"]
+    assert "latest_work_unit_investments AS" in captured["query"]
+    assert "membership_scoped_work_unit_ids AS" in captured["query"]
+    assert "latest_computed_at AS computed_at" in captured["query"]
     assert "argMax(computed_at, computed_at)" not in captured["query"]
     assert "ORDER BY effort_value DESC, work_unit_id ASC" in captured["query"]
 

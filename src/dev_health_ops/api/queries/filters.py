@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any
 
 from dev_health_ops.investment_taxonomy import SUBCATEGORIES, THEMES
 
 from .client import query_dicts
+
+_EMAIL_VALUE_RE = re.compile(r"^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$")
+
+
+def _is_email_value(value: str) -> bool:
+    return bool(_EMAIL_VALUE_RE.match(value))
 
 
 async def fetch_filter_options(
@@ -105,7 +112,11 @@ async def fetch_filter_options(
 
     options["teams"] = [row["value"] for row in team_rows if row.get("value")]
     options["repos"] = [row["value"] for row in repo_rows if row.get("value")]
-    options["developers"] = [row["value"] for row in dev_rows if row.get("value")]
+    options["developers"] = [
+        row["value"]
+        for row in dev_rows
+        if row.get("value") and _is_email_value(row["value"])
+    ]
     options["work_category"] = sorted(THEMES) + sorted(SUBCATEGORIES)
     options["issue_type"] = [row["value"] for row in issue_rows if row.get("value")]
     options["flow_stage"] = [row["value"] for row in stage_rows if row.get("value")]

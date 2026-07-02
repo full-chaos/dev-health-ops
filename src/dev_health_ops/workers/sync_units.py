@@ -59,6 +59,7 @@ from dev_health_ops.models import (
     BackfillJob,
     JobRun,
     JobRunStatus,
+    ProviderRateLimitObservation,
     SyncComputeCheckpoint,
     SyncComputeCheckpointStatus,
     SyncComputeType,
@@ -535,6 +536,157 @@ def _merge_partial_observations_into_result(
     merged.update(observations)
     result["observations"] = merged
     _promote_result_observation_fields(result)
+
+
+_AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION = "ambiguous_dimension"
+
+# Allow-listed, normalized rate-limit reason categories (CHAOS-2758 review):
+# the observation store must never persist raw exception text -- legacy
+# no-signal raise sites build messages from provider response bodies, which
+# can embed header/body-shaped diagnostic content. Every provider client's
+# ``RateLimitSignal.reason`` value is already drawn from this vocabulary
+# (`primary`/`secondary` for GitHub/GitLab/LaunchDarkly/Jira,
+# `complexity` for Linear); `permission` is reserved for a future
+# classification site. Anything else -- including no signal at all --
+# normalizes to `unknown`.
+_RATE_LIMIT_REASON_CATEGORIES = frozenset(
+    {"primary", "secondary", "permission", "complexity", "unknown"}
+)
+_UNKNOWN_RATE_LIMIT_REASON = "unknown"
+
+
+def _route_family_and_attribution(
+    budget_audit: list[dict[str, Any]] | None, dimension: str | None
+) -> tuple[str | None, str | None]:
+    """Resolve the route family a rate-limit observation attributes to.
+
+    Returns ``(route_family, attribution)``. ``attribution`` is ``None`` when
+    ``route_family`` was confidently resolved, or
+    :data:`_AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION` when it could not be -- in
+    which case ``route_family`` is always ``None`` too. Never guesses: a
+    future cooldown-gating consumer (CHAOS-2760) falls back to
+    provider+integration+dimension gating whenever attribution is set,
+    documented in ``docs/providers/rate-limit-policy.md``.
+
+    A unit's budget estimate can carry multiple (route_family, dimension)
+    pairs, and **dimension alone does not disambiguate them**: e.g. Linear's
+    ``work-items`` estimator (``providers/linear/budget.py``) emits ``teams``,
+    ``issues``, ``cycles``, ``comments``, ``attachments``, and ``history`` --
+    all under ``graphql_cost`` -- and Jira's issue-comment datasets
+    (``providers/jira/budget.py``) can emit both ``jira_issue_enrichment`` and
+    ``jira_comments`` under ``rest_core``. Picking the first match in that
+    case would be a guess, not an attribution.
+
+    The rate-limit signal's ``dimension`` (populated by the provider client at
+    the classification site, i.e. which kind of call actually hit the limit)
+    narrows the candidate estimates when present. If the surviving candidate
+    set names exactly one **distinct** route family, that family is the
+    confident answer (this also covers the common single-estimate unit, e.g.
+    GitHub's ``commits`` dataset, and estimates that share one family across
+    multiple dimensions, e.g. GitHub's ``commit_stats``). Any other outcome --
+    no budget audit, no dimension match, or more than one distinct family --
+    is ambiguous and is NOT guessed at.
+    """
+    if not budget_audit:
+        return None, _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION
+
+    candidates = budget_audit
+    if dimension is not None:
+        dimension_matches = [
+            entry
+            for entry in budget_audit
+            if isinstance(entry, Mapping)
+            and isinstance(entry.get("bucket"), Mapping)
+            and entry["bucket"].get("dimension") == dimension
+        ]
+        if not dimension_matches:
+            # The signal names a dimension the unit never budgeted (e.g. a
+            # secondary-abuse signal against a REST-only unit). Falling back
+            # to the full audit would confidently attribute a family whose
+            # dimension CONTRADICTS the signal — CHAOS-2760 must use the
+            # provider+integration+dimension fallback instead.
+            return None, _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION
+        candidates = dimension_matches
+
+    route_families = {
+        str(entry.get("route_family"))
+        for entry in candidates
+        if isinstance(entry, Mapping) and entry.get("route_family")
+    }
+    if len(route_families) == 1:
+        return next(iter(route_families)), None
+    return None, _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION
+
+
+def _normalized_rate_limit_reason(exc: BaseException) -> str:
+    """Return an allow-listed rate-limit reason category, never raw text.
+
+    ``signal.reason`` is already a short normalized category at every
+    provider classification site (see :data:`_RATE_LIMIT_REASON_CATEGORIES`),
+    but this defensively re-validates it rather than trusting it blindly, and
+    NEVER falls back to ``str(exc)``: legacy no-signal raise sites build their
+    message from the raw provider response body, which can embed
+    header/body-shaped diagnostic content this store must not retain for its
+    14-day (default) retention window.
+    """
+    signal = getattr(exc, "signal", None)
+    if signal is not None and signal.reason:
+        candidate = str(signal.reason).strip().lower()
+        if candidate in _RATE_LIMIT_REASON_CATEGORIES:
+            return candidate
+    return _UNKNOWN_RATE_LIMIT_REASON
+
+
+def _build_rate_limit_observation(
+    *,
+    unit: SyncRunUnit,
+    provider: str,
+    exc: BaseException,
+    budget_audit: list[dict[str, Any]] | None,
+    observed_at: datetime,
+) -> ProviderRateLimitObservation:
+    """Build the durable observation row for a rate-limit deferral (CHAOS-2758).
+
+    Only normalized fields are persisted -- never raw provider headers or
+    exception text (leak / bloat risk). ``integration_id``/``sync_run_id``/
+    ``sync_run_unit_id`` come from the unit row already loaded in this task
+    (never re-resolved from mutable ``Integration`` state); ``route_family``/
+    ``dimension`` come from the budget estimate ALREADY computed for this
+    unit at dispatch time -- never re-estimated (estimators require
+    credential decryption). The ``RateLimitSignal`` (CHAOS-2753) may be absent
+    on legacy-connector exceptions raised without one; every field degrades
+    gracefully to the unit/exception context in that case.
+    """
+    signal = getattr(exc, "signal", None)
+    dimension = (
+        signal.dimension.value
+        if signal is not None and signal.dimension is not None
+        else None
+    )
+    retry_after_seconds = getattr(exc, "retry_after_seconds", None)
+    if retry_after_seconds is None and signal is not None:
+        retry_after_seconds = signal.retry_after_seconds
+    route_family, route_family_attribution = _route_family_and_attribution(
+        budget_audit, dimension
+    )
+    return ProviderRateLimitObservation(
+        org_id=str(unit.org_id),
+        provider=(
+            signal.provider if signal is not None and signal.provider else provider
+        ),
+        host=signal.host if signal is not None else None,
+        integration_id=unit.integration_id,
+        sync_run_id=unit.sync_run_id,
+        sync_run_unit_id=unit.id,
+        route_family=route_family,
+        route_family_attribution=route_family_attribution,
+        dimension=dimension,
+        retry_after_seconds=retry_after_seconds,
+        reset_at=signal.reset_at if signal is not None else None,
+        reason=_normalized_rate_limit_reason(exc),
+        request_id=signal.request_id if signal is not None else None,
+        observed_at=observed_at,
+    )
 
 
 @celery_app.task(queue="sync", name="dev_health_ops.workers.tasks.dispatch_sync_run")
@@ -1078,6 +1230,38 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     "unit_id": unit_id,
                     "reason": "lease_lost",
                 }
+            # Durable observation store (CHAOS-2758): attempted only after the
+            # CAS above confirms the RETRYING stamp actually landed, so it
+            # never runs for a deferral that didn't happen. It is
+            # deliberately isolated in its own SAVEPOINT rather than sharing
+            # the outer transaction outright: the observation store is
+            # diagnostic, not load-bearing, and a DB-level failure writing it
+            # (e.g. migration 0031 not yet applied during a rolling deploy,
+            # or schema drift) must never roll back the RETRYING stamp / turn
+            # a recoverable rate-limit deferral into a lost unit. On success
+            # the two still commit together (nested.commit() only stages the
+            # savepoint into the still-open outer transaction); on failure
+            # only the observation attempt rolls back and is logged.
+            observation_nested = session.begin_nested()
+            try:
+                session.add(
+                    _build_rate_limit_observation(
+                        unit=unit,
+                        provider=ctx.provider,
+                        exc=exc,
+                        budget_audit=budget_audit,
+                        observed_at=now,
+                    )
+                )
+                session.flush()
+            except SQLAlchemyError as observation_exc:
+                observation_nested.rollback()
+                logger.warning(
+                    "run_sync_unit.rate_limit_observation_persist_failed",
+                    extra={**_log_ctx, "error": str(observation_exc)},
+                )
+            else:
+                observation_nested.commit()
             if sync_run_id is not None:
                 # Earlier-wins upsert (CHAOS-2647): we deliberately do NOT
                 # force-set available_at=not_before here. A revived past dispatch

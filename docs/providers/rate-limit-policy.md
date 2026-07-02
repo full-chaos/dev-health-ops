@@ -236,6 +236,98 @@ CHAOS-2754's normalized `provider_usage` actuals, one row per
   also out of scope — there's no bucket context to attribute even an
   unbudgeted row to.
 
+## Observation store
+
+Shipped in [CHAOS-2758](https://linear.app/fullchaos/issue/CHAOS-2758). Every
+`RateLimitException` that defers a sync unit (the worker-level deferral path
+above) now attempts one durable, normalized row into the
+`provider_rate_limit_observations` Postgres table, in the **same
+session** as the unit's `RETRYING` stamp
+(`workers/sync_units.py`, the `except RateLimitException` branch of
+`run_sync_unit`), attempted only after the CAS confirming that stamp landed
+succeeds — so the write never fires for a deferral that didn't actually
+happen. The write itself is isolated in its own `SAVEPOINT`
+(`session.begin_nested()`), not folded into the outer transaction outright:
+the observation store is diagnostic, not load-bearing, so a DB-level failure
+persisting it (a rolling deploy where migration `0031` isn't applied to every
+node yet, schema drift, or any other insert-time error) rolls back only the
+observation attempt and is logged — it must never turn a recoverable
+rate-limit deferral into a lost/failed unit.
+
+**Schema:** `id`, `org_id` (indexed), `provider`, `host`, `integration_id`,
+`sync_run_id`, `sync_run_unit_id`, `route_family`, `route_family_attribution`,
+`dimension`, `retry_after_seconds`, `reset_at`, `reason`, `request_id`,
+`observed_at`, plus a composite index `(provider, integration_id,
+route_family, observed_at)` for the cooldown lookup a future consumer needs
+(migration `0031`, `models/rate_limit_observations.py`). Only normalized
+fields are persisted — **never raw provider headers or exception text**
+(leak/bloat risk); header capture stays best-effort and provider-local
+exactly as documented per-provider above, and `reason` is one of a fixed,
+allow-listed category vocabulary (below), never free text.
+
+**Why Postgres, not ClickHouse.** This answers the open question the earlier
+CHAOS-2742 budget plan left unresolved ("no new persistence table unless
+log/result metadata proves insufficient — durable store TBD"). Every store the
+dispatch path already consults transactionally is Postgres:
+`SyncDispatchOutbox` (`models/integrations.py`), the per-unit rate-limit
+deferral columns on `sync_run_units` (migration `0022`),
+`SyncComputeCheckpoint` (migration `0025`), and `BudgetGuard`'s own
+reservation runs inside a Postgres advisory-lock transaction
+(`sync/budget_guard.py`). The [cooldown-gating consumer](#known-gaps)
+(CHAOS-2760) needs to read recent observations from inside that same
+advisory-lock transaction — only Postgres supports that join here; ClickHouse
+is a separate analytics cluster with no transactional relationship to the
+dispatch guard. ClickHouse mirroring is deferred and would only be revisited
+if this table becomes an analytics source in its own right, not a dispatch
+input.
+
+**Enrichment (worker boundary, not the client).** Per the
+[`RateLimitSignal` contract](#how-rate-limits-are-handled), provider clients
+leave `integration_id`/`route_family` unset. The worker boundary enriches
+both before persisting: `integration_id` comes from the unit row already
+loaded for the deferral (`SyncRunUnit.integration_id` — never re-resolved from
+mutable `Integration` state), and `route_family` is picked from the
+`BudgetEstimate` list **already computed for this unit's dispatch** (never
+re-estimated — estimators require credential decryption).
+
+**Route-family attribution is confidence-gated, never guessed.** A unit's
+estimate can carry multiple `(route_family, dimension)` pairs, and dimension
+alone frequently does **not** disambiguate them: Linear's `work-items`
+estimator emits `teams`/`issues`/`cycles`/`comments`/`attachments`/`history`
+**all** under `graphql_cost`, and Jira's comment-bearing datasets can emit
+both `jira_issue_enrichment` and `jira_comments` under `rest_core`. The
+observation writer (`_route_family_and_attribution` in `workers/sync_units.py`)
+narrows the unit's estimates by the signal's `dimension` (which call kind
+actually hit the limit) and only commits to a `route_family` when the
+surviving candidates name exactly **one distinct** family — this also covers
+the common case of a single-estimate unit, and estimates that share one
+family across dimensions (e.g. GitHub's `commit_stats`). Whenever that check
+can't produce a unique family — no budget audit, no dimension match, or more
+than one distinct family — `route_family` is `NULL` and
+`route_family_attribution` is set to `ambiguous_dimension`; `dimension`
+itself is still populated. **The CHAOS-2760 cooldown-gating consumer must
+fall back to provider+integration+dimension gating whenever
+`route_family_attribution` is set**, rather than trusting a guessed family.
+
+**`reason` is a normalized category, never raw exception text.** Legacy
+no-signal raise sites build their message from the provider's raw response
+body, which can embed header/body-shaped diagnostic content; persisting that
+verbatim for the retention window would be a leak risk. `reason` is always
+one of a fixed vocabulary — `primary`, `secondary`, `permission` (reserved for
+a future classification site), `complexity`, or `unknown` (no signal, or a
+value outside this vocabulary) — never `str(exception)`.
+
+**Retention.** A beat-scheduled task (`prune_rate_limit_observations`,
+`workers/sync_reconciler.py`, `workers/config.py`) deletes rows older than
+`SYNC_RATE_LIMIT_OBSERVATION_RETENTION_DAYS` (default **14**, env-overridable)
+once daily. This is an observation log, not an audit trail — expired rows are
+deleted outright, no archival path.
+
+**Not yet wired: cooldown gating.** Nothing reads this table back before
+dispatch yet — see [Known gaps](#known-gaps) /
+[CHAOS-2760](https://linear.app/fullchaos/issue/CHAOS-2760). Any such
+consumer must honor the `route_family_attribution` fallback contract above.
+
 ## Per-provider policy
 
 ### GitHub
@@ -326,7 +418,12 @@ CHAOS-2754's normalized `provider_usage` actuals, one row per
   work-item **listing** goes through the separately-limited REST `search/jql`
   endpoint (`search` dimension), while enrichment (changelog/comments/sprints)
   uses `rest_core`. AGG GraphQL enrichment, when enabled, uses `graphql_cost`.
-- **Headers.** `Retry-After` on `429`.
+- **Headers.** `Retry-After` on `429` (authoritative delay). `X-RateLimit-Reset`
+  is also sent, but as an **ISO 8601 timestamp** (e.g. `2025-10-08T15:00:00Z`),
+  not epoch seconds/milliseconds like GitHub/GitLab/Linear — verified against
+  Atlassian's Cloud rate-limiting docs
+  (`developer.atlassian.com/cloud/jira/platform/rate-limiting/`) for CHAOS-2758
+  (previously unverified; `RateLimitSignal.reset_at_from_iso8601` parses it).
 - **Retry semantics.** On `429`, Jira retries **in place** honoring `Retry-After`
   (`providers/jira/client.py` `_request_json`, `max_retries_429=3` → 4 attempts),
   then raises `RateLimitException` when exhausted so the worker deferral path
@@ -430,12 +527,11 @@ These are the instrumentation/coverage gaps the [CHAOS-2742](https://linear.app/
 epic exists to close. They are documented as **current reality**, not defects to
 paper over:
 
-- **No shared, persisted rate-limit observations.** Provider 429s are handled
-  per-task; there is no durable store of `retry_after` / `reset_at` /
-  `route_family` observations that siblings can consult. (Target:
-  [CHAOS-2758](https://linear.app/fullchaos/issue/CHAOS-2758).)
-- **No cross-unit cooldown gating.** When one unit discovers a real cooldown,
-  sibling units still call the provider and re-discover it. (Target:
+- **No cross-unit cooldown gating.** Provider rate-limit observations are now
+  durably persisted (see [Observation store](#observation-store), shipped in
+  [CHAOS-2758](https://linear.app/fullchaos/issue/CHAOS-2758)), but nothing
+  reads them back yet: when one unit discovers a real cooldown, sibling units
+  still call the provider and re-discover it independently. (Target:
   [CHAOS-2760](https://linear.app/fullchaos/issue/CHAOS-2760).)
 - **Calibration only covers instrumented route families.** [CHAOS-2759](https://linear.app/fullchaos/issue/CHAOS-2759)
   attaches a `budget_comparison` (see
@@ -478,8 +574,6 @@ append its section here in the same changeset (per `AGENTS.md`
   Stamp `credential_id`/version onto `SyncRun` at plan time; bootstrap uses the
   run-stamped auth context, not mutable integration state. Determinism only —
   **never** unit-level credential selection for capacity.
-- **Observation store — [CHAOS-2758](https://linear.app/fullchaos/issue/CHAOS-2758).**
-  A durable Postgres table / event stream for provider rate-limit observations.
 - **Cooldown gating — [CHAOS-2760](https://linear.app/fullchaos/issue/CHAOS-2760).**
   Consult recent observations before dispatch and defer sibling units into a
   known provider/integration/route-family cooldown window.

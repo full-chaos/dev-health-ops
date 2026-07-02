@@ -192,7 +192,12 @@ class JiraClient:
                             host=urlparse(self.auth.base_url).hostname,
                             dimension=BudgetDimension.REST_CORE,
                             retry_after_seconds=retry_after,
-                            reset_at=RateLimitSignal.reset_at_from_epoch_seconds(
+                            # Jira's X-RateLimit-Reset is an ISO 8601 timestamp
+                            # (Atlassian Cloud rate-limiting docs), not epoch
+                            # seconds like GitHub/GitLab -- CHAOS-2758 verified
+                            # this against the docs (see RateLimitSignal
+                            # docstring); Retry-After remains authoritative.
+                            reset_at=RateLimitSignal.reset_at_from_iso8601(
                                 resp.headers.get("X-RateLimit-Reset")
                             ),
                             reason="primary",

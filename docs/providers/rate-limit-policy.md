@@ -364,7 +364,7 @@ discipline.
 **Redaction, not an allow-list — deliberately.** `reason` above is a closed,
 normalized enum with no diagnostic-text mandate, so allow-listing a fixed
 vocabulary is correct there. `sync_run_units.error` and its siblings
-(`sync_runs.error`, `sync_run_reference_discovery.error`,
+(`sync_runs.error`, `sync_run_reference_discoveries.error`,
 `sync_dispatch_outbox.last_error`) are free-form, operator-facing
 diagnostics — the entire point of persisting them is to help debug a failed
 sync without re-running it. Collapsing them to a category string would defeat
@@ -464,8 +464,17 @@ test instead
 written before this column was brought under `sanitize_error_text` keeps its
 raw text at rest until the row is next overwritten by a sanitizing write path
 (or copied through one of the sinks above, which now re-sanitizes on the way
-through). A scrub/backfill of already-persisted rows is a deliberately
-separate decision, out of scope for this PR.
+through). [CHAOS-2780](https://linear.app/fullchaos/issue/CHAOS-2780) closes
+that gap: `dev-hops maintenance scrub-error-text` applies `sanitize_error_text`
+to every already-persisted row across all ten in-scope columns (the eight
+listed above plus `integration_credentials.last_test_error`, whose write path
+CHAOS-2780 also sanitizes at the source, and
+`sync_configurations.last_sync_stats`'s `'error'` JSON key). Dry-run by
+default; `--apply` mutates, `--org` optionally scopes to one organization,
+and re-running after a full apply reports zero changes (the scrub, like
+`sanitize_error_text` itself, is idempotent). See
+`src/dev_health_ops/maintenance/scrub_error_text.py` for the column registry
+and compare-and-swap update semantics.
 
 ## Cooldown gating
 

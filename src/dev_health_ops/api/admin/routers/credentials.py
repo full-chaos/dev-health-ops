@@ -21,6 +21,7 @@ from dev_health_ops.api.admin.schemas import (
 )
 from dev_health_ops.api.services.configuration import IntegrationCredentialsService
 from dev_health_ops.credentials.resolver import github_credentials_from_mapping
+from dev_health_ops.sync.error_sanitize import sanitize_error_text
 
 from .common import get_session
 
@@ -367,6 +368,15 @@ async def test_connection(
         safe_provider = str(payload.provider).replace("\r", "").replace("\n", "")
         logger.exception("Test connection failed for %s", safe_provider)
 
+    # CHAOS-2780: this is the credential-test flow -- the most likely place
+    # for a secret-bearing exception message (or, via the provider helpers
+    # below, a raw external HTTP response body) to appear. Sanitize before
+    # it reaches EITHER sink: the persisted last_test_error (below) and the
+    # HTTP response returned to the caller (below that). sanitize_error_text
+    # is a no-op on None/already-clean text, so this is safe regardless of
+    # which branch above set `error`.
+    error = sanitize_error_text(error)
+
     # Always persist the test result when a stored credential exists
     # (covers both inline pre-save tests and DB-sourced tests)
     if stored is None:
@@ -667,7 +677,20 @@ async def _test_github_connection(creds: dict[str, Any]) -> tuple[bool, dict[str
                     "repository_count": data.get("total_count"),
                 }
             return True, {"user": data.get("login"), "name": data.get("name")}
-        return False, {"status": resp.status_code, "error": resp.text[:200]}
+        return False, {
+            "status": resp.status_code,
+            # CHAOS-2780: this is a raw response body from the external
+            # provider, not something this codebase formats -- some
+            # providers echo request details (including the submitted
+            # credential) back in error/diagnostic bodies, so it must go
+            # through the same redaction as any other error-bearing field
+            # in this response. Sanitize the FULL body (not a blind [:200]
+            # slice first) so the 200-char cap can never split a credential
+            # in half and leave a partial, still-identifiable fragment --
+            # same redact-before-truncate ordering sanitize_error_text
+            # itself guarantees internally.
+            "error": sanitize_error_text(resp.text, max_length=200),
+        }
 
 
 async def _test_gitlab_connection(creds: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
@@ -695,7 +718,20 @@ async def _test_gitlab_connection(creds: dict[str, Any]) -> tuple[bool, dict[str
         if resp.status_code == 200:
             data = resp.json()
             return True, {"user": data.get("username"), "name": data.get("name")}
-        return False, {"status": resp.status_code, "error": resp.text[:200]}
+        return False, {
+            "status": resp.status_code,
+            # CHAOS-2780: this is a raw response body from the external
+            # provider, not something this codebase formats -- some
+            # providers echo request details (including the submitted
+            # credential) back in error/diagnostic bodies, so it must go
+            # through the same redaction as any other error-bearing field
+            # in this response. Sanitize the FULL body (not a blind [:200]
+            # slice first) so the 200-char cap can never split a credential
+            # in half and leave a partial, still-identifiable fragment --
+            # same redact-before-truncate ordering sanitize_error_text
+            # itself guarantees internally.
+            "error": sanitize_error_text(resp.text, max_length=200),
+        }
 
 
 async def _test_jira_connection(creds: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
@@ -731,7 +767,20 @@ async def _test_jira_connection(creds: dict[str, Any]) -> tuple[bool, dict[str, 
                 "user": data.get("emailAddress"),
                 "name": data.get("displayName"),
             }
-        return False, {"status": resp.status_code, "error": resp.text[:200]}
+        return False, {
+            "status": resp.status_code,
+            # CHAOS-2780: this is a raw response body from the external
+            # provider, not something this codebase formats -- some
+            # providers echo request details (including the submitted
+            # credential) back in error/diagnostic bodies, so it must go
+            # through the same redaction as any other error-bearing field
+            # in this response. Sanitize the FULL body (not a blind [:200]
+            # slice first) so the 200-char cap can never split a credential
+            # in half and leave a partial, still-identifiable fragment --
+            # same redact-before-truncate ordering sanitize_error_text
+            # itself guarantees internally.
+            "error": sanitize_error_text(resp.text, max_length=200),
+        }
 
 
 async def _test_linear_connection(creds: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
@@ -753,7 +802,20 @@ async def _test_linear_connection(creds: dict[str, Any]) -> tuple[bool, dict[str
             viewer = data.get("data", {}).get("viewer", {})
             if viewer:
                 return True, {"user": viewer.get("email"), "name": viewer.get("name")}
-        return False, {"status": resp.status_code, "error": resp.text[:200]}
+        return False, {
+            "status": resp.status_code,
+            # CHAOS-2780: this is a raw response body from the external
+            # provider, not something this codebase formats -- some
+            # providers echo request details (including the submitted
+            # credential) back in error/diagnostic bodies, so it must go
+            # through the same redaction as any other error-bearing field
+            # in this response. Sanitize the FULL body (not a blind [:200]
+            # slice first) so the 200-char cap can never split a credential
+            # in half and leave a partial, still-identifiable fragment --
+            # same redact-before-truncate ordering sanitize_error_text
+            # itself guarantees internally.
+            "error": sanitize_error_text(resp.text, max_length=200),
+        }
 
 
 async def _test_launchdarkly_connection(

@@ -4,7 +4,7 @@ Live verification of CHAOS-2758 (evidence comment on CHAOS-2742) demonstrated
 that a provider exception whose message embeds an ``Authorization`` header
 (``403 rate limited -- Authorization: Bearer ghp_FAKE...``) persisted
 VERBATIM into the pre-existing ``sync_run_units.error`` column and its
-siblings (``sync_runs.error``, ``sync_run_reference_discovery.error``,
+siblings (``sync_runs.error``, ``sync_run_reference_discoveries.error``,
 ``sync_dispatch_outbox.last_error``) -- every one of these is populated from
 ``str(exc)`` (or an f-string embedding it) at a worker boundary that never
 controls what a provider client library puts in an exception message.

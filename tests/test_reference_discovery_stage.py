@@ -460,7 +460,7 @@ def test_reference_discovery_failure_sanitizes_credential_material(
     """Mirrors CHAOS-2758's live-verify case B for the reference-discovery
     ledger's error text (CHAOS-2766): a provider exception whose message
     embeds an Authorization header must not persist the raw credential to
-    ``sync_run_reference_discovery.error``, ``sync_run_units.error``,
+    ``sync_run_reference_discoveries.error``, ``sync_run_units.error``,
     ``sync_runs.error``, or the task's own returned ``error`` field -- every
     one of those is populated from this same exception."""
 

@@ -791,11 +791,10 @@ paper over:
   instrumentation for those datasets lands as the fetch moves to
   `providers/github/` / `providers/gitlab/` — tracked as its own
   canonical-provider-migration effort in
-  [CHAOS-XXXX](https://linear.app/fullchaos/issue/CHAOS-XXXX) (placeholder —
-  confirm issue number before merge), since it is a much larger migration
-  (~1400 lines per connector, off PyGithub/python-gitlab entirely) than a
-  follow-up-ticket-sized change. LaunchDarkly's equivalent gap (flag/audit-log
-  fetches on the frozen connector) was closed in
+  [CHAOS-2773](https://linear.app/fullchaos/issue/CHAOS-2773), since it is a
+  much larger migration (~1400 lines per connector, off PyGithub/python-gitlab
+  entirely) than a follow-up-ticket-sized change. LaunchDarkly's equivalent
+  gap (flag/audit-log fetches on the frozen connector) was closed in
   [CHAOS-2761](https://linear.app/fullchaos/issue/CHAOS-2761); see
   [LaunchDarkly](#launchdarkly) above.
 

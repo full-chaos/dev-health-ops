@@ -65,6 +65,20 @@ def test_repo_effort_cte_dedups_by_org_work_unit_repo() -> None:
     assert "GROUP BY org_id, work_unit_id, repo_id" in cte
 
 
+def test_repo_effort_cte_scopes_to_latest_allocation_generation() -> None:
+    """The CTE must keep only the unit's LATEST allocation generation, so stale
+    per-repo rows from a shrunk repo set (same work_unit_id, older computed_at)
+    do not survive under the per-repo RMT key and inflate the fan-out."""
+    cte = investment_queries.LATEST_WORK_UNIT_REPO_EFFORT_CTE
+    # Per-unit generation clock = max(computed_at) over ALL of the unit's repo
+    # rows (the allocation table's OWN clock, not the investments computed_at).
+    assert "max(computed_at) AS unit_generation_at" in cte
+    assert "GROUP BY org_id, work_unit_id" in cte  # the clock groups per unit
+    assert "WHERE d.latest_repo_effort_computed_at = g.unit_generation_at" in cte
+    # Explicit match flag so consumers never depend on a non-empty id sentinel.
+    assert "1 AS has_allocation" in cte
+
+
 def test_repo_allocated_source_falls_back_to_scalar_repo() -> None:
     """The derived source LEFT JOINs the per-repo allocation on
     (org_id, work_unit_id) and falls back to the scalar repo_id / effort_value
@@ -73,13 +87,16 @@ def test_repo_allocated_source_falls_back_to_scalar_repo() -> None:
     assert "LEFT JOIN latest_work_unit_repo_effort AS wure" in src
     assert "ON wure.org_id = wui.org_id" in src
     assert "AND wure.work_unit_id = wui.work_unit_id" in src
-    # Scalar fallback (mirrors compiler.py): an unmatched LEFT JOIN leaves the
-    # String key '', so the scalar branch only fires for units with no alloc row.
-    assert "if(wure.work_unit_id != '', wure.repo_id, wui.repo_id) AS repo_id" in src
+    # Scalar fallback gated on the explicit has_allocation flag (not a
+    # non-empty work_unit_id sentinel): unmatched rows fall through to scalar.
+    assert "if(wure.has_allocation = 1, wure.repo_id, wui.repo_id) AS repo_id" in src
     assert (
-        "if(wure.work_unit_id != '', wure.repo_effort_value, wui.effort_value) AS effort_value"
+        "if(wure.has_allocation = 1, wure.repo_effort_value, wui.effort_value) AS effort_value"
         in src
     )
+    # has_allocation is re-exposed so downstream can tell "no allocation row"
+    # apart from "allocation row with a NULL repo".
+    assert "if(wure.has_allocation = 1, 1, 0) AS has_allocation" in src
 
 
 @pytest.mark.asyncio
@@ -93,7 +110,7 @@ async def test_repo_edge_fetchers_read_allocation(
     assert "latest_work_unit_repo_effort AS (" in sql
     assert "LEFT JOIN latest_work_unit_repo_effort AS wure" in sql
     assert (
-        "if(wure.work_unit_id != '', wure.repo_effort_value, wui.effort_value)" in sql
+        "if(wure.has_allocation = 1, wure.repo_effort_value, wui.effort_value)" in sql
     )
     # Effort is still subcategory-weighted; the per-repo split preserves the
     # unit total by construction.
@@ -102,6 +119,15 @@ async def test_repo_edge_fetchers_read_allocation(
     # repo-effort CTE (org isolation / stale-scope fallback depend on order).
     assert sql.index("latest_complete_membership_run AS") < sql.index(
         "latest_work_unit_repo_effort AS ("
+    )
+    # HIGH 2: unit_team must read the SAME repo-allocated source so a repo
+    # scope_filter is applied to the fanned repo_id, not the scalar one. The
+    # source therefore appears at least twice (outer flow + unit_team), and the
+    # base table is never the direct FROM of the issue-fanning unit_team.
+    assert sql.count("LEFT JOIN latest_work_unit_repo_effort AS wure") >= 2
+    assert (
+        "FROM latest_work_unit_investments AS work_unit_investments\n"
+        "                ARRAY JOIN arrayDistinct(arrayConcat(" not in sql
     )
 
 
@@ -116,13 +142,14 @@ async def test_unassigned_counts_excludes_allocated_multi_repo_units(
         monkeypatch, investment_queries.fetch_investment_unassigned_counts
     )
     assert "latest_work_unit_repo_effort AS (" in sql
-    # Per-unit existence check (aggregated, so it does not fan the count out).
-    assert ") AS unit_repo_alloc" in sql
-    assert "ON unit_repo_alloc.org_id = work_unit_investments.org_id" in sql
-    assert (
-        "AND unit_repo_alloc.work_unit_id = work_unit_investments.work_unit_id" in sql
-    )
-    assert "repo_id IS NULL AND unit_repo_alloc.work_unit_id = ''" in sql
+    # Reads the same repo-allocated source as the Sankey edges: on that source
+    # ``has_allocation = 0 AND repo_id IS NULL`` is exactly a no-allocation,
+    # NULL-scalar unit (allocated repos are non-null and flagged).
+    assert "has_allocation = 0 AND repo_id IS NULL" in sql
+    assert "LEFT JOIN latest_work_unit_repo_effort AS wure" in sql
+    # scope_filter now applies to the fanned repo_id consistently (unit_team +
+    # main both read the source).
+    assert sql.count("LEFT JOIN latest_work_unit_repo_effort AS wure") >= 2
 
 
 @pytest.mark.asyncio

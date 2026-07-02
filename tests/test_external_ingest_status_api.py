@@ -54,7 +54,7 @@ async def session_maker(tmp_path: Path):
 
 @pytest_asyncio.fixture
 async def client(session_maker):
-    ctx = IngestAuthContext(org_id=ORG_A, scopes={"ingest:status"})
+    ctx = IngestAuthContext(org_id=ORG_A, scopes=frozenset({"ingest:status"}))
 
     async def _session_override():
         async with session_maker() as session:

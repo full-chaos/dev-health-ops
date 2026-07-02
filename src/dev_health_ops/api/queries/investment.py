@@ -75,6 +75,45 @@ LATEST_WORK_UNIT_REPO_EFFORT_CTE = """
 """.rstrip()
 
 
+# CHAOS-2777: multi-repo work units carry a NULL scalar ``repo_id`` in
+# work_unit_investments; their real per-repo effort split lives in
+# work_unit_repo_effort (migration 064, one row per (work_unit, repo)). This
+# derived table LEFT JOINs the per-repo allocation onto
+# latest_work_unit_investments and, for units WITH allocation rows, fans each
+# unit out to one row per allocated repo -- replacing the scalar ``repo_id`` /
+# ``effort_value`` with the per-repo ``repo_id`` / ``repo_effort_value``. Units
+# WITHOUT any allocation row keep their scalar repo_id + full effort_value (the
+# ``wure.work_unit_id != ''`` guard: an unmatched LEFT JOIN fills the String key
+# with '', so this never fires for a matched row), so no unit is ever dropped.
+# Because a unit's per-repo effort sums to its total effort by construction
+# (verified live: sum(repo_effort_value) == effort_value for every allocated
+# unit), a downstream ``sum(subcategory_kv.2 * effort_value)`` is UNCHANGED for
+# single-repo units and split -- same total -- across repos for multi-repo units
+# (the allocation sum invariant). Keyed on (org_id, work_unit_id) so tenant
+# isolation is preserved. Mirrors the GraphQL compiler
+# (api/graphql/sql/compiler.py) and coverage-stats
+# (api/graphql/resolvers/analytics.py) scalar-fallback pattern. Callers MUST
+# chain LATEST_WORK_UNIT_REPO_EFFORT_CTE into the WITH clause and expose the
+# alias ``work_unit_investments`` so existing column references keep resolving.
+REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE = """
+            (
+                SELECT
+                    wui.work_unit_id AS work_unit_id,
+                    wui.from_ts AS from_ts,
+                    wui.to_ts AS to_ts,
+                    wui.org_id AS org_id,
+                    if(wure.work_unit_id != '', wure.repo_id, wui.repo_id) AS repo_id,
+                    if(wure.work_unit_id != '', wure.repo_effort_value, wui.effort_value) AS effort_value,
+                    wui.subcategory_distribution_json AS subcategory_distribution_json,
+                    wui.structural_evidence_json AS structural_evidence_json
+                FROM latest_work_unit_investments AS wui
+                LEFT JOIN latest_work_unit_repo_effort AS wure
+                    ON wure.org_id = wui.org_id
+                    AND wure.work_unit_id = wui.work_unit_id
+            ) AS work_unit_investments
+""".rstrip()
+
+
 async def _query_investment_dicts(
     sink: BaseMetricsSink, query: str, params: dict[str, Any]
 ) -> list[dict[str, Any]]:
@@ -424,6 +463,7 @@ async def fetch_investment_repo_team_edges(
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
     query = f"""
         WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE},
+        {LATEST_WORK_UNIT_REPO_EFFORT_CTE},
         unit_team AS (
             SELECT
                 work_unit_id,
@@ -460,7 +500,7 @@ async def fetch_investment_repo_team_edges(
             ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id))) AS repo,
             ifNull(nullIf(unit_team.team, ''), 'unassigned') AS team,
             sum(subcategory_kv.2 * effort_value) AS value
-        FROM latest_work_unit_investments AS work_unit_investments
+        FROM {REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE}
         LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)
         LEFT JOIN unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
@@ -499,6 +539,7 @@ async def fetch_investment_team_category_repo_edges(
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
     query = f"""
         WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE},
+        {LATEST_WORK_UNIT_REPO_EFFORT_CTE},
         unit_team AS (
             SELECT
                 work_unit_id,
@@ -535,7 +576,7 @@ async def fetch_investment_team_category_repo_edges(
             splitByChar('.', subcategory_kv.1)[1] AS category,
             ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id))) AS repo,
             sum(subcategory_kv.2 * effort_value) AS value
-        FROM latest_work_unit_investments AS work_unit_investments
+        FROM {REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE}
         LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)
         LEFT JOIN unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
@@ -574,6 +615,7 @@ async def fetch_investment_team_subcategory_repo_edges(
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
     query = f"""
         WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE},
+        {LATEST_WORK_UNIT_REPO_EFFORT_CTE},
         unit_team AS (
             SELECT
                 work_unit_id,
@@ -610,7 +652,7 @@ async def fetch_investment_team_subcategory_repo_edges(
             subcategory_kv.1 AS subcategory,
             ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id))) AS repo,
             sum(subcategory_kv.2 * effort_value) AS value
-        FROM latest_work_unit_investments AS work_unit_investments
+        FROM {REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE}
         LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)
         LEFT JOIN unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
@@ -653,6 +695,7 @@ async def fetch_investment_unassigned_counts(
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
     query = f"""
         WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE},
+        {LATEST_WORK_UNIT_REPO_EFFORT_CTE},
         unit_team AS (
             SELECT
                 work_unit_id,
@@ -686,12 +729,26 @@ async def fetch_investment_unassigned_counts(
             GROUP BY work_unit_id
         )
         SELECT
-            countDistinctIf(work_unit_investments.work_unit_id, repo_id IS NULL) AS missing_repo,
+            -- CHAOS-2777: a unit is only "missing repo" when it has a NULL scalar
+            -- repo_id AND no per-repo allocation row at all. Multi-repo units carry
+            -- a NULL scalar repo_id but DO have work_unit_repo_effort rows mapping
+            -- their effort to real repos, so they must NOT be counted as unassigned.
+            countDistinctIf(
+                work_unit_investments.work_unit_id,
+                repo_id IS NULL AND unit_repo_alloc.work_unit_id = ''
+            ) AS missing_repo,
             countDistinctIf(
                 work_unit_investments.work_unit_id,
                 ifNull(nullIf(unit_team.team, ''), '') = ''
             ) AS missing_team
         FROM latest_work_unit_investments AS work_unit_investments
+        LEFT JOIN (
+            SELECT org_id, work_unit_id
+            FROM latest_work_unit_repo_effort
+            GROUP BY org_id, work_unit_id
+        ) AS unit_repo_alloc
+            ON unit_repo_alloc.org_id = work_unit_investments.org_id
+            AND unit_repo_alloc.work_unit_id = work_unit_investments.work_unit_id
         LEFT JOIN unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
         WHERE work_unit_investments.from_ts < %(end_ts)s
           AND work_unit_investments.to_ts >= %(start_ts)s

@@ -1556,14 +1556,14 @@ async def test_list_sync_config_jobs_enriches_planner_run_and_paginates(
         "mode": "incremental",
         "triggered_by": "manual",
         "requested_range": {
-            "since": "2026-01-01T00:00:00",
-            "before": "2026-01-02T00:00:00",
+            "since": "2026-01-01T00:00:00Z",
+            "before": "2026-01-02T00:00:00Z",
             "source_ids": [str(source.id)],
             "run_ids": [str(sync_run.id)],
         },
         "covered_range": {
-            "since": "2026-01-01T00:00:00",
-            "before": "2026-01-02T00:00:00",
+            "since": "2026-01-01T00:00:00Z",
+            "before": "2026-01-02T00:00:00Z",
             "source_ids": [str(source.id)],
             "run_ids": [str(sync_run.id)],
         },
@@ -1576,6 +1576,31 @@ async def test_list_sync_config_jobs_enriches_planner_run_and_paginates(
     second = second_page.json()
     assert len(second) == 1
     assert second[0]["sync_run"] is None
+
+
+def test_sync_run_unit_range_normalizes_naive_datetimes_to_utc():
+    source_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    unit = SyncRunUnit(
+        org_id="org-1",
+        sync_run_id=run_id,
+        integration_id=uuid.uuid4(),
+        source_id=source_id,
+        provider="github",
+        dataset_key="commits",
+        cost_class="standard",
+        mode="incremental",
+        since_at=datetime(2026, 1, 1),
+        before_at=datetime(2026, 1, 2),
+        status="success",
+        attempts=1,
+    )
+
+    coverage_range = sync_router_module._sync_run_unit_range([unit])
+
+    assert coverage_range is not None
+    assert coverage_range.since == datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert coverage_range.before == datetime(2026, 1, 2, tzinfo=timezone.utc)
 
 
 # ---------------------------------------------------------------------------

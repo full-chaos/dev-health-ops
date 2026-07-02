@@ -36,6 +36,7 @@ from dev_health_ops.api.services.licensing import TierLimitService
 from dev_health_ops.api.services.sync_coverage import (
     HISTORY_LOOKBACK_DAYS,
     build_sync_coverage_summary,
+    ensure_utc,
 )
 from dev_health_ops.models import SyncRun
 from dev_health_ops.models.integrations import (
@@ -435,9 +436,15 @@ def _sync_run_unit_range(
     if not scoped_units:
         return None
     return SyncCoverageRange(
-        since=min(unit.since_at for unit in scoped_units if unit.since_at is not None),
+        since=min(
+            ensure_utc(unit.since_at)
+            for unit in scoped_units
+            if unit.since_at is not None
+        ),
         before=max(
-            unit.before_at for unit in scoped_units if unit.before_at is not None
+            ensure_utc(unit.before_at)
+            for unit in scoped_units
+            if unit.before_at is not None
         ),
         source_ids=sorted({str(unit.source_id) for unit in scoped_units}),
         run_ids=sorted({str(unit.sync_run_id) for unit in scoped_units}),

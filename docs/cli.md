@@ -42,6 +42,12 @@ CLICKHOUSE_URI="clickhouse://localhost:8123/default" dev-hops metrics complexity
 CLICKHOUSE_URI="clickhouse://localhost:8123/default" dev-hops fixtures generate --days 30
 ```
 
+Generation refuses to write into an org that already holds live
+connector-synced data (github/gitlab/jira/linear/bitbucket rows in
+`work_items`/`repos`): synthetic repos and teams mixed into a synced org
+pollute Investment allocation and team/repo rollups (CHAOS-2778). Use a
+dedicated demo org, or pass `--allow-mixed-org` to override deliberately.
+
 ### Migrations
 
 Use `migrate clickhouse repair` when ClickHouse contains duplicate `repos`

@@ -7,6 +7,7 @@ from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 from .client import query_dicts
 from .investment import LATEST_WORK_UNIT_INVESTMENTS_CTE
+from .investment_membership_scope import record_stale_investment_membership_scope
 
 
 async def fetch_investment_flow_items(
@@ -38,6 +39,7 @@ async def fetch_investment_flow_items(
     params = {"start_ts": start_ts, "end_ts": end_ts, "limit": limit}
     params.update(scope_params)
     params["org_id"] = org_id
+    await record_stale_investment_membership_scope(sink, org_id=org_id)
     return await query_dicts(sink, query, params)
 
 

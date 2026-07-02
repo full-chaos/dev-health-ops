@@ -21,6 +21,19 @@ def _window() -> tuple[datetime, datetime]:
     )
 
 
+def _assert_membership_scope_sql(sql: str) -> None:
+    assert "latest_complete_membership_run AS" in sql
+    assert "investment_membership_scope_state AS" in sql
+    assert "membership_scoped_work_unit_ids AS" in sql
+    assert "argMax(run_id, completed_at) AS latest_run_id" in sql
+    assert "latest_run.latest_run_id != ''" in sql
+    assert "m.run_id = latest_run.latest_run_id" in sql
+    assert "max(computed_at) AS legacy_max_computed_at" in sql
+    assert "m.computed_at = lnm.legacy_max_computed_at" in sql
+    assert "SELECT DISTINCT m.work_unit_id AS work_unit_id" in sql
+    assert "(SELECT scope_enabled FROM investment_membership_scope_state) = 0" in sql
+
+
 def test_latest_row_cte_does_not_shadow_argmax_ordering_column() -> None:
     """Regression: the aggregate in the latest-row CTE must NOT be aliased to
     ``computed_at``.
@@ -38,6 +51,7 @@ def test_latest_row_cte_does_not_shadow_argmax_ordering_column() -> None:
     assert "argMax(effort_value, computed_at)" in cte  # ordering column is used
     assert "max(computed_at) AS computed_at" not in cte  # the shadowing alias
     assert "max(computed_at) AS latest_computed_at" in cte
+    _assert_membership_scope_sql(cte)
 
 
 def test_work_unit_authors_cte_scopes_dedup_by_org() -> None:
@@ -301,6 +315,7 @@ async def test_investment_queries_read_latest_work_unit_rows(
     # applied before aggregation and the dedup key must include org_id.
     assert "WHERE org_id = %(org_id)s" in sql
     assert "GROUP BY org_id, work_unit_id" in sql
+    _assert_membership_scope_sql(sql)
 
 
 @pytest.mark.asyncio
@@ -332,6 +347,7 @@ async def test_sankey_flow_items_read_latest_work_unit_rows(
     assert (
         "FROM latest_work_unit_investments AS work_unit_investments" in captured["sql"]
     )
+    _assert_membership_scope_sql(captured["sql"])
 
 
 def test_investment_timeseries_compiler_reads_latest_work_unit_rows() -> None:
@@ -350,3 +366,4 @@ def test_investment_timeseries_compiler_reads_latest_work_unit_rows() -> None:
     assert "latest_work_unit_investments AS" in sql
     assert "FROM latest_work_unit_investments AS work_unit_investments" in sql
     assert "work_unit_investments.org_id = %(org_id)s" in sql
+    _assert_membership_scope_sql(sql)

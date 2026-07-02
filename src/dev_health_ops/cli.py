@@ -355,6 +355,18 @@ def _is_workers_inspect_json_invocation(argv: list[str] | None) -> bool:
     )
 
 
+def _is_push_invocation(argv: list[str] | None) -> bool:
+    """`push` subcommands print their primary result to stdout (sample's raw
+    envelope JSON, `--json` mode's single JSON object) and are frequently
+    piped (``push sample --all | push validate -``, CI log capture) --
+    Sentry/OTel init noise and their background-exporter retry chatter
+    landing on stdout (same leak `_is_workers_inspect_json_invocation`
+    exists for) would corrupt that output, so every `push` invocation gets
+    the same quiet treatment regardless of `--json`."""
+    args = sys.argv[1:] if argv is None else argv
+    return bool(args) and args[0] == "push"
+
+
 @contextlib.contextmanager
 def _suppress_parser_construction_noise():
     previous_disable_level = logging.root.manager.disable
@@ -386,6 +398,14 @@ def _should_resolve_org(ns: argparse.Namespace) -> bool:
         getattr(ns, "command", None) == "maintenance"
         and getattr(ns, "maintenance_command", None) == "scrub-error-text"
     ):
+        return False
+    # `push` runs against a customer's own FullChaos org over HTTP, usually
+    # from a CI runner with no local DB at all -- auto-resolving --org to
+    # "the first org in the local Postgres DB" is actively wrong here (and
+    # would silently push to the wrong org if it ever did have DB access).
+    # `push batch`/`push status` resolve their own --org/FULLCHAOS_ORG_ID
+    # (CHAOS-2700 decision 12).
+    if getattr(ns, "command", None) == "push":
         return False
     return not (
         getattr(ns, "command", None) == "migrate"
@@ -637,6 +657,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     from dev_health_ops.processors import sync as sync_processor
     from dev_health_ops.providers import teams as teams_provider
+    from dev_health_ops.push import cli as push_cli
     from dev_health_ops.work_graph import runner as work_graph_runner
     from dev_health_ops.workers import runner as workers_runner
 
@@ -728,6 +749,9 @@ def build_parser() -> argparse.ArgumentParser:
     work_graph_runner.register_commands(sub)
 
     backfill_cli.register_backfill_commands(sub)
+
+    # ---- push (customer-push external ingestion CLI, CHAOS-2700) ----
+    push_cli.register_commands(sub)
 
     # ---- recommendations ----
     rec_parser = sub.add_parser(
@@ -849,7 +873,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"dotenv error: {exc}", file=sys.stderr)
             return 2
 
-    quiet_json_inspect = _is_workers_inspect_json_invocation(argv)
+    quiet_json_inspect = _is_workers_inspect_json_invocation(
+        argv
+    ) or _is_push_invocation(argv)
     previous_otel_enabled = os.environ.get("OTEL_ENABLED")
     if quiet_json_inspect:
         os.environ["OTEL_ENABLED"] = "false"
@@ -879,9 +905,15 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         if not (
-            getattr(ns, "command", None) == "workers"
-            and getattr(ns, "workers_command", None) == "inspect"
-            and getattr(ns, "output", None) == "json"
+            (
+                getattr(ns, "command", None) == "workers"
+                and getattr(ns, "workers_command", None) == "inspect"
+                and getattr(ns, "output", None) == "json"
+            )
+            # `push` never touches the in-process rate limiter (that's a
+            # server-side concern for the API `push` talks to over HTTP) and
+            # is stdout-sensitive (see _is_push_invocation) -- skip the log.
+            or getattr(ns, "command", None) == "push"
         ):
             log_rate_limit_configuration()
 

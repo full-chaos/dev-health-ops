@@ -34,6 +34,10 @@ async def resolve_home(
         raise RuntimeError("Database client not available")
 
     from dev_health_ops.api.queries.client import query_dicts
+    from dev_health_ops.api.queries.investment import LATEST_WORK_UNIT_INVESTMENTS_CTE
+    from dev_health_ops.api.queries.investment_membership_scope import (
+        record_stale_investment_membership_scope,
+    )
     from dev_health_ops.api.queries.metrics import (
         _INVESTMENT_THEME_LABELS,
         canonical_investment_theme_sql,
@@ -56,13 +60,14 @@ async def resolve_home(
         last_ingested = freshness_rows[0]["last_ingested_at"]
 
     # Get metric deltas (comparing current period to previous)
-    deltas_sql = """
+    deltas_sql = f"""
+        WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE}
         SELECT
             'throughput' as metric,
             'Throughput' as label,
             count(DISTINCT work_unit_id) as value,
             'units' as unit
-        FROM work_unit_investments
+        FROM latest_work_unit_investments AS work_unit_investments
         WHERE from_ts >= today() - 30
         AND from_ts < today()
         AND org_id = %(org_id)s
@@ -71,12 +76,13 @@ async def resolve_home(
             'pr_rework_ratio' as metric,
             'PR Rework Ratio' as label,
             SUM(pr_rework_ratio * prs_merged) / NULLIF(SUM(prs_merged), 0) * 100.0 as value,
-            '%' as unit
+            '%%' as unit
         FROM repo_metrics_daily
         WHERE day >= today() - 30
         AND day < today()
         AND org_id = %(org_id)s
     """
+    await record_stale_investment_membership_scope(client, org_id=context.org_id)
     delta_rows = await query_dicts(client, deltas_sql, {"org_id": context.org_id})
 
     canonical_theme_expr = canonical_investment_theme_sql("investment_area")

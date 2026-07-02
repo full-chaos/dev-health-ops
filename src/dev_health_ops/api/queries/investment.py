@@ -6,6 +6,11 @@ from typing import Any
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 from .client import query_dicts
+from .investment_membership_scope import (
+    INVESTMENT_MEMBERSHIP_SCOPE_CTES,
+    INVESTMENT_MEMBERSHIP_SCOPE_FILTER,
+    record_stale_investment_membership_scope,
+)
 
 # NOTE: This CTE MUST stay tenant-scoped. The ReplacingMergeTree dedup key for
 # work_unit_investments is (org_id, work_unit_id) (migration 027), so org_id is
@@ -15,7 +20,8 @@ from .client import query_dicts
 # `WHERE org_id = %(org_id)s` drops the losing tenant's data entirely
 # (cross-org leak / undercount — CHAOS-2374). Every consumer of this CTE already
 # supplies the `org_id` query param.
-LATEST_WORK_UNIT_INVESTMENTS_CTE = """
+LATEST_WORK_UNIT_INVESTMENTS_CTE = f"""
+{INVESTMENT_MEMBERSHIP_SCOPE_CTES},
         latest_work_unit_investments AS (
             SELECT
                 work_unit_id,
@@ -46,6 +52,7 @@ LATEST_WORK_UNIT_INVESTMENTS_CTE = """
                 max(computed_at) AS latest_computed_at
             FROM work_unit_investments
             WHERE org_id = %(org_id)s
+{INVESTMENT_MEMBERSHIP_SCOPE_FILTER}
             GROUP BY org_id, work_unit_id
         )
 """.rstrip()
@@ -66,6 +73,15 @@ LATEST_WORK_UNIT_REPO_EFFORT_CTE = """
             GROUP BY org_id, work_unit_id, repo_id
         )
 """.rstrip()
+
+
+async def _query_investment_dicts(
+    sink: BaseMetricsSink, query: str, params: dict[str, Any]
+) -> list[dict[str, Any]]:
+    org_id = str(params.get("org_id") or "")
+    if org_id:
+        await record_stale_investment_membership_scope(sink, org_id=org_id)
+    return await query_dicts(sink, query, params)
 
 
 # CHAOS-2492: work_unit_investments carries NO author/developer column at all
@@ -181,7 +197,7 @@ async def fetch_investment_breakdown(
         GROUP BY subcategory, theme
         ORDER BY value DESC
     """
-    return await query_dicts(sink, query, params)
+    return await _query_investment_dicts(sink, query, params)
 
 
 async def fetch_mock_fixture_investment_row_count(
@@ -226,7 +242,7 @@ async def fetch_mock_fixture_investment_row_count(
         {scope_filter}
         {category_filter}
     """
-    rows = await query_dicts(sink, query, params)
+    rows = await _query_investment_dicts(sink, query, params)
     if not rows:
         return 0
     return int(rows[0].get("count") or 0)
@@ -266,7 +282,7 @@ async def fetch_investment_edges(
         GROUP BY source, target
         ORDER BY value DESC
     """
-    return await query_dicts(sink, query, params)
+    return await _query_investment_dicts(sink, query, params)
 
 
 async def fetch_investment_subcategory_edges(
@@ -308,7 +324,7 @@ async def fetch_investment_subcategory_edges(
         GROUP BY source, target
         ORDER BY value DESC
     """
-    return await query_dicts(sink, query, params)
+    return await _query_investment_dicts(sink, query, params)
 
 
 async def fetch_investment_team_edges(
@@ -381,7 +397,7 @@ async def fetch_investment_team_edges(
         GROUP BY source, target
         ORDER BY value DESC
     """
-    return await query_dicts(sink, query, params)
+    return await _query_investment_dicts(sink, query, params)
 
 
 async def fetch_investment_repo_team_edges(
@@ -456,7 +472,7 @@ async def fetch_investment_repo_team_edges(
         GROUP BY subcategory, repo, team
         ORDER BY value DESC
     """
-    return await query_dicts(sink, query, params)
+    return await _query_investment_dicts(sink, query, params)
 
 
 async def fetch_investment_team_category_repo_edges(
@@ -531,7 +547,7 @@ async def fetch_investment_team_category_repo_edges(
         GROUP BY team, category, repo
         ORDER BY value DESC
     """
-    return await query_dicts(sink, query, params)
+    return await _query_investment_dicts(sink, query, params)
 
 
 async def fetch_investment_team_subcategory_repo_edges(
@@ -606,7 +622,7 @@ async def fetch_investment_team_subcategory_repo_edges(
         GROUP BY team, subcategory, repo
         ORDER BY value DESC
     """
-    return await query_dicts(sink, query, params)
+    return await _query_investment_dicts(sink, query, params)
 
 
 async def fetch_investment_unassigned_counts(
@@ -683,7 +699,7 @@ async def fetch_investment_unassigned_counts(
         {scope_filter}
         {category_filter}
     """
-    rows = await query_dicts(sink, query, params)
+    rows = await _query_investment_dicts(sink, query, params)
     if not rows:
         return {"missing_team": 0, "missing_repo": 0}
     row = rows[0]
@@ -739,7 +755,7 @@ async def fetch_investment_sunburst(
         ORDER BY value DESC
         LIMIT %(limit)s
     """
-    return await query_dicts(sink, query, params)
+    return await _query_investment_dicts(sink, query, params)
 
 
 async def fetch_investment_quality_stats(
@@ -835,7 +851,7 @@ async def fetch_investment_quality_stats(
         {team_filter}
         {category_filter}
     """
-    rows = await query_dicts(sink, query, params)
+    rows = await _query_investment_dicts(sink, query, params)
     if not rows:
         return {}
     return dict(rows[0])

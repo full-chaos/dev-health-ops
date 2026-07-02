@@ -28,6 +28,7 @@ import json
 import uuid
 from collections.abc import Iterator
 from datetime import datetime, timezone
+from typing import Any
 
 import pytest
 from sqlalchemy import create_engine
@@ -331,16 +332,19 @@ def test_sync_configuration_has_no_credential_column() -> None:
         "Integration.credential_id is the only sanctioned surface"
     )
 
+    # Built as a dict and unpacked (not passed as a literal keyword) so this
+    # deliberately-invalid call isn't statically bindable to the constructor
+    # signature -- both mypy (call-arg) and CodeQL
+    # (py/call/wrong-named-class-argument) would otherwise flag the literal
+    # form as a static error, which is exactly the point being proven, just
+    # asserted at runtime instead.
+    legacy_write_kwargs: dict[str, Any] = {
+        "name": "legacy-write-attempt",
+        "provider": "github",
+        "credential_id": uuid.uuid4(),
+    }
     with pytest.raises(TypeError):
-        # Deliberately passing a removed constructor kwarg -- mypy also
-        # rejects this call statically (call-arg), which is the same
-        # regression from the other direction; silence it here rather than
-        # weaken the constructor's signature to humor a test.
-        SyncConfiguration(  # type: ignore[call-arg]
-            name="legacy-write-attempt",
-            provider="github",
-            credential_id=uuid.uuid4(),
-        )
+        SyncConfiguration(**legacy_write_kwargs)
 
 
 # --- Behavior guards ----------------------------------------------------------

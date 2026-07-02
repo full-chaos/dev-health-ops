@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +26,7 @@ from dev_health_ops.api.admin.schemas.customer_push import (
     AdminBatchListResponse,
     AdminBatchResponse,
     AdminRejectedRecordResponse,
+    AdminValidateResponse,
     IngestSourceCreate,
     IngestSourcePatch,
     IngestSourceResponse,
@@ -33,6 +35,8 @@ from dev_health_ops.api.admin.schemas.customer_push import (
     IngestTokenResponse,
 )
 from dev_health_ops.api.external_ingest import status as ingest_status
+from dev_health_ops.api.external_ingest.errors import ExternalIngestError
+from dev_health_ops.api.external_ingest.router import _read_body_enforcing_size_limit
 from dev_health_ops.api.external_ingest.schemas import (
     MAX_BODY_BYTES_DEFAULT,
     MAX_RECORDS_DEFAULT,
@@ -42,6 +46,8 @@ from dev_health_ops.api.external_ingest.schemas import (
 )
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.utils.audit import emit_audit_log
+from dev_health_ops.external_ingest.ownership import find_matching_managed_sources
+from dev_health_ops.external_ingest.validate import validate_records
 from dev_health_ops.models.audit import AuditAction, AuditResourceType
 from dev_health_ops.models.ingest_auth import (
     TOKEN_PREFIX_DISPLAY_LENGTH,
@@ -53,7 +59,7 @@ from dev_health_ops.models.ingest_auth import (
     generate_ingest_token,
     hash_ingest_token,
 )
-from dev_health_ops.models.integrations import Integration, IntegrationSource
+from dev_health_ops.models.integrations import Integration
 
 from .common import get_session
 
@@ -196,31 +202,15 @@ async def _get_org_token(
     return token
 
 
-def _linear_is_org_wide_placeholder(source: IntegrationSource) -> bool:
-    metadata = source.metadata_ or {}
-    if metadata.get("org_wide_placeholder") is True:
-        return True
-    return (source.external_id or "").strip().lower() == "linear"
-
-
-def _matches_instance(system: str, instance: str, source: IntegrationSource) -> bool:
-    """CC5 per-provider matching (see docs/architecture/customer-push-authz.md)."""
-    if system in ("github", "jira"):
-        return instance in (source.external_id, source.full_name)
-    if system == "gitlab":
-        path_with_namespace = (source.metadata_ or {}).get("path_with_namespace")
-        return instance in (source.full_name, path_with_namespace, source.external_id)
-    if system == "linear":
-        if _linear_is_org_wide_placeholder(source):
-            return True
-        return instance in (source.external_id, source.full_name, source.name)
-    return False
-
-
 async def _resolve_ownership(
     session: AsyncSession, org_id: str, system: str, instance: str
 ) -> tuple[uuid.UUID | None, list[str]]:
     """Run CC5 per-provider ownership matching against managed integration_sources.
+
+    The matching predicates live in ``dev_health_ops.external_ingest.ownership``
+    (CHAOS-2695, brief decision 12: the SAME logic runs here at registration
+    time and in the data-plane accept path's ``resolve_effective_mode``) --
+    this wrapper only applies the registration-time POLICY on top.
 
     Returns ``(matched_integration_source_id, warnings)``. Raises 409
     ``source_owned_by_fullchaos_sync`` if a managed source matches this
@@ -241,26 +231,9 @@ async def _resolve_ownership(
     if system == "custom":
         return matched_id, warnings
 
-    # func.lower(...) on both sides: nearby sync-creation paths (e.g.
-    # IntegrationCreate) don't enforce lowercase provider values, so a
-    # mixed-case managed row ("GitHub") must still be found and block a
-    # lowercase "github" customer-push registration -- a bare `==` here
-    # would silently bypass the one-active-owner 409.
-    candidate_rows = (
-        await session.execute(
-            select(IntegrationSource, Integration.is_active)
-            .join(Integration, IntegrationSource.integration_id == Integration.id)
-            .where(
-                IntegrationSource.org_id == org_id,
-                func.lower(IntegrationSource.provider) == system,
-            )
-        )
-    ).all()
-    matches = [
-        (source, integration_is_active)
-        for source, integration_is_active in candidate_rows
-        if _matches_instance(system, instance, source)
-    ]
+    matches = await find_matching_managed_sources(
+        session, org_id=org_id, system=system, instance=instance
+    )
     enabled_match = next(
         (
             source
@@ -374,6 +347,40 @@ async def create_source(
     system = _validate_system(payload.system)
     mode = _validate_mode(payload.mode)
     _reject_fullchaos_hosted_webhook_mode(payload.webhook_mode)
+
+    # Case-insensitive duplicate check BEFORE insert (CHAOS-2695
+    # adversarial-review finding): the unique constraint is on the RAW
+    # (org, system, instance), but provider instance identifiers are
+    # case-insensitive (GitHub full names, GitLab paths, Jira/Linear keys)
+    # -- without this, 'Acme/API' and 'acme/api' register as two enabled
+    # sources for the same logical repository, splitting the one-active-owner
+    # and idempotency namespaces. The stored instance keeps the user's
+    # casing (tokens/envelopes then match it exactly); only the collision
+    # check folds case. App-level only (this changeset ships no migrations);
+    # a DB-level canonical unique index is tracked as a follow-up.
+    case_variant = (
+        (
+            await session.execute(
+                select(IngestSource).where(
+                    IngestSource.org_id == org_id,
+                    IngestSource.system == system,
+                    func.lower(IngestSource.instance)
+                    == payload.instance.strip().lower(),
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if case_variant is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"A source is already registered for system='{system}' "
+                f"instance='{case_variant.instance}' in this organization "
+                "(instance identifiers are case-insensitive)"
+            ),
+        )
 
     matched_id: uuid.UUID | None = None
     warnings: list[str] = []
@@ -826,6 +833,131 @@ async def get_batch_detail(
         org_id=org_id,
         rejected_records_limit=rejected_records_limit,
         rejected_records_offset=rejected_records_offset,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Validate proxy (CHAOS-2695) -- session-auth twin of the token-authed
+# data-plane POST /api/v1/external-ingest/validate, for the web console's
+# Screen 5. VALIDATE-ONLY: the console-push proxy (POST .../batches,
+# producer="web-console") was CUT from v1 (master-spec CC25); the ingestion
+# write path stays exclusively token-authed.
+# ---------------------------------------------------------------------------
+
+
+def _validate_failure(
+    code: str, message: str, path: str | None
+) -> AdminValidateResponse:
+    """Envelope-level failure as a 200 ``valid: false`` result row.
+
+    Deliberately NOT a 4xx (see ``AdminValidateResponse``'s docstring): the
+    console renders these as validation results; only auth/404 scope errors
+    surface as HTTP errors on this route.
+    """
+    return AdminValidateResponse(
+        valid=False,
+        items_accepted=0,
+        items_rejected=0,
+        errors=[
+            AdminRejectedRecordResponse(
+                index=0,
+                kind="unknown",
+                external_id=None,
+                code=code,
+                message=message,
+                path=path,
+            )
+        ],
+    )
+
+
+@router.post(
+    "/customer-push/sources/{source_id}/validate",
+    response_model=AdminValidateResponse,
+)
+async def validate_source_payload(
+    source_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(get_admin_user),
+) -> AdminValidateResponse:
+    """Validate a batch envelope against the wire schemas, per-record.
+
+    Mirrors the data-plane ``POST /validate`` semantics exactly (same
+    ``validate_records``, same size/version/count checks) so a payload that
+    validates here validates there -- it does NOT check the envelope's
+    ``source`` against this route's source (the data plane enforces that at
+    push time via the token's source binding, which has no analogue in a
+    session-authed console request). The ``source_id`` path segment is a
+    tenant/scope check only.
+    """
+    await _get_org_source(session, current_user.org_id, source_id)
+
+    try:
+        raw = await _read_body_enforcing_size_limit(request)
+    except ExternalIngestError as exc:
+        return _validate_failure(exc.code, exc.message, None)
+
+    try:
+        envelope = BatchEnvelope.model_validate_json(raw)
+    except ValidationError as exc:
+        return AdminValidateResponse(
+            valid=False,
+            items_accepted=0,
+            items_rejected=0,
+            errors=[
+                AdminRejectedRecordResponse(
+                    index=0,
+                    kind="unknown",
+                    external_id=None,
+                    code="invalid_envelope",
+                    message=err["msg"],
+                    path=".".join(str(part) for part in err["loc"]) or None,
+                )
+                # Cap pathological inputs; the first errors are the
+                # actionable ones for a console user.
+                for err in exc.errors()[:50]
+            ],
+        )
+
+    if envelope.schema_version != SCHEMA_VERSION:
+        return _validate_failure(
+            "unsupported_schema_version",
+            f"Unsupported schemaVersion: {envelope.schema_version!r}",
+            "schemaVersion",
+        )
+
+    max_records = _external_ingest_limits()["maxRecordsPerBatch"]
+    if len(envelope.records) > max_records:
+        return _validate_failure(
+            "batch_too_large",
+            f"Batch has {len(envelope.records)} records; max is {max_records}",
+            "records",
+        )
+
+    errors = validate_records(envelope.records)
+    rejected_indices = {item.index for item in errors}
+    return AdminValidateResponse(
+        valid=not errors,
+        items_accepted=len(envelope.records) - len(rejected_indices),
+        items_rejected=len(rejected_indices),
+        errors=[
+            AdminRejectedRecordResponse(
+                index=item.index,
+                kind=item.kind,
+                # ValidationErrorItem has no external_id; enrich from the
+                # record wrapper for console-table correlation.
+                external_id=(
+                    envelope.records[item.index].external_id
+                    if 0 <= item.index < len(envelope.records)
+                    else None
+                ),
+                code=item.code,
+                message=item.message,
+                path=item.path,
+            )
+            for item in errors
+        ],
     )
 
 

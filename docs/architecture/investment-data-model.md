@@ -21,7 +21,7 @@ One row per WorkUnit per materialization run. Created in
 
 | Column | Type | Notes |
 | ------ | ---- | ----- |
-| `work_unit_id` | `String` | Stable SHA-256 of the component's sorted nodes |
+| `work_unit_id` | `String` | SHA-256 of the component's sorted nodes for that materialization run |
 | `work_unit_type` | `Nullable(String)` | Label (added in 019) |
 | `work_unit_name` | `Nullable(String)` | Label (added in 019) |
 | `from_ts` / `to_ts` | `DateTime64(3,'UTC')` | Component time bounds (min/max node times) |
@@ -99,12 +99,18 @@ for all new work.
 The three canonical investment tables (`work_unit_investments`, `work_unit_investment_quotes`, `investment_explanations`) use `ENGINE = ReplacingMergeTree(computed_at)`. ClickHouse replaces rows
 with the same sort key **eventually**, during background merges — not immediately.
 
-- `work_unit_investments` is `ORDER BY (work_unit_id)`, so re-materializing a WorkUnit
-  produces a new row that *eventually* replaces the old one.
+- `work_unit_investments` is `ORDER BY (work_unit_id)`, so re-materializing an identical
+  component produces a new row that *eventually* replaces the old one. If the component's
+  node set changes, its hash changes and the old row is not superseded by ClickHouse merges.
 - The investment API does not rely on background merge timing. Read queries first select
   the latest physical row per `work_unit_id` with an explicit `argMax(..., computed_at)`
-  latest-row subquery, then apply the normal `org_id`, time-window, scope, and category
-  filters before effort-weighted aggregation.
+  latest-row subquery. When the latest complete `work_unit_membership` projection is at
+  least as recent as every `work_unit_investments` row, the API scopes reads to that
+  projection's distinct `work_unit_id` set before aggregation. If no complete marker exists,
+  or any investment row is newer than the marker, reads fail open to the historical unscoped
+  behavior and emit `investment_membership_scope_stale` for stale-marker fallbacks. A complete
+  marker with zero matching membership rows is treated as an empty canonical set, not a
+  fallback.
 
 This means user-visible investment totals use latest-row-by-`computed_at` semantics even
 before ClickHouse has compacted older ReplacingMergeTree versions.

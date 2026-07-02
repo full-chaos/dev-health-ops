@@ -109,15 +109,15 @@ cooperating layers:
 2. **`RateLimitException` as the carrier.** When in-place retries are exhausted
    (or a 429/permission-vs-limit decision is made), the **canonical provider
    clients** (`providers/<provider>/client.py`) raise
-   `dev_health_ops.exceptions.RateLimitException` carrying an optional
-   `retry_after_seconds`, and the worker deferral (`workers/sync_units.py`)
-   catches exactly that type. **Caveat:** the frozen legacy connectors
-   (`connectors/github.py`, `connectors/gitlab.py`) raise a *separate*
-   `connectors.base.RateLimitException` (it subclasses plain `Exception`, not
-   `ConnectorException`), so the two exception hierarchies are **not yet
-   unified**. Normalizing every provider onto one signal is
-   [CHAOS-2753](https://linear.app/fullchaos/issue/CHAOS-2753) — see
-   [Known gaps](#known-gaps).
+   `dev_health_ops.exceptions.RateLimitException` carrying a normalized
+   `RateLimitSignal` (`route_family`, `dimension`,
+   `reason`, `retry_after_seconds`, `reset_at`, `request_id`), and the worker
+   deferral (`workers/sync_units.py`) catches exactly that type. The frozen
+   legacy connectors (`connectors/github.py`, `connectors/gitlab.py`) raise
+   `connectors.base.RateLimitException`, which **subclasses the canonical root**
+   (shipped as [CHAOS-2753](https://linear.app/fullchaos/issue/CHAOS-2753),
+   ops#1111) — so a rate limit raised deep in a legacy connector reaches the
+   same deferral branch and carries the same signal, one unified hierarchy.
 
 3. **Worker-level deferral (`workers/rate_limit_defer.py`).** Instead of
    consuming the genuine-failure retry budget and stamping the run `FAILED`, a
@@ -787,8 +787,8 @@ once beyond what DispatchGuard's concurrency cap already allows
   takes over.
 - **Non-retryable auth cases.** Jira has **no dedicated 403 rate-limit vs.
   permission classification** — a 403 surfaces through the shared HTTP error path
-  (`raise_for_status`). This is a known asymmetry vs. GitHub/GitLab; unified 403
-  handling is part of the [target contract](#target-contracts-chaos-2742).
+  (`raise_for_status`). This is a known asymmetry vs. GitHub/GitLab — see
+  [Known gaps](#known-gaps).
 - **Gating.** Worklog and AGG-GraphQL route families only appear when
   `JIRA_FETCH_WORKLOGS` / `ATLASSIAN_GQL_ENABLED` are set (`providers/jira/budget.py`).
 
@@ -899,10 +899,16 @@ once beyond what DispatchGuard's concurrency cap already allows
 
 ## Known gaps
 
-These are the instrumentation/coverage gaps the [CHAOS-2742](https://linear.app/fullchaos/issue/CHAOS-2742)
-epic exists to close. They are documented as **current reality**, not defects to
+These are the remaining instrumentation/coverage gaps after the
+[CHAOS-2742](https://linear.app/fullchaos/issue/CHAOS-2742) epic (all eight
+sub-issues shipped). They are documented as **current reality**, not defects to
 paper over:
 
+- **Jira 403s are not classified rate-limit vs. permission.** Unlike
+  GitHub/GitLab, Jira has no dedicated 403 classification — a 403 surfaces
+  through the shared HTTP error path rather than as a `RateLimitSignal` with a
+  `permission` reason (see [Jira](#jira) above). Untracked; file under a
+  follow-up if it bites in practice.
 - **Calibration only covers instrumented route families.** [CHAOS-2759](https://linear.app/fullchaos/issue/CHAOS-2759)
   attaches a `budget_comparison` (see
   [Actual-vs-estimated calibration](#actual-vs-estimated-calibration-chaos-2759)
@@ -913,12 +919,6 @@ paper over:
   **uninstrumented**, so those families never produce a comparison row.
   There is also no cross-run aggregation/dashboard yet — calibration today is
   visible per-unit (result + structured log), not rolled up over time.
-- **Signal handling is not yet provider-neutral.** There are two unrelated
-  `RateLimitException` classes — `dev_health_ops.exceptions.RateLimitException`
-  (canonical providers, caught by the worker deferral) and
-  `connectors.base.RateLimitException` (frozen legacy connectors) — and neither
-  carries a normalized `route_family` / `dimension` / `reason` / `request_id`.
-  (Target: [CHAOS-2753](https://linear.app/fullchaos/issue/CHAOS-2753).)
 - **Frozen `connectors/` path.** GitHub's `git`/`commit_stats`/`files`/`blame`/
   `cicd`/`tests`/`deployments`/`security` route families and the equivalent
   GitLab code-dataset paths remain under the frozen `connectors/` tree
@@ -935,19 +935,6 @@ paper over:
   [CHAOS-2761](https://linear.app/fullchaos/issue/CHAOS-2761); see
   [LaunchDarkly](#launchdarkly) above.
 
-## Target contracts (CHAOS-2742)
-
-The following are **not shipped**; each lands in its own sub-issue PR, which will
-append its section here in the same changeset (per `AGENTS.md`
-"behavior docs updated with code"). Do not treat these as current behavior.
-
-- **`RateLimitSignal` normalization — [CHAOS-2753](https://linear.app/fullchaos/issue/CHAOS-2753).**
-  A provider-neutral
-  `RateLimitSignal(provider, host, integration_id, route_family, dimension,
-  retry_after_seconds, reset_at, reason, request_id)` that every provider emits
-  and the deferral machinery consumes, preserving GitHub's
-  primary/secondary/permission distinction and extending comparable handling to
-  Linear, Jira, GitLab, and LaunchDarkly.
 
 ## References
 

@@ -45,6 +45,12 @@ _REAL_IS_BATCH_TERMINAL_ASYNC = (
 )
 # Same rationale, for the module-wide `_processor_available` autouse stub.
 _REAL_PROCESSOR_AVAILABLE = consumer_mod._processor_available
+# Same rationale, for the module-wide `_resolve_mark_batch_failed` autouse
+# stub (CHAOS-2697: the processor module exists now, so the real resolver
+# would hand any give-up path the REAL Postgres-backed mark_batch_failed).
+_REAL_RESOLVE_MARK_BATCH_FAILED = (
+    consumer_mod.ExternalIngestStreamConsumer._resolve_mark_batch_failed
+)
 
 
 @pytest.fixture
@@ -109,6 +115,22 @@ def _processor_available(monkeypatch):
     monkeypatch.setattr(consumer_mod, "_processor_available", lambda: True)
 
 
+@pytest.fixture(autouse=True)
+def _mark_batch_failed_unresolvable(monkeypatch):
+    """CHAOS-2697's processor module exists now, so the real
+    ``_resolve_mark_batch_failed()`` would resolve the REAL Postgres-backed
+    ``mark_batch_failed`` inside any test whose give-up path runs -- reaching
+    for a live database from a unit test. Default every test to the
+    unresolvable branch (the pre-2697 behavior these mechanics tests were
+    written against); the tests exercising the resolution contract itself
+    restore ``_REAL_RESOLVE_MARK_BATCH_FAILED`` and install a fake module."""
+    monkeypatch.setattr(
+        consumer_mod.ExternalIngestStreamConsumer,
+        "_resolve_mark_batch_failed",
+        staticmethod(lambda: None),
+    )
+
+
 class TestHappyPath:
     def test_success_acks_and_not_pending(self, fake_redis):
         stream, entry_id = _xadd_batch(fake_redis)
@@ -159,10 +181,15 @@ class TestPermanentFailure:
         assert dlq_data["entry_id"] == entry_id
 
     def test_calls_mark_batch_failed(self, fake_redis, monkeypatch):
-        # dev_health_ops.external_ingest.processor is CHAOS-2697's module and
-        # does not exist yet in this issue's scope -- inject a stand-in so we
-        # can assert the give-up path calls it exactly as CC23 pins, without
-        # depending on 2697 having landed.
+        # Restore the real resolver (the autouse stub defaults it to
+        # unresolvable) and inject a stand-in module so we can assert the
+        # give-up path resolves and calls mark_batch_failed exactly as CC23
+        # pins -- without the real Postgres-backed implementation running.
+        monkeypatch.setattr(
+            consumer_mod.ExternalIngestStreamConsumer,
+            "_resolve_mark_batch_failed",
+            staticmethod(_REAL_RESOLVE_MARK_BATCH_FAILED),
+        )
         fake_processor = types.ModuleType("dev_health_ops.external_ingest.processor")
         mark_failed = AsyncMock()
         setattr(
@@ -194,6 +221,11 @@ class TestPermanentFailure:
         a non-terminal status while the entry is gone. Leaving it pending
         lets a later redelivery retry the status write (a duplicate DLQ entry
         on that retry is accepted operational noise)."""
+        monkeypatch.setattr(
+            consumer_mod.ExternalIngestStreamConsumer,
+            "_resolve_mark_batch_failed",
+            staticmethod(_REAL_RESOLVE_MARK_BATCH_FAILED),
+        )
         fake_processor = types.ModuleType("dev_health_ops.external_ingest.processor")
         mark_failed = AsyncMock(side_effect=RuntimeError("pg down"))
         setattr(fake_processor, "mark_batch_failed", mark_failed)
@@ -222,9 +254,21 @@ class TestPermanentFailure:
         )
         assert len(pending) == 1
 
-    def test_missing_processor_module_does_not_crash_consumer(self, fake_redis):
-        """Before CHAOS-2697 lands, processor.py doesn't exist -- the
-        give-up path must log and continue, not crash the consumer loop."""
+    def test_missing_processor_module_does_not_crash_consumer(
+        self, fake_redis, monkeypatch
+    ):
+        """Rollback scenario: if a deploy removes CHAOS-2697's processor.py
+        again, the give-up path must log and continue, not crash the consumer
+        loop. Simulated by poisoning the sys.modules entry (a ``None`` value
+        makes ``import`` raise ImportError) under the REAL resolver."""
+        monkeypatch.setattr(
+            consumer_mod.ExternalIngestStreamConsumer,
+            "_resolve_mark_batch_failed",
+            staticmethod(_REAL_RESOLVE_MARK_BATCH_FAILED),
+        )
+        monkeypatch.setitem(
+            sys.modules, "dev_health_ops.external_ingest.processor", None
+        )
         stream, _entry_id = _xadd_batch(fake_redis, org_id="org-no-processor")
         c = _consumer()
         with patch.object(
@@ -319,6 +363,11 @@ class TestReclaim:
         # above) exercises the awaited counterpart; this test is the sync
         # counterpart's regression coverage for the same class of bug (a
         # nested/re-entrant run_async() call would raise here).
+        monkeypatch.setattr(
+            consumer_mod.ExternalIngestStreamConsumer,
+            "_resolve_mark_batch_failed",
+            staticmethod(_REAL_RESOLVE_MARK_BATCH_FAILED),
+        )
         fake_processor = types.ModuleType("dev_health_ops.external_ingest.processor")
         mark_failed = AsyncMock()
         setattr(
@@ -518,11 +567,12 @@ class TestProcessorAvailabilityGuard:
 
     def test_processor_available_reflects_real_import(self):
         """Sanity check on the real (unmocked) helper: CHAOS-2697's module
-        genuinely does not exist yet at this issue's implementation time.
-        Uses the reference captured at collection time (module docstring
-        note above) since the autouse fixture in this file replaces
+        exists now, so the deployment-order guard genuinely passes — this is
+        the assertion that "merging processor.py arms the consumer". Uses the
+        reference captured at collection time (module docstring note above)
+        since the autouse fixture in this file replaces
         ``consumer_mod._processor_available`` for every other test."""
-        assert _REAL_PROCESSOR_AVAILABLE() is False
+        assert _REAL_PROCESSOR_AVAILABLE() is True
 
 
 class TestIdempotentSkipGuard:

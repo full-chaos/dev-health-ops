@@ -64,16 +64,17 @@ _TERMINAL_STATUS_VALUES = {s.value for s in TERMINAL_STATUSES}
 
 def _processor_available() -> bool:
     """Whether CHAOS-2697's ``external_ingest.processor`` module (owning
-    ``process_batch``/``mark_batch_failed``) is importable yet.
+    ``process_batch``/``mark_batch_failed``) is importable.
 
     Deployment-order guard (adversarial-review finding): this issue's beat
-    schedule/queue wiring ships ahead of CHAOS-2697's worker implementation
-    by design (master-spec wave plan), so the consumer must check this
-    before claiming any entries rather than draining the stream into a
-    guaranteed-ImportError retry ladder.
+    schedule/queue wiring shipped ahead of CHAOS-2697's worker implementation
+    by design (master-spec wave plan), so the consumer checks this before
+    claiming any entries rather than draining the stream into a
+    guaranteed-ImportError retry ladder. CHAOS-2697 has since landed — the
+    guard now passes and is kept as rollback protection.
     """
     try:
-        import dev_health_ops.external_ingest.processor  # type: ignore  # noqa: F401
+        import dev_health_ops.external_ingest.processor  # noqa: F401
     except ImportError:
         return False
     return True
@@ -244,15 +245,12 @@ class ExternalIngestStreamConsumer(StreamConsumer):
     @staticmethod
     def _resolve_mark_batch_failed():
         """Give-up path calls ``external_ingest.processor.mark_batch_failed``
-        (CHAOS-2697's pinned worker contract, CC23). Import-tolerant:
-        CHAOS-2697 lands after this issue, so until it does, this returns
-        ``None`` rather than raising ImportError into the consumer loop.
+        (CHAOS-2697's pinned worker contract, CC23). Import-tolerant: kept
+        even now that CHAOS-2697 has landed, so a rollback that removes the
+        processor module degrades to the logged-warning path rather than
+        raising ImportError into the consumer loop.
         """
         try:
-            # CHAOS-2697's module; doesn't exist yet at this issue's
-            # implementation time (see module docstring) -- the
-            # missing-stubs diagnostic for this module path is already
-            # silenced once per file by _processor_available()'s import.
             from dev_health_ops.external_ingest.processor import mark_batch_failed
         except ImportError:
             return None
@@ -360,16 +358,14 @@ class ExternalIngestStreamConsumer(StreamConsumer):
     ) -> int:
         from dev_health_ops.external_ingest.processor import process_batch
 
-        result = process_batch(
+        # CHAOS-2697's pinned contract (CC23): async, returns items_accepted.
+        return await process_batch(
             ingestion_id=data["ingestion_id"],
             org_id=data["org_id"],
             source_system=data["source_system"],
             source_instance=data["source_instance"],
             schema_version=data["schema_version"],
         )
-        if inspect.isawaitable(result):
-            result = await result
-        return int(result)
 
     def process_entry(
         self, stream_key: str, entry_id: str, data: dict[str, str]

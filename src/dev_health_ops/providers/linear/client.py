@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ from dev_health_ops.connectors.utils.rate_limit_queue import (
 )
 from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.providers._ratelimit import gate_call
+from dev_health_ops.providers.usage import UsageRecorder
 from dev_health_ops.providers.utils import EnvSpec, read_env_spec
 from dev_health_ops.sync.budget_types import BudgetDimension
 from dev_health_ops.sync.rate_limit_signal import RateLimitSignal
@@ -26,6 +28,25 @@ logger = logging.getLogger(__name__)
 LINEAR_API_URL = "https://api.linear.app/graphql"
 
 DEFAULT_MAX_ATTEMPTS = 5
+
+_GRAPHQL_OPERATION_NAME_RE = re.compile(r"\b(?:query|mutation)\s+(\w+)")
+
+# Linear returns per-request budget headers on every GraphQL POST; capturing
+# them lets recorded actuals join against the GraphQL-cost budget estimate.
+_LINEAR_RATE_LIMIT_HEADERS = (
+    ("x-ratelimit-requests-limit", "limit"),
+    ("x-ratelimit-requests-remaining", "remaining"),
+    ("x-ratelimit-requests-reset", "reset"),
+    ("retry-after", "retry_after"),
+)
+
+
+def _graphql_operation_name(query: str) -> str:
+    """Extract the named GraphQL operation (e.g. ``Issues``) for route-family
+    resolution; falls back to ``graphql`` for anonymous queries."""
+
+    match = _GRAPHQL_OPERATION_NAME_RE.search(query)
+    return match.group(1) if match else "graphql"
 
 
 class LinearGraphQLError(RuntimeError):
@@ -429,6 +450,10 @@ class LinearClient:
         )
         self.max_attempts = max(1, int(max_attempts))
         self._rate_limit: RateLimitInfo | None = None
+
+        from dev_health_ops.providers.linear.budget import LINEAR_USAGE_RESOLVER
+
+        self._usage = UsageRecorder(resolver=LINEAR_USAGE_RESOLVER)
         self._client = httpx.Client(
             headers={
                 "Content-Type": "application/json",
@@ -464,6 +489,9 @@ class LinearClient:
                     self._wait_for_rate_limit()
                     response = self._client.post(LINEAR_API_URL, json=payload)
                     self._update_rate_limit(response)
+                    # Count every POST (including the ones that 429) so recorded
+                    # actuals reflect real GraphQL request volume.
+                    self._record_graphql_usage(query, response)
                     if response.status_code == 429:
                         raise _LinearHTTPRateLimit(self._retry_after_seconds(response))
             except _LinearHTTPRateLimit as exc:
@@ -593,6 +621,23 @@ class LinearClient:
                 "Headers: %s",
                 dict(headers),
             )
+
+    def _record_graphql_usage(self, query: str, response: httpx.Response) -> None:
+        rate_limit: dict[str, Any] = {}
+        for source, target in _LINEAR_RATE_LIMIT_HEADERS:
+            value = response.headers.get(source)
+            if value is not None:
+                rate_limit[target] = str(value)
+        self._usage.record(
+            transport="graphql",
+            operation=_graphql_operation_name(query),
+            headers={},
+            rate_limit=rate_limit,
+            status=response.status_code,
+        )
+
+    def drain_usage_observations(self) -> list[dict[str, Any]]:
+        return self._usage.drain()
 
     def iter_issues(
         self,

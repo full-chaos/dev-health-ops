@@ -456,6 +456,7 @@ def fetch_gitlab_work_items(
     include_label_events: bool = True,
     max_label_events: int = 300,
     org_id: str = "",
+    usage_observations: list[dict[str, Any]] | None = None,
 ) -> tuple[
     list[WorkItem],
     list[WorkItemStatusTransition],
@@ -560,4 +561,11 @@ def fetch_gitlab_work_items(
         since_utc.isoformat(),
         len(ai_attributions),
     )
+    if usage_observations is not None:
+        # Drain the live-sync GitLab client's request actuals into the caller's
+        # accumulator (CHAOS-2754). This is the sync path the worker actually
+        # runs (GitLabProvider.ingest is the provider-pattern path); both drain.
+        from dev_health_ops.providers.usage import drain_provider_usage
+
+        usage_observations.extend(drain_provider_usage(client))
     return list(work_items.values()), transitions, ai_attributions

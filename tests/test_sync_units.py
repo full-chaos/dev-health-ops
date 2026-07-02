@@ -3249,6 +3249,67 @@ def test_run_sync_unit_rate_limit_defers_without_failure(db_session, monkeypatch
     )
 
 
+def test_usage_survives_rate_limit_deferral(db_session, monkeypatch):
+    """CHAOS-2754: usage actuals gathered before a rate-limit raise are merged
+    into the deferral stamp WITHOUT clobbering error_category / retry fields the
+    admin API reads."""
+    from dev_health_ops.exceptions import RateLimitException
+    from dev_health_ops.metrics.job_work_items import (
+        attach_work_item_partial_observations,
+    )
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_dispatching_unit(db_session)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(sync_units, "set_watermark", lambda *a, **kw: None)
+    _patch_finalize_apply(monkeypatch)
+
+    provider_usage = [
+        {
+            "transport": "rest",
+            "route_family": "work_items",
+            "dimension": "rest_core",
+            "request_count": 7,
+        }
+    ]
+
+    def raise_rate_limit(ctx, runtime):
+        exc = RateLimitException("429 Too Many Requests", retry_after_seconds=120)
+        attach_work_item_partial_observations(
+            exc,
+            {
+                "provider_usage": provider_usage,
+                "linear_page_count": 2,
+                "linear_batch_count": 3,
+            },
+        )
+        raise exc
+
+    monkeypatch.setattr(dataset_adapters, "run_dataset_unit", raise_rate_limit)
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    assert result["status"] == "rate_limited_deferred"
+    db_session.refresh(unit)
+    assert unit.status == SyncRunUnitStatus.RETRYING.value
+
+    # Admin-API-read fields stay intact.
+    assert unit.result["error_category"] == "rate_limit"
+    assert unit.result["not_before"] is not None
+    assert unit.result["rate_limit_deferrals"] == 1
+    # Partial actuals were merged under observations (additive, no clobber).
+    assert unit.result["observations"]["provider_usage"] == provider_usage
+    # Linear page/batch counts promoted to the top level (admin contract).
+    assert unit.result["linear_page_count"] == 2
+    assert unit.result["linear_batch_count"] == 3
+
+
 def test_retrying_unit_not_claimed_before_available_at_and_claimed_after(
     tmp_path, monkeypatch
 ):

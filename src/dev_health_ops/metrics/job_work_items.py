@@ -53,6 +53,7 @@ from dev_health_ops.providers.teams import (
     load_team_resolver,
     normalize_team_id,
 )
+from dev_health_ops.providers.usage import drain_provider_usage
 from dev_health_ops.storage import detect_db_type
 from dev_health_ops.utils.cli import (
     add_date_range_args,
@@ -290,6 +291,56 @@ def _build_linear_work_client(
     )
 
 
+# Exception attribute carrying best-effort usage observations gathered before a
+# mid-sync raise, so the worker deferral/failure stamp can persist actuals even
+# when the unit never returns normally (CHAOS-2754).
+_PARTIAL_OBSERVATIONS_ATTR = "dev_health_partial_observations"
+
+
+def _build_work_item_observations(
+    *,
+    github_usage: list[dict[str, Any]],
+    provider_usage: list[dict[str, Any]],
+    linear_page_count: int,
+    linear_batch_count: int,
+    include_linear_counts: bool,
+) -> dict[str, Any]:
+    """Assemble the unit-result ``observations`` fragment.
+
+    Emits the provider-neutral ``provider_usage`` key alongside the legacy
+    ``github_usage`` key (kept intact for pinned tests + admin consumers).
+    """
+
+    observations: dict[str, Any] = {}
+    if github_usage:
+        observations["github_usage"] = github_usage
+    if provider_usage:
+        observations["provider_usage"] = provider_usage
+    if include_linear_counts:
+        observations["linear_page_count"] = linear_page_count
+        observations["linear_batch_count"] = linear_batch_count
+    return observations
+
+
+def attach_work_item_partial_observations(
+    exc: BaseException, observations: dict[str, Any]
+) -> None:
+    """Stash partial usage observations on an in-flight exception (no-op when
+    empty) so a rate-limit deferral / failure can still record actuals."""
+
+    if observations:
+        setattr(exc, _PARTIAL_OBSERVATIONS_ATTR, observations)
+
+
+def read_work_item_partial_observations(
+    exc: BaseException,
+) -> dict[str, Any] | None:
+    """Read observations attached by :func:`attach_work_item_partial_observations`."""
+
+    observations = getattr(exc, _PARTIAL_OBSERVATIONS_ATTR, None)
+    return observations if isinstance(observations, dict) else None
+
+
 def run_work_items_sync_job(
     *,
     db_url: str,
@@ -357,6 +408,14 @@ def run_work_items_sync_job(
     sinks: list[Any] = [primary_sink]
     for s in sinks:
         setattr(s, "org_id", org_id)
+
+    # Usage accumulators are declared before the try so the failure/deferral
+    # path (the ``except`` below) can attach whatever actuals were gathered
+    # before a mid-sync raise (CHAOS-2754).
+    github_usage_observations: list[dict[str, Any]] = []
+    provider_usage_observations: list[dict[str, Any]] = []
+    linear_page_count = 0
+    linear_batch_count = 0
 
     try:
         for s in sinks:
@@ -512,11 +571,11 @@ def run_work_items_sync_job(
         # Populated when providers emit attribution signals (GitHub PRs).
         # Written to sink via write_ai_attribution() at end of sync loop.
         ai_attributions: list[Any] = []
-        github_usage_observations: list[dict[str, Any]] = []
-        linear_page_count = 0
-        linear_batch_count = 0
 
         if "jira" in provider_set:
+            jira_client = _build_jira_work_client(
+                org_id=org_id, credentials=credentials
+            )
             (
                 items,
                 tr,
@@ -529,7 +588,7 @@ def run_work_items_sync_job(
                 until=until_dt,
                 status_mapping=status_mapping,
                 identity=identity,
-                client=_build_jira_work_client(org_id=org_id, credentials=credentials),
+                client=jira_client,
                 project_keys=jira_project_keys,
                 jql_override=jira_jql,
                 fetch_all=jira_fetch_all,
@@ -537,6 +596,7 @@ def run_work_items_sync_job(
                 reference_sprints=reference_sprints,
                 reference_sink=primary_sink,
             )
+            provider_usage_observations.extend(drain_provider_usage(jira_client))
             work_items.extend(items)
             transitions.extend(tr)
             dependencies.extend(dep)
@@ -593,6 +653,13 @@ def run_work_items_sync_job(
                         github_usage_observations.extend(
                             item for item in raw_github_usage if isinstance(item, dict)
                         )
+                    raw_provider_usage = batch.observations.get("provider_usage")
+                    if isinstance(raw_provider_usage, list):
+                        provider_usage_observations.extend(
+                            item
+                            for item in raw_provider_usage
+                            if isinstance(item, dict)
+                        )
 
             projects = parse_github_projects_v2_env()
             if projects:
@@ -620,6 +687,7 @@ def run_work_items_sync_job(
                 gitlab_url=gl_url,
                 include_label_events=True,
                 org_id=org_id,
+                usage_observations=provider_usage_observations,
             )
             work_items.extend(items)
             transitions.extend(tr)
@@ -663,12 +731,13 @@ def run_work_items_sync_job(
                     "Linear work-item sync requires a non-empty source team key"
                 )
 
+            linear_client = _build_linear_work_client(
+                org_id=org_id, credentials=credentials
+            )
             linear_provider = LinearProvider(
                 status_mapping=status_mapping,
                 identity=identity,
-                client=_build_linear_work_client(
-                    org_id=org_id, credentials=credentials
-                ),
+                client=linear_client,
             )
             ctx = IngestionContext(
                 window=IngestionWindow(updated_since=since_dt, active_until=until_dt),
@@ -711,6 +780,7 @@ def run_work_items_sync_job(
                 fetched_transitions,
                 fetched_sprints,
             )
+            provider_usage_observations.extend(drain_provider_usage(linear_client))
 
         logger.info(
             "Work item sync: fetched %d items and %d transitions (providers=%s)",
@@ -1129,15 +1199,31 @@ def run_work_items_sync_job(
                 if hasattr(s, "write_investment_metrics") and investment_metrics_rows:
                     _ensure_unit_lease_for_write("investment_metrics_daily")
                     s.write_investment_metrics(investment_metrics_rows)
-        observations: dict[str, Any] = {}
-        if github_usage_observations:
-            observations["github_usage"] = github_usage_observations
-        if "linear" in provider_set:
-            observations["linear_page_count"] = linear_page_count
-            observations["linear_batch_count"] = linear_batch_count
+        observations = _build_work_item_observations(
+            github_usage=github_usage_observations,
+            provider_usage=provider_usage_observations,
+            linear_page_count=linear_page_count,
+            linear_batch_count=linear_batch_count,
+            include_linear_counts="linear" in provider_set,
+        )
         if observations:
             return {"observations": observations}
         return None
+    except Exception as exc:
+        # Preserve actuals gathered before the raise (partial fetch) so the
+        # worker's rate-limit deferral / failure stamp can persist them
+        # (CHAOS-2754). Never suppresses the error.
+        attach_work_item_partial_observations(
+            exc,
+            _build_work_item_observations(
+                github_usage=github_usage_observations,
+                provider_usage=provider_usage_observations,
+                linear_page_count=linear_page_count,
+                linear_batch_count=linear_batch_count,
+                include_linear_counts="linear" in provider_set,
+            ),
+        )
+        raise
     finally:
         for s in sinks:
             try:

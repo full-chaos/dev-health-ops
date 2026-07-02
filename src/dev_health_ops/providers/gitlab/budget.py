@@ -5,6 +5,7 @@ import json
 from collections.abc import Callable, Mapping
 from urllib.parse import urlparse
 
+from dev_health_ops.providers.usage import OperationResolver, UsageRouteFamily
 from dev_health_ops.sync.budget_types import (
     BudgetBucketKey,
     BudgetDimension,
@@ -343,3 +344,41 @@ def _fallback_credential_scope(
         "credential_id": credential_id or "env",
         "integration_id": integration_id,
     }
+
+
+# ---------------------------------------------------------------------------
+# Actuals recorder route-family registry (CHAOS-2754)
+# ---------------------------------------------------------------------------
+# The GitLab work client labels most paginated reads identically
+# ("GET iterator page"), so per-entity distinctions (issues vs merge_requests vs
+# notes vs milestones vs epics) cannot be recovered from the operation label.
+# The instrumented resolution therefore maps project-metadata reads to
+# ``project`` and every other read to the dominant work-item entity ``issues``
+# (both REST_CORE); the remaining families are declared for budget-vocabulary
+# coverage but carry no operation markers.
+GITLAB_USAGE_ROUTE_FAMILIES: tuple[UsageRouteFamily, ...] = (
+    UsageRouteFamily(
+        "project",
+        BudgetDimension.REST_CORE,
+        transport="rest",
+        operation_markers=(
+            "/projects/:id",
+            "/projects/",
+        ),
+    ),
+    UsageRouteFamily("issues", BudgetDimension.REST_CORE),
+    UsageRouteFamily("merge_requests", BudgetDimension.REST_CORE),
+    UsageRouteFamily("notes", BudgetDimension.REST_CORE),
+    UsageRouteFamily("pipelines", BudgetDimension.REST_CORE),
+    UsageRouteFamily("milestones", BudgetDimension.REST_CORE),
+    UsageRouteFamily("epics", BudgetDimension.REST_CORE),
+)
+
+GITLAB_USAGE_ROUTE_FAMILY_KEYS = frozenset(
+    family.route_family for family in GITLAB_USAGE_ROUTE_FAMILIES
+)
+
+GITLAB_USAGE_RESOLVER = OperationResolver(
+    families=GITLAB_USAGE_ROUTE_FAMILIES,
+    defaults=(("rest", "issues", BudgetDimension.REST_CORE),),
+)

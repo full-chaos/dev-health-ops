@@ -108,8 +108,10 @@ def test_work_client_records_rest_usage_from_pygithub_rate_limit_state() -> None
     assert observations == [
         {
             "transport": "rest",
-            "operation": "GET /repos/full-chaos/dev-health-web",
+            "route_family": "work_items",
+            "dimension": "rest_core",
             "request_count": 1,
+            "example_operation": "GET /repos/full-chaos/dev-health-web",
             "rate_limit": {
                 "remaining": "42",
                 "reset": "1234567890",
@@ -144,8 +146,10 @@ def test_work_client_records_graphql_usage_from_headers_and_rate_limit_payload()
     assert observations == [
         {
             "transport": "graphql",
-            "operation": "POST /graphql test",
+            "route_family": "work_item_prs",
+            "dimension": "graphql_cost",
             "request_count": 1,
+            "example_operation": "POST /graphql test",
             "latest_status": 200,
             "latest_headers": {
                 "x-ratelimit-remaining": "4998",

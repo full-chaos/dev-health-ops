@@ -270,6 +270,32 @@ def _promote_result_observation_fields(result: dict[str, Any]) -> dict[str, Any]
     return result
 
 
+def _merge_partial_observations_into_result(
+    result: dict[str, Any], exc: BaseException
+) -> None:
+    """Merge usage observations captured before a mid-sync raise into a
+    failure/deferral unit result (CHAOS-2754).
+
+    Additive only: it nests the actuals under ``observations`` and promotes the
+    linear page/batch counts to the top level (admin-API contract), leaving
+    ``error_category`` / ``next_retry_at`` and every other top-level field the
+    admin router reads untouched.
+    """
+
+    from dev_health_ops.metrics.job_work_items import (
+        read_work_item_partial_observations,
+    )
+
+    observations = read_work_item_partial_observations(exc)
+    if not observations:
+        return
+    existing = result.get("observations")
+    merged = dict(existing) if isinstance(existing, Mapping) else {}
+    merged.update(observations)
+    result["observations"] = merged
+    _promote_result_observation_fields(result)
+
+
 @celery_app.task(queue="sync", name="dev_health_ops.workers.tasks.dispatch_sync_run")
 def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
     """Authorize, route, and queue all pending units of a planned run.
@@ -764,6 +790,15 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
         not_before = datetime.fromisoformat(deferral.not_before)
         first_seen_at = datetime.fromisoformat(deferral.first_seen_at)
+        deferral_result_payload: dict[str, Any] = {
+            "error_category": "rate_limit",
+            "retry_after_seconds": getattr(exc, "retry_after_seconds", None),
+            "not_before": deferral.not_before,
+            "rate_limit_deferrals": deferral.attempts,
+        }
+        # Persist any actuals gathered before the rate-limit raise; never
+        # overwrites error_category / retry fields (CHAOS-2754).
+        _merge_partial_observations_into_result(deferral_result_payload, exc)
         terminal_txn_started = True
         with get_postgres_session_sync() as session:
             deferred_result: Any = session.execute(
@@ -782,14 +817,7 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     rate_limit_deferrals=deferral.attempts,
                     rate_limit_first_seen_at=first_seen_at,
                     error=str(exc),
-                    result={
-                        "error_category": "rate_limit",
-                        "retry_after_seconds": getattr(
-                            exc, "retry_after_seconds", None
-                        ),
-                        "not_before": deferral.not_before,
-                        "rate_limit_deferrals": deferral.attempts,
-                    },
+                    result=deferral_result_payload,
                     lease_owner=None,
                     lease_expires_at=None,
                     last_heartbeat_at=now,
@@ -1149,6 +1177,10 @@ def _stamp_sync_unit_failed(
     completed_at = datetime.now(timezone.utc)
     duration_seconds = max(0, int((completed_at - started_at).total_seconds()))
     error_category = _classify_error(exc)
+    failed_result_payload: dict[str, Any] = {"error_category": error_category}
+    # Persist any actuals gathered before the raise; error_category stays intact
+    # (admin-API contract) (CHAOS-2754).
+    _merge_partial_observations_into_result(failed_result_payload, exc)
     with get_postgres_session_sync() as session:
         terminal_result: Any = session.execute(
             update(SyncRunUnit)
@@ -1164,7 +1196,7 @@ def _stamp_sync_unit_failed(
                 status=SyncRunUnitStatus.FAILED.value,
                 duration_seconds=duration_seconds,
                 error=str(exc),
-                result={"error_category": error_category},
+                result=failed_result_payload,
                 lease_owner=None,
                 lease_expires_at=None,
                 last_heartbeat_at=completed_at,

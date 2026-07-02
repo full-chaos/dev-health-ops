@@ -646,6 +646,126 @@ def test_run_sync_unit_success_logs_budget_underestimated_warning(
     assert record.unit_id == str(unit.id)
     assert record.bucket["provider"] == "github"
     assert record.budget_key.endswith(":rest_core:git")
+    assert record.reason == "underestimated"
+
+
+def test_run_sync_unit_success_surfaces_unbudgeted_actual_route_family(
+    db_session, monkeypatch, caplog
+):
+    """CHAOS-2759 adversarial review fix: actual traffic on a route_family
+    with NO matching budget estimate (e.g. the shared recorder's
+    'unclassified' fallback for an operation that couldn't be resolved to any
+    family) must surface as an explicit unbudgeted_actual row and a
+    budget_underestimated warning with reason=unbudgeted_actual -- never be
+    silently dropped."""
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(db_session)  # provider="github", dataset_key="commits"
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        dataset_adapters,
+        "run_dataset_unit",
+        lambda ctx, runtime: {
+            "ok": True,
+            "observations": {
+                "provider_usage": [
+                    {
+                        "transport": "rest",
+                        "route_family": "unclassified",
+                        "dimension": "rest_core",
+                        "request_count": 6,
+                    }
+                ]
+            },
+        },
+    )
+
+    with caplog.at_level(logging.WARNING, logger="dev_health_ops.workers.sync_units"):
+        result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    assert result["status"] == "success"
+    db_session.refresh(unit)
+    observations = unit.result["observations"]
+    comparisons = observations["budget_comparison"]
+    unclassified_row = next(
+        row for row in comparisons if row["route_family"] == "unclassified"
+    )
+    assert unclassified_row["estimated_units"] == 0
+    assert unclassified_row["actual_requests"] == 6
+    assert unclassified_row["unbudgeted_actual"] is True
+    assert unclassified_row["underestimated"] is True
+    assert unclassified_row["underestimation_assessable"] is True
+
+    warnings = [
+        r for r in caplog.records if r.message == "run_sync_unit.budget_underestimated"
+    ]
+    unbudgeted_warnings = [w for w in warnings if w.route_family == "unclassified"]
+    assert len(unbudgeted_warnings) == 1
+    assert unbudgeted_warnings[0].reason == "unbudgeted_actual"
+
+
+def test_run_sync_unit_success_does_not_warn_for_non_assessable_dimension(
+    db_session, monkeypatch, caplog
+):
+    """CHAOS-2759 adversarial review fix: a graphql_cost route_family
+    (query-cost/complexity points, not a request count) with actual_requests
+    far exceeding estimated_units must NOT log budget_underestimated -- the
+    comparison isn't unit-comparable."""
+    from dev_health_ops.processors import dataset_adapters
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    # "prs" estimates REST_CORE "prs", GRAPHQL_COST "pr_social", and
+    # SECONDARY_ABUSE_RISK "pr_social" (providers/github/budget.py) -- all
+    # unconditional, no processor_flags needed.
+    run, unit = _seed_run(db_session, dataset_key="prs")
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        dataset_adapters,
+        "run_dataset_unit",
+        lambda ctx, runtime: {
+            "ok": True,
+            "observations": {
+                "provider_usage": [
+                    {
+                        "transport": "graphql",
+                        "route_family": "pr_social",
+                        "dimension": "graphql_cost",
+                        "request_count": 999,
+                    }
+                ]
+            },
+        },
+    )
+
+    with caplog.at_level(logging.WARNING, logger="dev_health_ops.workers.sync_units"):
+        result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    assert result["status"] == "success"
+    db_session.refresh(unit)
+    comparisons = unit.result["observations"]["budget_comparison"]
+    pr_social_row = next(
+        row for row in comparisons if row["route_family"] == "pr_social"
+    )
+    assert pr_social_row["actual_requests"] == 999
+    assert pr_social_row["underestimated"] is False
+    assert pr_social_row["underestimation_assessable"] is False
+    assert pr_social_row["underestimation_assessable_reason"] is not None
+    assert not [
+        r for r in caplog.records if r.message == "run_sync_unit.budget_underestimated"
+    ]
 
 
 def test_run_sync_unit_budget_comparison_never_mutates_estimate(

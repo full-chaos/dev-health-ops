@@ -281,6 +281,28 @@ def _comparison_budget_key(bucket: Mapping[str, Any], *, route_family: str) -> s
     )
 
 
+# Dimensions whose estimated_units approximate a literal request/page count
+# (see docs/providers/rate-limit-policy.md's dimension table: rest_core is
+# "Standard REST request budget", search is "Search/JQL request budget"), so a
+# raw actual_requests comparison is meaningful. graphql_cost (query-cost /
+# complexity points), contents_blob (high-variance blob/tree expansion), and
+# secondary_abuse_risk (a flat risk-flag reservation, not a request count) are
+# NOT -- comparing a request COUNT against one of those would invent a
+# conversion the estimator never made (CHAOS-2759 adversarial review finding).
+_REQUEST_COUNT_COMPARABLE_DIMENSIONS = frozenset({"rest_core", "search"})
+
+
+def _shell_bucket(template: Mapping[str, Any], *, dimension: str) -> dict[str, Any]:
+    """Build a bucket for a route_family/dimension with no estimate of its
+    own, borrowing the provider/org_id/host/credential_fingerprint of a
+    sibling estimate from the SAME unit (they share one ctx, so those fields
+    are constant across every estimate a unit's audit produces) and swapping
+    in the actual observation's own dimension.
+    """
+
+    return {**dict(template), "dimension": dimension}
+
+
 def _join_budget_estimates_with_actuals(
     budget_audit: list[dict[str, Any]],
     provider_usage: list[Any],
@@ -296,9 +318,23 @@ def _join_budget_estimates_with_actuals(
 
     Reports both numbers RAW: ``estimated_units`` are abstract reservation
     units (docs/ops/deployment-guide.md), never converted against
-    ``actual_requests``. A unit with no drained actuals for a route_family
-    (e.g. code datasets, LaunchDarkly) or no estimate for one produces no row
-    for that family -- never a fabricated 100% over/under-estimation.
+    ``actual_requests``. A route_family/dimension with an estimate but no
+    drained actuals this run (e.g. code datasets, LaunchDarkly) produces no
+    row -- never a fabricated 100% over-estimation. The reverse -- actual
+    traffic with NO matching estimate at all, including the shared recorder's
+    ``unclassified`` fallback -- is the highest-value calibration signal (real
+    provider calls against zero admitted budget) and IS surfaced, with
+    ``estimated_units: 0`` and ``unbudgeted_actual: True``.
+
+    ``underestimated``/``ratio`` are only computed when the comparison is
+    unit-comparable (``underestimation_assessable``): either the dimension
+    denominates in something request-count-like
+    (``_REQUEST_COUNT_COMPARABLE_DIMENSIONS``), or there is no estimate at all
+    (a zero baseline is never a unit-conversion problem, unlike comparing a
+    request count to a nonzero abstract quantity of e.g. GraphQL cost
+    points). Otherwise both are left unassessed (``ratio: None``,
+    ``underestimated: False``) with a ``underestimation_assessable_reason``
+    explaining why, and no warning is logged for that row.
 
     When the CHAOS-2754 recorder's 50-key overflow marker is present, dropped
     operations could belong to any route_family (the recorder never learns
@@ -346,22 +382,48 @@ def _join_budget_estimates_with_actuals(
         estimated_units_by_key[key] += int(estimate.get("estimated_units") or 0)
         bucket_by_key.setdefault(key, bucket)
 
+    if not bucket_by_key:
+        # No usable bucket to attribute even an unbudgeted row to.
+        return []
+    bucket_template = next(iter(bucket_by_key.values()))
+
     comparisons: list[dict[str, Any]] = []
-    for key in sorted(estimated_units_by_key.keys() & actual_requests_by_key.keys()):
+    for key in sorted(actual_requests_by_key):
         route_family, dimension = key
-        estimated_units = estimated_units_by_key[key]
         actual_requests = actual_requests_by_key[key]
-        bucket = bucket_by_key[key]
+        unbudgeted_actual = key not in estimated_units_by_key
+        estimated_units = 0 if unbudgeted_actual else estimated_units_by_key[key]
+        bucket = bucket_by_key.get(key)
+        if bucket is None:
+            bucket = _shell_bucket(bucket_template, dimension=dimension)
+
+        assessable = (
+            unbudgeted_actual or dimension in _REQUEST_COUNT_COMPARABLE_DIMENSIONS
+        )
+        if assessable:
+            ratio = actual_requests / estimated_units if estimated_units else None
+            underestimated = actual_requests > estimated_units
+            assessable_reason = None
+        else:
+            ratio = None
+            underestimated = False
+            assessable_reason = (
+                f"{dimension!r} is an abstract reservation unit, not a 1:1 "
+                "request count -- comparing actual_requests against it would "
+                "invent a conversion the estimator never made"
+            )
+
         comparisons.append(
             {
                 "route_family": route_family,
                 "dimension": dimension,
                 "estimated_units": estimated_units,
                 "actual_requests": actual_requests,
-                "ratio": (
-                    actual_requests / estimated_units if estimated_units else None
-                ),
-                "underestimated": actual_requests > estimated_units,
+                "ratio": ratio,
+                "underestimated": underestimated,
+                "underestimation_assessable": assessable,
+                "underestimation_assessable_reason": assessable_reason,
+                "unbudgeted_actual": unbudgeted_actual,
                 "incomplete": incomplete,
                 "bucket": dict(bucket),
                 "budget_key": _comparison_budget_key(bucket, route_family=route_family),
@@ -412,8 +474,15 @@ def _attach_budget_comparison(
     result_payload["observations"] = new_observations
 
     for comparison in comparisons:
+        # underestimated is only ever True for an underestimation_assessable
+        # row (see _join_budget_estimates_with_actuals), so this already
+        # excludes abstract-unit dimensions -- no warning is invented from a
+        # request-count vs. reservation-unit mismatch.
         if not comparison["underestimated"]:
             continue
+        reason = (
+            "unbudgeted_actual" if comparison["unbudgeted_actual"] else "underestimated"
+        )
         logger.warning(
             "run_sync_unit.budget_underestimated",
             extra={
@@ -426,6 +495,7 @@ def _attach_budget_comparison(
                 "dimension": comparison["dimension"],
                 "ratio": comparison["ratio"],
                 "incomplete": comparison["incomplete"],
+                "reason": reason,
             },
         )
     return result_payload

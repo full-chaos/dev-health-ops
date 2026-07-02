@@ -84,24 +84,17 @@ _OVERFLOW_MARKER = {
 def test_budget_comparison_attached_per_route_family():
     budget_audit = [
         _estimate(route_family="git", dimension="rest_core", estimated_units=2),
-        _estimate(
-            route_family="pr_social", dimension="graphql_cost", estimated_units=4
-        ),
+        _estimate(route_family="jql", dimension="search", estimated_units=4),
     ]
     provider_usage = [
         _actual(route_family="git", dimension="rest_core", request_count=5),
-        _actual(
-            route_family="pr_social",
-            dimension="graphql_cost",
-            request_count=1,
-            transport="graphql",
-        ),
+        _actual(route_family="jql", dimension="search", request_count=1),
     ]
 
     comparisons = _join_budget_estimates_with_actuals(budget_audit, provider_usage)
 
     by_family = {row["route_family"]: row for row in comparisons}
-    assert set(by_family) == {"git", "pr_social"}
+    assert set(by_family) == {"git", "jql"}
 
     git_row = by_family["git"]
     assert git_row["dimension"] == "rest_core"
@@ -109,35 +102,139 @@ def test_budget_comparison_attached_per_route_family():
     assert git_row["actual_requests"] == 5
     assert git_row["ratio"] == 2.5
     assert git_row["underestimated"] is True
+    assert git_row["underestimation_assessable"] is True
+    assert git_row["underestimation_assessable_reason"] is None
+    assert git_row["unbudgeted_actual"] is False
     assert git_row["incomplete"] is False
     assert git_row["budget_key"] == _comparison_budget_key(
         git_row["bucket"], route_family="git"
     )
 
-    social_row = by_family["pr_social"]
-    assert social_row["estimated_units"] == 4
-    assert social_row["actual_requests"] == 1
-    assert social_row["ratio"] == 0.25
-    assert social_row["underestimated"] is False
-    assert social_row["incomplete"] is False
+    # "search" is also request-count-comparable (Jira JQL listing pagination).
+    jql_row = by_family["jql"]
+    assert jql_row["estimated_units"] == 4
+    assert jql_row["actual_requests"] == 1
+    assert jql_row["ratio"] == 0.25
+    assert jql_row["underestimated"] is False
+    assert jql_row["underestimation_assessable"] is True
+    assert jql_row["unbudgeted_actual"] is False
+    assert jql_row["incomplete"] is False
+
+
+def test_non_assessable_dimension_does_not_claim_underestimation():
+    """graphql_cost (query-cost/complexity points) and other abstract-unit
+    dimensions must never produce ``underestimated: True`` from a raw
+    request-count comparison -- the estimator's units there aren't a 1:1
+    request count, so a magnitude comparison would invent a conversion it
+    never made (CHAOS-2759 adversarial review finding)."""
+
+    budget_audit = [
+        _estimate(
+            route_family="pr_social", dimension="graphql_cost", estimated_units=4
+        ),
+    ]
+    provider_usage = [
+        _actual(
+            route_family="pr_social",
+            dimension="graphql_cost",
+            request_count=9,
+            transport="graphql",
+        ),
+    ]
+
+    comparisons = _join_budget_estimates_with_actuals(budget_audit, provider_usage)
+
+    assert len(comparisons) == 1
+    row = comparisons[0]
+    assert row["actual_requests"] == 9
+    assert row["estimated_units"] == 4
+    assert row["ratio"] is None
+    assert row["underestimated"] is False
+    assert row["underestimation_assessable"] is False
+    assert row["underestimation_assessable_reason"] is not None
+    assert row["unbudgeted_actual"] is False
 
 
 def test_no_actuals_no_false_signal():
-    """A unit with estimates but no drained actuals for a family (code
-    datasets, LaunchDarkly's unwired families) must produce NO row -- never a
-    fabricated 100% over-estimation."""
+    """A unit with estimates but no drained actuals at all produces no rows
+    -- never a fabricated 100% over-estimation for the estimated side."""
 
     budget_audit = [
         _estimate(route_family="git", dimension="rest_core", estimated_units=2),
     ]
 
     assert _join_budget_estimates_with_actuals(budget_audit, []) == []
-    # Actuals present, but only for an unrelated family -- still no row for
-    # "git" (no cross-family fallback / guessing).
-    unrelated_actuals = [
-        _actual(route_family="flags", dimension="rest_core", request_count=9)
+
+
+def test_unbudgeted_actual_family_is_surfaced_not_dropped():
+    """Actual traffic for a route_family/dimension with NO matching estimate
+    at all must be surfaced as an explicit unbudgeted_actual row -- never
+    silently dropped. This is the highest-value calibration signal: real
+    provider calls against zero admitted budget (CHAOS-2759 adversarial
+    review finding)."""
+
+    budget_audit = [
+        _estimate(route_family="git", dimension="rest_core", estimated_units=2),
     ]
-    assert _join_budget_estimates_with_actuals(budget_audit, unrelated_actuals) == []
+    unrelated_actuals = [
+        _actual(route_family="flags", dimension="search", request_count=9)
+    ]
+
+    comparisons = _join_budget_estimates_with_actuals(budget_audit, unrelated_actuals)
+
+    assert len(comparisons) == 1
+    row = comparisons[0]
+    assert row["route_family"] == "flags"
+    assert row["dimension"] == "search"
+    assert row["estimated_units"] == 0
+    assert row["actual_requests"] == 9
+    assert row["ratio"] is None
+    assert row["unbudgeted_actual"] is True
+    # A zero baseline is never a unit-conversion problem, so this is always
+    # assessable -- unlike a nonzero abstract estimate.
+    assert row["underestimated"] is True
+    assert row["underestimation_assessable"] is True
+    assert row["underestimation_assessable_reason"] is None
+    # The bucket is a shell borrowed from a sibling estimate in the same
+    # unit (same provider/org/host/credential), dimension overridden to
+    # match the actual observation.
+    assert row["bucket"]["provider"] == "github"
+    assert row["bucket"]["org_id"] == "org-1"
+    assert row["bucket"]["dimension"] == "search"
+    assert row["budget_key"] == "github:org-1:api.github.com:fp-1:search:flags"
+
+
+def test_unclassified_family_actuals_surface_as_unbudgeted():
+    """The shared recorder's ``unclassified`` fallback (unresolved
+    operations, see ``providers/usage.py`` ``OperationResolver.resolve``) has
+    no estimator model by construction -- it must still surface as an
+    unbudgeted row, regardless of which dimension the unresolved transport
+    defaulted to."""
+
+    budget_audit = [
+        _estimate(route_family="git", dimension="rest_core", estimated_units=2),
+    ]
+    provider_usage = [
+        _actual(route_family="unclassified", dimension="rest_core", request_count=3),
+        _actual(
+            route_family="unclassified",
+            dimension="graphql_cost",
+            request_count=7,
+            transport="graphql",
+        ),
+    ]
+
+    comparisons = _join_budget_estimates_with_actuals(budget_audit, provider_usage)
+    by_dimension = {row["dimension"]: row for row in comparisons}
+
+    assert set(by_dimension) == {"rest_core", "graphql_cost"}
+    for row in by_dimension.values():
+        assert row["route_family"] == "unclassified"
+        assert row["estimated_units"] == 0
+        assert row["unbudgeted_actual"] is True
+        assert row["underestimated"] is True
+        assert row["underestimation_assessable"] is True
+        assert row["underestimation_assessable_reason"] is None
 
 
 def test_overflow_marks_comparison_incomplete():
@@ -297,6 +394,74 @@ def test_attach_budget_comparison_logs_underestimated_warning(caplog):
     assert record.bucket["dimension"] == "rest_core"
     assert record.sync_run_id == "run-1"
     assert record.unit_id == "unit-1"
+    assert record.reason == "underestimated"
+
+
+def test_attach_budget_comparison_logs_unbudgeted_reason(caplog):
+    """The warning's ``reason`` field distinguishes a genuine underestimation
+    (nonzero estimate exceeded) from unbudgeted actual traffic (zero
+    estimate, some real usage) -- both fire the same event name so existing
+    alerting still catches them, but operators can tell them apart."""
+
+    budget_audit = [
+        _estimate(route_family="git", dimension="rest_core", estimated_units=2),
+    ]
+    result = {
+        "ok": True,
+        "observations": {
+            "provider_usage": [
+                _actual(route_family="flags", dimension="rest_core", request_count=4)
+            ]
+        },
+    }
+
+    with caplog.at_level(logging.WARNING, logger="dev_health_ops.workers.sync_units"):
+        _attach_budget_comparison(
+            result, budget_audit, log_ctx={}, computed_at=datetime.now(timezone.utc)
+        )
+
+    warning_records = [
+        r for r in caplog.records if r.message == "run_sync_unit.budget_underestimated"
+    ]
+    assert len(warning_records) == 1
+    assert warning_records[0].reason == "unbudgeted_actual"
+    assert warning_records[0].route_family == "flags"
+
+
+def test_attach_budget_comparison_does_not_warn_for_non_assessable_dimension(caplog):
+    """graphql_cost actual_requests exceeding estimated_units must NOT log
+    the underestimation warning -- the comparison isn't unit-comparable."""
+
+    budget_audit = [
+        _estimate(
+            route_family="pr_social", dimension="graphql_cost", estimated_units=4
+        ),
+    ]
+    result = {
+        "ok": True,
+        "observations": {
+            "provider_usage": [
+                _actual(
+                    route_family="pr_social",
+                    dimension="graphql_cost",
+                    request_count=9,
+                    transport="graphql",
+                )
+            ]
+        },
+    }
+
+    with caplog.at_level(logging.WARNING, logger="dev_health_ops.workers.sync_units"):
+        attached = _attach_budget_comparison(
+            result, budget_audit, log_ctx={}, computed_at=datetime.now(timezone.utc)
+        )
+
+    row = attached["observations"]["budget_comparison"][0]
+    assert row["underestimated"] is False
+    assert row["underestimation_assessable"] is False
+    assert not [
+        r for r in caplog.records if r.message == "run_sync_unit.budget_underestimated"
+    ]
 
 
 def test_attach_budget_comparison_does_not_log_for_over_estimated_rows(caplog):

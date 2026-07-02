@@ -148,7 +148,7 @@ Every successful `run_sync_unit` result carries a `budget_comparison` under
 `result['observations']`, joining the unit's run-time budget audit
 (`estimate_provider_budget`, same call `budget_estimate` is built from) to
 CHAOS-2754's normalized `provider_usage` actuals, one row per
-`(route_family, dimension)` present in **both**:
+`(route_family, dimension)` with drained actuals this run:
 
 ```json
 {
@@ -158,6 +158,9 @@ CHAOS-2754's normalized `provider_usage` actuals, one row per
   "actual_requests": 5,
   "ratio": 2.5,
   "underestimated": true,
+  "underestimation_assessable": true,
+  "underestimation_assessable_reason": null,
+  "unbudgeted_actual": false,
   "incomplete": false,
   "bucket": {"provider": "github", "org_id": "...", "host": "api.github.com",
              "credential_fingerprint": "...", "dimension": "rest_core"},
@@ -169,10 +172,33 @@ CHAOS-2754's normalized `provider_usage` actuals, one row per
   (see `SYNC_BUDGET_BUCKET_LIMITS` above), never converted against
   `actual_requests`; the two are reported side by side, not blended into one
   number.
-- **`underestimated`** is `actual_requests > estimated_units`. No row is
-  emitted for a `route_family`/`dimension` with an estimate but no drained
-  actuals this run (code datasets, an unwired LaunchDarkly family, …) — never
-  a fabricated 100% over-estimation.
+- **A route_family/dimension with an estimate but no drained actuals this
+  run produces no row** (code datasets, an unwired LaunchDarkly family, …) —
+  never a fabricated 100% over-estimation.
+- **`unbudgeted_actual`** is the reverse case: actual traffic on a
+  route_family/dimension with **no matching estimate at all**, including the
+  shared recorder's `unclassified` fallback for an operation that couldn't be
+  resolved to any budget family. This is surfaced, not dropped — it is the
+  highest-value calibration signal (real provider calls against zero admitted
+  budget) — with `estimated_units: 0` and `ratio: null`. The row's `bucket` is
+  a shell borrowed from a sibling estimate in the same unit (same
+  provider/org/host/credential — a unit has one ctx, so those fields are
+  constant across every estimate it produces) with only `dimension`
+  overridden to match the actual observation.
+- **`underestimated`** is `actual_requests > estimated_units`, but only
+  trustworthy when **`underestimation_assessable`** is `true`. A raw request
+  count is only comparable to `estimated_units` when the dimension
+  denominates in something request-count-like — `rest_core` ("Standard REST
+  request budget") and `search` ("Search/JQL request budget"), per the
+  dimension table above — or when there is no estimate at all
+  (`unbudgeted_actual`; a zero baseline is never a unit-conversion problem).
+  For `graphql_cost` (query-cost/complexity points), `contents_blob`
+  (high-variance blob/tree expansion), and `secondary_abuse_risk` (a flat
+  risk-flag reservation, not a request count), comparing a request count
+  against a nonzero estimate would invent a conversion the estimator never
+  made: `underestimation_assessable` is `false`,
+  `underestimation_assessable_reason` explains why, `ratio` is `null`, and
+  `underestimated` stays `false` — **no warning is logged** for that row.
 - **`incomplete`** is `true` for every row on a unit whose CHAOS-2754
   recorder hit its 50-key overflow cap. Dropped operations aren't attributed
   to a specific family (the recorder never learns which family they'd have
@@ -180,13 +206,16 @@ CHAOS-2754's normalized `provider_usage` actuals, one row per
   confirmed over-estimation. A visible `underestimated: true` stays valid even
   when `incomplete`: a capped (undercounted) actual that already exceeds the
   estimate only understates the true overage.
-- **Underestimation is surfaced, never auto-tuned.** Each underestimated row
-  logs `run_sync_unit.budget_underestimated` with the same structured field
-  vocabulary BudgetGuard's own admission logs use (`bucket`, `budget_key`,
-  `estimated_units`, `route_family` — see `_observe_estimate` above) so an
-  operator can correlate a calibration warning with the run's actual
-  admission decision. The comparison never changes an estimator's output or
-  `SYNC_BUDGET_*` consumption — it is a pure, read-only join
+- **Underestimation is surfaced, never auto-tuned.** Each row with
+  `underestimated: true` (whether a genuine underestimation or an
+  `unbudgeted_actual` row) logs `run_sync_unit.budget_underestimated` with
+  the same structured field vocabulary BudgetGuard's own admission logs use
+  (`bucket`, `budget_key`, `estimated_units`, `route_family` — see
+  `_observe_estimate` above) plus a `reason` of `"underestimated"` or
+  `"unbudgeted_actual"`, so an operator can correlate a calibration warning
+  with the run's actual admission decision and tell the two cases apart. The
+  comparison never changes an estimator's output or `SYNC_BUDGET_*`
+  consumption — it is a pure, read-only join
   (`tests/test_budget_calibration.py::test_estimates_never_mutated_by_comparison`).
 - **Drift caveat.** This compares against the **run-time** budget audit —
   recomputed just before the unit's dataset fetch — not the estimate
@@ -202,7 +231,10 @@ CHAOS-2754's normalized `provider_usage` actuals, one row per
 - **Out of scope.** The CLI and backfill runner discard job/task returns
   (`metrics/job_work_items.py`, `backfill/runner.py`), so this comparison only
   surfaces through the unitized sync path (unit result / structured logs /
-  the admin API's `result` passthrough) — not CLI or backfill output.
+  the admin API's `result` passthrough) — not CLI or backfill output. A unit
+  whose estimator produces **no estimate at all** (`budget_audit` empty) is
+  also out of scope — there's no bucket context to attribute even an
+  unbudgeted row to.
 
 ## Per-provider policy
 

@@ -156,7 +156,7 @@ successful materialize. The projection is full-coverage by construction, so an
 **unscoped** run publishes a full-coverage org-wide membership marker **even when
 windowed** (CHAOS-2776); only `--repo-id`/`--team-id` scoping suppresses the
 org-wide marker. See
-[Investment Data Model → Membership projection & completion marker](../architecture/investment-data-model.md#membership-projection--completion-marker--write-side-chaos-2433--chaos-2776).
+[Investment Data Model → Membership projection & completion marker](../architecture/investment-data-model.md#membership-projection-completion-marker-write-side-chaos-2433-chaos-2776).
 
 ### Output
 

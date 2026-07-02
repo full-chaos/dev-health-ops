@@ -1053,7 +1053,8 @@ Materialize WorkUnit investment categorization (theme/subcategory distributions 
 # Full org materialization (publishes coverage marker)
 dev-hops investment materialize --db "$CLICKHOUSE_URI" --org "$ORG_ID"
 
-# Date-windowed refresh (does NOT publish org-wide coverage marker)
+# Date-windowed refresh (unscoped → still publishes the org-wide coverage
+# marker via the full-coverage membership projection; CHAOS-2776)
 dev-hops investment materialize --window-days 30 --llm-provider none
 ```
 
@@ -1062,8 +1063,8 @@ dev-hops investment materialize --window-days 30 --llm-provider none
 |--------|-------------|
 | `--db` | ClickHouse connection string (default: `CLICKHOUSE_URI`) |
 | `--from` / `--to` | Date range (`--from` defaults to `--window-days` before `--to`; `--to` defaults to now) |
-| `--window-days` | Window size when `--from` is not set (default: 30). Marks the run as date-windowed: refreshes investments only, no org-wide coverage marker |
-| `--repo-id` / `--team-id` | Filter to specific repos/teams |
+| `--window-days` | Window size when `--from` is not set (default: 30). Windowing does NOT suppress the org-wide membership marker — the post-run projection is full-coverage by construction (CHAOS-2776) |
+| `--repo-id` / `--team-id` | Filter to specific repos/teams. Scoped runs skip the membership projection and publish no org-wide marker |
 | `-l, --llm-provider` | LLM provider (`auto`, `openai`, `anthropic`, `local`, `mock`, `none`). Use `none` for distributions without explanations |
 | `-m, --model` | LLM model name (overrides provider default) |
 | `--persist-evidence-snippets` / `--no-persist-evidence-snippets` | Persist or skip extractive evidence quotes |

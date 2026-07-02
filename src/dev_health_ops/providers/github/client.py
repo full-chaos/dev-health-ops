@@ -31,6 +31,7 @@ from dev_health_ops.credentials.resolver import (
 )
 from dev_health_ops.credentials.types import GitHubCredentials
 from dev_health_ops.providers._ratelimit import gate_call
+from dev_health_ops.providers.github.ratelimit import classify_github_403
 from dev_health_ops.providers.usage import UsageRecorder
 from dev_health_ops.sync.budget_types import BudgetDimension
 from dev_health_ops.sync.rate_limit_signal import RateLimitSignal
@@ -175,23 +176,6 @@ def _github_error_message(data: object) -> str:
     if data is None:
         return ""
     return str(data)
-
-
-def _retry_after_seconds(headers: dict[str, str]) -> float | None:
-    retry_after = headers.get("retry-after")
-    if retry_after is not None:
-        try:
-            return float(retry_after)
-        except ValueError:
-            return None
-
-    reset = headers.get("x-ratelimit-reset")
-    if reset is not None:
-        try:
-            return max(0.0, float(reset) - time.time())
-        except ValueError:
-            return None
-    return None
 
 
 class _GitHubLabelLike(Protocol):
@@ -595,17 +579,12 @@ class GitHubWorkClient:
                 f"GitHub resource not found on {operation}: {message} (headers={headers})"
             ) from exc
         if status == 403:
-            lowered = message.lower()
-            is_rate_limit = (
-                headers.get("x-ratelimit-remaining") == "0"
-                or "retry-after" in headers
-                or "rate limit" in lowered
-                or "abuse" in lowered
-                or "secondary" in lowered
-            )
-            if is_rate_limit:
-                retry_after = _retry_after_seconds(headers)
-                is_primary = headers.get("x-ratelimit-remaining") == "0"
+            # 403 triage (primary rate limit / secondary-abuse / permission-SSO)
+            # is extracted to providers/github/ratelimit.py::classify_github_403
+            # (CHAOS-2773 CS1) so this REST work client and any future httpx
+            # GitHubCodeClient share ONE classifier -- no second copy.
+            classification = classify_github_403(headers=headers, message=message)
+            if classification.is_rate_limit:
                 logger.warning(
                     "GitHub rate limit (403) on %s headers=%s message=%s",
                     operation,
@@ -614,19 +593,15 @@ class GitHubWorkClient:
                 )
                 raise RateLimitException(
                     f"GitHub rate limit (403) on {operation}: {message} (headers={headers})",
-                    retry_after_seconds=retry_after,
+                    retry_after_seconds=classification.retry_after_seconds,
                     signal=RateLimitSignal(
                         provider="github",
-                        dimension=(
-                            BudgetDimension.REST_CORE
-                            if is_primary
-                            else BudgetDimension.SECONDARY_ABUSE_RISK
-                        ),
-                        retry_after_seconds=retry_after,
+                        dimension=classification.dimension,
+                        retry_after_seconds=classification.retry_after_seconds,
                         reset_at=RateLimitSignal.reset_at_from_epoch_seconds(
                             headers.get("x-ratelimit-reset")
                         ),
-                        reason="primary" if is_primary else "secondary",
+                        reason=classification.reason,
                         request_id=headers.get("x-github-request-id"),
                     ),
                 ) from exc

@@ -13,11 +13,10 @@ from dev_health_ops.connectors.utils.rate_limit_queue import (
     create_rate_limit_gate,
 )
 from dev_health_ops.exceptions import RateLimitException
-from dev_health_ops.providers._ratelimit import gate_call, parse_retry_after_header
+from dev_health_ops.providers._ratelimit import gate_call
+from dev_health_ops.providers.gitlab.ratelimit import maybe_raise_gitlab_rate_limit
 from dev_health_ops.providers.usage import UsageRecorder
 from dev_health_ops.providers.utils import EnvSpec, read_env_spec
-from dev_health_ops.sync.budget_types import BudgetDimension
-from dev_health_ops.sync.rate_limit_signal import RateLimitSignal
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +41,15 @@ def _diagnostic_headers(headers: object) -> dict[str, str]:
 def _maybe_raise_gitlab_rate_limit(exc: BaseException) -> None:
     """Raise RateLimitException if exc is a GitLab rate-limit error (HTTP 429,
     or 403 carrying rate-limit headers); otherwise return None so callers
-    continue their existing handling."""
+    continue their existing handling.
+
+    Delegates the actual 429/header-qualified-403 predicate + delay
+    computation to ``providers/gitlab/ratelimit.py`` (CHAOS-2773 CS1), itself
+    built on the shared ``providers/_ratelimit.py`` helpers
+    (``gitlab_403_is_rate_limited`` / ``gitlab_resolve_retry_after_seconds``,
+    #1142) -- so exactly one predicate/delay implementation exists for
+    GitLab, not a second copy inline here.
+    """
     import gitlab  # python-gitlab; keep lazy to match existing import semantics
 
     if isinstance(exc, RateLimitException):
@@ -51,7 +58,6 @@ def _maybe_raise_gitlab_rate_limit(exc: BaseException) -> None:
         return None
     status = getattr(exc, "response_code", None)
     headers = getattr(exc, "response_headers", None) or {}
-    retry_after = parse_retry_after_header(headers)
 
     def _hdr(name: str) -> str | None:
         try:
@@ -59,39 +65,13 @@ def _maybe_raise_gitlab_rate_limit(exc: BaseException) -> None:
         except AttributeError:
             return None
 
-    is_rate_limited = status == 429 or (
-        status == 403
-        and (
-            retry_after is not None
-            or str(_hdr("RateLimit-Remaining")) == "0"
-            or _hdr("Retry-After") is not None
+    try:
+        maybe_raise_gitlab_rate_limit(
+            status=status, headers=headers, request_id=_hdr("X-Request-Id")
         )
-    )
-    if not is_rate_limited:
-        return None
-    # Prefer Retry-After; else derive from RateLimit-Reset (epoch seconds) if present.
-    reset_raw = _hdr("RateLimit-Reset")
-    if retry_after is None and reset_raw is not None:
-        try:
-            import time as _t
-
-            retry_after = max(0.0, float(reset_raw) - _t.time())
-        except (TypeError, ValueError):
-            retry_after = None
-    raise RateLimitException(
-        f"GitLab rate limited (HTTP {status})",
-        retry_after_seconds=retry_after,
-        signal=RateLimitSignal(
-            provider="gitlab",
-            dimension=BudgetDimension.REST_CORE,
-            retry_after_seconds=retry_after,
-            reset_at=RateLimitSignal.reset_at_from_epoch_seconds(reset_raw),
-            # 429 is the documented quota limit; a header-qualified 403 is the
-            # softer/abuse-style signal -- mirror GitHub's primary/secondary split.
-            reason="primary" if status == 429 else "secondary",
-            request_id=_hdr("X-Request-Id"),
-        ),
-    ) from exc
+    except RateLimitException as rate_limit_exc:
+        raise rate_limit_exc from exc
+    return None
 
 
 class _ListManager(Protocol):

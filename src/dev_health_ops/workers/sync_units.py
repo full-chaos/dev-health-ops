@@ -599,8 +599,14 @@ def _route_family_and_attribution(
             and isinstance(entry.get("bucket"), Mapping)
             and entry["bucket"].get("dimension") == dimension
         ]
-        if dimension_matches:
-            candidates = dimension_matches
+        if not dimension_matches:
+            # The signal names a dimension the unit never budgeted (e.g. a
+            # secondary-abuse signal against a REST-only unit). Falling back
+            # to the full audit would confidently attribute a family whose
+            # dimension CONTRADICTS the signal — CHAOS-2760 must use the
+            # provider+integration+dimension fallback instead.
+            return None, _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION
+        candidates = dimension_matches
 
     route_families = {
         str(entry.get("route_family"))

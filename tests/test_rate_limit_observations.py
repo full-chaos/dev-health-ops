@@ -391,9 +391,24 @@ def test_route_family_resolution_keeps_unique_match_and_refuses_to_guess():
         "prs",
         None,
     )
-    # A dimension that matches nothing falls back to the full candidate set --
-    # still ambiguous here since it names two distinct families.
+    # A dimension that matches NOTHING in the audit is ambiguous by
+    # definition -- the signal names traffic the unit never budgeted, so a
+    # family pick would contradict the signal's own dimension.
     assert _route_family_and_attribution(github_prs_audit, "search") == (
+        None,
+        _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION,
+    )
+    # Regression (codex re-pass finding): the dimension-miss rule must hold
+    # even for SINGLE-family audits. A REST-only GitHub "commits" unit hit by
+    # a secondary-abuse signal must not be recorded as a trusted 'git'
+    # observation -- CHAOS-2760 falls back to provider+integration+dimension.
+    github_commits_audit = [
+        {"bucket": {"dimension": "rest_core"}, "route_family": "git"},
+        {"bucket": {"dimension": "contents_blob"}, "route_family": "git"},
+    ]
+    assert _route_family_and_attribution(
+        github_commits_audit, "secondary_abuse_risk"
+    ) == (
         None,
         _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION,
     )

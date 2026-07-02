@@ -216,11 +216,11 @@ class TestPermanentFailure:
     def test_mark_batch_failed_raising_leaves_entry_unacked(
         self, fake_redis, monkeypatch
     ):
-        """Adversarial-review round-2: a DLQ-written entry must NOT be ACKed
-        when the failed-status write raised -- otherwise the batch strands in
-        a non-terminal status while the entry is gone. Leaving it pending
-        lets a later redelivery retry the status write (a duplicate DLQ entry
-        on that retry is accepted operational noise)."""
+        """Adversarial-review rounds 2 (2693) + 2 (2697): when the
+        failed-status write raises, the entry must NOT be ACKed (the batch
+        would strand non-terminal with the entry gone) AND -- mark-first
+        ordering -- no DLQ row may be written yet, or every retry would XADD
+        a duplicate into the capped DLQ during a Postgres outage."""
         monkeypatch.setattr(
             consumer_mod.ExternalIngestStreamConsumer,
             "_resolve_mark_batch_failed",
@@ -245,10 +245,11 @@ class TestPermanentFailure:
             c.consume(max_iterations=1)
 
         mark_failed.assert_awaited_once()
-        # DLQ entry was written...
+        # Mark-first ordering: no DLQ row until the status write is durable
+        # (retries must not accumulate duplicates in the capped DLQ)...
         dlq_entries = fake_redis.xrange("external-ingest:org-mark-raises:dlq")
-        assert len(dlq_entries) == 1
-        # ...but the source entry remains pending (NOT acked) for a retry.
+        assert dlq_entries == []
+        # ...and the source entry remains pending (NOT acked) for a retry.
         pending = fake_redis.xpending_range(
             stream, consumer_mod.CONSUMER_GROUP, min="-", max="+", count=10
         )
@@ -424,10 +425,12 @@ class TestReclaim:
         self, fake_redis, monkeypatch
     ):
         """CHAOS-2697 adversarial-review HIGH: the sync give-up path
-        (``reclaim_stale() -> move_to_dlq``) must NOT ACK when the DLQ write
-        succeeded but ``mark_batch_failed`` raised -- ACKing would strand the
-        batch in a non-terminal status with its only retry handle gone (a
-        ``processing`` row REPLAYs, never RETRYs). Sync twin of
+        (``reclaim_stale() -> move_to_dlq``) must NOT ACK when
+        ``mark_batch_failed`` raised -- ACKing would strand the batch in a
+        non-terminal status with its only retry handle gone (a ``processing``
+        row REPLAYs, never RETRYs). Round-2 refinement: mark-first ordering
+        means no DLQ row is written either, so outage retries cannot flood
+        the capped DLQ. Sync twin of
         ``test_mark_batch_failed_raising_leaves_entry_unacked`` above."""
         monkeypatch.setattr(
             consumer_mod.ExternalIngestStreamConsumer,
@@ -458,14 +461,45 @@ class TestReclaim:
             c.consume(max_iterations=1)
 
         mark_failed.assert_awaited_once()
+        # Mark-first: no DLQ row while the status write keeps failing...
         dlq_entries = fake_redis.xrange("external-ingest:org-giveup-markfail:dlq")
-        assert len(dlq_entries) == 1  # the DLQ record itself was written...
+        assert dlq_entries == []
         pending = fake_redis.xpending_range(
             stream, consumer_mod.CONSUMER_GROUP, min="-", max="+", count=10
         )
-        # ...but the source entry keeps its retry handle for the status write.
+        # ...and the source entry keeps its retry handle for the status write.
         assert len(pending) == 1
         assert pending[0]["message_id"] == entry_id
+
+    def test_give_up_transient_field_reread_failure_does_not_ack(self, fake_redis):
+        """CHAOS-2697 adversarial-review round-2 HIGH: a transient XRANGE
+        failure while re-reading the entry's fields must not be treated as
+        safe-to-ACK -- the batch would never be marked failed and its retry
+        handle would vanish. move_to_dlq must return False (retry later)."""
+        stream, entry_id = _xadd_batch(fake_redis, org_id="org-xrange-fail")
+        c = _consumer()
+        with patch.object(
+            consumer_mod.ExternalIngestStreamConsumer,
+            "_fetch_entry_fields",
+            lambda self, rc, sk, eid: None,
+        ):
+            assert c.move_to_dlq(fake_redis, stream, entry_id, "gave up") is False
+        assert fake_redis.xrange("external-ingest:org-xrange-fail:dlq") == []
+
+    def test_give_up_trimmed_entry_writes_tombstone_and_acks(self, fake_redis):
+        """An entry MAXLEN-trimmed while pending has no recoverable fields:
+        nothing addressable to mark, so the give-up path writes a tombstone
+        DLQ row and reports safe-to-ACK -- the possibly-stranded batch row is
+        the CHAOS-2769 orphan reconciler's target, not a reason to retry a
+        re-read that is authoritatively empty forever."""
+        c = _consumer()
+        stream = "external-ingest:org-trimmed:batches"
+        # Entry ID that was never XADDed: XRANGE succeeds and returns [].
+        assert c.move_to_dlq(fake_redis, stream, "0-1", "gave up") is True
+        dlq_entries = fake_redis.xrange("external-ingest:org-trimmed:dlq")
+        assert len(dlq_entries) == 1
+        assert dlq_entries[0][1]["ingestion_id"] == ""
+        assert dlq_entries[0][1]["org_id"] == "org-trimmed"
 
 
 class TestPerOrgDlqIsolation:

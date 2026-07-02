@@ -588,6 +588,11 @@ class TestMarkBatchFailed:
             "system_failure": True,
             "reason": "max_deliveries_exceeded",
         }
+        # Counter invariant (adversarial round 2): failed = zero accepted;
+        # the whole batch counts as rejected for GET/list consumers.
+        assert row.items_accepted == 0
+        assert row.items_rejected == row.items_received == 1
+        assert row.record_counts is None
         assert row.completed_at is not None
         async with session_maker() as session:
             assert not await payload_exists(

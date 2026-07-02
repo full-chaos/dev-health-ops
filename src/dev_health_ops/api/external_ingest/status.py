@@ -699,7 +699,12 @@ async def mark_failed(
     ``processing`` or count reconciliation: the whole point is that the worker
     never got far enough to produce counts (schema-version mismatch and
     missing-payload failures raise before ``mark_processing``, leaving
-    ``accepted``). Idempotent: returns ``False`` (untouched row) when already
+    ``accepted``). The published counter invariant still holds (adversarial
+    round 2): ``failed`` means zero accepted, so ``items_rejected`` is forced
+    to ``items_received`` (a system failure rejects the whole batch as far as
+    GET/list consumers are concerned; no per-record rejection rows exist --
+    ``error_summary.system_failure`` carries the cause) and ``record_counts``
+    is cleared. Idempotent: returns ``False`` (untouched row) when already
     terminal or missing. Does NOT commit."""
     now = datetime.now(timezone.utc)
     result = await session.execute(
@@ -708,6 +713,8 @@ async def mark_failed(
             f"""
             UPDATE {_BATCHES_TABLE}
             SET status = :status, error_summary = :error_summary,
+                items_accepted = 0, items_rejected = items_received,
+                record_counts = NULL,
                 completed_at = :completed_at, updated_at = :updated_at
             WHERE org_id = :org_id AND ingestion_id = :ingestion_id
                 AND status NOT IN (:completed, :partial, :failed)

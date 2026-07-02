@@ -112,14 +112,31 @@ does the same on the give-up path. A subsequent same-key resubmission
 (RETRY) re-upserts the payload under the same `ingestion_id`. Never-retried
 orphans are the CHAOS-2769 reconciler's job.
 
-**`mark_batch_failed` raises on failure.** The consumer's ACK gate depends
-on it: if the terminal-`failed` write cannot land, the entry must stay
-un-ACKed so a later redelivery retries the status write — ACKing past a
-lost write strands the batch non-terminal with the pointer gone
-(2693 adversarial-review round-2). It uses `status.mark_failed`, which
-transitions from ANY non-terminal status (permanent failures raised before
-`mark_processing` leave `accepted`) and is a no-op for terminal/unknown
-batches, so DLQ re-drives and duplicate pointers stay idempotent.
+**`mark_batch_failed` raises on failure; the consumer marks FIRST, DLQs
+second.** The consumer's ACK gate depends on the raise: if the
+terminal-`failed` write cannot land, the entry must stay un-ACKed so a later
+redelivery retries the status write — ACKing past a lost write strands the
+batch non-terminal with the pointer gone (2693 adversarial-review round-2).
+Both give-up paths (sync `move_to_dlq` from `reclaim_stale`, async
+permanent-failure) write the DLQ row only AFTER the mark is durable
+(2697 round-2): the old DLQ-then-mark order XADDed a duplicate DLQ row on
+every retry during a Postgres outage, eventually evicting distinct failures
+from the capped approximate DLQ stream. `status.mark_failed` transitions
+from ANY non-terminal status (permanent failures raised before
+`mark_processing` leave `accepted`), forces the counter invariant
+(`items_accepted=0`, `items_rejected=items_received`, `record_counts=NULL`
+— failed means nothing accepted, and GET/list consumers key off these), and
+is a no-op for terminal/unknown batches, so DLQ re-drives and duplicate
+pointers stay idempotent.
+
+**Give-up with unrecoverable entry fields.** `reclaim_stale` hands
+`move_to_dlq` only a message ID; the fields are re-read via XRANGE. A
+transient re-read failure is NOT safe to ACK (return `False`, retry later —
+2697 round-2 HIGH: collapsing it with "absent" let a Redis blip ACK away an
+unmarked batch). An authoritatively-absent entry (MAXLEN-trimmed while
+pending) has nothing addressable to mark: a tombstone DLQ row is written
+and the entry ACKed; the possibly-stranded batch row is the CHAOS-2769
+orphan-batch reconciler's territory.
 
 **Source provenance resolution.** `source_id` (CC8) is looked up from
 `external_ingest_sources` case-insensitively (2695 blocks case-variant

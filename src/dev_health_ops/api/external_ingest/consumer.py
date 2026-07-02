@@ -131,7 +131,7 @@ class ExternalIngestStreamConsumer(StreamConsumer):
 
     def _fetch_entry_fields(
         self, rc: Any, stream_key: str, entry_id: str
-    ) -> dict[str, str]:
+    ) -> dict[str, str] | None:
         """Re-read a single entry's fields by ID.
 
         Used only by :meth:`move_to_dlq`'s give-up path (invoked by the
@@ -139,12 +139,19 @@ class ExternalIngestStreamConsumer(StreamConsumer):
         the message ID from ``XPENDING``). Freshly-read/reclaimed entries
         handled via :meth:`handle_entries` already carry their field dict
         and never call this.
+
+        Tri-state (adversarial-review round 2): ``None`` = the XRANGE itself
+        failed (transient -- retrying later is productive, the caller must
+        NOT ACK); ``{}`` = the read succeeded but the entry is gone
+        (MAXLEN-trimmed while pending -- authoritatively unrecoverable).
+        Collapsing the two let a transient Redis blip ACK away an entry
+        whose batch was never marked failed.
         """
         try:
             rows = rc.xrange(stream_key, min=entry_id, max=entry_id)
         except Exception:
             logger.exception("Failed to re-read entry %s for DLQ routing", entry_id)
-            return {}
+            return None
         if not rows:
             return {}
         _id, data = rows[0]
@@ -157,26 +164,48 @@ class ExternalIngestStreamConsumer(StreamConsumer):
         use :func:`run_async` for the ``mark_batch_failed`` side effect.
 
         Returns whether it is safe to ACK the source entry (base class
-        contract): requires BOTH the DLQ write to succeed (adversarial-review
-        finding: a swallowed DLQ-write failure must not silently drop the
-        entry with no DLQ record) AND, when an ingestion_id is present, the
-        failed-status write to be safe (CHAOS-2697 adversarial review: this
-        sync path previously ignored the mark result while its async twin
-        ``_dlq_entry_async`` gated on it -- ACKing past a raised
-        ``mark_batch_failed`` strands the batch in a non-terminal status with
-        the entry gone, and a ``processing`` row REPLAYs rather than RETRYs,
-        leaving the customer no recovery handle at all).
+        contract). MARK-FIRST ordering (CHAOS-2697 adversarial review rounds
+        1+2): the terminal-``failed`` status write must be durable BEFORE the
+        DLQ row is written -- ACKing past a raised ``mark_batch_failed``
+        strands the batch in a non-terminal status with the entry gone (a
+        ``processing`` row REPLAYs rather than RETRYs, no customer recovery),
+        and writing the DLQ row first meant every mark-failure retry XADDed a
+        duplicate, flooding the capped/approximate DLQ during a Postgres
+        outage until distinct failures evicted.
+
+        Unrecoverable-fields path: a transient XRANGE failure returns
+        ``False`` (retry later); an authoritatively-absent entry
+        (MAXLEN-trimmed while pending) has nothing addressable to mark, so a
+        tombstone DLQ row is written and the entry ACKed -- the possibly
+        still-non-terminal batch row is exactly what the CHAOS-2769
+        orphan-batch reconciler exists to heal.
         """
         data = self._fetch_entry_fields(rc, stream_key, entry_id)
-        org_id, dlq_written = self._xadd_dlq_entry(
-            rc, stream_key, entry_id, reason, data
-        )
+        if data is None:
+            # Transient re-read failure: retrying later is productive.
+            return False
         ingestion_id = data.get("ingestion_id")
-        if dlq_written and ingestion_id:
+        if ingestion_id:
+            org_id = data.get("org_id") or self._org_id_from_stream_key(stream_key)
             marked_ok = self._mark_batch_failed_best_effort(
                 org_id=org_id, ingestion_id=ingestion_id, reason=reason
             )
-            return dlq_written and marked_ok
+            if not marked_ok:
+                # No DLQ write on this attempt: the retry (entry stays
+                # pending) re-runs the mark, and only a durable mark
+                # proceeds to XADD -- at most one DLQ row per entry.
+                return False
+        else:
+            logger.error(
+                "Entry %s on %s has no recoverable fields (trimmed while "
+                "pending?) -- writing tombstone DLQ row and ACKing; any "
+                "stranded batch row is the CHAOS-2769 reconciler's target",
+                entry_id,
+                stream_key,
+            )
+        _org_id, dlq_written = self._xadd_dlq_entry(
+            rc, stream_key, entry_id, reason, data
+        )
         return dlq_written
 
     async def _dlq_entry_async(
@@ -193,22 +222,32 @@ class ExternalIngestStreamConsumer(StreamConsumer):
         than call :meth:`_mark_batch_failed_best_effort` (which itself calls
         :func:`run_async`), or ``run_async``'s own re-entrancy guard raises.
 
-        Returns whether the source entry may be ACKed: requires BOTH the DLQ
-        write to succeed (same rationale as :meth:`move_to_dlq`) AND, when an
-        ingestion_id is present, the failed-status write to be safe (see
-        :meth:`_mark_batch_failed_best_effort_async` -- adversarial-review
-        round-2: ACKing past a raised ``mark_batch_failed`` strands the batch
-        in a non-terminal status with the entry gone).
+        Same MARK-FIRST ordering and ACK contract as :meth:`move_to_dlq`
+        (see its docstring): the failed-status write must be durable before
+        the DLQ row is written, so a Postgres outage leaves the entry
+        pending with NO duplicate DLQ rows accumulating across retries.
+        Entries on this path always carry their field dict, so the
+        tombstone branch here only covers a malformed producer entry.
         """
-        org_id, dlq_written = self._xadd_dlq_entry(
-            rc, stream_key, entry_id, reason, data
-        )
         ingestion_id = data.get("ingestion_id")
-        if dlq_written and ingestion_id:
+        if ingestion_id:
+            org_id = data.get("org_id") or self._org_id_from_stream_key(stream_key)
             marked_ok = await self._mark_batch_failed_best_effort_async(
                 org_id=org_id, ingestion_id=ingestion_id, reason=reason
             )
-            return dlq_written and marked_ok
+            if not marked_ok:
+                return False
+        else:
+            logger.error(
+                "Entry %s on %s carries no ingestion_id -- writing tombstone "
+                "DLQ row and ACKing; any stranded batch row is the "
+                "CHAOS-2769 reconciler's target",
+                entry_id,
+                stream_key,
+            )
+        _org_id, dlq_written = self._xadd_dlq_entry(
+            rc, stream_key, entry_id, reason, data
+        )
         return dlq_written
 
     def _xadd_dlq_entry(

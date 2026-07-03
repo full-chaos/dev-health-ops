@@ -94,9 +94,10 @@ async def _load_repo_to_team(sink: Any, org_id: str) -> dict[str, str]:
 
     repos = sink.query_dicts(
         """
-        SELECT toString(repo_id) AS repo_id, full_name
+        SELECT toString(id) AS repo_id, argMax(repo, last_synced) AS full_name
         FROM repos
         WHERE org_id = {org_id:String}
+        GROUP BY org_id, id
         """,
         {"org_id": org_id},
     )

@@ -11,25 +11,49 @@ Postgres + Valkey (never mocks/FakeValkey for the boundary under test):
   durably ``XADD``s a pointer to ``external-ingest:<org_id>:batches``.
 - Idempotency replay (200, same ingestionId, no new stream entry) and
   conflict (409) -- CHAOS-2695.
-- The worker (``dev_health_ops.external_ingest.processor.process_batch``,
-  CHAOS-2697/2693 -- driven directly here, in-test, against the real
-  Valkey-enqueued batch; NOT a Celery task named
-  ``consume_external_ingest_batches`` as an earlier planning draft assumed)
-  normalizes and writes through the real ClickHouse sinks -- rows verified
-  via ``FINAL`` + ``org_id`` predicate for all 9 v1 record-kind families.
+- The worker is driven via the REAL production entry point,
+  ``dev_health_ops.api.external_ingest.consumer.consume_external_ingest_streams
+  (max_iterations=1)`` -- the actual ``ExternalIngestStreamConsumer``, doing a
+  real ``XREADGROUP``/entry-parse/``process_batch``/``XACK`` pass over
+  whatever this org's real Valkey-enqueued pointer(s) look like, NOT a direct
+  hardcoded call to ``process_batch(...)`` (which would bypass the stream
+  metadata contract entirely). Run off the event loop via
+  ``asyncio.to_thread`` since it's a synchronous, blocking-read function
+  (mirrors how Celery actually invokes it -- a separate thread with no
+  ambient event loop, which is what lets ``run_async`` inside it create its
+  own fresh loop safely). It normalizes and writes through the real
+  ClickHouse sinks -- rows verified via ``FINAL`` + ``org_id`` predicate for
+  all 9 v1 record-kind families.
 - ``GET /batches/{id}`` reports accepted/rejected counts and per-record
   rejection diagnostics for a deliberately-invalid record.
-- Bounded metric recompute is proven QUEUED, not executed inline
-  (CHAOS-2699's actual seam: ``schedule_or_coalesce`` debounces via a Valkey
-  guard key and schedules
+- Bounded metric recompute is proven QUEUED, not executed inline. The real
+  dispatch seam (CHAOS-2699) is
   ``workers.external_ingest_recompute.flush_external_ingest_recompute
   .apply_async(countdown=...)`` -- the real ``celery_app.send_task`` calls
   for ``run_daily_metrics``/etc. only happen inside THAT task, which this
-  test never runs; patching the flush task's ``apply_async`` is therefore
-  the load-bearing seam, mirroring
-  ``tests/test_external_ingest_recompute_debounce.py``'s own pattern).
+  test never runs. Only ``apply_async`` is patched (``patch.object`` on the
+  real, registered task object) so the real task/registration/debounce path
+  (including the real Valkey SETNX guard key) still runs; the test also
+  asserts the task's production dotted name to catch a rename.
 - Disabled-source (403) and stream-unavailable (503, never accept-and-warn)
   regressions.
+
+Because ``consume_external_ingest_streams`` discovers ALL orgs' streams via
+a wildcard pattern (``external-ingest:*:batches``), a single call can sweep
+up pending entries left behind by earlier tests in this module (each uses
+its own org_id, so this is inert cross-contamination, not a correctness
+bug) -- assertions below are written to tolerate that rather than assume
+exactly-one-batch-per-call.
+
+Client selection (black-box vs white-box): most scenarios drive the app via
+``client``, which targets a REAL, harness-booted ``dev-hops api`` server
+process when ``LIVE_E2E_BASE_URL`` is set (``ci/run_live_backend_e2e.sh``
+exports it), falling back to an in-process ``ASGITransport`` for standalone
+local runs. The stream-unavailable regression is a deliberate, permanent
+EXCEPTION: it monkeypatches an in-process module attribute
+(``streams.get_redis_client``), which cannot reach into a separately-booted
+server process, so it always uses the always-in-process ``asgi_client``
+fixture regardless of ``LIVE_E2E_BASE_URL``.
 
 Opt-in (filtered from unit/CI-unit runs): ``pytest -m clickhouse``. Requires
 ``CLICKHOUSE_URI``, ``POSTGRES_URI`` (or ``DATABASE_URI``), and ``REDIS_URL``
@@ -41,13 +65,16 @@ docstring).
 
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+
+LIVE_E2E_BASE_URL = os.environ.get("LIVE_E2E_BASE_URL")
 
 CLICKHOUSE_URI = os.environ.get("CLICKHOUSE_URI")
 POSTGRES_URI = os.environ.get("POSTGRES_URI") or os.environ.get("DATABASE_URI")
@@ -97,6 +124,35 @@ def _redis_client():
     import valkey
 
     return valkey.from_url(REDIS_URL, decode_responses=True)
+
+
+async def _run_consumer_pass() -> int:
+    """Run one bounded ``consume_external_ingest_streams(max_iterations=1)``
+    pass off the event loop (mirrors how Celery actually invokes it -- a
+    separate thread with no ambient event loop).
+
+    ``run_async`` (inside the consumer's ``handle_entries``) calls
+    ``dev_health_ops.db.reset_async_engines()`` before its own
+    ``asyncio.run(...)`` so ITS fresh Postgres engine is bound to the worker
+    thread's temporary loop, not this test's loop -- correct for that call,
+    but it leaves the module-global engine cache pointing at an engine bound
+    to a loop that's about to be destroyed when the thread exits. Any
+    subsequent Postgres access from THIS test's own (module-scoped) loop --
+    e.g. the app's ``GET /batches/{id}`` right after this call -- would then
+    crash with "Future attached to a different loop". Reset again here,
+    back on this test's own loop, so the next ``get_postgres_engine()`` call
+    lazily recreates a fresh engine correctly bound to it.
+    """
+    from dev_health_ops.api.external_ingest.consumer import (
+        consume_external_ingest_streams,
+    )
+    from dev_health_ops.db import reset_async_engines
+
+    accepted = await asyncio.to_thread(
+        consume_external_ingest_streams, max_iterations=1
+    )
+    reset_async_engines()
+    return accepted
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +222,31 @@ def _reset_ingest_rate_limiter():
 
 @pytest_asyncio.fixture(loop_scope="module")
 async def client():
+    """Black-box client: a real ``httpx.AsyncClient`` against the harness-
+    booted ``dev-hops api`` server process when ``LIVE_E2E_BASE_URL`` is set
+    (so a route-mounting/startup/uvicorn-config regression in the real
+    server process is not false-greened by only ever exercising the FastAPI
+    app object in-process); falls back to in-process ``ASGITransport`` for
+    standalone local runs where no separate server was booted."""
+    if LIVE_E2E_BASE_URL:
+        async with AsyncClient(base_url=LIVE_E2E_BASE_URL) as c:
+            yield c
+        return
+
+    from dev_health_ops.api.main import app
+
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+
+
+@pytest_asyncio.fixture(loop_scope="module")
+async def asgi_client():
+    """ALWAYS in-process, regardless of ``LIVE_E2E_BASE_URL`` -- the
+    stream-unavailable regression (scenario 9) monkeypatches
+    ``streams_mod.get_redis_client`` on the module object imported into THIS
+    test process; that has no effect on a separately-booted server process,
+    so that one white-box test must use this fixture, never ``client``."""
     from dev_health_ops.api.main import app
 
     transport = ASGITransport(app=app, raise_app_exceptions=False)
@@ -403,9 +484,18 @@ async def test_idempotency_conflict_returns_409(client, source_and_token):
 async def test_worker_processes_all_nine_kinds_and_recompute_is_queued_not_inline(
     client, source_and_token, org_id, ch_sink
 ):
-    from dev_health_ops.api.external_ingest.schemas import SCHEMA_VERSION
-    from dev_health_ops.external_ingest.processor import process_batch
+    from dev_health_ops.workers.external_ingest_recompute import (
+        flush_external_ingest_recompute,
+    )
     from tests._helpers_external_ingest import ALL_KINDS, build_batch_envelope
+
+    # Registered production task name -- catches a rename/re-registration
+    # regression that would otherwise silently defeat the patch.object below
+    # (patching an attribute on the wrong/stale task object).
+    assert (
+        flush_external_ingest_recompute.name
+        == "dev_health_ops.workers.tasks.flush_external_ingest_recompute"
+    )
 
     envelope = build_batch_envelope(
         idempotency_key=f"e2e-worker-full-{uuid.uuid4()}", kinds=ALL_KINDS
@@ -416,35 +506,39 @@ async def test_worker_processes_all_nine_kinds_and_recompute_is_queued_not_inlin
     assert resp.status_code == 202, resp.text
     ingestion_id = resp.json()["ingestionId"]
 
-    mock_flush_task = MagicMock()
-    with patch(
-        "dev_health_ops.workers.external_ingest_recompute.flush_external_ingest_recompute",
-        mock_flush_task,
-    ):
-        accepted = await process_batch(
-            ingestion_id=ingestion_id,
-            org_id=org_id,
-            source_system="github",
-            source_instance="acme/api",
-            schema_version=SCHEMA_VERSION,
-        )
-    assert accepted == len(ALL_KINDS)
+    # Patch ONLY the enqueue call, not the whole task object: the real
+    # schedule_or_coalesce() dispatch path (including its real Valkey SETNX
+    # debounce guard) still runs; only the actual Celery publish is
+    # intercepted.
+    with patch.object(
+        flush_external_ingest_recompute, "apply_async"
+    ) as mock_apply_async:
+        # Real production entry point: XREADGROUP -> parse -> process_batch
+        # -> XACK, not a hardcoded process_batch(...) call. This discovers
+        # ALL orgs' streams via a wildcard pattern, so it may also sweep up
+        # pending entries left by earlier tests in this module (each has
+        # its own org_id -- harmless cross-contamination) in the same pass;
+        # the return value is therefore a cross-org sum, not scoped to this
+        # test's own ingestion_id, hence the weak sanity check below rather
+        # than an exact-count assertion.
+        accepted = await _run_consumer_pass()
+    assert accepted > 0
 
-    # (a) recompute was QUEUED: schedule_or_coalesce's real dispatch seam is
-    # `flush_external_ingest_recompute.apply_async(countdown=...)`, NOT a
-    # direct `celery_app.send_task(...)` for run_daily_metrics/etc. -- those
-    # only fire from *inside* the flush task once its debounce window
-    # elapses (dev_health_ops/external_ingest/recompute.py). Patching the
-    # flush task itself (mirrors tests/test_external_ingest_recompute_debounce
-    # .py) is therefore the naming-agnostic, real seam.
-    mock_flush_task.apply_async.assert_called_once()
-    call_kwargs = mock_flush_task.apply_async.call_args.kwargs
-    assert call_kwargs["kwargs"] == {
-        "org_id": org_id,
-        "source_system": "github",
-        "source_instance": "acme/api",
-    }
-    assert call_kwargs["countdown"] > 0
+    # (a) recompute was QUEUED for THIS org specifically -- filter by kwargs
+    # rather than assert_called_once(), since other orgs swept up in the
+    # same consumer pass each trigger their own independent apply_async call.
+    matching_calls = [
+        call
+        for call in mock_apply_async.call_args_list
+        if call.kwargs.get("kwargs")
+        == {
+            "org_id": org_id,
+            "source_system": "github",
+            "source_instance": "acme/api",
+        }
+    ]
+    assert len(matching_calls) == 1, mock_apply_async.call_args_list
+    assert matching_calls[0].kwargs["countdown"] > 0
 
     status_resp = await client.get(
         f"{BASE}/batches/{ingestion_id}", headers=_headers(source_and_token)
@@ -483,8 +577,9 @@ async def test_worker_processes_all_nine_kinds_and_recompute_is_queued_not_inlin
 async def test_status_reports_partial_with_rejection_diagnostics(
     client, source_and_token, org_id
 ):
-    from dev_health_ops.api.external_ingest.schemas import SCHEMA_VERSION
-    from dev_health_ops.external_ingest.processor import process_batch
+    from dev_health_ops.workers.external_ingest_recompute import (
+        flush_external_ingest_recompute,
+    )
     from tests._helpers_external_ingest import build_batch_envelope
 
     envelope = build_batch_envelope(
@@ -498,18 +593,13 @@ async def test_status_reports_partial_with_rejection_diagnostics(
     assert resp.status_code == 202, resp.text
     ingestion_id = resp.json()["ingestionId"]
 
-    with patch(
-        "dev_health_ops.workers.external_ingest_recompute.flush_external_ingest_recompute",
-        MagicMock(),
-    ):
-        accepted = await process_batch(
-            ingestion_id=ingestion_id,
-            org_id=org_id,
-            source_system="github",
-            source_instance="acme/api",
-            schema_version=SCHEMA_VERSION,
-        )
-    assert accepted == 1
+    # Same real production entry point as the previous scenario (finding 2);
+    # only the enqueue call is patched (not asserted here -- covered by the
+    # dedicated recompute scenario above) so a real, unpatched apply_async
+    # never attempts a live Celery broker publish in this test.
+    with patch.object(flush_external_ingest_recompute, "apply_async"):
+        accepted = await _run_consumer_pass()
+    assert accepted > 0
 
     status_resp = await client.get(
         f"{BASE}/batches/{ingestion_id}", headers=_headers(source_and_token)
@@ -559,8 +649,14 @@ async def test_disabled_source_returns_403(client, disabled_source_and_token):
 
 
 async def test_stream_unavailable_returns_503_not_202(
-    client, source_and_token, monkeypatch
+    asgi_client, source_and_token, monkeypatch
 ):
+    # ALWAYS in-process (asgi_client, never the black-box `client` fixture):
+    # this monkeypatches an attribute on the `streams` module as imported
+    # into THIS test process. Against a separately-booted server process
+    # (LIVE_E2E_BASE_URL set) that patch would be invisible -- the server
+    # would enqueue successfully and this test would wrongly expect 503. See
+    # the module docstring's "Client selection" note.
     from dev_health_ops.api.external_ingest import streams as streams_mod
     from tests._helpers_external_ingest import build_batch_envelope
 
@@ -574,7 +670,7 @@ async def test_stream_unavailable_returns_503_not_202(
         idempotency_key=f"e2e-stream-unavailable-{uuid.uuid4()}",
         kinds=["repository"],
     )
-    resp = await client.post(
+    resp = await asgi_client.post(
         f"{BASE}/batches", json=envelope, headers=_headers(source_and_token)
     )
     assert resp.status_code == 503, resp.text

@@ -42,6 +42,7 @@ jobs:
               - 'alembic.ini'
               - 'Makefile'
               - 'scripts/**'
+              - '.github/workflows/live-e2e.yml'
 
   live-e2e:
     needs: [changes]

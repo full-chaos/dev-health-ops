@@ -378,6 +378,11 @@ echo "==> running customer-push external-ingest live e2e test (CHAOS-2702)"
   export DATABASE_URI="${DATABASE_URI}"
   export REDIS_URL="${REDIS_URL}"
   export JWT_SECRET_KEY="${JWT_SECRET_KEY}"
+  # Point the test's black-box `client` fixture at the real, already-booted
+  # `dev-hops api` server process (BASE_URL, computed above) instead of an
+  # in-process ASGITransport -- proves the real route-mounting/startup/
+  # uvicorn-config path, not just the FastAPI app object.
+  export LIVE_E2E_BASE_URL="${BASE_URL}"
   run_python -m pytest tests/test_external_ingest_customer_push_live.py -m clickhouse -q
 )
 

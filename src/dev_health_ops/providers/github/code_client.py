@@ -565,7 +565,25 @@ class GitHubCodeClient:
                 operation=operation,
                 params=params,
             )
-        except (AuthenticationException, NotFoundException):
+        except AuthenticationException as exc:
+            logger.warning(
+                "GitHub security endpoint unavailable provider=github owner=%s "
+                "repo=%s endpoint=%s status=auth error=%s",
+                owner,
+                repo,
+                endpoint,
+                exc,
+            )
+            return []
+        except NotFoundException as exc:
+            logger.warning(
+                "GitHub security endpoint unavailable provider=github owner=%s "
+                "repo=%s endpoint=%s status=404 error=%s",
+                owner,
+                repo,
+                endpoint,
+                exc,
+            )
             return []
         alerts = [build(item) for item in items]
         if max_alerts is not None:

@@ -28,6 +28,7 @@ from dev_health_ops.models import (
     IntegrationDataset,
     IntegrationSource,
     SyncRunMode,
+    SyncRunUnit,
 )
 from dev_health_ops.models.settings import SyncConfiguration
 from dev_health_ops.models.users import Organization
@@ -294,6 +295,11 @@ def test_scheduler_routes_migrated_config_through_planner(db_session, monkeypatc
     )
     assert len(plan_calls) == 1, "plan_sync_run must be called exactly once"
     assert len(dispatch_calls) == 1, "dispatch_sync_run.apply_async must be called once"
+    dataset_keys = {
+        unit.dataset_key
+        for unit in db_session.query(SyncRunUnit).order_by(SyncRunUnit.dataset_key)
+    }
+    assert dataset_keys == {"commits", "security"}
 
 
 # ---------------------------------------------------------------------------

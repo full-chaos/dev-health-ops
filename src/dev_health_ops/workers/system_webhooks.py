@@ -218,7 +218,7 @@ def _process_github_event(
                 sync_cicd=False,
                 sync_deployments=False,
                 sync_incidents=False,
-                sync_security=False,
+                sync_security=True,
                 sync_tests=False,
             )
         elif event_type == "pull_request":
@@ -232,7 +232,7 @@ def _process_github_event(
                 sync_cicd=False,
                 sync_deployments=False,
                 sync_incidents=False,
-                sync_security=False,
+                sync_security=True,
                 sync_tests=False,
             )
         elif event_type in ("issue_created", "issue_updated", "issue_closed"):
@@ -246,7 +246,7 @@ def _process_github_event(
                 sync_cicd=False,
                 sync_deployments=False,
                 sync_incidents=True,
-                sync_security=False,
+                sync_security=True,
                 sync_tests=False,
             )
         elif event_type == "deployment":
@@ -260,7 +260,7 @@ def _process_github_event(
                 sync_cicd=False,
                 sync_deployments=True,
                 sync_incidents=False,
-                sync_security=False,
+                sync_security=True,
                 sync_tests=False,
             )
         elif event_type == "workflow_run":
@@ -274,7 +274,7 @@ def _process_github_event(
                 sync_cicd=True,
                 sync_deployments=False,
                 sync_incidents=False,
-                sync_security=False,
+                sync_security=True,
                 sync_tests=False,
             )
 
@@ -415,7 +415,7 @@ def _process_gitlab_event(
                 sync_cicd=False,
                 sync_deployments=False,
                 sync_incidents=False,
-                sync_security=False,
+                sync_security=True,
                 sync_tests=False,
             )
         elif event_type == "merge_request":
@@ -429,7 +429,7 @@ def _process_gitlab_event(
                 sync_cicd=False,
                 sync_deployments=False,
                 sync_incidents=False,
-                sync_security=False,
+                sync_security=True,
                 sync_tests=False,
             )
         elif event_type in ("issue_created", "issue_updated", "issue_closed"):
@@ -443,7 +443,7 @@ def _process_gitlab_event(
                 sync_cicd=False,
                 sync_deployments=False,
                 sync_incidents=True,
-                sync_security=False,
+                sync_security=True,
                 sync_tests=False,
             )
         elif event_type == "pipeline":
@@ -457,7 +457,7 @@ def _process_gitlab_event(
                 sync_cicd=True,
                 sync_deployments=False,
                 sync_incidents=False,
-                sync_security=False,
+                sync_security=True,
                 sync_tests=False,
             )
 

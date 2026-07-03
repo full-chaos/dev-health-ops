@@ -9,8 +9,9 @@ behavior (the sync is best-effort garnish for those). Follow-up to CHAOS-2803.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -76,6 +77,41 @@ def test_github_non_rate_limit_error_degrades(monkeypatch: pytest.MonkeyPatch) -
     assert "error" in result
 
 
+@pytest.mark.parametrize(
+    "event_type",
+    ["push", "pull_request", "issue_created", "deployment", "workflow_run"],
+)
+def test_github_webhook_events_request_security_sync(
+    monkeypatch: pytest.MonkeyPatch, event_type: str
+) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "x")
+    process_repo = AsyncMock()
+
+    async def run_with_store(db_url, db_type, handler, org_id=None):
+        await handler(MagicMock())
+
+    with (
+        patch(
+            "dev_health_ops.workers.system_webhooks._get_db_url",
+            return_value="clickhouse://x",
+        ),
+        patch("dev_health_ops.storage.resolve_db_type", return_value="clickhouse"),
+        patch("dev_health_ops.storage.run_with_store", side_effect=run_with_store),
+        patch("dev_health_ops.processors.github.process_github_repo", process_repo),
+        patch(
+            "dev_health_ops.workers.system_webhooks.run_async",
+            side_effect=lambda awaitable: asyncio.run(awaitable),
+        ),
+    ):
+        result = system_webhooks._process_github_event(
+            event_type, _GITHUB_PAYLOAD, "org-1", None
+        )
+
+    assert result["processed"] is True
+    assert process_repo.await_args is not None
+    assert process_repo.await_args.kwargs["sync_security"] is True
+
+
 def test_gitlab_rate_limit_reraises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITLAB_TOKEN", "x")
     p1, p2, p3 = _patch_storage()
@@ -92,6 +128,42 @@ def test_gitlab_rate_limit_reraises(monkeypatch: pytest.MonkeyPatch) -> None:
             system_webhooks._process_gitlab_event(
                 "push", _GITLAB_PAYLOAD, "org-1", None
             )
+
+
+@pytest.mark.parametrize(
+    "event_type", ["push", "merge_request", "issue_created", "pipeline"]
+)
+def test_gitlab_webhook_events_request_security_sync(
+    monkeypatch: pytest.MonkeyPatch, event_type: str
+) -> None:
+    monkeypatch.setenv("GITLAB_TOKEN", "x")
+    process_project = AsyncMock()
+
+    async def run_with_store(db_url, db_type, handler, org_id=None):
+        await handler(MagicMock())
+
+    with (
+        patch(
+            "dev_health_ops.workers.system_webhooks._get_db_url",
+            return_value="clickhouse://x",
+        ),
+        patch("dev_health_ops.storage.resolve_db_type", return_value="clickhouse"),
+        patch("dev_health_ops.storage.run_with_store", side_effect=run_with_store),
+        patch(
+            "dev_health_ops.processors.gitlab.process_gitlab_project", process_project
+        ),
+        patch(
+            "dev_health_ops.workers.system_webhooks.run_async",
+            side_effect=lambda awaitable: asyncio.run(awaitable),
+        ),
+    ):
+        result = system_webhooks._process_gitlab_event(
+            event_type, _GITLAB_PAYLOAD, "org-1", None
+        )
+
+    assert result["processed"] is True
+    assert process_project.await_args is not None
+    assert process_project.await_args.kwargs["sync_security"] is True
 
 
 def test_jira_rate_limit_reraises() -> None:

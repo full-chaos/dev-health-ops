@@ -376,3 +376,74 @@ def test_github_usage_key_backward_compat() -> None:
         "linear_page_count",
         "linear_batch_count",
     )
+
+
+# ---------------------------------------------------------------------------
+# Provider-neutral partial-observations alias (CHAOS-2803/CS2)
+# ---------------------------------------------------------------------------
+
+
+def test_attach_and_read_partial_observations_round_trip() -> None:
+    from dev_health_ops.providers.usage import (
+        attach_partial_observations,
+        read_partial_observations,
+    )
+
+    exc = RuntimeError("boom")
+    observations = {"provider_usage": [{"route_family": "pr_social"}]}
+
+    attach_partial_observations(exc, observations)
+
+    assert read_partial_observations(exc) == observations
+
+
+def test_attach_partial_observations_is_noop_for_empty_payload() -> None:
+    from dev_health_ops.providers.usage import (
+        attach_partial_observations,
+        read_partial_observations,
+    )
+
+    exc = RuntimeError("boom")
+    attach_partial_observations(exc, {})
+
+    assert read_partial_observations(exc) is None
+
+
+def test_read_partial_observations_returns_none_when_never_attached() -> None:
+    from dev_health_ops.providers.usage import read_partial_observations
+
+    assert read_partial_observations(RuntimeError("boom")) is None
+
+
+def test_job_work_items_partial_observations_helpers_delegate_to_providers_usage() -> (
+    None
+):
+    """metrics/job_work_items.py's attach_work_item_partial_observations /
+    read_work_item_partial_observations now delegate to the provider-neutral
+    alias in providers/usage.py (CHAOS-2803/CS2) -- pinning that BOTH ends
+    read/write the SAME exception attribute, so cross-module reads (e.g.
+    workers/sync_units.py reading what dataset_adapters.py attached) work."""
+    from dev_health_ops.metrics.job_work_items import (
+        attach_work_item_partial_observations,
+        read_work_item_partial_observations,
+    )
+    from dev_health_ops.providers.usage import (
+        attach_partial_observations,
+        read_partial_observations,
+    )
+
+    exc = RuntimeError("boom")
+    observations = {"provider_usage": [{"route_family": "work_items"}]}
+
+    # Written via the work-items helper, read via the provider-neutral one.
+    attach_work_item_partial_observations(exc, observations)
+    assert read_partial_observations(exc) == observations
+
+    other_exc = RuntimeError("boom2")
+    other_observations = {"provider_usage": [{"route_family": "pr_social"}]}
+
+    # Written via the provider-neutral helper (the code-dataset adapter's call
+    # site), read via the work-items helper (workers/sync_units.py's call
+    # site) -- proves the SAME underlying attribute either way.
+    attach_partial_observations(other_exc, other_observations)
+    assert read_work_item_partial_observations(other_exc) == other_observations

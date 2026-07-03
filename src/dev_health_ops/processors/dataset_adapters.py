@@ -9,6 +9,10 @@ from dev_health_ops.credentials.resolver import (
     gitlab_credentials_from_mapping,
     resolve_gitlab_url,
 )
+from dev_health_ops.providers.usage import (
+    PROVIDER_USAGE_OBSERVATION_KEY,
+    attach_partial_observations,
+)
 from dev_health_ops.storage import resolve_db_type, run_with_store
 from dev_health_ops.sync.datasets import DatasetKey
 from dev_health_ops.workers.async_runner import run_async
@@ -203,6 +207,13 @@ def _run_github_dataset(
     owner, repo_name = _github_repo_parts(context.source_external_id)
     flags = _explicit_flags(context)
     token = _github_credentials(context)
+    # CHAOS-2803/CS2: adapter-owned sink. process_github_repo drains every
+    # instrumented client it constructs (currently: the PR review-batch's
+    # local GitHubWorkClient) into this list in a `finally:` block, on both
+    # the success AND failure path -- the list is mutated in place, so
+    # whatever was drained before a mid-sync raise is still visible here even
+    # though the raise unwinds through run_async below.
+    usage_sink: list[dict[str, Any]] = []
 
     async def _handler(store: Any) -> None:
         await process_github_repo(
@@ -227,10 +238,16 @@ def _run_github_dataset(
             sync_commit_stats=flags["sync_commit_stats"],
             sync_files=flags["sync_files"],
             sync_blame=flags["sync_blame"],
+            usage_sink=usage_sink,
         )
 
-    run_async(_run_with_reused_or_new_store(context, runtime, _handler))
-    return {
+    try:
+        run_async(_run_with_reused_or_new_store(context, runtime, _handler))
+    except Exception as exc:
+        _attach_usage_sink_to_exception(exc, usage_sink)
+        raise
+
+    result: dict[str, Any] = {
         "provider": context.provider,
         "dataset": context.dataset_key,
         "source": context.source_external_id,
@@ -244,6 +261,9 @@ def _run_github_dataset(
         if context.window_end is not None
         else None,
     }
+    if usage_sink:
+        result["observations"] = {PROVIDER_USAGE_OBSERVATION_KEY: list(usage_sink)}
+    return result
 
 
 def _run_gitlab_dataset(
@@ -254,6 +274,12 @@ def _run_gitlab_dataset(
     project_id = _gitlab_project_id(context.source_external_id)
     token, gitlab_url = _gitlab_credentials(context)
     flags = _explicit_flags(context)
+    # CHAOS-2803/CS2: adapter-owned sink (see _run_github_dataset). No
+    # instrumented client is constructed by process_gitlab_project yet (GitLab
+    # code-dataset fetch stays on the frozen connector until CHAOS-2773 Wave
+    # B), so this sink is inert today -- the plumbing is wired now so a
+    # future GitLab code client only has to start draining into it.
+    usage_sink: list[dict[str, Any]] = []
 
     async def _handler(store: Any) -> None:
         await process_gitlab_project(
@@ -278,10 +304,16 @@ def _run_gitlab_dataset(
             sync_commit_stats=flags["sync_commit_stats"],
             sync_files=flags["sync_files"],
             sync_blame=flags["sync_blame"],
+            usage_sink=usage_sink,
         )
 
-    run_async(_run_with_reused_or_new_store(context, runtime, _handler))
-    return {
+    try:
+        run_async(_run_with_reused_or_new_store(context, runtime, _handler))
+    except Exception as exc:
+        _attach_usage_sink_to_exception(exc, usage_sink)
+        raise
+
+    result: dict[str, Any] = {
         "provider": context.provider,
         "dataset": context.dataset_key,
         "source": context.source_external_id,
@@ -295,6 +327,24 @@ def _run_gitlab_dataset(
         if context.window_end is not None
         else None,
     }
+    if usage_sink:
+        result["observations"] = {PROVIDER_USAGE_OBSERVATION_KEY: list(usage_sink)}
+    return result
+
+
+def _attach_usage_sink_to_exception(
+    exc: BaseException, usage_sink: list[dict[str, Any]]
+) -> None:
+    """Preserve actuals drained before a mid-sync raise (CHAOS-2754) so the
+    worker's rate-limit deferral / failure stamp can still persist them --
+    the code-dataset twin of ``job_work_items.attach_work_item_partial_observations``,
+    via the provider-neutral alias (CHAOS-2803/CS2). No-ops when the sink is
+    empty. Never suppresses the error."""
+
+    if usage_sink:
+        attach_partial_observations(
+            exc, {PROVIDER_USAGE_OBSERVATION_KEY: list(usage_sink)}
+        )
 
 
 def _run_work_item_dataset(context: SyncTaskContext) -> dict[str, Any]:

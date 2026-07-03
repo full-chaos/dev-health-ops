@@ -248,3 +248,38 @@ def provider_usage_observations(client: object) -> dict[str, Any]:
 
     observations = drain_provider_usage(client)
     return {PROVIDER_USAGE_OBSERVATION_KEY: observations} if observations else {}
+
+
+# ---------------------------------------------------------------------------
+# Partial-observations-on-exception mechanism (CHAOS-2754 / CHAOS-2803 CS2)
+# ---------------------------------------------------------------------------
+# Exception attribute carrying best-effort usage observations gathered before a
+# mid-sync raise, so a worker deferral/failure stamp can persist actuals even
+# when the unit never returns normally. Originally implemented inline in
+# ``metrics/job_work_items.py`` for the work-items sync path only; hoisted here
+# so non-work-item callers (the CHAOS-2773 code-dataset adapters in
+# ``processors/dataset_adapters.py``) do not need to import a metrics module
+# just to preserve partial actuals across a raise. ``metrics/job_work_items.py``
+# now delegates its ``attach_work_item_partial_observations`` /
+# ``read_work_item_partial_observations`` to the functions below (same
+# attribute name, so anything already reading it -- e.g.
+# ``workers/sync_units.py::_merge_partial_observations_into_result`` --
+# continues to work unchanged for both callers).
+_PARTIAL_OBSERVATIONS_ATTR = "dev_health_partial_observations"
+
+
+def attach_partial_observations(
+    exc: BaseException, observations: dict[str, Any]
+) -> None:
+    """Stash partial usage observations on an in-flight exception (no-op when
+    empty) so a rate-limit deferral / failure can still record actuals."""
+
+    if observations:
+        setattr(exc, _PARTIAL_OBSERVATIONS_ATTR, observations)
+
+
+def read_partial_observations(exc: BaseException) -> dict[str, Any] | None:
+    """Read observations attached by :func:`attach_partial_observations`."""
+
+    observations = getattr(exc, _PARTIAL_OBSERVATIONS_ATTR, None)
+    return observations if isinstance(observations, dict) else None

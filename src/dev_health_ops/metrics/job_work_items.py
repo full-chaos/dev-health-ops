@@ -56,7 +56,11 @@ from dev_health_ops.providers.teams import (
     load_team_resolver,
     normalize_team_id,
 )
-from dev_health_ops.providers.usage import drain_provider_usage
+from dev_health_ops.providers.usage import (
+    attach_partial_observations,
+    drain_provider_usage,
+    read_partial_observations,
+)
 from dev_health_ops.storage import detect_db_type
 from dev_health_ops.utils.cli import (
     add_date_range_args,
@@ -316,12 +320,6 @@ def _build_linear_work_client(
     )
 
 
-# Exception attribute carrying best-effort usage observations gathered before a
-# mid-sync raise, so the worker deferral/failure stamp can persist actuals even
-# when the unit never returns normally (CHAOS-2754).
-_PARTIAL_OBSERVATIONS_ATTR = "dev_health_partial_observations"
-
-
 def _build_work_item_observations(
     *,
     github_usage: list[dict[str, Any]],
@@ -351,19 +349,29 @@ def attach_work_item_partial_observations(
     exc: BaseException, observations: dict[str, Any]
 ) -> None:
     """Stash partial usage observations on an in-flight exception (no-op when
-    empty) so a rate-limit deferral / failure can still record actuals."""
+    empty) so a rate-limit deferral / failure can still record actuals.
 
-    if observations:
-        setattr(exc, _PARTIAL_OBSERVATIONS_ATTR, observations)
+    Delegates to the provider-neutral ``providers.usage.attach_partial_observations``
+    (CHAOS-2803/CS2), which now owns the exception-attribute mechanism; kept
+    here (same name/behavior) since this is the work-items sync job's public
+    call site and is pinned by existing tests.
+    """
+
+    attach_partial_observations(exc, observations)
 
 
 def read_work_item_partial_observations(
     exc: BaseException,
 ) -> dict[str, Any] | None:
-    """Read observations attached by :func:`attach_work_item_partial_observations`."""
+    """Read observations attached by :func:`attach_work_item_partial_observations`.
 
-    observations = getattr(exc, _PARTIAL_OBSERVATIONS_ATTR, None)
-    return observations if isinstance(observations, dict) else None
+    Delegates to ``providers.usage.read_partial_observations`` (CHAOS-2803/CS2)
+    -- same underlying exception attribute, so this also reads observations
+    attached via the provider-neutral ``attach_partial_observations`` alias
+    (e.g. from the code-dataset adapters).
+    """
+
+    return read_partial_observations(exc)
 
 
 def run_work_items_sync_job(

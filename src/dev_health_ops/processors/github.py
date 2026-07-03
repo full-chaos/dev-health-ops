@@ -53,6 +53,7 @@ from dev_health_ops.processors.testops_ingest import (
 )
 from dev_health_ops.providers.github.client import GitHubAuth, GitHubWorkClient
 from dev_health_ops.providers.pr_state import normalize_pr_state
+from dev_health_ops.providers.usage import drain_provider_usage
 from dev_health_ops.utils import (
     AGGREGATE_STATS_MARKER,
     BATCH_SIZE,
@@ -629,6 +630,13 @@ def _collect_github_pr_objects(
     return pr_objects, raw_gh_prs
 
 
+# Route family this batch's GraphQL reviews traffic re-buckets to (CHAOS-2803
+# CS2 -- was previously mis-bucketed to work_item_prs via the transport
+# default, since the client emitted this operation with no family prefix; see
+# the CS1 short-circuit convention in providers/usage.py::OperationResolver).
+_PR_SOCIAL_ROUTE_FAMILY = "pr_social"
+
+
 def _enrich_prs_with_reviews_batch(
     connector,
     owner: str,
@@ -639,16 +647,39 @@ def _enrich_prs_with_reviews_batch(
     ingestion_sink: IngestionSink,
     loop: asyncio.AbstractEventLoop,
     gate: "RateLimitGate",
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> list[GitPullRequestReview]:
     """Batch-fetch reviews for all PRs and enrich pr_objects in place.
 
     Collects all review objects and returns them for a single bulk insert,
     replacing the N+1 pattern (one review API call per PR).
+
+    Constructs a local, per-call ``GitHubWorkClient`` (CHAOS-2803/CS2: this
+    was previously never drained, silently discarding its usage actuals).
+    ``usage_sink``, when given, is drained into in a ``finally:`` block on
+    BOTH the success and failure path. Failure semantics are split:
+    ``RateLimitException`` PROPAGATES (after the finally-drain) so the
+    adapter can attach the partial ``pr_social`` usage to the exception and
+    the worker can defer the unit to RETRYING; any other fetch error keeps
+    the pre-existing degrade-and-log behavior (reviews are optional
+    enrichment on top of the PR rows). ``usage_sink=None`` (a legacy entry
+    point with no adapter-owned sink -- CLI batch sync, webhooks) still
+    drains the client (so its recorder never leaks across calls) but only
+    logs the observations at debug level -- never persisted (CHAOS-2773 plan
+    §2, last bullet).
+
+    The reviews GraphQL call is labeled with the ``pr_social:`` family prefix
+    (CS1's explicit-prefix resolver short-circuit) so its traffic resolves to
+    the ``pr_social`` route family the estimator already budgets for, instead
+    of the unprefixed transport default (``work_item_prs``) that the
+    work-items PR-as-work-item path (``providers/github/provider.py``)
+    continues to emit unshifted.
     """
     all_review_objects: list[GitPullRequestReview] = []
     pr_objects_by_number = {int(pr.number): pr for pr in pr_objects}
     reviews_by_pr = {}
 
+    review_client: GitHubWorkClient | None = None
     try:
         review_client = _github_work_client_from_connector(connector, gate=gate)
         for pr_number, reviews in review_client.iter_pr_reviews_batch(
@@ -656,12 +687,43 @@ def _enrich_prs_with_reviews_batch(
             repo=repo_name,
             prs=raw_gh_prs,
             limit=None,
+            operation_family=_PR_SOCIAL_ROUTE_FAMILY,
         ):
             reviews_by_pr[int(pr_number)] = reviews
+    except RateLimitException:
+        # A rate limit must PROPAGATE (codex HIGH on CHAOS-2803): swallowing
+        # it here would stamp the unit SUCCESS with reviews silently missing
+        # and bypass both the adapter's partial-observation attach and the
+        # worker's RETRYING/not_before deferral branch (sync_units.py). The
+        # `finally:` below still runs during the unwind, so the partial
+        # pr_social usage recorded before the 429 is drained into the sink
+        # FIRST and travels with the exception (CHAOS-2754 failure-path
+        # preservation).
+        raise
     except Exception as e:
+        # Intentional degrade-and-log (pre-existing semantic): review data is
+        # optional enrichment garnish on top of the PR rows -- a non-rate-limit
+        # fetch failure (schema drift, permission edge, transient GraphQL
+        # error) must not fail the whole PR sync. Only rate limits are
+        # re-raised above, because they carry deferral semantics.
         logging.debug(
             "Failed to batch-fetch reviews for %s/%s: %s", owner, repo_name, e
         )
+    finally:
+        if review_client is not None:
+            drained = drain_provider_usage(review_client)
+            if usage_sink is not None:
+                usage_sink.extend(drained)
+            elif drained:
+                logging.debug(
+                    "_enrich_prs_with_reviews_batch: drained %d %s usage "
+                    "observation(s) for %s/%s with no adapter-owned sink "
+                    "(legacy entry point) -- logging only, not persisted",
+                    len(drained),
+                    _PR_SOCIAL_ROUTE_FAMILY,
+                    owner,
+                    repo_name,
+                )
 
     for gh_pr in raw_gh_prs:
         pr_number = int(getattr(gh_pr, "number", 0) or 0)
@@ -745,12 +807,14 @@ def _sync_github_prs_to_store(
     gate: RateLimitGate | None = None,
     since: datetime | None = None,
     until: datetime | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> int:
     """Fetch all PRs for a repo and insert them in batches.
 
     Runs in a worker thread; uses run_coroutine_threadsafe to write batches.
     Reviews are fetched in a single batch pass after all PRs are collected,
-    avoiding N+1 API calls.
+    avoiding N+1 API calls. ``usage_sink`` is threaded through to
+    ``_enrich_prs_with_reviews_batch`` (CHAOS-2803/CS2) -- see its docstring.
     """
     logging.info(
         "Fetching PRs for %s/%s...",
@@ -788,6 +852,7 @@ def _sync_github_prs_to_store(
         ingestion_sink=ingestion_sink,
         loop=loop,
         gate=gate,
+        usage_sink=usage_sink,
     )
 
     # Phase 3: persist reviews in one bulk insert
@@ -1526,9 +1591,18 @@ async def process_github_repo(
     sync_commit_stats: bool | None = None,
     sync_files: bool | None = None,
     sync_blame: bool | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> None:
     """
     Process a GitHub repository using the GitHub connector.
+
+    ``usage_sink`` (CHAOS-2803/CS2), when given, is the caller-owned list
+    every instrumented client this call constructs drains into (currently:
+    the PR review-batch's local ``GitHubWorkClient`` -- see
+    ``_enrich_prs_with_reviews_batch``). ``None`` (the default, used by the
+    legacy CLI batch/webhook entry points that do not own a sink) still
+    drains any such client but only logs the observations, never persisting
+    them.
     """
     if not CONNECTORS_AVAILABLE:
         raise RuntimeError("Connectors unavailable. Install required dependencies.")
@@ -1653,6 +1727,7 @@ async def process_github_repo(
                     None,
                     since,
                     until,
+                    usage_sink,
                 )
                 logging.info(f"Stored {pr_total} pull requests from GitHub")
 

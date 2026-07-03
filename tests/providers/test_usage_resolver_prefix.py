@@ -123,6 +123,50 @@ def test_gitlab_existing_labels_resolve_unshifted(
 
 
 # ---------------------------------------------------------------------------
+# 1b. CHAOS-2803/CS2: the FIRST intentional re-bucketing. The PR review-batch
+# enrichment (processors/github.py::_enrich_prs_with_reviews_batch) now labels
+# its local GitHubWorkClient's GraphQL calls with the "pr_social:" prefix, so
+# they resolve to `pr_social` instead of the unprefixed transport default
+# (`work_item_prs`) -- while the SAME literal label, unprefixed (still emitted
+# by providers/github/provider.py's work-items PR-as-work-item path, which
+# never passes operation_family), keeps resolving to `work_item_prs` exactly
+# as it always has (see GITHUB_EXISTING_LABELS above, unchanged).
+# ---------------------------------------------------------------------------
+
+GITHUB_CS2_PREFIXED_LABELS: tuple[tuple[str, str, tuple[str, BudgetDimension]], ...] = (
+    (
+        "graphql",
+        "pr_social:POST /graphql PR social data",
+        ("pr_social", BudgetDimension.GRAPHQL_COST),
+    ),
+    (
+        "graphql",
+        "pr_social:POST /graphql PR review comments",
+        ("pr_social", BudgetDimension.GRAPHQL_COST),
+    ),
+)
+
+
+@pytest.mark.parametrize("transport,operation,expected", GITHUB_CS2_PREFIXED_LABELS)
+def test_github_review_batch_prefixed_labels_resolve_to_pr_social(
+    transport: str, operation: str, expected: tuple[str, BudgetDimension]
+) -> None:
+    assert (
+        GITHUB_USAGE_RESOLVER.resolve(transport=transport, operation=operation)
+        == expected
+    )
+
+
+def test_github_review_batch_unprefixed_label_still_resolves_to_work_item_prs() -> None:
+    """Sanity check mirroring the GitLab pipelines/project one below: the SAME
+    literal operation, without the family prefix, is untouched -- proving the
+    CS2 fix is additive (a new label, not a resolver default change)."""
+    assert GITHUB_USAGE_RESOLVER.resolve(
+        transport="graphql", operation="POST /graphql PR social data"
+    ) == ("work_item_prs", BudgetDimension.GRAPHQL_COST)
+
+
+# ---------------------------------------------------------------------------
 # 2. Representative prefixed labels per registered family short-circuit.
 # ---------------------------------------------------------------------------
 

@@ -168,6 +168,16 @@ def _diagnostic_headers(headers: object) -> dict[str, str]:
     return {name: lowered[name] for name in _DIAGNOSTIC_HEADER_NAMES if name in lowered}
 
 
+def _prefixed_operation(operation_family: str | None, label: str) -> str:
+    """Apply the CS1 explicit-prefix resolver convention (``providers/usage.py::
+    OperationResolver``) to a GraphQL operation label: ``"<family>:<label>"``
+    when ``operation_family`` is given, else ``label`` unchanged (CHAOS-2803).
+    """
+    if not operation_family:
+        return label
+    return f"{operation_family}:{label}"
+
+
 def _github_error_message(data: object) -> str:
     if isinstance(data, dict):
         message = data.get("message")
@@ -839,6 +849,7 @@ class GitHubWorkClient:
         reviews_limit: int | None = None,
         events_limit: int | None = 0,
         batch_size: int = 50,
+        operation_family: str | None = None,
     ) -> Iterable[BatchedPRPayload]:
         """Fetch PR issue comments, reviews, and review comments in GraphQL batches.
 
@@ -849,6 +860,14 @@ class GitHubWorkClient:
         query per up-to-50 PRs. Nested connections are page-limited to control
         GraphQL cost and are paginated per PR only when the first page indicates
         more data.
+
+        ``operation_family`` (CHAOS-2803/CS1 short-circuit convention), when
+        given, prefixes every GraphQL operation label this call emits with
+        ``"<family>:"`` so ``OperationResolver`` resolves the recorded usage
+        DIRECTLY to that route family, bypassing the substring marker scan.
+        ``None`` (the default) preserves the existing unprefixed label exactly
+        -- unshifted attribution for callers that predate this convention
+        (``providers/github/provider.py``'s work-items PR-as-work-item path).
         """
         numbers: list[int] = []
         for pr in prs:
@@ -870,6 +889,7 @@ class GitHubWorkClient:
                 review_comments_first=self._connection_first(review_comments_limit),
                 reviews_first=self._connection_first(reviews_limit),
                 events_first=self._connection_first(events_limit),
+                operation_family=operation_family,
             )
             yield from self._complete_pr_social_payloads(
                 owner=owner,
@@ -879,6 +899,7 @@ class GitHubWorkClient:
                 review_comments_limit=review_comments_limit,
                 reviews_limit=reviews_limit,
                 events_limit=events_limit,
+                operation_family=operation_family,
             )
 
     def iter_pr_comments_batch(
@@ -926,8 +947,12 @@ class GitHubWorkClient:
         repo: str,
         prs: Sequence[_GitHubPullRequestLike],
         limit: int | None = None,
+        operation_family: str | None = None,
     ) -> Iterable[tuple[int, tuple[GitHubGraphQLReview, ...]]]:
-        """Return reviews keyed by PR number."""
+        """Return reviews keyed by PR number.
+
+        See :meth:`iter_pr_social_data_batch` for ``operation_family``.
+        """
         for payload in self.iter_pr_social_data_batch(
             owner=owner,
             repo=repo,
@@ -935,6 +960,7 @@ class GitHubWorkClient:
             comments_limit=0,
             review_comments_limit=0,
             reviews_limit=limit,
+            operation_family=operation_family,
         ):
             yield payload.number, payload.reviews
 
@@ -1021,6 +1047,7 @@ class GitHubWorkClient:
         reviews_after: str | None = None,
         events_first: int = 0,
         events_after: str | None = None,
+        operation_family: str | None = None,
     ) -> dict[int, dict[str, Any]]:
         aliases: list[str] = []
         for idx, number in enumerate(numbers):
@@ -1073,7 +1100,7 @@ class GitHubWorkClient:
         """
         with gate_call(self.gate):
             data = self._query_graphql(
-                "POST /graphql PR social data",
+                _prefixed_operation(operation_family, "POST /graphql PR social data"),
                 query,
                 variables={"owner": owner, "repo": repo},
             )
@@ -1091,6 +1118,7 @@ class GitHubWorkClient:
         review_id: str,
         first: int,
         after: str | None,
+        operation_family: str | None = None,
     ) -> dict[str, Any] | None:
         query = """
         query($reviewId: ID!, $first: Int!, $after: String) {
@@ -1106,7 +1134,9 @@ class GitHubWorkClient:
         """
         with gate_call(self.gate):
             data = self._query_graphql(
-                "POST /graphql PR review comments",
+                _prefixed_operation(
+                    operation_family, "POST /graphql PR review comments"
+                ),
                 query,
                 variables={"reviewId": review_id, "first": first, "after": after},
             )
@@ -1124,6 +1154,7 @@ class GitHubWorkClient:
         review_comments_limit: int | None,
         reviews_limit: int | None,
         events_limit: int | None = 0,
+        operation_family: str | None = None,
     ) -> Iterable[BatchedPRPayload]:
         for number, pr_node in initial.items():
             comments_connection = pr_node.get("comments")
@@ -1145,6 +1176,7 @@ class GitHubWorkClient:
                     review_comments_first=0,
                     reviews_first=0,
                     comments_after=comments_cursor,
+                    operation_family=operation_family,
                 ).get(number, {})
                 more_connection = (
                     more.get("comments") if isinstance(more, dict) else None
@@ -1173,6 +1205,7 @@ class GitHubWorkClient:
                     review_comments_first=self._connection_first(review_comments_limit),
                     reviews_first=self._connection_first(remaining_reviews),
                     reviews_after=reviews_cursor,
+                    operation_family=operation_family,
                 ).get(number, {})
                 more_reviews = more.get("reviews") if isinstance(more, dict) else None
                 reviews_nodes.extend(self._connection_nodes(more_reviews))
@@ -1205,6 +1238,7 @@ class GitHubWorkClient:
                         review_id=review_node_id,
                         first=self._connection_first(remaining_comments),
                         after=review_comment_cursor,
+                        operation_family=operation_family,
                     )
                     review_comments.extend(
                         self._comment_from_graphql(node)
@@ -1238,6 +1272,7 @@ class GitHubWorkClient:
                     reviews_first=0,
                     events_first=self._connection_first(remaining_events),
                     events_after=events_cursor,
+                    operation_family=operation_family,
                 ).get(number, {})
                 more_events = (
                     more.get("timelineItems") if isinstance(more, dict) else None

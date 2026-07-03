@@ -70,7 +70,7 @@ These inputs are supplied through global flags or environment variables (`--anal
 
 ```bash
 $ dev-hops metrics compounding-risk        # no CLICKHOUSE_URI / org configured
-usage: dev-health-ops metrics compounding-risk [-h] [--day DAY] ...
+usage: dev-health-ops metrics compounding-risk [-h] [--since SINCE | --backfill BACKFILL] ...
 dev-health-ops metrics compounding-risk: error: missing required input(s):
   - ClickHouse analytics database — pass --analytics-db or set CLICKHOUSE_URI (...)
   - organization id — pass --org or set ORG_ID (could not auto-resolve ...)
@@ -145,7 +145,7 @@ dev-hops sync git --provider gitlab \
 | `--project-id` | GitLab project ID |
 | `--since` | Start datetime (ISO 8601). Mutually exclusive with `--backfill` |
 | `--before` | End date (exclusive, default: tomorrow) |
-| `--backfill N` | Backfill N days ending at `--before`. Mutually exclusive with `--since` |
+| `--backfill N` | Backfill N days ending before `--before`. Mutually exclusive with `--since` |
 | `--sink` | Analytics backend (`clickhouse` only; default) |
 
 `--date` is a deprecated hidden alias for `--before`.
@@ -339,7 +339,7 @@ dev-hops metrics daily \
 |--------|-------------|
 | `--since` | Start date. Mutually exclusive with `--backfill` |
 | `--before` | End date (exclusive, default: tomorrow) |
-| `--backfill N` | Compute N days ending at `--before` (default: 1) |
+| `--backfill N` | Compute N days ending before `--before` (default: 1) |
 | `--repo-id` | Filter to specific repository |
 | `--sink` | Analytics backend (`clickhouse` only) |
 
@@ -364,7 +364,7 @@ dev-hops metrics rebuild \
 | `--repo-id` | Repo UUID to rebuild; repeatable. Omit to rebuild all repos |
 | `--since` | Start date (inclusive). Mutually exclusive with `--backfill` |
 | `--before` | End date (exclusive, default: tomorrow) |
-| `--backfill N` | Process N days ending at `--before` (default: 1) |
+| `--backfill N` | Process N days ending before `--before` (default: 1) |
 | `--sink` | Analytics backend (`clickhouse` only) |
 | `--provider` | Restrict to a single provider (default: `auto`) |
 
@@ -477,17 +477,22 @@ Compute the Compounding Risk composite from persisted inputs (`repo_metrics_dail
 ```bash
 dev-hops metrics compounding-risk --org "$ORG_ID"
 
-# Backfill additional days ending at --day
-dev-hops metrics compounding-risk --day 2025-02-02 --backfill 7
+# Backfill seven days ending before 2025-02-02, i.e. through 2025-02-01
+dev-hops metrics compounding-risk --before 2025-02-02 --backfill 7
+
+# Explicit inclusive start with exclusive end
+dev-hops metrics compounding-risk --since 2025-01-01 --before 2025-02-02
 ```
 
 **Options:**
 | Option | Description |
 |--------|-------------|
-| `--day` | Target day (UTC, default: today) |
-| `--backfill N` | Additional days to backfill, inclusive (default: 0) |
+| `--since` | Start date (inclusive). Mutually exclusive with `--backfill` |
+| `--before` | End date (exclusive, default: tomorrow) |
+| `--backfill N` | Process N days ending before `--before` (default: 1) |
+| `--sink` | Analytics backend (`clickhouse` only) |
 
-> Note: `metrics compounding-risk` uses `--day` + `--backfill` rather than the `--since`/`--before`/`--backfill` range shared by the other metrics commands.
+> CHAOS-2475 follow-up: `--day` is not supported. Use `--before <day-after-target> --backfill 1` for one historical day.
 
 ---
 
@@ -881,7 +886,7 @@ dev-hops backfill run \
 | `--config-id` | Sync configuration UUID (required) |
 | `--since` | Start date (ISO 8601). Mutually exclusive with `--backfill` |
 | `--before` | End date (exclusive, default: tomorrow) |
-| `--backfill N` | Backfill N days ending at `--before`. Mutually exclusive with `--since` |
+| `--backfill N` | Backfill N days ending before `--before`. Mutually exclusive with `--since` |
 | `--sink` | Analytics backend (`clickhouse` only; default) |
 
 Backfill depth is limited by organization tier:

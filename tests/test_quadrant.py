@@ -74,6 +74,71 @@ def test_quadrant_axis_label_snapshot():
 
 
 @pytest.mark.asyncio
+async def test_person_quadrant_passes_org_to_team_cohort_lookup(monkeypatch):
+    @asynccontextmanager
+    async def _fake_client(_db_url):
+        yield object()
+
+    async def _fake_identity_variants(_sink, *, person_id, org_id):
+        assert person_id == "person-1"
+        assert org_id == "org-X"
+        return ["dev@example.com"]
+
+    async def _fake_person_team(_sink, *, identities, org_id):
+        assert identities == ["dev@example.com"]
+        assert org_id == "org-X"
+        return "team-X"
+
+    async def _fake_metric(
+        _sink,
+        *,
+        scope_filter,
+        scope_params,
+        **_,
+    ):
+        assert scope_filter == "AND m.team_id = %(team_id)s"
+        assert scope_params == {"team_id": "team-X"}
+        return [
+            {
+                "bucket": date(2024, 1, 1),
+                "entity_id": "dev@example.com",
+                "entity_label": "dev@example.com",
+                "value": 2.0,
+            }
+        ]
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.services.quadrant.clickhouse_client", _fake_client
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.api.services.quadrant._resolve_identity_variants",
+        _fake_identity_variants,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.api.services.quadrant.fetch_person_team_id",
+        _fake_person_team,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.api.services.quadrant.fetch_quadrant_metric",
+        _fake_metric,
+    )
+
+    response = await build_quadrant_response(
+        db_url="clickhouse://test",
+        org_id="org-X",
+        type="review_load_latency",
+        scope_type="person",
+        scope_id="person-1",
+        range_days=30,
+        bucket="week",
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 1, 8),
+    )
+
+    assert response.points[0].entity_id
+
+
+@pytest.mark.asyncio
 async def test_quadrant_resolves_team_uuid_label_from_team_catalog(monkeypatch):
     team_uuid = "4e00fff2-df66-5028-8ebd-e4535332300b"
 

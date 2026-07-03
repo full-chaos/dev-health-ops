@@ -199,6 +199,11 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   same-provider donor), Jira (`test_jira_issue_project_wins_over_linked_issue`,
   `test_assignee_membership_wins_over_jira_linked_donor`). (Provider *link-capture* — distinct from
   the resolver — is also tested per provider, e.g. `test_gitlab_captures_external_key_*`.)
+- **Chart team attribution:** Investment Sankey, GraphQL TEAM flow-matrix/chord, team
+  Cycle Time × Throughput quadrant axes, and work-unit investment team evidence read the
+  primary `work_item_team_attributions` snapshot before rolling up team totals. Cycle-time
+  rows can still provide activity windows, durations, and co-occurrence bridges, but not the
+  owning team identity.
 - **Why it matters:** the team/project/member **dimension** is populated by the per-provider
   team/project/member sync. **"Auto Import" is a UX option** (checkboxes to import teams, projects,
   and members from an integration → `run_team_autoimport`, writing ClickHouse directly); manual
@@ -396,10 +401,12 @@ boundary).
 erDiagram
     work_items ||--o{ work_item_dependencies : "source of edges"
     work_items ||--o{ work_item_cycle_times : "completed to cycle row"
+    work_items ||--o{ work_item_team_attributions : "primary attribution candidates"
     work_item_dependencies }o--|| work_items : "target or extkey to donor issue"
-    teams ||--o{ work_item_cycle_times : "team_id"
-    work_item_cycle_times ||--o{ investment_coverage : "team/repo coverage %"
-    work_item_cycle_times ||--o{ team_exchange_chord : "cross-team flows"
+    teams ||--o{ work_item_team_attributions : "team_id"
+    work_item_team_attributions ||--o{ investment_coverage : "team/repo coverage %"
+    work_item_team_attributions ||--o{ team_exchange_chord : "team identity"
+    work_item_cycle_times ||--o{ team_exchange_chord : "activity/day/scope bridge"
 
     work_items {
         string work_item_id PK
@@ -418,9 +425,16 @@ erDiagram
     }
     work_item_cycle_times {
         string work_item_id
-        string team_id "inherited when a PR borrows a donor"
         string work_scope_id
         date   day
+        string org_id
+    }
+    work_item_team_attributions {
+        string work_item_id
+        string team_id "latest primary owner"
+        string source
+        uint8  is_primary
+        datetime computed_at
         string org_id
     }
     teams {
@@ -430,10 +444,9 @@ erDiagram
     }
 ```
 
-The chord and coverage both read `work_item_cycle_times.team_id`. Before
-inheritance, PR rows carried `unassigned`, so they never bridged to the issue
-trackers' teams; after, a PR's row carries the donor issue's team and the two
-providers finally co-occur on a team dimension.
+Coverage and team-identity hydration read latest primary rows from
+`work_item_team_attributions`. Cycle-time rows can still provide activity dates,
+durations, and co-occurrence bridges, but they are not the owning team source.
 
 ---
 
@@ -526,7 +539,16 @@ does not collapse to `unassigned`.
    SELECT count() FROM members WHERE org_id = '<org_id>';
    SELECT count() FROM team_memberships WHERE org_id = '<org_id>' AND provider = 'linear';
    SELECT count() FROM team_project_ownership WHERE org_id = '<org_id>' AND provider = 'linear';
-   SELECT team_id, count() FROM work_item_cycle_times WHERE org_id = '<org_id>' GROUP BY team_id;
+   SELECT team_id, count() FROM work_item_team_attributions FINAL
+   WHERE org_id = '<org_id>'
+     AND is_primary = 1
+     AND (work_item_id, computed_at) IN (
+       SELECT work_item_id, max(computed_at)
+       FROM work_item_team_attributions
+       WHERE org_id = '<org_id>'
+       GROUP BY work_item_id
+     )
+   GROUP BY team_id;
    ```
 
 | Aspect | `job_work_items` (sync) | `job_daily` (recompute) |
@@ -578,12 +600,13 @@ migration**, only a data replay.
 
 ### Why a plain backfill is not enough
 
-The investment **allocation** views derive team at *query time*: the coverage %
-and team-exchange chord read `work_unit_investments` and **LEFT JOIN**
-`work_item_cycle_times` for `argMax(team_id, …)`. So three things must be true,
-and the backfill **runner only re-runs `run_work_items_sync_job` — it does NOT
-fan out** to the work-graph or investment jobs (only the live sync path chains
-those). They must be triggered explicitly.
+The investment **allocation** views derive team at *query time*: the coverage %, 
+team-exchange chord, team Cycle Time × Throughput quadrant, and work-unit
+investment evidence read `work_unit_investments` / cycle-time activity and join
+latest primary `work_item_team_attributions` rows for team identity. So three
+things must be true, and the backfill **runner only re-runs
+`run_work_items_sync_job` — it does NOT fan out** to the work-graph or investment
+jobs (only the live sync path chains those). They must be triggered explicitly.
 
 ```mermaid
 flowchart TD
@@ -592,10 +615,10 @@ flowchart TD
         L["Linear (issues + attachment edges)"]
         G["GitHub / GitLab (PRs/MRs + comment/body edges)"]
     end
-    SYNC --> CT["work_item_dependencies (extkey/attachment edges)<br/>+ work_item_cycle_times.team_id (inherited)"]
+    SYNC --> CT["work_item_dependencies (extkey/attachment edges)<br/>+ work_item_team_attributions (latest primary owner)<br/>+ work_item_cycle_times (activity bridge)"]
     CT --> WG["3. work-graph build"]
     WG --> IM["4. investment materialize (--force)"]
-    IM --> Q["5. allocation coverage % + chord<br/>recover via query-time join to cycle_times"]
+    IM --> Q["5. allocation coverage % + chord<br/>recover via query-time join to primary attribution"]
 ```
 
 ### Ordered steps (per affected org)
@@ -605,14 +628,15 @@ flowchart TD
    nothing: the PR/MR rows and their edges come from the git providers, and the
    donor issues come from Linear. A single `--provider all` run (or per-provider
    with Linear synced so its issues are present) writes the edges and recomputes
-   `work_item_cycle_times.team_id`. The org is derived from the sync config
+   `work_item_team_attributions`. The org is derived from the sync config
    (#923), so `--org` is optional.
 3. **Work-graph build**, then
 4. **Investment materialize (`--force`)** — these rebuild `work_unit_investments`
    + its `structural_evidence_json.issues` (the coverage join keys); the backfill
    does not trigger them.
-5. **Verify & recover** — the coverage % and chord recover automatically via the
-   query-time join. Confirm the links were captured:
+5. **Verify & recover** — the coverage %, chord, team Cycle Time × Throughput
+   quadrant, and work-unit investment evidence recover automatically via the
+   query-time join to primary attribution. Confirm the links were captured:
 
    ```sql
    SELECT relationship_type_raw, count()

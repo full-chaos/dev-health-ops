@@ -6,6 +6,7 @@ from datetime import date
 from typing import Any
 
 from .client import query_dicts
+from .investment import PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE
 
 
 async def fetch_cycle_breakdown(
@@ -165,30 +166,39 @@ async def fetch_throughput(
     }
     params["org_id"] = org_id
 
-    filters = ["day >= %(start_day)s", "day < %(end_day)s", "org_id = %(org_id)s"]
+    filters = [
+        "wct.day >= %(start_day)s",
+        "wct.day < %(end_day)s",
+        "wct.org_id = %(org_id)s",
+    ]
     if team_id:
-        filters.append("team_id = %(team_id)s")
+        filters.append("t.team_id = %(team_id)s")
         params["team_id"] = team_id
     if provider:
-        filters.append("provider = %(provider)s")
+        filters.append("wct.provider = %(provider)s")
         params["provider"] = provider
     if work_scope_id:
-        filters.append("work_scope_id = %(work_scope_id)s")
+        filters.append("wct.work_scope_id = %(work_scope_id)s")
         params["work_scope_id"] = work_scope_id
 
     where_clause = " AND ".join(filters)
+    team_key_expr = "coalesce(nullIf(t.team_id, ''), 'unassigned')"
 
-    # Query work_item_metrics_daily for aggregate counts by team
-    # Note: No work_type available in this table, so we use 'All' as synthetic type
     query = f"""
         SELECT
             'All' AS work_type,
-            coalesce(nullIf(team_name, ''), 'Unassigned') AS team_name,
-            sum(items_completed) AS items_completed,
-            sum(items_started) AS items_started
-        FROM work_item_metrics_daily FINAL
+            if(
+                {team_key_expr} = 'unassigned',
+                'Unassigned',
+                coalesce(nullIf(any(t.team_name), ''), {team_key_expr})
+            ) AS team_name,
+            uniqExact(wct.work_item_id) AS items_completed,
+            0 AS items_started
+        FROM work_item_cycle_times AS wct FINAL
+        LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t
+          ON t.work_item_id = wct.work_item_id
         WHERE {where_clause}
-        GROUP BY team_name
+        GROUP BY {team_key_expr}
         HAVING items_completed > 0
         ORDER BY items_completed DESC
         LIMIT %(limit)s
@@ -218,25 +228,32 @@ async def fetch_throughput_by_type(
 
     # Filter by completed_at date range, not day column
     filters = [
-        "completed_at >= toDateTime(%(start_day)s)",
-        "completed_at < toDateTime(%(end_day)s)",
-        "completed_at IS NOT NULL",
-        "org_id = %(org_id)s",
+        "wct.completed_at >= toDateTime(%(start_day)s)",
+        "wct.completed_at < toDateTime(%(end_day)s)",
+        "wct.completed_at IS NOT NULL",
+        "wct.org_id = %(org_id)s",
     ]
     if team_id:
-        filters.append("team_id = %(team_id)s")
+        filters.append("t.team_id = %(team_id)s")
         params["team_id"] = team_id
 
     where_clause = " AND ".join(filters)
+    team_key_expr = "coalesce(nullIf(t.team_id, ''), 'unassigned')"
 
     query = f"""
         SELECT
-            coalesce(nullIf(type, ''), 'unclassified') AS work_type,
-            coalesce(nullIf(team_name, ''), 'Unassigned') AS team_name,
-            count(*) AS items_completed
-        FROM work_item_cycle_times
+            coalesce(nullIf(wct.type, ''), 'unclassified') AS work_type,
+            if(
+                {team_key_expr} = 'unassigned',
+                'Unassigned',
+                coalesce(nullIf(any(t.team_name), ''), {team_key_expr})
+            ) AS team_name,
+            uniqExact(wct.work_item_id) AS items_completed
+        FROM work_item_cycle_times AS wct FINAL
+        LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t
+          ON t.work_item_id = wct.work_item_id
         WHERE {where_clause}
-        GROUP BY work_type, team_name
+        GROUP BY work_type, {team_key_expr}
         HAVING items_completed > 0
         ORDER BY items_completed DESC
         LIMIT %(limit)s

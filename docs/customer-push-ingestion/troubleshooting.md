@@ -48,21 +48,49 @@ never saw the pointer) only becomes retryable after 15 minutes (see
   capped server-side at a maximum number of stored rejection rows per batch — if
   `errorSummary.truncated` is `true`, `total_rejected` exceeds what was persisted; the
   first-N are always the ones stored.
-- Per-record error `code` vocabulary (identical between `POST /validate` and worker-side
-  rejections, since both call the same validation function):
 
-| Code | Meaning |
-|---|---|
-| `unknown_kind` | `records[i].kind` isn't one of the 9 supported kinds. |
-| `missing_required_field` | A required field is absent from `payload`. |
-| `invalid_literal` | A field's value isn't one of its allowed literal/enum values. |
-| `invalid_field` | Any other field-level validation failure (wrong type, failed length/range constraint, etc). |
+!!! warning "`POST /validate` is shape-only — it does NOT catch everything the worker rejects"
+    `POST /validate` and the worker share the same *shape* validation
+    (`external_ingest.validate.validate_records`), but the worker additionally enforces two
+    source-context rules that `/validate` has no way to check (it never receives a registered
+    source to check against): the CC6 kind×system matrix, and git-family repo-instance
+    scoping. **A record can pass `/validate` cleanly and still be rejected once the batch is
+    processed**, showing up in `GET /batches/{id}`'s `errors[]` with one of the two extra codes
+    below.
+
+- Per-record error `code` vocabulary. `unknown_kind`/`missing_required_field`/
+  `invalid_literal`/`invalid_field` are shape errors, produced identically by `POST /validate`
+  and the worker (both call `validate_records`). `unsupported_kind_for_system` and
+  `record_outside_source_instance` are **worker-only** — they require the batch's registered
+  `source.system`/`source.instance`, which `/validate` never has:
+
+| Code | Meaning | Only from |
+|---|---|---|
+| `unknown_kind` | `records[i].kind` isn't one of the 9 supported kinds. | `/validate` and worker |
+| `missing_required_field` | A required field is absent from `payload`. | `/validate` and worker |
+| `invalid_literal` | A field's value isn't one of its allowed literal/enum values. | `/validate` and worker |
+| `invalid_field` | Any other field-level validation failure (wrong type, failed length/range constraint, etc). | `/validate` and worker |
+| `unsupported_kind_for_system` | The record's `kind` isn't allowed for the batch's `source.system` (e.g. a `commit.v1` record under a `jira` source) — see the kind×system matrix in [Schemas & Idempotency](schemas-and-idempotency.md#kind-x-system-matrix). | worker only |
+| `record_outside_source_instance` | A git-family record (`repository.v1`/`pull_request.v1`/`review.v1`/`commit.v1`) references a repository identifier that doesn't match the batch's `source.instance` (case-insensitive comparison). | worker only |
 
 - `path` points at the offending field: `records[<index>].payload.<field.path>` (or
-  `records[<index>].kind` for `unknown_kind`).
+  `records[<index>].kind` for `unknown_kind`/`unsupported_kind_for_system`).
+
+**Remediation:**
+
+- `unsupported_kind_for_system` — only send record kinds that are valid for the source's
+  system (e.g. don't send `work_item.v1` under a `github`/`gitlab`/`custom` source, and don't
+  send git-family kinds under a `jira`/`linear` source). See the matrix in
+  [Schemas & Idempotency](schemas-and-idempotency.md#kind-x-system-matrix).
+- `record_outside_source_instance` — keep every git-family record's repository identifier
+  (`externalId` for `repository.v1`, `repositoryExternalId` elsewhere) equal to the batch's
+  `source.instance`. A batch pushing data for multiple repositories must be split into one
+  batch per `source.instance`.
 
 Always run `POST /validate` (or `dev-hops push validate`) before `POST /batches` in CI to catch
-these before they cost a real batch attempt.
+shape errors before they cost a real batch attempt — but note it cannot catch the two
+worker-only codes above, since those need the registered source context that only exists at
+accept/processing time.
 
 ## Common failure modes and remediation
 

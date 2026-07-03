@@ -215,8 +215,35 @@ Lists batches for the caller's org.
 - **Auth scope:** `ingest:status`
 - **Query params:** `sourceSystem`, `sourceInstance`, `status`, `createdAfter`, `createdBefore`
   (all optional filters), `limit` (1-200, default 50), `offset` (default 0).
-- **Success — `200`:** `{"items": [...], "total": N, "limit": 50, "offset": 0}` — each item is
-  the same shape as a `GET /batches/{id}` response, minus `errors`/`errorSummary`/`recompute`.
+- **Success — `200`:**
+
+```json
+{
+  "items": [
+    {
+      "ingestionId": "b6c1e6b0-...-uuid",
+      "status": "partial",
+      "itemsReceived": 250,
+      "itemsAccepted": 248,
+      "itemsRejected": 2,
+      "source": {"system": "github", "instance": "acme/api"},
+      "window": {"startedAt": "2026-06-25T00:00:00Z", "endedAt": "2026-06-26T00:00:00Z"},
+      "producer": "dev-hops-cli",
+      "createdAt": "2026-06-26T00:01:00Z",
+      "completedAt": "2026-06-26T00:01:05Z"
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+  Each list item is a **narrower** shape than a `GET /batches/{id}` response — it has exactly
+  these 10 fields (`ingestionId`, `status`, `itemsReceived`, `itemsAccepted`, `itemsRejected`,
+  `source`, `window`, `producer`, `createdAt`, `completedAt`) and none of the detail-only
+  fields: no `attempts`, `producerVersion`, `updatedAt`, `errors`, `errorSummary`, or
+  `recompute`. Fetch `GET /batches/{id}` for any of those.
 - **Failure modes:** `401 invalid_token`, `403 insufficient_scope`, `429 rate_limited`.
 
 ---

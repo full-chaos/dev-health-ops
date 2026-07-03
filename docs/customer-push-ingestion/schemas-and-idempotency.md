@@ -40,7 +40,7 @@ never drift from what the server actually accepts. Validate your integration aga
 | `idempotencyKey` | 1-255 chars. Unique **forever** per `(org, source.system, source.instance, idempotencyKey)` — no TTL. See [Idempotency](#idempotency). |
 | `source.type` | Always `customer_push`. |
 | `source.system` | One of `github`, `gitlab`, `jira`, `linear`, `custom`. |
-| `source.instance` | The provider instance identifier — for git systems this must equal each record's `repositoryExternalId`/`externalId` (provider full name, e.g. `owner/repo`, not a URL). Matching against your token's bound source and the source-registration record is **case-insensitive**. |
+| `source.instance` | The provider instance identifier — for git systems this must equal each record's `repositoryExternalId`/`externalId` (provider full name, e.g. `owner/repo`, not a URL). **Must match your `ingest:write` token's bound source with EXACT casing** — the accept-time check (`require_matching_source`) is a plain string comparison, so a token bound to `Acme/API` rejects an envelope with `source.instance: "acme/api"` with `403 source_mismatch`. Registration-time ownership/dedup (whether an instance is already registered, and one-active-owner-vs-managed-sync checks) IS case-insensitive — which is why you can't separately register `Acme/API` and `acme/api` — but that leniency does not extend to this accept-time token/envelope match. Always send the exact instance string used when the source was registered. |
 | `source.producer` / `source.producerVersion` | Optional, free-text — identifies the client (e.g. `dev-hops-cli` / `0.12.0`). |
 | `window` | Optional. `startedAt`/`endedAt` — `endedAt` must be `>= startedAt`. |
 | `records` | 1-1000 entries (see [Batch limits](#batch-limits)). |
@@ -81,6 +81,27 @@ silently dropped data. Field names below are the wire (camelCase) names.
 `backlog | todo | in_progress | in_review | blocked | done | canceled | unknown`.
 `review.v1`'s `state` is one of `APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED |
 PENDING`. `pull_request.v1`'s `state` is one of `open | closed | merged`.
+
+## Kind x System Matrix
+
+Not every record kind is valid under every `source.system` — the worker (not `POST /validate`,
+which has no source context to check against) enforces which kinds a given system may push.
+Sending a disallowed kind is rejected with `unsupported_kind_for_system` — see
+[Troubleshooting](troubleshooting.md#rejected-record-diagnostics).
+
+| `source.system` | Allowed record kinds |
+|---|---|
+| `github` | All 9 kinds: `repository.v1`, `pull_request.v1`, `review.v1`, `commit.v1` (git family) + `work_item.v1`, `work_item_transition.v1`, `work_item_dependency.v1` (work-item family) + `team.v1`, `identity.v1` (org-scoped) |
+| `gitlab` | All 9 kinds (same as `github`) |
+| `jira` | `work_item.v1`, `work_item_transition.v1`, `work_item_dependency.v1` (work-item family) + `team.v1`, `identity.v1` (org-scoped) — no git-family kinds |
+| `linear` | Same as `jira` — work-item family + org-scoped only |
+| `custom` | `repository.v1`, `pull_request.v1`, `review.v1`, `commit.v1` (git family) + `team.v1`, `identity.v1` (org-scoped) — no work-item family in v1 |
+
+For `github`/`gitlab`/`custom` sources, every git-family record's repository identifier
+(`repository.v1`'s `externalId`, or `repositoryExternalId` on the other three git-family kinds)
+must also match the batch's `source.instance` (case-insensitive at this per-record check) — a
+mismatch is rejected with `record_outside_source_instance`. A batch covering multiple
+repositories must be split into one batch per `source.instance`.
 
 ### Canonical example payloads
 

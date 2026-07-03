@@ -15,6 +15,7 @@ import time
 import types
 import uuid
 from contextlib import asynccontextmanager
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -45,6 +46,12 @@ _REAL_IS_BATCH_TERMINAL_ASYNC = (
 )
 # Same rationale, for the module-wide `_processor_available` autouse stub.
 _REAL_PROCESSOR_AVAILABLE = consumer_mod._processor_available
+# Same rationale, for the module-wide `_resolve_mark_batch_failed` autouse
+# stub (CHAOS-2697: the processor module exists now, so the real resolver
+# would hand any give-up path the REAL Postgres-backed mark_batch_failed).
+_REAL_RESOLVE_MARK_BATCH_FAILED = (
+    consumer_mod.ExternalIngestStreamConsumer._resolve_mark_batch_failed
+)
 
 
 @pytest.fixture
@@ -109,6 +116,22 @@ def _processor_available(monkeypatch):
     monkeypatch.setattr(consumer_mod, "_processor_available", lambda: True)
 
 
+@pytest.fixture(autouse=True)
+def _mark_batch_failed_unresolvable(monkeypatch):
+    """CHAOS-2697's processor module exists now, so the real
+    ``_resolve_mark_batch_failed()`` would resolve the REAL Postgres-backed
+    ``mark_batch_failed`` inside any test whose give-up path runs -- reaching
+    for a live database from a unit test. Default every test to the
+    unresolvable branch (the pre-2697 behavior these mechanics tests were
+    written against); the tests exercising the resolution contract itself
+    restore ``_REAL_RESOLVE_MARK_BATCH_FAILED`` and install a fake module."""
+    monkeypatch.setattr(
+        consumer_mod.ExternalIngestStreamConsumer,
+        "_resolve_mark_batch_failed",
+        staticmethod(lambda: None),
+    )
+
+
 class TestHappyPath:
     def test_success_acks_and_not_pending(self, fake_redis):
         stream, entry_id = _xadd_batch(fake_redis)
@@ -159,10 +182,15 @@ class TestPermanentFailure:
         assert dlq_data["entry_id"] == entry_id
 
     def test_calls_mark_batch_failed(self, fake_redis, monkeypatch):
-        # dev_health_ops.external_ingest.processor is CHAOS-2697's module and
-        # does not exist yet in this issue's scope -- inject a stand-in so we
-        # can assert the give-up path calls it exactly as CC23 pins, without
-        # depending on 2697 having landed.
+        # Restore the real resolver (the autouse stub defaults it to
+        # unresolvable) and inject a stand-in module so we can assert the
+        # give-up path resolves and calls mark_batch_failed exactly as CC23
+        # pins -- without the real Postgres-backed implementation running.
+        monkeypatch.setattr(
+            consumer_mod.ExternalIngestStreamConsumer,
+            "_resolve_mark_batch_failed",
+            staticmethod(_REAL_RESOLVE_MARK_BATCH_FAILED),
+        )
         fake_processor = types.ModuleType("dev_health_ops.external_ingest.processor")
         mark_failed = AsyncMock()
         setattr(
@@ -189,11 +217,18 @@ class TestPermanentFailure:
     def test_mark_batch_failed_raising_leaves_entry_unacked(
         self, fake_redis, monkeypatch
     ):
-        """Adversarial-review round-2: a DLQ-written entry must NOT be ACKed
-        when the failed-status write raised -- otherwise the batch strands in
-        a non-terminal status while the entry is gone. Leaving it pending
-        lets a later redelivery retry the status write (a duplicate DLQ entry
-        on that retry is accepted operational noise)."""
+        """Adversarial-review rounds 1-3 (CHAOS-2697): when the failed-status
+        write raises, the entry must NOT be ACKed (the batch would strand
+        non-terminal with the entry gone), the DLQ row IS written (DLQ-first
+        ordering -- round 3: mark-first lost the row entirely when the XADD
+        failed after a successful mark), and retry cycles must NOT
+        accumulate duplicate DLQ rows (round 2: the per-entry marker
+        dedups)."""
+        monkeypatch.setattr(
+            consumer_mod.ExternalIngestStreamConsumer,
+            "_resolve_mark_batch_failed",
+            staticmethod(_REAL_RESOLVE_MARK_BATCH_FAILED),
+        )
         fake_processor = types.ModuleType("dev_health_ops.external_ingest.processor")
         mark_failed = AsyncMock(side_effect=RuntimeError("pg down"))
         setattr(fake_processor, "mark_batch_failed", mark_failed)
@@ -204,27 +239,47 @@ class TestPermanentFailure:
         stream, _entry_id = _xadd_batch(
             fake_redis, org_id="org-mark-raises", ingestion_id="ingest-mark-raises"
         )
-        c = _consumer()
+        c = _consumer(reclaim_idle_ms=0)
         with patch.object(
             consumer_mod.ExternalIngestStreamConsumer,
             "_process_entry_async",
             AsyncMock(side_effect=PermanentProcessingError("nope")),
         ):
             c.consume(max_iterations=1)
+            # Retry cycle (reclaim redelivers the still-pending entry; the
+            # sleep is the fakeredis XPENDING-idle requirement documented in
+            # TestReclaim): the mark fails again, and the marker must
+            # suppress a duplicate DLQ row.
+            time.sleep(0.01)
+            c.consume(max_iterations=1)
 
-        mark_failed.assert_awaited_once()
-        # DLQ entry was written...
+        assert mark_failed.await_count == 2
+        # DLQ-first ordering: the row IS written (round 3: mark-first lost it
+        # when the XADD failed after the mark landed) -- exactly once across
+        # both attempts (round 2: marker dedup)...
         dlq_entries = fake_redis.xrange("external-ingest:org-mark-raises:dlq")
         assert len(dlq_entries) == 1
-        # ...but the source entry remains pending (NOT acked) for a retry.
+        # ...and the source entry remains pending (NOT acked) for a retry.
         pending = fake_redis.xpending_range(
             stream, consumer_mod.CONSUMER_GROUP, min="-", max="+", count=10
         )
         assert len(pending) == 1
 
-    def test_missing_processor_module_does_not_crash_consumer(self, fake_redis):
-        """Before CHAOS-2697 lands, processor.py doesn't exist -- the
-        give-up path must log and continue, not crash the consumer loop."""
+    def test_missing_processor_module_does_not_crash_consumer(
+        self, fake_redis, monkeypatch
+    ):
+        """Rollback scenario: if a deploy removes CHAOS-2697's processor.py
+        again, the give-up path must log and continue, not crash the consumer
+        loop. Simulated by poisoning the sys.modules entry (a ``None`` value
+        makes ``import`` raise ImportError) under the REAL resolver."""
+        monkeypatch.setattr(
+            consumer_mod.ExternalIngestStreamConsumer,
+            "_resolve_mark_batch_failed",
+            staticmethod(_REAL_RESOLVE_MARK_BATCH_FAILED),
+        )
+        monkeypatch.setitem(
+            sys.modules, "dev_health_ops.external_ingest.processor", None
+        )
         stream, _entry_id = _xadd_batch(fake_redis, org_id="org-no-processor")
         c = _consumer()
         with patch.object(
@@ -290,8 +345,13 @@ class TestReclaim:
         assert len(pending_before) == 1
         assert pending_before[0]["times_delivered"] == 1
 
-        # Second pass: reclaim_stale() picks it up (idle=0 means everything
-        # is eligible), process_entry now succeeds.
+        # Second pass: reclaim_stale() picks it up, process_entry now
+        # succeeds. The sleep is load-bearing: fakeredis's XPENDING IDLE
+        # filter requires actual elapsed wall-clock ms (idle=0 does NOT mean
+        # "always eligible" -- see the identical note in the give-up test
+        # below); back-to-back consume() calls can land in the same 0ms tick
+        # under -n-distributed parallel load, making reclaim find nothing.
+        time.sleep(0.01)
         with patch.object(
             consumer_mod.ExternalIngestStreamConsumer,
             "_process_entry_async",
@@ -319,6 +379,11 @@ class TestReclaim:
         # above) exercises the awaited counterpart; this test is the sync
         # counterpart's regression coverage for the same class of bug (a
         # nested/re-entrant run_async() call would raise here).
+        monkeypatch.setattr(
+            consumer_mod.ExternalIngestStreamConsumer,
+            "_resolve_mark_batch_failed",
+            staticmethod(_REAL_RESOLVE_MARK_BATCH_FAILED),
+        )
         fake_processor = types.ModuleType("dev_health_ops.external_ingest.processor")
         mark_failed = AsyncMock()
         setattr(
@@ -365,6 +430,91 @@ class TestReclaim:
         mark_failed.assert_awaited_once()
         _args, kwargs = mark_failed.call_args
         assert kwargs["reason"] == "max_deliveries_exceeded"
+
+    def test_give_up_with_failing_mark_batch_failed_leaves_entry_unacked(
+        self, fake_redis, monkeypatch
+    ):
+        """CHAOS-2697 adversarial-review HIGH: the sync give-up path
+        (``reclaim_stale() -> move_to_dlq``) must NOT ACK when
+        ``mark_batch_failed`` raised -- ACKing would strand the batch in a
+        non-terminal status with its only retry handle gone (a ``processing``
+        row REPLAYs, never RETRYs). Rounds 2-3 refinement: the DLQ row IS
+        written (DLQ-first; mark-first lost it on XADD failure) but exactly
+        once across retry cycles (marker dedup -- outage retries previously
+        flooded the capped DLQ). Sync twin of
+        ``test_mark_batch_failed_raising_leaves_entry_unacked`` above."""
+        monkeypatch.setattr(
+            consumer_mod.ExternalIngestStreamConsumer,
+            "_resolve_mark_batch_failed",
+            staticmethod(_REAL_RESOLVE_MARK_BATCH_FAILED),
+        )
+        fake_processor = types.ModuleType("dev_health_ops.external_ingest.processor")
+        mark_failed = AsyncMock(side_effect=RuntimeError("pg down"))
+        setattr(fake_processor, "mark_batch_failed", mark_failed)
+        monkeypatch.setitem(
+            sys.modules, "dev_health_ops.external_ingest.processor", fake_processor
+        )
+
+        stream, entry_id = _xadd_batch(fake_redis, org_id="org-giveup-markfail")
+        c = _consumer(reclaim_idle_ms=0, max_deliveries=1)
+
+        with patch.object(
+            consumer_mod.ExternalIngestStreamConsumer,
+            "_process_entry_async",
+            AsyncMock(side_effect=RuntimeError("still broken")),
+        ):
+            # iter 1: fresh read, delivery #1, fails transiently, pending.
+            c.consume(max_iterations=1)
+            # iter 2: reclaim_stale sees delivery #1 >= max_deliveries(1) ->
+            # give-up -> DLQ write SUCCEEDS but mark_batch_failed raises ->
+            # move_to_dlq must return False -> entry must stay pending.
+            time.sleep(0.01)
+            c.consume(max_iterations=1)
+            # iter 3: give-up retried -- the marker must dedup the DLQ row
+            # while the mark keeps failing.
+            time.sleep(0.01)
+            c.consume(max_iterations=1)
+
+        assert mark_failed.await_count == 2
+        # DLQ-first: exactly one DLQ row across both give-up attempts...
+        dlq_entries = fake_redis.xrange("external-ingest:org-giveup-markfail:dlq")
+        assert len(dlq_entries) == 1
+        pending = fake_redis.xpending_range(
+            stream, consumer_mod.CONSUMER_GROUP, min="-", max="+", count=10
+        )
+        # ...and the source entry keeps its retry handle for the status write.
+        assert len(pending) == 1
+        assert pending[0]["message_id"] == entry_id
+
+    def test_give_up_transient_field_reread_failure_does_not_ack(self, fake_redis):
+        """CHAOS-2697 adversarial-review round-2 HIGH: a transient XRANGE
+        failure while re-reading the entry's fields must not be treated as
+        safe-to-ACK -- the batch would never be marked failed and its retry
+        handle would vanish. move_to_dlq must return False (retry later)."""
+        stream, entry_id = _xadd_batch(fake_redis, org_id="org-xrange-fail")
+        c = _consumer()
+        with patch.object(
+            consumer_mod.ExternalIngestStreamConsumer,
+            "_fetch_entry_fields",
+            lambda self, rc, sk, eid: None,
+        ):
+            assert c.move_to_dlq(fake_redis, stream, entry_id, "gave up") is False
+        assert fake_redis.xrange("external-ingest:org-xrange-fail:dlq") == []
+
+    def test_give_up_trimmed_entry_writes_tombstone_and_acks(self, fake_redis):
+        """An entry MAXLEN-trimmed while pending has no recoverable fields:
+        nothing addressable to mark, so the give-up path writes a tombstone
+        DLQ row and reports safe-to-ACK -- the possibly-stranded batch row is
+        the CHAOS-2769 orphan reconciler's target, not a reason to retry a
+        re-read that is authoritatively empty forever."""
+        c = _consumer()
+        stream = "external-ingest:org-trimmed:batches"
+        # Entry ID that was never XADDed: XRANGE succeeds and returns [].
+        assert c.move_to_dlq(fake_redis, stream, "0-1", "gave up") is True
+        dlq_entries = fake_redis.xrange("external-ingest:org-trimmed:dlq")
+        assert len(dlq_entries) == 1
+        assert dlq_entries[0][1]["ingestion_id"] == ""
+        assert dlq_entries[0][1]["org_id"] == "org-trimmed"
 
 
 class TestPerOrgDlqIsolation:
@@ -477,6 +627,100 @@ class TestMoveToDlqFailureIsSwallowed:
         assert pending[0]["message_id"] == entry_id
         assert broken.xrange("external-ingest:org-dlq-broken-reclaim:dlq") == []
 
+    def test_broken_dlq_xadd_never_marks_batch_failed(self, monkeypatch):
+        """CHAOS-2697 adversarial round 3: with DLQ-first ordering, a failed
+        DLQ XADD must leave the batch UNMARKED. Marking first would let the
+        idempotent-skip guard ACK the redelivered entry (the batch is now
+        terminal) before the DLQ write is ever retried -- silent DLQ loss.
+        Once the DLQ write recovers, the mark proceeds and the entry may be
+        ACKed."""
+
+        class FlakyDlq(FakeValkey):
+            fail_next = True
+
+            def xadd(self, name, *args, **kwargs):
+                if name.endswith(":dlq") and FlakyDlq.fail_next:
+                    FlakyDlq.fail_next = False
+                    raise ConnectionError("dlq blip")
+                return super().xadd(name, *args, **kwargs)
+
+        FlakyDlq.fail_next = True
+        # Any: valkey's sync xrange is typed Awaitable-or-value; the untyped
+        # fake fixtures elsewhere in this file get the same treatment.
+        rc: Any = FlakyDlq(decode_responses=True)
+        stream, entry_id = _xadd_batch(rc, org_id="org-dlq-flaky")
+
+        monkeypatch.setattr(
+            consumer_mod.ExternalIngestStreamConsumer,
+            "_resolve_mark_batch_failed",
+            staticmethod(_REAL_RESOLVE_MARK_BATCH_FAILED),
+        )
+        fake_processor = types.ModuleType("dev_health_ops.external_ingest.processor")
+        mark_failed = AsyncMock()
+        setattr(fake_processor, "mark_batch_failed", mark_failed)
+        monkeypatch.setitem(
+            sys.modules, "dev_health_ops.external_ingest.processor", fake_processor
+        )
+        c = _consumer()
+
+        # Attempt 1: XADD fails -> not safe to ACK, and crucially the batch
+        # was never marked (nothing for the terminal-skip guard to see).
+        assert c.move_to_dlq(rc, stream, entry_id, "gave up") is False
+        mark_failed.assert_not_awaited()
+        assert rc.xrange("external-ingest:org-dlq-flaky:dlq") == []
+
+        # Attempt 2 (retry): DLQ recovers -> row written -> mark runs ->
+        # safe to ACK.
+        assert c.move_to_dlq(rc, stream, entry_id, "gave up") is True
+        mark_failed.assert_awaited_once()
+        dlq_entries = rc.xrange("external-ingest:org-dlq-flaky:dlq")
+        assert len(dlq_entries) == 1
+
+    def test_marker_hit_rewrites_when_original_dlq_row_trimmed(self, fake_redis):
+        """CHAOS-2697 adversarial round 4 HIGH: the dedup marker must not
+        suppress a fresh DLQ write once the original row has been trimmed
+        from the capped stream. Otherwise a mark/ACK after trimming leaves a
+        failed batch with no surviving DLQ record -- silent DLQ loss under
+        sustained pressure. On a marker hit the code verifies the stored
+        stream-id is still present and, if trimmed, writes a fresh row."""
+        stream, entry_id = _xadd_batch(fake_redis, org_id="org-dlq-trim")
+        c = _consumer()
+        dlq = "external-ingest:org-dlq-trim:dlq"
+
+        assert c.move_to_dlq(fake_redis, stream, entry_id, "gave up") is True
+        first = fake_redis.xrange(dlq)
+        assert len(first) == 1
+        marker = f"{dlq}:written:{entry_id}"
+        # The marker stores the DLQ stream-id, not a bare flag.
+        assert fake_redis.get(marker) == first[0][0]
+
+        # Simulate the capped stream trimming the original row out.
+        fake_redis.xdel(dlq, first[0][0])
+        assert fake_redis.xrange(dlq) == []
+
+        # Retry: marker still points at the now-gone id -> must write fresh.
+        # The empty-then-non-empty transition proves a fresh XADD happened
+        # (a marker-only short-circuit would leave the stream empty -- the
+        # round-4 silent-loss bug). Not asserting id-inequality: fakeredis
+        # resets a drained stream's auto-id to <ms>-0 and can collide within
+        # one millisecond, unlike real Redis's monotonic last_id.
+        assert c.move_to_dlq(fake_redis, stream, entry_id, "gave up") is True
+        second = fake_redis.xrange(dlq)
+        assert len(second) == 1
+        assert fake_redis.get(marker) == second[0][0]
+
+    def test_marker_hit_with_surviving_row_does_not_duplicate(self, fake_redis):
+        """The dedup still holds when the original row survives (round-2
+        property preserved by the round-4 change): a marker hit whose stored
+        id is still present short-circuits without a second XADD."""
+        stream, entry_id = _xadd_batch(fake_redis, org_id="org-dlq-keep")
+        c = _consumer()
+        dlq = "external-ingest:org-dlq-keep:dlq"
+
+        assert c.move_to_dlq(fake_redis, stream, entry_id, "gave up") is True
+        assert c.move_to_dlq(fake_redis, stream, entry_id, "gave up") is True
+        assert len(fake_redis.xrange(dlq)) == 1
+
 
 class TestProcessorAvailabilityGuard:
     """Deployment-order guard (adversarial-review finding): before
@@ -518,11 +762,12 @@ class TestProcessorAvailabilityGuard:
 
     def test_processor_available_reflects_real_import(self):
         """Sanity check on the real (unmocked) helper: CHAOS-2697's module
-        genuinely does not exist yet at this issue's implementation time.
-        Uses the reference captured at collection time (module docstring
-        note above) since the autouse fixture in this file replaces
+        exists now, so the deployment-order guard genuinely passes — this is
+        the assertion that "merging processor.py arms the consumer". Uses the
+        reference captured at collection time (module docstring note above)
+        since the autouse fixture in this file replaces
         ``consumer_mod._processor_available`` for every other test."""
-        assert _REAL_PROCESSOR_AVAILABLE() is False
+        assert _REAL_PROCESSOR_AVAILABLE() is True
 
 
 class TestIdempotentSkipGuard:

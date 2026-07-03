@@ -39,6 +39,7 @@ nav:
       - Schemas & Idempotency: customer-push-ingestion/schemas-and-idempotency.md
       - Troubleshooting: customer-push-ingestion/troubleshooting.md
       - Setup Guide: customer-push-ingestion/setup-guide.md
+      - Examples & Quickstart: customer-push-ingestion/examples.md
   - Alerting: alerting.md
   - Architecture:
       - Overview: architecture.md

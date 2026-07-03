@@ -256,6 +256,35 @@ LATEST_WORK_UNIT_AUTHORS_CTE = """
 """.rstrip()
 
 
+# CHAOS-2833: Investment Sankey/coverage team resolution previously joined
+# work_item_cycle_times for team_id/team_name -- a cycle-time metrics rollup,
+# not the authoritative attribution source. A work item can carry a primary
+# row in work_item_team_attributions (the CHAOS-2600 precedence-resolved
+# winner) with no matching work_item_cycle_times row, which surfaced as a
+# false TEAM:unassigned Sankey node even though attribution already existed.
+# This is the single source every Investment Sankey/coverage team join must
+# read from: work_item_team_attributions FINAL, is_primary = 1, latest by
+# computed_at per work_item_id (docs/architecture/team-attribution.md §0).
+# Filter to the latest snapshot before reading plain nullable team fields so a
+# newer primary row with NULL team fields clears an older assigned team.
+# Centralized so no caller drifts back onto work_item_cycle_times.
+PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE = """(
+    SELECT
+        work_item_id,
+        team_id,
+        team_name
+    FROM work_item_team_attributions FINAL
+    WHERE org_id = %(org_id)s
+      AND is_primary = 1
+      AND (work_item_id, computed_at) IN (
+          SELECT work_item_id, max(computed_at)
+          FROM work_item_team_attributions
+          WHERE org_id = %(org_id)s
+          GROUP BY work_item_id
+      )
+)""".rstrip()
+
+
 async def fetch_investment_breakdown(
     sink: BaseMetricsSink,
     *,
@@ -462,15 +491,7 @@ async def fetch_investment_team_edges(
                     JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
                     [work_unit_investments.work_unit_id]
                 )) AS issue_id
-                LEFT JOIN (
-                    SELECT
-                        work_item_id,
-                        argMax(team_id, computed_at) AS team_id,
-                        argMax(team_name, computed_at) AS team_name
-                    FROM work_item_cycle_times
-                    WHERE org_id = %(org_id)s
-                    GROUP BY work_item_id
-                ) AS t ON t.work_item_id = issue_id
+                LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t ON t.work_item_id = issue_id
                 WHERE work_unit_investments.from_ts < %(end_ts)s
                   AND work_unit_investments.to_ts >= %(start_ts)s
                   AND work_unit_investments.org_id = %(org_id)s
@@ -536,15 +557,7 @@ async def fetch_investment_repo_team_edges(
                     JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
                     [work_unit_investments.work_unit_id]
                 )) AS issue_id
-                LEFT JOIN (
-                    SELECT
-                        work_item_id,
-                        argMax(team_id, computed_at) AS team_id,
-                        argMax(team_name, computed_at) AS team_name
-                    FROM work_item_cycle_times
-                    WHERE org_id = %(org_id)s
-                    GROUP BY work_item_id
-                ) AS t ON t.work_item_id = issue_id
+                LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t ON t.work_item_id = issue_id
                 WHERE work_unit_investments.from_ts < %(end_ts)s
                   AND work_unit_investments.to_ts >= %(start_ts)s
                   AND work_unit_investments.org_id = %(org_id)s
@@ -612,15 +625,7 @@ async def fetch_investment_team_category_repo_edges(
                     JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
                     [work_unit_investments.work_unit_id]
                 )) AS issue_id
-                LEFT JOIN (
-                    SELECT
-                        work_item_id,
-                        argMax(team_id, computed_at) AS team_id,
-                        argMax(team_name, computed_at) AS team_name
-                    FROM work_item_cycle_times
-                    WHERE org_id = %(org_id)s
-                    GROUP BY work_item_id
-                ) AS t ON t.work_item_id = issue_id
+                LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t ON t.work_item_id = issue_id
                 WHERE work_unit_investments.from_ts < %(end_ts)s
                   AND work_unit_investments.to_ts >= %(start_ts)s
                   AND work_unit_investments.org_id = %(org_id)s
@@ -688,15 +693,7 @@ async def fetch_investment_team_subcategory_repo_edges(
                     JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
                     [work_unit_investments.work_unit_id]
                 )) AS issue_id
-                LEFT JOIN (
-                    SELECT
-                        work_item_id,
-                        argMax(team_id, computed_at) AS team_id,
-                        argMax(team_name, computed_at) AS team_name
-                    FROM work_item_cycle_times
-                    WHERE org_id = %(org_id)s
-                    GROUP BY work_item_id
-                ) AS t ON t.work_item_id = issue_id
+                LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t ON t.work_item_id = issue_id
                 WHERE work_unit_investments.from_ts < %(end_ts)s
                   AND work_unit_investments.to_ts >= %(start_ts)s
                   AND work_unit_investments.org_id = %(org_id)s
@@ -768,15 +765,7 @@ async def fetch_investment_unassigned_counts(
                     JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
                     [work_unit_investments.work_unit_id]
                 )) AS issue_id
-                LEFT JOIN (
-                    SELECT
-                        work_item_id,
-                        argMax(team_id, computed_at) AS team_id,
-                        argMax(team_name, computed_at) AS team_name
-                    FROM work_item_cycle_times
-                    WHERE org_id = %(org_id)s
-                    GROUP BY work_item_id
-                ) AS t ON t.work_item_id = issue_id
+                LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t ON t.work_item_id = issue_id
                 WHERE work_unit_investments.from_ts < %(end_ts)s
                   AND work_unit_investments.to_ts >= %(start_ts)s
                   AND work_unit_investments.org_id = %(org_id)s
@@ -903,7 +892,7 @@ async def fetch_investment_quality_stats(
     team_filter = ""
     if team_scope_ids:
         params["team_scope_ids"] = team_scope_ids
-        team_join = """
+        team_join = f"""
         LEFT JOIN (
             SELECT
                 work_unit_id,
@@ -920,15 +909,7 @@ async def fetch_investment_quality_stats(
                     JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
                     [work_unit_investments.work_unit_id]
                 )) AS issue_id
-                LEFT JOIN (
-                    SELECT
-                        work_item_id,
-                        argMax(team_id, computed_at) AS team_id,
-                        argMax(team_name, computed_at) AS team_name
-                    FROM work_item_cycle_times
-                    WHERE org_id = %(org_id)s
-                    GROUP BY work_item_id
-                ) AS t ON t.work_item_id = issue_id
+                LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t ON t.work_item_id = issue_id
                 WHERE work_unit_investments.from_ts < %(end_ts)s
                   AND work_unit_investments.to_ts >= %(start_ts)s
                   AND work_unit_investments.org_id = %(org_id)s

@@ -10,6 +10,7 @@ import httpx
 
 from dev_health_ops.exceptions import APIException, AuthenticationException
 from dev_health_ops.metrics.testops_schemas import JobRunRow, PipelineRunExtendedRow
+from dev_health_ops.providers.usage import OperationResolver, UsageRecorder
 
 
 @dataclass(slots=True)
@@ -22,6 +23,8 @@ class PipelineSyncBatch:
 class BasePipelineAdapter(ABC):
     provider: str
     token_env_var: str = ""
+    usage_resolver: OperationResolver | None = None
+    diagnostic_header_names: tuple[str, ...] = ()
 
     def __init__(
         self,
@@ -44,6 +47,11 @@ class BasePipelineAdapter(ABC):
         self.timeout = timeout
         self._transport = transport
         self._client: httpx.AsyncClient | None = None
+        self._usage = (
+            UsageRecorder(resolver=self.usage_resolver)
+            if self.usage_resolver is not None
+            else None
+        )
 
     def _token_from_env(self) -> str | None:
         if not self.token_env_var:
@@ -83,9 +91,11 @@ class BasePipelineAdapter(ABC):
         url: str,
         *,
         params: dict[str, Any] | None = None,
+        operation: str | None = None,
     ) -> tuple[Any, httpx.Response]:
         client = await self._get_client()
         response = await client.request(method, url, params=params)
+        self._record_response_usage(response, operation=operation or f"{method} {url}")
         if response.status_code == 401:
             raise AuthenticationException(
                 f"{self.provider} authentication failed: {response.text}"
@@ -102,6 +112,7 @@ class BasePipelineAdapter(ABC):
         *,
         params: dict[str, Any] | None = None,
         data_key: str | None = None,
+        operation: str | None = None,
     ) -> list[Any]:
         aggregated: list[Any] = []
         page = 1
@@ -111,7 +122,7 @@ class BasePipelineAdapter(ABC):
         while True:
             current_params["page"] = page
             payload, response = await self._request_json(
-                "GET", url, params=current_params
+                "GET", url, params=current_params, operation=operation
             )
             items = payload.get(data_key, []) if data_key else payload
             if not isinstance(items, list):
@@ -140,6 +151,43 @@ class BasePipelineAdapter(ABC):
         if item_count < self.per_page:
             return None
         return current_page + 1
+
+    def _record_response_usage(
+        self, response: httpx.Response, *, operation: str
+    ) -> None:
+        if self._usage is None:
+            return
+        lowered = {str(k).lower(): str(v) for k, v in response.headers.items()}
+        safe_headers = {
+            name: lowered[name]
+            for name in self.diagnostic_header_names
+            if name in lowered
+        }
+        rate_limit: dict[str, Any] = {}
+        for header_name, field_name in (
+            ("x-ratelimit-remaining", "remaining"),
+            ("ratelimit-remaining", "remaining"),
+            ("x-ratelimit-reset", "reset"),
+            ("ratelimit-reset", "reset"),
+            ("x-ratelimit-limit", "limit"),
+            ("ratelimit-limit", "limit"),
+            ("x-ratelimit-used", "used"),
+            ("retry-after", "retry_after"),
+        ):
+            if header_name in safe_headers:
+                rate_limit[field_name] = safe_headers[header_name]
+        self._usage.record(
+            transport="rest",
+            operation=operation,
+            headers=safe_headers,
+            rate_limit=rate_limit,
+            status=response.status_code,
+        )
+
+    def drain_usage_observations(self) -> list[dict[str, Any]]:
+        if self._usage is None:
+            return []
+        return self._usage.drain()
 
     @staticmethod
     def parse_datetime(value: object) -> datetime | None:

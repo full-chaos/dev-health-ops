@@ -267,9 +267,9 @@ def categorization_json_schema() -> dict[str, Any]:
                     "required": ["quote", "source", "id"],
                     "additionalProperties": False,
                     "properties": {
-                        "quote": {"type": "string"},
+                        "quote": {"type": "string", "minLength": 1, "maxLength": 280},
                         "source": {"type": "string", "enum": ["issue", "pr", "commit"]},
-                        "id": {"type": "string"},
+                        "id": {"type": "string", "minLength": 1},
                     },
                 },
             },

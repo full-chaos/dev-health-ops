@@ -54,10 +54,16 @@ require_cmd curl
 
 CLICKHOUSE_URI_DEFAULT="clickhouse://ch:ch@127.0.0.1:8123/default"
 POSTGRES_URI_DEFAULT="postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/test_db"
+REDIS_URL_DEFAULT="redis://127.0.0.1:6379/0"
 
 CLICKHOUSE_URI="${CLICKHOUSE_URI:-${CLICKHOUSE_URI_DEFAULT}}"
 POSTGRES_URI="${POSTGRES_URI:-${POSTGRES_URI_DEFAULT}}"
 DATABASE_URI="${POSTGRES_URI}"
+# CHAOS-2702: the customer-push external-ingest live e2e module needs a real
+# Valkey/Redis instance (durable stream + bounded-recompute debounce), in
+# addition to the Postgres/ClickHouse this harness already provisions.
+REDIS_URL="${REDIS_URL:-${REDIS_URL_DEFAULT}}"
+export REDIS_URL
 
 API_HOST="${LIVE_E2E_API_HOST:-127.0.0.1}"
 API_PORT="${LIVE_E2E_API_PORT:-18080}"
@@ -90,6 +96,36 @@ cleanup() {
 }
 
 trap cleanup EXIT INT TERM
+
+wait_for_redis() {
+  # CHAOS-2702: fail fast (before burning time on fixture generation / API
+  # boot) if the Valkey service container isn't reachable yet. Uses the
+  # `valkey` python client (already a project dependency, see
+  # tests/test_external_ingest_customer_push_live.py) instead of requiring a
+  # `valkey-cli`/`redis-cli` binary on the runner.
+  local i
+  for ((i = 1; i <= READINESS_ATTEMPTS; i++)); do
+    if REDIS_URL="${REDIS_URL}" run_python - <<'PY'
+import os
+import sys
+
+import valkey
+
+client = valkey.from_url(os.environ["REDIS_URL"])
+try:
+    client.ping()
+except Exception:
+    sys.exit(1)
+PY
+    then
+      echo "Valkey ready after ${i} attempt(s)."
+      return 0
+    fi
+    sleep "${READINESS_SLEEP_SECS}"
+  done
+  echo "ERROR: Timed out waiting for Valkey readiness at ${REDIS_URL}."
+  return 1
+}
 
 generate_auth_token() {
   run_python - <<'PY'
@@ -217,6 +253,9 @@ PY
   return 1
 }
 
+echo "==> waiting for Valkey readiness"
+wait_for_redis
+
 echo "==> generating deterministic ClickHouse fixtures (metrics + work graph)"
 (
   export DISABLE_DOTENV=1
@@ -330,5 +369,21 @@ constraint = payload.get("constraint", {})
 assert constraint.get("title"), constraint
 assert constraint.get("evidence"), constraint
 PY
+
+echo "==> running customer-push external-ingest live e2e test (CHAOS-2702)"
+(
+  export DISABLE_DOTENV=1
+  export CLICKHOUSE_URI="${CLICKHOUSE_URI}"
+  export POSTGRES_URI="${POSTGRES_URI}"
+  export DATABASE_URI="${DATABASE_URI}"
+  export REDIS_URL="${REDIS_URL}"
+  export JWT_SECRET_KEY="${JWT_SECRET_KEY}"
+  # Point the test's black-box `client` fixture at the real, already-booted
+  # `dev-hops api` server process (BASE_URL, computed above) instead of an
+  # in-process ASGITransport -- proves the real route-mounting/startup/
+  # uvicorn-config path, not just the FastAPI app object.
+  export LIVE_E2E_BASE_URL="${BASE_URL}"
+  run_python -m pytest tests/test_external_ingest_customer_push_live.py -m clickhouse -q
+)
 
 echo "Live backend e2e checks passed."

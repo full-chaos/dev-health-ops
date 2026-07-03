@@ -1,0 +1,22 @@
+{
+  "kind": "work_item_dependency.v1",
+  "valid": {
+    "kind": "work_item_dependency.v1",
+    "externalId": "ABC-123-blocks-ABC-124",
+    "payload": {
+      "sourceExternalKey": "ABC-123",
+      "targetExternalKey": "ABC-124",
+      "relationshipType": "blocks",
+      "relationshipTypeRaw": "blocks"
+    }
+  },
+  "invalid": {
+    "kind": "work_item_dependency.v1",
+    "externalId": "ABC-123-blocks-ABC-124-invalid",
+    "payload": {
+      "sourceExternalKey": "ABC-123",
+      "targetExternalKey": "ABC-124"
+    },
+    "expectedError": {"code": "missing_required_field", "field": "relationshipType"}
+  }
+}

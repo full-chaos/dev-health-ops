@@ -154,3 +154,55 @@ def test_outer_task_falls_back_to_exponential_countdown() -> None:
             )
     # retries defaults to 0 outside a worker context: 30 * 2**0 == 30
     assert captured["countdown"] == 30
+
+
+def _capture_outer_countdown(exc: BaseException) -> int:
+    """Run the outer task with a processor that raises ``exc`` and return the
+    countdown handed to ``self.retry`` (never actually retrying)."""
+    captured: dict[str, Any] = {}
+
+    class _RetrySentinel(Exception):
+        pass
+
+    def _fake_retry(*, exc: Any, countdown: int) -> None:
+        captured["countdown"] = countdown
+        raise _RetrySentinel
+
+    with (
+        patch(
+            "dev_health_ops.workers.system_webhooks._process_github_event",
+            side_effect=exc,
+        ),
+        patch.object(system_webhooks.process_webhook_event, "retry", _fake_retry),
+    ):
+        task = cast(Any, system_webhooks.process_webhook_event)
+        with pytest.raises(_RetrySentinel):
+            task.run(
+                provider="github", event_type="pull_request", payload=_GITHUB_PAYLOAD
+            )
+    return captured["countdown"]
+
+
+def test_outer_task_infinite_retry_after_falls_back_to_exponential() -> None:
+    """A non-finite retry_after_seconds must not reach int() (OverflowError);
+    it falls back to exponential backoff so the webhook still retries."""
+    countdown = _capture_outer_countdown(
+        RateLimitException("limited", retry_after_seconds=float("inf"))
+    )
+    assert countdown == 30  # 30 * 2**0, not an OverflowError
+
+
+def test_outer_task_absurd_finite_retry_after_is_clamped() -> None:
+    """An oversized but finite retry_after_seconds is clamped to the cap."""
+    countdown = _capture_outer_countdown(
+        RateLimitException("limited", retry_after_seconds=10**9)
+    )
+    assert countdown == system_webhooks._MAX_RETRY_COUNTDOWN_SECONDS
+
+
+def test_outer_task_fractional_retry_after_is_ceiled() -> None:
+    """A sub-second/fractional delay rounds up to a real (>=1s) countdown."""
+    countdown = _capture_outer_countdown(
+        RateLimitException("limited", retry_after_seconds=90.5)
+    )
+    assert countdown == 91

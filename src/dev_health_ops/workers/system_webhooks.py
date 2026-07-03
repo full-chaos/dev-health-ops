@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 from datetime import datetime, timezone
 
@@ -11,6 +12,12 @@ from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.task_utils import _get_db_url, _invalidate_sync_cache
 
 logger = logging.getLogger(__name__)
+
+# Upper bound for a provider-supplied rate-limit retry delay. Caps absurd or
+# adversarial ``Retry-After`` values so an oversized (but finite) countdown
+# can't park a webhook retry for an unreasonable span; real rate limits clear
+# well within an hour.
+_MAX_RETRY_COUNTDOWN_SECONDS = 3600
 
 
 @celery_app.task(
@@ -102,13 +109,21 @@ def process_webhook_event(
         )
         # Honor a provider-supplied rate-limit delay when the escaping exception
         # carries one (RateLimitException.retry_after_seconds); otherwise fall
-        # back to the generic exponential backoff.
+        # back to the generic exponential backoff. Guard against non-finite or
+        # absurd values (e.g. a proxy echoing ``Retry-After: inf`` -> float(inf)):
+        # int(inf) raises OverflowError, which would escape this handler and drop
+        # the very webhook the retry exists to preserve. Round fractional delays
+        # up so a sub-second value still yields a real (>=1s) countdown.
         retry_after = getattr(exc, "retry_after_seconds", None)
-        countdown = (
-            int(retry_after)
-            if isinstance(retry_after, (int, float)) and retry_after > 0
-            else 30 * (2**self.request.retries)
-        )
+        if (
+            isinstance(retry_after, (int, float))
+            and not isinstance(retry_after, bool)
+            and math.isfinite(retry_after)
+            and retry_after > 0
+        ):
+            countdown = min(math.ceil(retry_after), _MAX_RETRY_COUNTDOWN_SECONDS)
+        else:
+            countdown = 30 * (2**self.request.retries)
         raise self.retry(exc=exc, countdown=countdown)
 
 

@@ -110,6 +110,7 @@ async def test_github_actions_adapter_maps_runs_and_jobs() -> None:
         org_id="org-1",
         since_date=_dt("2026-04-01T00:00:00Z"),
     )
+    observations = adapter.drain_usage_observations()
     await adapter.close()
 
     assert len(batch.pipeline_runs) == 1
@@ -127,6 +128,9 @@ async def test_github_actions_adapter_maps_runs_and_jobs() -> None:
     assert job["duration_seconds"] == 150.0
     assert job["runner_type"] == "hosted"
     assert batch.last_synced_cursor == _dt("2026-04-01T10:07:00Z")
+    assert len(observations) == 1
+    assert observations[0]["route_family"] == "tests"
+    assert observations[0]["request_count"] == 2
 
 
 @pytest.mark.asyncio

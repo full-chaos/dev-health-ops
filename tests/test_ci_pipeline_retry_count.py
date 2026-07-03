@@ -24,9 +24,15 @@ import pytest
 # pre-existing providers._base <-> connectors circular import when this file
 # is collected in isolation.
 import dev_health_ops.connectors  # noqa: F401
+from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.processors.base_git import build_ci_pipeline_run
-from dev_health_ops.processors.github import _fetch_github_workflow_runs_sync
+from dev_health_ops.processors.github import (
+    _fetch_github_workflow_runs_async,
+    _fetch_github_workflow_runs_sync,
+    _sync_github_test_reports,
+)
 from dev_health_ops.processors.gitlab import _fetch_gitlab_pipelines_sync
+from dev_health_ops.providers.github.code_client import GitHubWorkflowRunData
 from dev_health_ops.providers.gitlab.code_client import GitLabPipelineData
 from dev_health_ops.storage.mixins.cicd import CicdMixin
 
@@ -109,6 +115,114 @@ def test_github_workflow_run_absent_run_attempt_defaults_to_zero():
     )
 
     assert runs[0].retry_count == 0
+
+
+class _GitHubWorkflowRunClient:
+    def __init__(self, runs: list[GitHubWorkflowRunData]) -> None:
+        self.runs = runs
+        self.closed = False
+
+    async def get_workflow_runs(
+        self, owner: str, repo: str, *, max_runs: int
+    ) -> list[GitHubWorkflowRunData]:
+        return self.runs[:max_runs]
+
+    def drain_usage_observations(self) -> list[dict[str, object]]:
+        return [{"route_family": "cicd", "request_count": 1}]
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_github_workflow_run_async_drains_cicd_usage(monkeypatch):
+    run = GitHubWorkflowRunData(
+        run_id="200",
+        status="success",
+        queued_at=datetime(2023, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+        started_at=_STARTED,
+        finished_at=datetime(2023, 1, 1, 0, 5, 0, tzinfo=timezone.utc),
+        retry_count=2,
+    )
+    client = _GitHubWorkflowRunClient([run])
+    monkeypatch.setattr(
+        "dev_health_ops.processors.github._github_code_client_from_connector",
+        lambda connector: client,
+    )
+    usage_sink: list[dict[str, object]] = []
+
+    runs = await _fetch_github_workflow_runs_async(
+        object(),
+        "acme",
+        "widgets",
+        repo_id=None,
+        max_runs=10,
+        since=None,
+        usage_sink=usage_sink,
+    )
+
+    assert len(runs) == 1
+    assert runs[0].run_id == "200"
+    assert runs[0].retry_count == 2
+    assert usage_sink == [{"route_family": "cicd", "request_count": 1}]
+    assert client.closed is True
+
+
+@pytest.mark.asyncio
+async def test_sync_github_test_reports_drains_adapter_usage(monkeypatch):
+    class _Adapter:
+        def __init__(self, *, base_url: str, token: str) -> None:
+            self.base_url = base_url
+            self.token = token
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        def drain_usage_observations(self) -> list[dict[str, object]]:
+            return [{"route_family": "tests", "request_count": 2}]
+
+    class _Processor:
+        def __init__(self, ingestion_sink: object) -> None:
+            self.ingestion_sink = ingestion_sink
+
+        async def fetch_and_store(self, adapter: _Adapter, **kwargs: object):
+            return SimpleNamespace(pipeline_runs=1, job_runs=1)
+
+    monkeypatch.setattr(
+        "dev_health_ops.providers.github.testops_pipeline.GitHubActionsAdapter",
+        _Adapter,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.processors.testops_pipeline.TestOpsPipelineProcessor",
+        _Processor,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.processors.github._fetch_github_test_artifacts_sync",
+        lambda *args: [],
+    )
+    usage_sink: list[dict[str, object]] = []
+    connector = SimpleNamespace(
+        token="token",
+        _rest_base_url=lambda: "https://api.github.test",
+    )
+
+    await _sync_github_test_reports(
+        connector=connector,
+        gh_repo=SimpleNamespace(default_branch="main"),
+        owner="acme",
+        repo_name="widgets",
+        repo_id=None,
+        org_id="org-1",
+        ingestion_sink=cast(IngestionSink, object()),
+        loop=__import__("asyncio").get_running_loop(),
+        since=None,
+        usage_sink=usage_sink,
+    )
+
+    assert usage_sink == [{"route_family": "tests", "request_count": 2}]
 
 
 class _GitLabPipelineClient:

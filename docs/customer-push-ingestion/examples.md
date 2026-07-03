@@ -30,25 +30,33 @@ package example, snippet-included here so it can never drift from what the serve
 ```json
 {
   "schemaVersion": "external-ingest.v1",
-  "idempotencyKey": "acme-github-prs-2026-06-26",
+  "idempotencyKey": "sample-pull_request.v1",
   "source": {
     "type": "customer_push",
     "system": "github",
-    "instance": "github.com/acme",
+    "instance": "acme/api",
     "producer": "dev-hops-cli",
-    "producerVersion": "0.12.0"
+    "producerVersion": "1.0.0"
   },
-  "window": { "startedAt": "2026-06-25T00:00:00Z", "endedAt": "2026-06-26T00:00:00Z" },
+  "window": { "startedAt": "2026-06-20T00:00:00Z", "endedAt": "2026-06-26T00:00:00Z" },
   "records": [
     {
       "kind": "pull_request.v1",
-      "externalId": "acme/api#4821",
+      "externalId": "acme/api#482",
       "payload":
 --8<-- "pull_request.v1.json"
     }
   ]
 }
 ```
+
+!!! warning "`source.instance` scopes git-family records"
+    Note `source.instance` is `acme/api` — the **same** repository identifier as the
+    record's `repositoryExternalId`. The worker rejects a git-family record
+    (`repository`/`pull_request`/`review`/`commit`) whose repo falls outside the batch's
+    `source.instance` with `record_outside_source_instance`, and `source.instance` must
+    also match your registered source's casing exactly (else `403 source_mismatch`). Push
+    each repository's git records under a source registered for that repository.
 
 ## 2. Validate before you push
 
@@ -86,11 +94,18 @@ with `--poll`, blocks until a terminal status. Credentials come from flags or th
 
 ```bash
 export FULLCHAOS_API_URL="https://app.fullchaos.example"
-export FULLCHAOS_INGEST_TOKEN="fcpush_…"        # ingest:write scope, from your secret store
+export FULLCHAOS_INGEST_TOKEN="fcpush_…"        # from your secret store (scopes below)
 export FULLCHAOS_ORG_ID="…"
 
 dev-hops push batch --poll sample-batch.json
 ```
+
+!!! important "Scope the token for the whole flow"
+    This quickstart's single token drives three routes with **three different** scopes:
+    `POST /validate` needs `schema:read`, `POST /batches` needs `ingest:write`, and the
+    `GET /batches/{id}` polling (`--poll`, `push status`) needs `ingest:status`. Mint the
+    token with **all three** (`schema:read`, `ingest:write`, `ingest:status`) or a
+    write-only token will submit the batch and then `403` on the status poll.
 
 Raw REST — `202 Accepted` returns `{"ingestionId": "…", "status": "accepted", …}`:
 

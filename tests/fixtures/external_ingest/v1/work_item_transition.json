@@ -1,0 +1,28 @@
+{
+  "kind": "work_item_transition.v1",
+  "valid": {
+    "kind": "work_item_transition.v1",
+    "externalId": "ABC-123-transition-1",
+    "payload": {
+      "externalKey": "ABC-123",
+      "provider": "jira",
+      "occurredAt": "2026-06-21T09:00:00Z",
+      "fromStatus": "todo",
+      "toStatus": "in_progress",
+      "fromStatusRaw": "To Do",
+      "toStatusRaw": "In Progress",
+      "actor": "alice@acme.example"
+    }
+  },
+  "invalid": {
+    "kind": "work_item_transition.v1",
+    "externalId": "ABC-123-transition-1-invalid",
+    "payload": {
+      "externalKey": "ABC-123",
+      "provider": "jira",
+      "occurredAt": "2026-06-21T09:00:00Z",
+      "fromStatus": "todo"
+    },
+    "expectedError": {"code": "missing_required_field", "field": "toStatus"}
+  }
+}

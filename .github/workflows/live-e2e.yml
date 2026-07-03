@@ -77,6 +77,13 @@ jobs:
         options: >-
           --health-cmd "clickhouse-client --user ch --password ch --query 'SELECT 1'" --health-interval 10s --health-timeout 5s --health-retries 5
 
+      valkey:
+        image: valkey/valkey:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
+
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -97,6 +104,7 @@ jobs:
           DATABASE_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           CLICKHOUSE_URI: clickhouse://ch:ch@localhost:8123/default
           POSTGRES_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+          REDIS_URL: redis://localhost:6379/0
           LIVE_E2E_FIXTURE_SEED: "20260219"
           LIVE_E2E_API_LOG_FILE: ./live-e2e-api.log
           ENVIRONMENT: test

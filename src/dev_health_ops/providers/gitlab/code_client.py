@@ -378,8 +378,9 @@ class GitLabCodeClient:
                 params={"per_page": per_page},
             )
         except (NotFoundException, _GitLabSecurityForbidden) as exc:
-            logger.debug(
-                "GitLab vulnerability findings unavailable for project %s: %s",
+            logger.warning(
+                "GitLab security endpoint unavailable provider=gitlab project_id=%s "
+                "endpoint=vulnerability_findings error=%s",
                 project_id,
                 exc,
             )
@@ -402,8 +403,11 @@ class GitLabCodeClient:
                 params={"per_page": per_page},
             )
         except (NotFoundException, _GitLabSecurityForbidden) as exc:
-            logger.debug(
-                "GitLab dependencies unavailable for project %s: %s", project_id, exc
+            logger.warning(
+                "GitLab security endpoint unavailable provider=gitlab project_id=%s "
+                "endpoint=dependencies error=%s",
+                project_id,
+                exc,
             )
             return []
         payload = response.json()

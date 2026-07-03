@@ -58,18 +58,23 @@ class TestCompileFlowMatrix:
         assert len(nodes_queries) == 1
         assert len(edges_queries) == 1
 
-    def test_team_edges_use_asymmetric_cooccurrence(self) -> None:
-        """TEAM edges come from a self-join on work_item_cycle_times counting
-        the SOURCE team's distinct work items per shared scope+day — so edge
-        (A, B).value counts A's items, (B, A).value counts B's, producing an
-        asymmetric matrix whenever team volumes differ.
+    def test_team_edges_use_primary_attribution_and_asymmetric_cooccurrence(
+        self,
+    ) -> None:
+        """TEAM edges bridge cycle-time activity through primary attribution.
+
+        The SOURCE team's distinct work items per shared scope+day still make
+        edge (A, B).value count A's items and (B, A).value count B's, producing
+        an asymmetric matrix whenever team volumes differ.
         """
         _, edges_queries = compile_flow_matrix(_req("team"), org_id="org-1")
         edge_sql, _params = edges_queries[0]
         assert "'TEAM' AS source_dimension" in edge_sql
         assert "'TEAM' AS target_dimension" in edge_sql
-        assert "work_item_cycle_times AS a" in edge_sql
-        assert "INNER JOIN work_item_cycle_times AS b" in edge_sql
+        assert "FROM work_item_cycle_times AS wct FINAL" in edge_sql
+        assert "FROM work_item_team_attributions FINAL" in edge_sql
+        assert "is_primary = 1" in edge_sql
+        assert "INNER JOIN team_activity AS b" in edge_sql
         assert "a.work_scope_id = b.work_scope_id" in edge_sql
         assert "a.day = b.day" in edge_sql
         # asymmetric: count source-side items only, not product of both
@@ -82,7 +87,9 @@ class TestCompileFlowMatrix:
         stay consistent after the adapter's prefix-strip."""
         nodes_queries, _ = compile_flow_matrix(_req("team"), org_id="org-1")
         nodes_sql, _ = nodes_queries[0]
-        assert "work_item_cycle_times" in nodes_sql
+        assert "FROM work_item_cycle_times AS wct FINAL" in nodes_sql
+        assert "FROM work_item_team_attributions FINAL" in nodes_sql
+        assert "is_primary = 1" in nodes_sql
         assert "'TEAM' AS dimension" in nodes_sql
 
     @pytest.mark.parametrize("dim", ["team", "repo", "work_type"])

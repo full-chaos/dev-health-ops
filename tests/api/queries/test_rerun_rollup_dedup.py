@@ -72,6 +72,28 @@ async def test_quadrant_metric_leaves_plain_mergetree_untouched(
 
 
 @pytest.mark.asyncio
+async def test_quadrant_team_work_item_metric_uses_primary_attribution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _capture(monkeypatch, quadrant)
+    await quadrant.fetch_work_item_team_quadrant_metric(
+        cast(BaseMetricsSink, object()),
+        metric="throughput",
+        start_day=date(2026, 5, 1),
+        end_day=date(2026, 5, 2),
+        bucket="week",
+        org_id="org-a",
+    )
+
+    assert "FROM work_item_team_attributions FINAL" in captured["query"]
+    assert "FROM work_item_cycle_times AS wct FINAL" in captured["query"]
+    assert "is_primary = 1" in captured["query"]
+    assert "(work_item_id, computed_at) IN" in captured["query"]
+    assert "max(computed_at)" in captured["query"]
+    assert "work_item_metrics_daily" not in captured["query"]
+
+
+@pytest.mark.asyncio
 async def test_person_metric_value_dedups_rmt_table(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

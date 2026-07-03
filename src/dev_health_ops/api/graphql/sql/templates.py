@@ -8,6 +8,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from dev_health_ops.api.queries.investment import (
+    PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE,
+)
+
 from .validate import BucketInterval, Dimension, Measure
 
 
@@ -181,23 +185,33 @@ SETTINGS max_execution_time = %(timeout)s
 
 
 def flow_matrix_team_nodes_template() -> str:
-    """Nodes query for TEAM flow matrix, sourced from work_item_cycle_times.
+    """Nodes query for TEAM flow matrix.
 
-    Counts distinct work items per team in the window. The cycle_times table
-    carries the canonical per-work-item team assignment (one row per work item
-    per completed day) with real team diversity, unlike investment_metrics_daily
-    which aggregates and may collapse to a single team in sparse data.
+    Counts distinct completed work items per authoritative primary team in the
+    window. ``work_item_cycle_times`` supplies the activity/day/scope bridge;
+    ``work_item_team_attributions`` supplies the team identity.
     """
-    return """
+    return f"""
+WITH team_activity AS (
+    SELECT
+        wct.work_item_id,
+        wct.work_scope_id,
+        wct.day,
+        wct.org_id,
+        t.team_id AS team_id
+    FROM work_item_cycle_times AS wct FINAL
+    INNER JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t
+      ON t.work_item_id = wct.work_item_id
+    WHERE wct.day >= %(start_date)s AND wct.day <= %(end_date)s
+      AND wct.org_id = %(org_id)s
+      AND t.team_id IS NOT NULL
+      AND t.team_id != ''
+)
 SELECT
     'TEAM' AS dimension,
     toString(team_id) AS node_id,
     uniqExact(work_item_id) AS value
-FROM work_item_cycle_times
-WHERE day >= %(start_date)s AND day <= %(end_date)s
-  AND work_item_cycle_times.org_id = %(org_id)s
-  AND team_id IS NOT NULL
-  AND team_id != ''
+FROM team_activity
 GROUP BY node_id
 ORDER BY value DESC
 LIMIT %(limit_per_dim)s
@@ -206,7 +220,7 @@ SETTINGS max_execution_time = %(timeout)s
 
 
 def flow_matrix_team_edges_template() -> str:
-    """Asymmetric cross-team edges from work_item_cycle_times.
+    """Asymmetric cross-team edges from cycle-time activity and WITA teams.
 
     Self-joins on (work_scope_id, day, org_id) so every pair of teams that
     completed work in the same scope on the same day becomes an edge. The
@@ -224,23 +238,34 @@ def flow_matrix_team_edges_template() -> str:
     handoff (schema doesn't encode those natively), but a real directional
     signal that populates on any org with cross-team repo sharing.
     """
-    return """
+    return f"""
+WITH team_activity AS (
+    SELECT
+        wct.work_item_id,
+        wct.work_scope_id,
+        wct.day,
+        wct.org_id,
+        t.team_id AS team_id
+    FROM work_item_cycle_times AS wct FINAL
+    INNER JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t
+      ON t.work_item_id = wct.work_item_id
+    WHERE wct.day >= %(start_date)s AND wct.day <= %(end_date)s
+      AND wct.org_id = %(org_id)s
+      AND t.team_id IS NOT NULL
+      AND t.team_id != ''
+)
 SELECT
     'TEAM' AS source_dimension,
     'TEAM' AS target_dimension,
     toString(a.team_id) AS source,
     toString(b.team_id) AS target,
     uniqExact(a.work_item_id) AS value
-FROM work_item_cycle_times AS a
-INNER JOIN work_item_cycle_times AS b
+FROM team_activity AS a
+INNER JOIN team_activity AS b
   ON a.work_scope_id = b.work_scope_id
   AND a.day = b.day
   AND a.org_id = b.org_id
-WHERE a.day >= %(start_date)s AND a.day <= %(end_date)s
-  AND a.org_id = %(org_id)s
-  AND a.team_id IS NOT NULL AND a.team_id != ''
-  AND b.team_id IS NOT NULL AND b.team_id != ''
-  AND a.team_id != b.team_id
+WHERE a.team_id != b.team_id
 GROUP BY source, target
 ORDER BY value DESC
 LIMIT %(max_edges)s

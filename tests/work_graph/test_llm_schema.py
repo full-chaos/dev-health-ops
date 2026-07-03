@@ -129,6 +129,38 @@ def test_degenerate_probability_sum_still_rejected():
     assert any("probability_sum_out_of_range:0.5000" in err for err in result.errors)
 
 
+def test_all_zero_probability_sum_is_rejected():
+    payload: dict[str, object] = {
+        "subcategories": {key: 0.0 for key in SUBCATEGORIES},
+        "evidence_quotes": [
+            {"quote": "Fix login outage", "source": "issue", "id": "E1"}
+        ],
+        "uncertainty": "Reasonable confidence based on evidence.",
+    }
+    result = validate_llm_payload(payload, _source_texts(), _handle_map())
+    assert not result.ok
+    assert any("probability_sum_out_of_range:0.0000" in err for err in result.errors)
+
+
+def test_exact_quote_over_280_chars_is_rejected():
+    long_quote = "Fix login outage for auth service " * 10
+    source_texts = {
+        "issue": {"jira:ABC-1": long_quote},
+        "pr": _source_texts()["pr"],
+        "commit": _source_texts()["commit"],
+    }
+    payload: dict[str, object] = {
+        "subcategories": {"quality.bugfix": 1.0},
+        "evidence_quotes": [{"quote": long_quote, "source": "issue", "id": "E1"}],
+        "uncertainty": "Reasonable confidence based on evidence.",
+    }
+
+    assert len(long_quote) > 280
+    result = validate_llm_payload(payload, source_texts, _handle_map())
+    assert not result.ok
+    assert any("evidence_quote_too_long:0" in err for err in result.errors)
+
+
 def test_evidence_quote_substring_check_normalizes_whitespace():
     source_text = _source_texts()["commit"]["repo@abc"]
     payload: dict[str, object] = {

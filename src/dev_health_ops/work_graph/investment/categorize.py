@@ -28,11 +28,18 @@ CANONICAL_PROMPT = """You are categorizing work unit evidence into canonical inv
 
 Rules:
 - Output JSON only. No markdown, no explanations.
-- Use ONLY these subcategories as keys: {subcategories}
-- Provide a probability distribution across all subcategories (values 0-1, sum to 1).
-- Provide evidence_quotes as 1-10 items with exact substrings from the source text.
+- Use ALL 15 canonical subcategories as keys, exactly once each, and use ONLY these keys: {subcategories}
+- Provide a probability distribution across all 15 subcategories.
+- Every subcategory value must be a number from 0 to 1.
+- At least one subcategory value MUST be non-zero.
+- Irrelevant subcategories MUST be 0.
+- The 15 probability values MUST sum to exactly 1.
+- Provide evidence_quotes as 1-10 items with exact substrings copied from the source text.
 - evidence_quotes items must have: quote, source (issue|pr|commit), id.
 - evidence_quotes id MUST be the bracketed handle shown before an evidence block (for example "E1"), copied exactly.
+- evidence_quotes quote MUST be non-empty and <= 280 characters.
+- evidence_quotes quote MUST be an exact source substring, not a paraphrase, not a summary, and not normalized text.
+- Do NOT use ellipses unless the literal ellipsis characters appear in the source substring.
 - Provide uncertainty as a short string (1-280 chars).
 - No extra keys.
 
@@ -67,7 +74,19 @@ REPAIR_PROMPT = """Your previous response failed validation.
 Errors:
 {errors}
 
-Return JSON only matching the schema and rules.
+Repair requirements:
+- Return JSON only matching the schema and rules.
+- Keep all 15 canonical subcategory keys.
+- Ensure at least one subcategory value is non-zero.
+- Ensure the full probability distribution sums to exactly 1.
+- Set irrelevant subcategories to 0.
+- Every evidence quote must be a non-empty exact source substring with length <= 280.
+- Copy evidence id handles exactly from the source blocks.
+- Do not paraphrase, summarize, or invent evidence.
+
+Targeted fixes:
+{guidance}
+
 """
 
 FALLBACK_PRIOR = {
@@ -173,9 +192,30 @@ def build_categorization_prompt(bundle: TextBundle) -> str:
     return _build_prompt(bundle.source_block)
 
 
+def _repair_guidance(errors: list[str]) -> str:
+    guidance: list[str] = []
+    if any(err.startswith("evidence_quote_too_long") for err in errors):
+        guidance.append(
+            "- For evidence_quote_too_long: replace the quote with a shorter exact substring from the same source text, 1-280 characters only."
+        )
+    if any(err.startswith("probability_sum_out_of_range:0.0000") for err in errors):
+        guidance.append(
+            "- For probability_sum_out_of_range:0.0000: all probabilities were zero. Assign non-zero probability to the relevant canonical subcategories so the total becomes exactly 1."
+        )
+    elif any(err.startswith("probability_sum_out_of_range") for err in errors):
+        guidance.append(
+            "- For probability_sum_out_of_range: adjust the subcategory values so their total is exactly 1 while keeping all 15 canonical keys present."
+        )
+    if not guidance:
+        guidance.append(
+            "- Fix every listed validation error and return one fully valid JSON object."
+        )
+    return "\n".join(guidance)
+
+
 def _build_repair_prompt(errors: list[str], source_block: str) -> str:
     errors_text = "\n".join(f"- {err}" for err in errors)
-    repair = REPAIR_PROMPT.format(errors=errors_text)
+    repair = REPAIR_PROMPT.format(errors=errors_text, guidance=_repair_guidance(errors))
     return f"{repair}\n\n{_build_prompt(source_block)}"
 
 

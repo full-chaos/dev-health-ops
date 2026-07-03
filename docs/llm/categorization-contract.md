@@ -35,7 +35,7 @@ There are exactly three top-level keys — `subcategories`, `evidence_quotes`,
 
 | Requirement | Details |
 |-------------|---------|
-| `subcategories` | Probabilities over the canonical subcategory keys (see [Investment Taxonomy](../product/investment-taxonomy.md)); each value `0–1`. A sum in the clean band `[0.98, 1.02]` is accepted as-is; a sum in `[0.9, 1.1]` but outside the clean band is renormalized and flagged with `probability_sum_renormalized:{total}` in `categorization_errors_json`; a sum `≤ 0` or outside `[0.9, 1.1]` is rejected |
+| `subcategories` | Probabilities over all 15 canonical subcategory keys (see [Investment Taxonomy](../product/investment-taxonomy.md)); the prompt and schema require every key, with `0` for irrelevant categories. Each value is `0-1`. A sum in the clean band `[0.98, 1.02]` is accepted as-is; a sum in `[0.9, 1.1]` but outside the clean band is renormalized and flagged with `probability_sum_renormalized:{total}` in `categorization_errors_json`; a sum `≤ 0` or outside `[0.9, 1.1]` is rejected |
 | `evidence_quotes` | A **list** of 1–10 objects, each exactly `{ "quote", "source", "id" }` |
 | `quote` | An **extractive substring** of the provided source text (≤ 280 chars). Matching is whitespace-tolerant, but the **exact source span** is what gets persisted |
 | `source` | One of `issue`, `pr`, `commit` |
@@ -48,9 +48,20 @@ There are exactly three top-level keys — `subcategories`, `evidence_quotes`,
 {
   "subcategories": {
     "feature_delivery.customer": 0.45,
+    "feature_delivery.roadmap": 0.0,
+    "feature_delivery.enablement": 0.0,
     "operational.incident_response": 0.25,
+    "operational.on_call": 0.0,
+    "operational.support": 0.0,
+    "maintenance.refactor": 0.10,
+    "maintenance.upgrade": 0.0,
+    "maintenance.debt": 0.0,
+    "quality.testing": 0.0,
     "quality.bugfix": 0.20,
-    "maintenance.refactor": 0.10
+    "quality.reliability": 0.0,
+    "risk.security": 0.0,
+    "risk.compliance": 0.0,
+    "risk.vulnerability": 0.0
   },
   "evidence_quotes": [
     { "quote": "requested by customer", "source": "issue", "id": "E1" },
@@ -60,14 +71,14 @@ There are exactly three top-level keys — `subcategories`, `evidence_quotes`,
 }
 ```
 
-> The prompt requests a value for **all 15** subcategories. Validation requires every
-> provided key to be canonical and the values to sum within `[0.9, 1.1]` — a clean sum in
-> `[0.98, 1.02]` is accepted as-is, while a near-miss is renormalized and flagged with
-> `probability_sum_renormalized:{total}`. The validation step then fills any missing keys
-> with `0` and renormalizes via
-> `ensure_full_subcategory_vector`. Keys must match `investment_taxonomy.py` exactly —
-> obsolete keys like `operational.external` or `feature_delivery.platform` are rejected
-> as `unknown_subcategory`.
+> The prompt and schema require all 15 canonical subcategories, with `0` for irrelevant
+> categories. Validation requires every provided key to be canonical and the values to
+> sum within `[0.9, 1.1]`, a clean sum in `[0.98, 1.02]` is accepted as-is, while a
+> near-miss is renormalized and flagged with `probability_sum_renormalized:{total}`.
+> After that sum check, the validation step defensively fills any missing canonical keys
+> with `0` and renormalizes via `ensure_full_subcategory_vector`. Keys must match
+> `investment_taxonomy.py` exactly, obsolete keys like `operational.external` or
+> `feature_delivery.platform` are rejected as `unknown_subcategory`.
 
 ### Two-stage process
 

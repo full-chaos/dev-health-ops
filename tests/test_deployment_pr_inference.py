@@ -27,7 +27,7 @@ from dev_health_ops.processors.github import (
 )
 from dev_health_ops.processors.gitlab import (
     _fetch_gitlab_incidents_sync,
-    _resolve_gitlab_deployment_mr,
+    _resolve_gitlab_deployment_mr_from_items,
 )
 
 REPO_ID = uuid.uuid4()
@@ -104,32 +104,25 @@ class TestGitHubDeploymentPRInference:
 
 class TestGitLabDeploymentMRInference:
     def test_resolves_merged_mr(self) -> None:
-        connector = Mock()
-        connector.rest_client.get_list.return_value = [
+        merge_requests = [
             {"iid": 5, "state": "opened", "merged_at": None},
             {"iid": 6, "state": "merged", "merged_at": "2026-06-12T00:00:00Z"},
         ]
 
-        number, merged_at = _resolve_gitlab_deployment_mr(connector, 123, "abc")
+        number, merged_at = _resolve_gitlab_deployment_mr_from_items(merge_requests)
 
         assert number == 6
         assert merged_at is not None
-        connector.rest_client.get_list.assert_called_once_with(
-            "projects/123/repository/commits/abc/merge_requests"
-        )
 
     def test_no_sha_or_failure_is_soft(self) -> None:
-        connector = Mock()
-        assert _resolve_gitlab_deployment_mr(connector, 123, None) == (None, None)
-        connector.rest_client.get_list.side_effect = RuntimeError("boom")
-        assert _resolve_gitlab_deployment_mr(connector, 123, "abc") == (None, None)
+        assert _resolve_gitlab_deployment_mr_from_items([]) == (None, None)
+        assert _resolve_gitlab_deployment_mr_from_items(object()) == (None, None)
 
     def test_non_numeric_iid_is_soft(self) -> None:
-        connector = Mock()
-        connector.rest_client.get_list.return_value = [
+        merge_requests = [
             {"iid": "abc", "state": "merged", "merged_at": "2026-06-12T00:00:00Z"}
         ]
-        number, merged_at = _resolve_gitlab_deployment_mr(connector, 123, "abc")
+        number, merged_at = _resolve_gitlab_deployment_mr_from_items(merge_requests)
         assert number is None
         assert merged_at is not None
 

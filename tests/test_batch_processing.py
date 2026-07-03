@@ -1418,6 +1418,9 @@ async def test_process_gitlab_projects_batch_stores_commits_and_stats(monkeypatc
                 on_project_complete(result)
             return [result]
 
+        def _get_projects_for_processing(self, **kwargs):
+            return [project]
+
         def close(self):
             return
 
@@ -1447,6 +1450,99 @@ async def test_process_gitlab_projects_batch_stores_commits_and_stats(monkeypatc
     expected_repo_id = get_repo_uuid_from_repo(project.full_name)
     assert all(c.repo_id == expected_repo_id for c in recorded_commits)
     assert "gitlab123" in {s.commit_hash for s in recorded_stats}
+
+
+@pytest.mark.asyncio
+async def test_process_gitlab_projects_batch_threads_code_usage_sink(monkeypatch):
+    _enable_connector_stubs(monkeypatch)
+    seen_usage_sink_ids: list[int] = []
+    seen_usage_sink_values: list[dict[str, object]] = []
+
+    class DummyStore:
+        async def insert_repo(self, repo):
+            return
+
+        async def insert_ci_pipeline_runs(self, pipeline_runs):
+            return
+
+        async def insert_deployments(self, deployments):
+            return
+
+    project = Mock()
+    project.id = 456
+    project.full_name = "group/proj-usage"
+    project.url = "https://example.com/group/proj-usage"
+    project.default_branch = "main"
+    result = BatchResult(repository=project, stats=None, success=True)
+
+    class DummyConnector:
+        def __init__(self, url: str, private_token: str):
+            self.url = url
+            self.private_token = private_token
+
+        async def get_projects_with_stats_async(self, **kwargs):
+            on_project_complete = kwargs.get("on_project_complete")
+            if on_project_complete:
+                on_project_complete(result)
+            return [result]
+
+        def _get_projects_for_processing(self, **kwargs):
+            return [project]
+
+        def close(self):
+            return
+
+    def fake_fetch_pipelines(
+        connector, project_id, repo_id, max_pipelines, since, usage_sink=None
+    ):
+        assert usage_sink is not None
+        seen_usage_sink_ids.append(id(usage_sink))
+        usage_sink.append({"route_family": "pipelines"})
+        seen_usage_sink_values.extend(usage_sink)
+        return []
+
+    def fake_fetch_deployments(
+        connector, project_id, repo_id, max_deployments, since, usage_sink=None
+    ):
+        assert usage_sink is not None
+        seen_usage_sink_ids.append(id(usage_sink))
+        usage_sink.append({"route_family": "deployments"})
+        seen_usage_sink_values.extend(usage_sink)
+        return []
+
+    monkeypatch.setattr(processors.gitlab, "GitLabConnector", DummyConnector)
+    monkeypatch.setattr(
+        processors.gitlab, "_fetch_gitlab_pipelines_sync", fake_fetch_pipelines
+    )
+    monkeypatch.setattr(
+        processors.gitlab, "_fetch_gitlab_deployments_sync", fake_fetch_deployments
+    )
+
+    await processors.gitlab.process_gitlab_projects_batch(
+        store=DummyStore(),
+        token="unit-token",
+        gitlab_url="https://gitlab.com",
+        group_name="group",
+        pattern="group/*",
+        batch_size=1,
+        max_concurrent=1,
+        rate_limit_delay=0,
+        use_async=True,
+        sync_git=False,
+        sync_prs=False,
+        sync_cicd=True,
+        sync_deployments=True,
+        sync_incidents=False,
+        sync_security=False,
+        sync_tests=False,
+        backfill_missing=False,
+    )
+
+    assert len(set(seen_usage_sink_ids)) == 1
+    assert {item["route_family"] for item in seen_usage_sink_values} == {
+        "pipelines",
+        "deployments",
+    }
 
 
 class TestPatternMatching:

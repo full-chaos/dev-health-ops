@@ -54,11 +54,13 @@ def _router_transport(
     consumed per hit, the last repeats) or a single fixed response."""
     calls: dict[str, int] = {}
     captured_headers: dict[str, httpx.Headers] = {}
+    captured_urls: dict[str, httpx.URL] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
         calls[path] = calls.get(path, 0) + 1
         captured_headers[path] = request.headers
+        captured_urls[path] = request.url
         entry = routes[path]
         if isinstance(entry, list):
             idx = min(calls[path] - 1, len(entry) - 1)
@@ -68,6 +70,7 @@ def _router_transport(
     transport = httpx.MockTransport(handler)
     transport.calls = calls  # type: ignore[attr-defined]
     transport.captured_headers = captured_headers  # type: ignore[attr-defined]
+    transport.captured_urls = captured_urls  # type: ignore[attr-defined]
     return transport, calls
 
 
@@ -548,6 +551,157 @@ class TestUsageRecording:
         client.drain_usage_observations()
 
         assert client.drain_usage_observations() == []
+
+
+_PIPELINES_PATH = "/api/v4/projects/42/pipelines"
+_RELEASES_PATH = "/api/v4/projects/42/releases"
+_DEPLOYMENTS_PATH = "/api/v4/projects/42/deployments"
+_DEPLOYMENT_MRS_PATH = "/api/v4/projects/42/repository/commits/abc123/merge_requests"
+
+
+class TestPipelinesParity:
+    @pytest.mark.asyncio
+    async def test_pipeline_request_params_mapping_and_usage_family(self) -> None:
+        pipeline = {
+            "id": 11,
+            "status": "success",
+            "created_at": "2026-02-01T00:00:00Z",
+            "started_at": "2026-02-01T00:01:00Z",
+            "finished_at": "2026-02-01T00:05:00Z",
+        }
+        transport, calls = _router_transport(
+            {_PIPELINES_PATH: _json_response(200, [pipeline])}
+        )
+        client = _client(transport)
+
+        pipelines = await client.get_pipelines(42, max_pipelines=10)
+
+        assert calls[_PIPELINES_PATH] == 1
+        assert pipelines[0].pipeline_id == "11"
+        assert pipelines[0].status == "success"
+        assert pipelines[0].created_at == datetime(
+            2026, 2, 1, 0, 0, tzinfo=timezone.utc
+        )
+        assert pipelines[0].started_at == datetime(
+            2026, 2, 1, 0, 1, tzinfo=timezone.utc
+        )
+        query = dict(transport.captured_urls[_PIPELINES_PATH].params)  # type: ignore[attr-defined]
+        assert query == {
+            "order_by": "updated_at",
+            "sort": "desc",
+            "page": "1",
+            "per_page": "100",
+        }
+        observations = client.drain_usage_observations()
+        assert observations[0]["route_family"] == "pipelines"
+        assert observations[0]["request_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_pipeline_max_over_one_page_follows_x_next_page_until_cap(
+        self,
+    ) -> None:
+        page_one = [{"id": i, "created_at": "2026-02-01T00:00:00Z"} for i in range(100)]
+        page_two = [{"id": 100, "created_at": "2026-02-01T00:00:00Z"}]
+        transport, calls = _router_transport(
+            {
+                _PIPELINES_PATH: [
+                    _json_response(200, page_one, headers={"X-Next-Page": "2"}),
+                    _json_response(200, page_two),
+                ]
+            }
+        )
+        client = _client(transport)
+
+        pipelines = await client.get_pipelines(42, max_pipelines=101)
+
+        assert len(pipelines) == 101
+        assert calls[_PIPELINES_PATH] == 2
+
+    @pytest.mark.asyncio
+    async def test_pipeline_hard_cap_does_not_chase_next_page(self) -> None:
+        page_one = [{"id": i, "created_at": "2026-02-01T00:00:00Z"} for i in range(100)]
+        transport, calls = _router_transport(
+            {
+                _PIPELINES_PATH: _json_response(
+                    200, page_one, headers={"X-Next-Page": "2"}
+                )
+            }
+        )
+        client = _client(transport)
+
+        pipelines = await client.get_pipelines(42, max_pipelines=100)
+
+        assert len(pipelines) == 100
+        assert calls[_PIPELINES_PATH] == 1
+
+
+class TestDeploymentsParity:
+    @pytest.mark.asyncio
+    async def test_deployments_request_params_mapping_and_usage_family(self) -> None:
+        deployment = {
+            "id": 501,
+            "iid": 7,
+            "status": "success",
+            "environment": {"name": "production"},
+            "created_at": "2026-03-01T10:00:00Z",
+            "finished_at": "2026-03-01T10:05:00Z",
+            "sha": "abc123",
+            "ref": "v1.2.3",
+        }
+        transport, calls = _router_transport(
+            {
+                _RELEASES_PATH: _json_response(200, [{"tag_name": "v1.2.3"}]),
+                _DEPLOYMENTS_PATH: _json_response(200, [deployment]),
+                _DEPLOYMENT_MRS_PATH: _json_response(200, []),
+            }
+        )
+        client = _client(transport)
+
+        releases = await client.get_deployment_releases(42, per_page=10)
+        deployments = await client.get_deployments(42, max_deployments=10)
+        mrs = await client.get_deployment_merge_requests(42, "abc123")
+
+        assert releases == [{"tag_name": "v1.2.3"}]
+        assert mrs == []
+        assert calls[_RELEASES_PATH] == 1
+        assert calls[_DEPLOYMENTS_PATH] == 1
+        assert calls[_DEPLOYMENT_MRS_PATH] == 1
+        assert deployments[0].deployment_id == "501"
+        assert deployments[0].deployment_iid == 7
+        assert deployments[0].status == "success"
+        assert deployments[0].environment == "production"
+        assert deployments[0].created_at == datetime(
+            2026, 3, 1, 10, 0, tzinfo=timezone.utc
+        )
+        assert deployments[0].finished_at == datetime(
+            2026, 3, 1, 10, 5, tzinfo=timezone.utc
+        )
+        assert dict(transport.captured_urls[_DEPLOYMENTS_PATH].params) == {  # type: ignore[attr-defined]
+            "order_by": "created_at",
+            "sort": "desc",
+            "page": "1",
+            "per_page": "10",
+        }
+        observations = client.drain_usage_observations()
+        assert observations[0]["route_family"] == "deployments"
+        assert observations[0]["request_count"] == 3
+
+    @pytest.mark.asyncio
+    async def test_deployments_endpoint_keeps_frozen_single_page_behavior(self) -> None:
+        first_page = [{"id": 1, "created_at": "2026-03-01T10:00:00Z"}]
+        transport, calls = _router_transport(
+            {
+                _DEPLOYMENTS_PATH: _json_response(
+                    200, first_page, headers={"X-Next-Page": "2"}
+                )
+            }
+        )
+        client = _client(transport)
+
+        deployments = await client.get_deployments(42, max_deployments=10)
+
+        assert len(deployments) == 1
+        assert calls[_DEPLOYMENTS_PATH] == 1
 
 
 # ---------------------------------------------------------------------------

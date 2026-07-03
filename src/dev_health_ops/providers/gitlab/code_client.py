@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import logging
 import urllib.parse
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -87,6 +88,29 @@ _RESET_HEADER_NAME = "RateLimit-Reset"
 # Explicit family prefix every operation this client issues is labeled with
 # (see the module docstring's "Every operation" paragraph).
 _SECURITY_FAMILY_PREFIX = "security"
+_PIPELINES_FAMILY_PREFIX = "pipelines"
+_DEPLOYMENTS_FAMILY_PREFIX = "deployments"
+
+
+@dataclass(frozen=True)
+class GitLabPipelineData:
+    pipeline_id: str
+    status: str | None
+    created_at: datetime | None
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+@dataclass(frozen=True)
+class GitLabDeploymentData:
+    deployment_id: str
+    deployment_iid: Any
+    status: str | None
+    environment: str | None
+    created_at: datetime | None
+    finished_at: datetime | None
+    sha: str | None
+    raw_payload: dict[str, Any]
 
 
 class _GitLabSecurityForbidden(APIException):
@@ -210,6 +234,45 @@ def _map_dependency_alert(
         created_at=datetime.now(timezone.utc),
         fixed_at=None,
         dismissed_at=None,
+    )
+
+
+def _parse_gitlab_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        logger.debug("Failed to parse GitLab datetime: %s", value)
+        return None
+
+
+def _map_pipeline(item: dict[str, Any]) -> GitLabPipelineData:
+    created_at = _parse_gitlab_datetime(item.get("created_at"))
+    return GitLabPipelineData(
+        pipeline_id=str(item.get("id", "")),
+        status=item.get("status"),
+        created_at=created_at,
+        started_at=_parse_gitlab_datetime(item.get("started_at")) or created_at,
+        finished_at=_parse_gitlab_datetime(item.get("finished_at")),
+    )
+
+
+def _map_deployment(item: dict[str, Any]) -> GitLabDeploymentData:
+    environment = item.get("environment")
+    environment_name = (
+        environment.get("name") if isinstance(environment, dict) else None
+    )
+    sha = item.get("sha")
+    return GitLabDeploymentData(
+        deployment_id=str(item.get("id", "")),
+        deployment_iid=item.get("iid"),
+        status=item.get("status"),
+        environment=environment_name,
+        created_at=_parse_gitlab_datetime(item.get("created_at")),
+        finished_at=_parse_gitlab_datetime(item.get("finished_at")),
+        sha=str(sha) if sha is not None else None,
+        raw_payload=dict(item),
     )
 
 
@@ -355,6 +418,113 @@ class GitLabCodeClient:
                 alerts.append(_map_dependency_alert(dep, vuln))
         return alerts
 
+    async def get_pipelines(
+        self,
+        project_id: int | str,
+        *,
+        max_pipelines: int,
+        per_page: int = 100,
+    ) -> list[GitLabPipelineData]:
+        if max_pipelines <= 0:
+            return []
+        params: dict[str, Any] = {"order_by": "updated_at", "sort": "desc"}
+        path = f"/projects/{project_id}/pipelines"
+        operation = f"{_PIPELINES_FAMILY_PREFIX}:GET /projects/{{id}}/pipelines"
+        raw_items = await self._get_gitlab_list(
+            path,
+            operation=operation,
+            params=params,
+            per_page=per_page,
+            paginate=max_pipelines > per_page,
+            max_items=max_pipelines,
+        )
+        return [_map_pipeline(item) for item in raw_items[:max_pipelines]]
+
+    async def get_deployment_releases(
+        self,
+        project_id: int | str,
+        *,
+        per_page: int = 100,
+    ) -> list[dict[str, Any]]:
+        return await self._get_gitlab_list(
+            f"/projects/{project_id}/releases",
+            operation=f"{_DEPLOYMENTS_FAMILY_PREFIX}:GET /projects/{{id}}/releases",
+            params={},
+            per_page=per_page,
+            paginate=False,
+            max_items=per_page,
+        )
+
+    async def get_deployments(
+        self,
+        project_id: int | str,
+        *,
+        max_deployments: int,
+        per_page: int | None = None,
+    ) -> list[GitLabDeploymentData]:
+        if max_deployments <= 0:
+            return []
+        effective_per_page = per_page or min(max_deployments, 100)
+        raw_items = await self._get_gitlab_list(
+            f"/projects/{project_id}/deployments",
+            operation=f"{_DEPLOYMENTS_FAMILY_PREFIX}:GET /projects/{{id}}/deployments",
+            params={"order_by": "created_at", "sort": "desc"},
+            per_page=effective_per_page,
+            paginate=False,
+            max_items=max_deployments,
+        )
+        return [_map_deployment(item) for item in raw_items[:max_deployments]]
+
+    async def get_deployment_merge_requests(
+        self, project_id: int | str, sha: str
+    ) -> list[dict[str, Any]]:
+        encoded_sha = urllib.parse.quote(str(sha), safe="")
+        return await self._get_gitlab_list(
+            f"/projects/{project_id}/repository/commits/{encoded_sha}/merge_requests",
+            operation=(
+                f"{_DEPLOYMENTS_FAMILY_PREFIX}:GET "
+                "/projects/{id}/repository/commits/{sha}/merge_requests"
+            ),
+            params={},
+            per_page=100,
+            paginate=False,
+            max_items=100,
+        )
+
+    async def _get_gitlab_list(
+        self,
+        path: str,
+        *,
+        operation: str,
+        params: dict[str, Any],
+        per_page: int,
+        paginate: bool,
+        max_items: int,
+    ) -> list[dict[str, Any]]:
+        if paginate:
+            max_pages = max(1, (max_items + per_page - 1) // per_page)
+            payload = await self._core.paginate_page_param(
+                path,
+                operation=operation,
+                params=params,
+                per_page=per_page,
+                max_pages=max_pages,
+            )
+            return [item for item in payload if isinstance(item, dict)][:max_items]
+
+        response = await self._core.request(
+            "GET",
+            path,
+            operation=operation,
+            params={**params, "page": 1, "per_page": per_page},
+        )
+        payload = response.json()
+        if not isinstance(payload, list):
+            raise APIException(
+                f"Unexpected GitLab list response for {operation}: {type(payload)!r}"
+            )
+        return [item for item in payload if isinstance(item, dict)][:max_items]
+
     def drain_usage_observations(self) -> list[dict[str, Any]]:
         return self._core.drain_usage_observations()
 
@@ -369,4 +539,4 @@ class GitLabCodeClient:
         await self.close()
 
 
-__all__ = ["GitLabCodeClient"]
+__all__ = ["GitLabCodeClient", "GitLabDeploymentData", "GitLabPipelineData"]

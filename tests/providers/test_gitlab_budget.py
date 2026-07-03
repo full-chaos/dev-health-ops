@@ -3,7 +3,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import datetime, timezone
 
-from dev_health_ops.providers.gitlab.budget import GitLabBudgetEstimator
+from dev_health_ops.providers.gitlab.budget import (
+    GITLAB_USAGE_ROUTE_FAMILIES,
+    GitLabBudgetEstimator,
+)
 from dev_health_ops.sync.budget import BudgetDimension, estimate_provider_budget
 from dev_health_ops.sync.budget_guard import (
     _budget_key,
@@ -85,6 +88,13 @@ def test_gitlab_budget_estimator_maps_known_route_families_to_rest_core() -> Non
         "merge_requests",
         "notes",
     }
+
+
+def test_gitlab_budget_has_code_client_family_prefix_markers() -> None:
+    families = {family.route_family: family for family in GITLAB_USAGE_ROUTE_FAMILIES}
+
+    assert families["pipelines"].operation_markers == ("pipelines:",)
+    assert families["deployments"].operation_markers == ("deployments:",)
 
 
 def test_gitlab_budget_route_family_limits_override_dimension_defaults() -> None:

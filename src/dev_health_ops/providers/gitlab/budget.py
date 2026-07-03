@@ -387,9 +387,20 @@ GITLAB_USAGE_ROUTE_FAMILIES: tuple[UsageRouteFamily, ...] = (
     UsageRouteFamily("issues", BudgetDimension.REST_CORE),
     UsageRouteFamily("merge_requests", BudgetDimension.REST_CORE),
     UsageRouteFamily("notes", BudgetDimension.REST_CORE),
-    UsageRouteFamily("pipelines", BudgetDimension.REST_CORE),
+    UsageRouteFamily(
+        "pipelines",
+        BudgetDimension.REST_CORE,
+        transport="rest",
+        operation_markers=("pipelines:",),
+    ),
     UsageRouteFamily("milestones", BudgetDimension.REST_CORE),
     UsageRouteFamily("epics", BudgetDimension.REST_CORE),
+    UsageRouteFamily(
+        "deployments",
+        BudgetDimension.REST_CORE,
+        transport="rest",
+        operation_markers=("deployments:",),
+    ),
     # CHAOS-2773 CS10: the "security" code-dataset client
     # (providers/gitlab/code_client.py::GitLabCodeClient) is the FIRST
     # canonical GitLab client to author its own operation labels rather than

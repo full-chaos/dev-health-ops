@@ -803,26 +803,50 @@ def _sync_gitlab_mrs_to_store(
     return total
 
 
-def _fetch_gitlab_pipelines_sync(gl_project, repo_id, max_pipelines, since):
+def _drain_gitlab_code_usage(
+    helper_name: str,
+    drained_observations: list[dict[str, Any]],
+    usage_sink: list[dict[str, Any]] | None,
+) -> None:
+    if usage_sink is not None:
+        usage_sink.extend(drained_observations)
+    elif drained_observations:
+        logging.debug(
+            "%s: drained %d GitLab code usage observation(s) with no "
+            "adapter-owned sink (legacy entry point) -- logging only, not persisted",
+            helper_name,
+            len(drained_observations),
+        )
+
+
+def _fetch_gitlab_pipelines_sync(
+    connector, project_id, repo_id, max_pipelines, since, usage_sink=None
+):
     """Sync helper to fetch GitLab CI/CD pipelines."""
     pipelines: list[CiPipelineRun] = []
+    drained_observations: list[dict[str, Any]] = []
+
+    async def _run():
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                return await client.get_pipelines(
+                    project_id, max_pipelines=max_pipelines
+                )
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
 
     try:
-        list_params = {"per_page": 100, "order_by": "updated_at", "sort": "desc"}
-        if max_pipelines > 100:
-            raw_pipelines = gl_project.pipelines.list(**list_params, as_list=False)
-        else:
-            raw_pipelines = gl_project.pipelines.list(**list_params, get_all=False)
+        raw_pipelines = asyncio.run(_run())
     except Exception as exc:
         logging.debug("Failed to fetch pipelines: %s", exc)
-        return pipelines
+        raw_pipelines = []
+    finally:
+        _drain_gitlab_code_usage(
+            "_fetch_gitlab_pipelines_sync", drained_observations, usage_sink
+        )
 
-    count = 0
     for pipeline in raw_pipelines:
-        if count >= max_pipelines:
-            break
-
-        created_at = safe_parse_datetime(getattr(pipeline, "created_at", None))
+        created_at = pipeline.created_at
 
         if created_at is None:
             continue
@@ -830,48 +854,32 @@ def _fetch_gitlab_pipelines_sync(gl_project, repo_id, max_pipelines, since):
         if since is not None and created_at.astimezone(timezone.utc) < since:
             break
 
-        started_at = (
-            safe_parse_datetime(getattr(pipeline, "started_at", None)) or created_at
-        )
-
-        finished_at = safe_parse_datetime(getattr(pipeline, "finished_at", None))
-
-        # GitLab pipelines expose no clean automatic-retry counter, so default
-        # to 0. (A new pipeline is created per retry rather than a run_attempt
-        # being incremented, unlike GitHub Actions.)
         pipelines.append(
             build_ci_pipeline_run(
                 repo_id=repo_id,
-                run_id=str(getattr(pipeline, "id", "")),
-                status=getattr(pipeline, "status", None),
+                run_id=pipeline.pipeline_id,
+                status=pipeline.status,
                 queued_at=created_at,
-                started_at=started_at,
-                finished_at=finished_at,
+                started_at=pipeline.started_at or created_at,
+                finished_at=pipeline.finished_at,
                 retry_count=0,
             )
         )
-        count += 1
 
     return pipelines
 
 
-def _resolve_gitlab_deployment_mr(connector, project_id, sha):
+def _resolve_gitlab_deployment_mr_from_items(mrs):
     """Resolve the merged MR for a deployed commit via the commits API.
 
     Failure-soft: any lookup error leaves the deployment without MR
     attribution rather than failing the sync.
     """
-    if not sha:
-        return None, None
     try:
-        mrs = connector.rest_client.get_list(
-            f"projects/{project_id}/repository/commits/{sha}/merge_requests"
-        )
-    except Exception as exc:
-        logging.debug("Failed MR lookup for deployed commit %s: %s", sha, exc)
+        merged = [mr for mr in mrs or [] if mr.get("state") == "merged"]
+        chosen = merged[0] if merged else (mrs[0] if mrs else None)
+    except Exception:
         return None, None
-    merged = [mr for mr in mrs or [] if mr.get("state") == "merged"]
-    chosen = merged[0] if merged else (mrs[0] if mrs else None)
     if not chosen:
         return None, None
     merged_at = safe_parse_datetime(chosen.get("merged_at") or "")
@@ -883,71 +891,91 @@ def _resolve_gitlab_deployment_mr(connector, project_id, sha):
 
 
 def _fetch_gitlab_deployments_sync(
-    connector, project_id, repo_id, max_deployments, since
+    connector, project_id, repo_id, max_deployments, since, usage_sink=None
 ):
     """Sync helper to fetch GitLab deployments."""
     deployments: list[Deployment] = []
-    release_objects = []
+    drained_observations: list[dict[str, Any]] = []
+
+    async def _run():
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                try:
+                    release_objects = await client.get_deployment_releases(
+                        project_id, per_page=min(max_deployments, 100)
+                    )
+                except Exception as exc:
+                    logging.debug(
+                        "Failed to fetch GitLab releases for release_ref: %s", exc
+                    )
+                    release_objects = []
+                raw_deployments = await client.get_deployments(
+                    project_id,
+                    max_deployments=max_deployments,
+                    per_page=min(max_deployments, 100),
+                )
+                merge_requests_by_deployment_id: dict[str, list[dict[str, Any]]] = {}
+                for dep in raw_deployments:
+                    if not dep.sha:
+                        continue
+                    try:
+                        merge_requests_by_deployment_id[
+                            dep.deployment_id
+                        ] = await client.get_deployment_merge_requests(
+                            project_id, dep.sha
+                        )
+                    except Exception as exc:
+                        logging.debug(
+                            "Failed MR lookup for deployed commit %s: %s", dep.sha, exc
+                        )
+                return release_objects, raw_deployments, merge_requests_by_deployment_id
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
+
     try:
-        release_objects = connector.rest_client.get_releases(
-            project_id=project_id,
-            per_page=min(max_deployments, 100),
-        )
-    except Exception as exc:
-        logging.debug("Failed to fetch GitLab releases for release_ref: %s", exc)
-    try:
-        # Use REST API to fetch deployments
-        raw_deployments = connector.rest_client.get_deployments(
-            project_id=project_id,
-            per_page=min(max_deployments, 100),
-            order_by="created_at",
-            sort="desc",
+        release_objects, raw_deployments, merge_requests_by_deployment_id = asyncio.run(
+            _run()
         )
     except Exception as exc:
         logging.debug("Failed to fetch deployments: %s", exc)
-        return deployments
+        raw_deployments = []
+        release_objects = []
+        merge_requests_by_deployment_id = {}
+    finally:
+        _drain_gitlab_code_usage(
+            "_fetch_gitlab_deployments_sync", drained_observations, usage_sink
+        )
 
     for dep in raw_deployments[:max_deployments]:
-        created_at_str = dep.get("created_at")
-        if not created_at_str:
-            continue
-
-        created_at = safe_parse_datetime(created_at_str)
+        created_at = dep.created_at
         if created_at is None:
             continue
 
         if since is not None and created_at.astimezone(timezone.utc) < since:
             break
 
-        # Parse other timestamps if available
-        finished_at = None
-        finished_at_str = dep.get("finished_at")
-        if finished_at_str:
-            finished_at = safe_parse_datetime(finished_at_str)
-
+        deployment_payload = {
+            **dep.raw_payload,
+            "deployment_id": dep.deployment_id,
+            "deployment_iid": dep.deployment_iid,
+        }
         enrichment = get_release_ref_enrichment(
-            {
-                **dep,
-                "deployment_id": str(dep.get("id", "")),
-                "deployment_iid": dep.get("iid"),
-            },
+            deployment_payload,
             "gitlab",
             releases=release_objects,
         )
 
-        mr_number, mr_merged_at = _resolve_gitlab_deployment_mr(
-            connector, project_id, dep.get("sha")
+        mr_number, mr_merged_at = _resolve_gitlab_deployment_mr_from_items(
+            merge_requests_by_deployment_id.get(dep.deployment_id, [])
         )
         deployments.append(
             build_deployment(
                 repo_id=repo_id,
-                deployment_id=str(dep.get("id", "")),
-                status=dep.get("status", None),
-                environment=dep.get("environment", {}).get("name")
-                if isinstance(dep.get("environment"), dict)
-                else None,
+                deployment_id=dep.deployment_id,
+                status=dep.status,
+                environment=dep.environment,
                 started_at=created_at,
-                finished_at=finished_at,
+                finished_at=dep.finished_at,
                 deployed_at=created_at,
                 merged_at=mr_merged_at,
                 pull_request_number=mr_number,
@@ -1979,10 +2007,12 @@ async def process_gitlab_project(
             pipeline_runs = await loop.run_in_executor(
                 None,
                 _fetch_gitlab_pipelines_sync,
-                gl_project,
+                connector,
+                project_id,
                 db_repo.id,
                 BATCH_SIZE,
                 since,
+                usage_sink,
             )
             pipeline_runs = _filter_after(pipeline_runs, until, "started_at")
             if pipeline_runs:
@@ -2013,6 +2043,7 @@ async def process_gitlab_project(
                 db_repo.id,
                 BATCH_SIZE,
                 since,
+                usage_sink,
             )
             deployments = _filter_after(deployments, until, "deployed_at", "started_at")
             if deployments:
@@ -2229,6 +2260,7 @@ async def process_gitlab_projects_batch(
             return
 
         gl_project = None
+        usage_sink: list[dict[str, Any]] = []
         if sync_git:
             # Fetch commits and stats to populate git_commits/git_commit_stats.
             if max_commits_per_project is None and since is None:
@@ -2312,17 +2344,15 @@ async def process_gitlab_projects_batch(
 
         if sync_cicd:
             try:
-                if gl_project is None:
-                    gl_project = await loop.run_in_executor(
-                        None, connector.gitlab.projects.get, project_info.id
-                    )
                 pipeline_runs = await loop.run_in_executor(
                     None,
                     _fetch_gitlab_pipelines_sync,
-                    gl_project,
+                    connector,
+                    project_info.id,
                     db_repo.id,
                     BATCH_SIZE,
                     since,
+                    usage_sink,
                 )
                 if pipeline_runs:
                     await ingestion_sink.insert_ci_pipeline_runs(pipeline_runs)
@@ -2367,6 +2397,7 @@ async def process_gitlab_projects_batch(
                     db_repo.id,
                     BATCH_SIZE,
                     since,
+                    usage_sink,
                 )
                 if deployments:
                     await ingestion_sink.insert_deployments(deployments)

@@ -8,9 +8,12 @@ the exact label ``incident`` with no diagnosability.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import Mock
+
+import pytest
 
 # Initialize the connectors package before processors to avoid the
 # pre-existing providers._base <-> connectors circular import when this file
@@ -19,9 +22,8 @@ import dev_health_ops.connectors  # noqa: F401
 from dev_health_ops.connectors.utils.rest import GitLabRESTClient
 from dev_health_ops.processors.base_git import resolve_incident_labels
 from dev_health_ops.processors.github import (
-    _fetch_github_deployments_sync,
+    _fetch_github_deployments_async,
     _fetch_github_incidents_sync,
-    _resolve_github_deployment_pr,
 )
 from dev_health_ops.processors.gitlab import (
     _fetch_gitlab_incidents_sync,
@@ -41,82 +43,63 @@ class _NoWaitGate:
 
 
 class TestGitHubDeploymentPRInference:
-    def test_resolves_merged_pr(self) -> None:
-        merged_pr = Mock(number=42, merged_at=NOW, merge_commit_sha="abc123")
-        open_pr = Mock(number=43, merged_at=None)
-        commit = Mock()
-        commit.get_pulls.return_value = [open_pr, merged_pr]
-        gh_repo = Mock()
-        gh_repo.get_commit.return_value = commit
-        gate = _NoWaitGate()
+    def test_deployments_carry_pr_attribution(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        asyncio.run(self._test_deployments_carry_pr_attribution(monkeypatch))
 
-        number, merged_at = _resolve_github_deployment_pr(gh_repo, "abc123", gate)
+    async def _test_deployments_carry_pr_attribution(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from dev_health_ops.providers.github.code_client import GitHubDeploymentData
 
-        assert (number, merged_at) == (42, NOW)
-        gh_repo.get_commit.assert_called_once_with("abc123")
-        assert gate.waits == 2
+        class FakeDeploymentClient:
+            def __init__(self) -> None:
+                self.closed = False
 
-    def test_prefers_pr_that_directly_merged_the_sha(self) -> None:
-        """get_pulls() also returns PRs that merely contain the SHA
-        (stacked merges); the direct merger must win regardless of order."""
-        containing_pr = Mock(number=100, merged_at=NOW, merge_commit_sha="other")
-        direct_pr = Mock(number=42, merged_at=NOW, merge_commit_sha="abc123")
-        commit = Mock()
-        commit.get_pulls.return_value = [containing_pr, direct_pr]
-        gh_repo = Mock()
-        gh_repo.get_commit.return_value = commit
+            async def get_deployment_releases(self, owner, repo_name, *, max_releases):
+                return []
 
-        number, _ = _resolve_github_deployment_pr(gh_repo, "abc123", _NoWaitGate())
+            async def get_deployments(self, owner, repo_name, *, max_deployments):
+                return [
+                    GitHubDeploymentData(
+                        deployment_id="99",
+                        state="success",
+                        environment="prod",
+                        created_at=NOW,
+                        sha="abc123",
+                        ref=None,
+                        tag=None,
+                        tag_name=None,
+                        payload=None,
+                    )
+                ]
 
-        assert number == 42
+            async def get_deployment_pull_request(self, owner, repo_name, sha):
+                return 42, NOW
 
-    def test_falls_back_to_first_pr_when_none_merged(self) -> None:
-        open_pr = Mock(number=7, merged_at=None)
-        commit = Mock()
-        commit.get_pulls.return_value = [open_pr]
-        gh_repo = Mock()
-        gh_repo.get_commit.return_value = commit
+            def drain_usage_observations(self):
+                return [{"route_family": "deployments", "request_count": 3}]
 
-        number, merged_at = _resolve_github_deployment_pr(
-            gh_repo, "abc123", _NoWaitGate()
+            async def close(self) -> None:
+                self.closed = True
+
+        fake_client = FakeDeploymentClient()
+        monkeypatch.setattr(
+            "dev_health_ops.processors.github._github_code_client_from_connector",
+            lambda connector: fake_client,
         )
+        usage_sink: list[dict[str, object]] = []
 
-        assert (number, merged_at) == (7, None)
-
-    def test_no_sha_skips_lookup(self) -> None:
-        gh_repo = Mock()
-        assert _resolve_github_deployment_pr(gh_repo, None, _NoWaitGate()) == (
-            None,
-            None,
-        )
-        gh_repo.get_commit.assert_not_called()
-
-    def test_lookup_failure_is_soft(self) -> None:
-        gh_repo = Mock()
-        gh_repo.get_commit.side_effect = RuntimeError("boom")
-        assert _resolve_github_deployment_pr(gh_repo, "abc", _NoWaitGate()) == (
-            None,
-            None,
-        )
-
-    def test_deployments_carry_pr_attribution(self) -> None:
-        dep = Mock(id=99, state="success", environment="prod", created_at=NOW)
-        dep.sha = "abc123"
-        merged_pr = Mock(number=42, merged_at=NOW)
-        commit = Mock()
-        commit.get_pulls.return_value = [merged_pr]
-        gh_repo = Mock()
-        gh_repo.get_deployments.return_value = [dep]
-        gh_repo.get_releases.return_value = []
-        gh_repo.get_commit.return_value = commit
-
-        deployments = _fetch_github_deployments_sync(
-            gh_repo, REPO_ID, 10, None, _NoWaitGate()
+        deployments = await _fetch_github_deployments_async(
+            Mock(), "acme", "widgets", REPO_ID, 10, None, usage_sink=usage_sink
         )
 
         assert len(deployments) == 1
         assert deployments[0].pull_request_number == 42
         assert deployments[0].merged_at == NOW
+        assert usage_sink == [{"route_family": "deployments", "request_count": 3}]
+        assert fake_client.closed is True
 
 
 class TestGitLabDeploymentMRInference:

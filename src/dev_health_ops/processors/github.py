@@ -346,86 +346,81 @@ def _fetch_github_workflow_runs_sync(gh_repo, repo_id, max_runs, since):
     return runs
 
 
-def _resolve_github_deployment_pr(gh_repo, sha, gate):
-    """Resolve the merged PR for a deployed commit via /commits/{sha}/pulls.
-
-    Costs up to two gated API calls per deployment. Failure-soft: any
-    lookup error leaves the deployment without PR attribution rather than
-    failing the sync.
-    """
-    if not sha:
-        return None, None
-    try:
-        if gate is not None:
-            gate.wait_sync()
-        commit = gh_repo.get_commit(sha)
-        if gate is not None:
-            gate.wait_sync()
-        pulls = list(commit.get_pulls()[:10])
-    except Exception as exc:
-        logging.debug("Failed PR lookup for deployed commit %s: %s", sha, exc)
-        return None, None
-    merged = [pr for pr in pulls if getattr(pr, "merged_at", None) is not None]
-    # Prefer the PR that directly merged this commit: get_pulls() also
-    # returns PRs that merely contain the SHA (e.g. stacked merges).
-    direct = [pr for pr in merged if getattr(pr, "merge_commit_sha", None) == sha]
-    chosen = (
-        direct[0]
-        if direct
-        else (merged[0] if merged else (pulls[0] if pulls else None))
-    )
-    if chosen is None:
-        return None, None
-    return getattr(chosen, "number", None), getattr(chosen, "merged_at", None)
-
-
-def _fetch_github_deployments_sync(gh_repo, repo_id, max_deployments, since, gate=None):
-    gate = BaseGitProcessor.ensure_gate(gate)
+async def _fetch_github_deployments_async(
+    connector,
+    owner: str,
+    repo_name: str,
+    repo_id,
+    max_deployments: int | None,
+    since: datetime | None,
+    usage_sink: list[dict[str, Any]] | None = None,
+) -> list[Deployment]:
     deployments: list[Deployment] = []
-    if not hasattr(gh_repo, "get_deployments"):
-        return deployments
+    client = _github_code_client_from_connector(connector)
     release_objects = []
-    if hasattr(gh_repo, "get_releases"):
+    try:
         try:
-            release_objects = list(gh_repo.get_releases()[:max_deployments])
+            release_objects = await client.get_deployment_releases(
+                owner,
+                repo_name,
+                max_releases=max_deployments,
+            )
         except Exception as exc:
             logging.debug("Failed to fetch GitHub releases for release_ref: %s", exc)
-    try:
-        raw_deployments = list(gh_repo.get_deployments()[:max_deployments])
-    except Exception as exc:
-        logging.debug("Failed to fetch deployments: %s", exc)
-        return deployments
-
-    for dep in raw_deployments:
-        created_at = getattr(dep, "created_at", None)
-        if not isinstance(created_at, datetime):
-            continue
-        if since is not None and created_at.astimezone(timezone.utc) < since:
-            continue
-        enrichment = get_release_ref_enrichment(
-            dep,
-            "github",
-            releases=release_objects,
-        )
-        pr_number, pr_merged_at = _resolve_github_deployment_pr(
-            gh_repo, getattr(dep, "sha", None), gate
-        )
-        deployments.append(
-            build_deployment(
-                repo_id=repo_id,
-                deployment_id=str(getattr(dep, "id", "")),
-                status=getattr(dep, "state", None),
-                environment=getattr(dep, "environment", None),
-                started_at=created_at,
-                finished_at=None,
-                deployed_at=created_at,
-                merged_at=pr_merged_at,
-                pull_request_number=pr_number,
-                release_ref=enrichment.release_ref,
-                release_ref_confidence=enrichment.confidence,
+        try:
+            raw_deployments = await client.get_deployments(
+                owner,
+                repo_name,
+                max_deployments=max_deployments,
             )
-        )
-    return deployments
+        except Exception as exc:
+            logging.debug("Failed to fetch deployments: %s", exc)
+            return deployments
+
+        for dep in raw_deployments:
+            created_at = dep.created_at
+            if not isinstance(created_at, datetime):
+                continue
+            if since is not None and created_at.astimezone(timezone.utc) < since:
+                continue
+            enrichment = get_release_ref_enrichment(
+                dep,
+                "github",
+                releases=release_objects,
+            )
+            pr_number, pr_merged_at = await client.get_deployment_pull_request(
+                owner, repo_name, dep.sha
+            )
+            deployments.append(
+                build_deployment(
+                    repo_id=repo_id,
+                    deployment_id=dep.deployment_id,
+                    status=dep.state,
+                    environment=dep.environment,
+                    started_at=created_at,
+                    finished_at=None,
+                    deployed_at=created_at,
+                    merged_at=pr_merged_at,
+                    pull_request_number=pr_number,
+                    release_ref=enrichment.release_ref,
+                    release_ref_confidence=enrichment.confidence,
+                )
+            )
+        return deployments
+    finally:
+        drained = client.drain_usage_observations()
+        if usage_sink is not None:
+            usage_sink.extend(drained)
+        elif drained:
+            logging.debug(
+                "_fetch_github_deployments_async: drained %d deployments usage "
+                "observation(s) for %s/%s with no adapter-owned sink (legacy "
+                "entry point) -- logging only, not persisted",
+                len(drained),
+                owner,
+                repo_name,
+            )
+        await client.close()
 
 
 def _fetch_github_incidents_sync(gh_repo, repo_id, max_issues, since):
@@ -1824,13 +1819,14 @@ async def process_github_repo(
 
             if sync_deployments:
                 logging.info("Fetching deployments from GitHub...")
-                deployments = await loop.run_in_executor(
-                    None,
-                    _fetch_github_deployments_sync,
-                    gh_repo,
+                deployments = await _fetch_github_deployments_async(
+                    connector,
+                    owner,
+                    repo_name,
                     db_repo.id,
                     BATCH_SIZE,
                     since,
+                    usage_sink=usage_sink,
                 )
                 deployments = _filter_after(
                     deployments, until, "deployed_at", "started_at"
@@ -1949,6 +1945,7 @@ async def process_github_repos_batch(
     blame_only: bool = False,
     backfill_missing: bool = True,
     since: datetime | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> None:
     """
     Process multiple GitHub repositories using batch processing with
@@ -2168,15 +2165,15 @@ async def process_github_repos_batch(
 
         if sync_deployments:
             try:
-                if gh_repo is None:
-                    gh_repo = connector.github.get_repo(repo_info.full_name)
-                deployments = await loop.run_in_executor(
-                    None,
-                    _fetch_github_deployments_sync,
-                    gh_repo,
+                batch_owner, _, batch_repo = repo_info.full_name.partition("/")
+                deployments = await _fetch_github_deployments_async(
+                    connector,
+                    batch_owner,
+                    batch_repo,
                     db_repo.id,
                     BATCH_SIZE,
                     since,
+                    usage_sink=usage_sink,
                 )
                 if deployments:
                     await ingestion_sink.insert_deployments(deployments)

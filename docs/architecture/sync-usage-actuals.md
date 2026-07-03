@@ -46,6 +46,7 @@ Drains emit two keys on `ProviderBatch.observations` / the unit-result
 | Provider | Transport | Drain site |
 | --- | --- | --- |
 | GitHub | REST + GraphQL | `GitHubProvider.ingest` (both keys) |
+| GitHub code datasets | REST | `process_github_repo` / `_backfill_github_missing_data` / `_sync_github_commits` / `_sync_github_commit_stats` (`git` + `commit_stats`, CHAOS-2807) |
 | GitLab | REST | `GitLabProvider.ingest` **and** `metrics.work_items.fetch_gitlab_work_items` (the live worker path) |
 | GitLab feature-flags | REST | `_sync_gitlab_feature_flags` (CHAOS-2785): `GitLabFeatureFlagsClient`, drained into `provider_usage` |
 | Jira | REST | `JiraProvider.ingest` (legacy + atlassian paths) and the `job_work_items` client drain |
@@ -73,20 +74,15 @@ attribution would require richer operation labels at the client call sites.
 
 ## Out-of-scope actuals gaps (documented, not fixed here)
 
-1. **Code-dataset actuals.** The GitHub/GitLab code datasets (`commits`,
-   `files`, `blame`, `cicd`, `tests`, `deployments`, `security`) run through
+1. **Remaining code-dataset actuals.** The GitHub/GitLab code datasets (`files`,
+   `blame`, plus any family not listed as instrumented above) run through
    `processors/dataset_adapters._run_github_dataset` / `_run_gitlab_dataset`,
    which use a shared/reused store rather than an instrumented per-unit work
-   client — they still fetch through the frozen `connectors/github.py`
-   (PyGithub-based) / `connectors/gitlab.py` (python-gitlab-based) connectors.
-   Their budget families (`git`, `commit_stats`, `files`, `blame`, `cicd`,
-   `tests`, `deployments`, `security`) are declared in the GitHub/GitLab usage
-   registries for coverage but carry no operation markers. Instrumenting them
-   needs a canonical-provider migration off PyGithub/python-gitlab (much
-   larger than a follow-up-ticket-sized change — see [Provider Rate-Limit
-   Policy — Known gaps](../providers/rate-limit-policy.md#known-gaps)) and is
-   deferred to its own tracked effort (CHAOS-2773 CS17 for the remaining
-   GitLab code-dataset methods specifically).
+   client. GitHub `git` / `commit_stats` are instrumented through
+   `providers/github/code_client.py::GitHubCodeClient` as of CHAOS-2807; GitHub
+   `files` / `blame` and the remaining GitLab connector-backed code-dataset
+   methods stay on frozen PyGithub/python-gitlab connector paths until their own
+   canonical-provider changesets.
 
 > **Resolved (CHAOS-2761):** LaunchDarkly flag/audit-log actuals — previously
 > gap #1 here, blocked on the frozen `connectors/launchdarkly.py` path — are

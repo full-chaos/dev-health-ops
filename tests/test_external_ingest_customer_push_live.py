@@ -61,6 +61,16 @@ simultaneously -- the only module in this repo that needs all three live
 services at once. Run via ``ci/run_live_backend_e2e.sh`` (extended for this
 issue), not ``ci/local_validate.sh`` (ClickHouse-only, per that script's own
 docstring).
+
+SCOPE BOUNDARY -- this module does NOT assert Alembic migration
+deployability. It bootstraps the scratch Postgres schema via
+``Base.metadata.create_all`` (the same convention the harness itself already
+uses, ``ci/run_live_backend_e2e.sh``), because the migration tree currently
+has a duplicate ``0032`` revision (two files at rev 0032 -> two heads ->
+``alembic upgrade head`` fails on a clean DB). Switching the harness to run
+the real migration path, and fixing that duplicate revision, is tracked in
+CHAOS-2832; a broken migration would therefore NOT be caught here until that
+lands.
 """
 
 from __future__ import annotations
@@ -163,9 +173,11 @@ async def _run_consumer_pass() -> int:
 @pytest.fixture(scope="module", autouse=True)
 def _ensure_postgres_schema():
     """Bootstrap the scratch Postgres schema via ``Base.metadata.create_all``
-    (checkfirst) rather than Alembic -- this worktree's migration history has
-    a pre-existing 0032/0034 multi-head overlap (per orchestrator note), and
-    this is the same bootstrap ``ci/run_live_backend_e2e.sh``'s own
+    (checkfirst) rather than Alembic -- the migration history has a
+    pre-existing duplicate ``0032`` revision (two files at rev 0032 -> two
+    heads; ``alembic upgrade head`` fails on a clean DB), tracked in
+    CHAOS-2832, and this is the same bootstrap
+    ``ci/run_live_backend_e2e.sh``'s own
     ``generate_auth_token()`` already relies on for the curl-based checks
     that run before this module's pytest step.
 

@@ -212,6 +212,86 @@ JOB_RUN_STATUS_LABELS: dict[int, str] = {
 }
 
 
+SyncCoverageHealth = Literal["healthy", "stale", "gaps", "failed", "insufficient_data"]
+SyncCoverageStatus = Literal[
+    "healthy",
+    "stale",
+    "gaps",
+    "failed",
+    "insufficient_data",
+    "paused",
+    "not_scheduled",
+    "running",
+]
+
+
+class SyncCoverageRange(BaseModel):
+    since: datetime
+    before: datetime
+    source_ids: list[str] = Field(default_factory=list)
+    run_ids: list[str] = Field(default_factory=list)
+
+
+class SyncRunJobEnrichment(BaseModel):
+    mode: str
+    triggered_by: str
+    requested_range: SyncCoverageRange | None = None
+    covered_range: SyncCoverageRange | None = None
+    total_units: int
+    completed_units: int
+    failed_units: int
+    sync_run_id: str
+
+
+class SyncCoverageOverall(BaseModel):
+    health: SyncCoverageHealth
+    latest_successful_run_at: datetime | None = None
+    latest_covered_through: datetime | None = None
+    next_scheduled_run_at: datetime | None = None
+    gap_count: int
+    stale_dataset_count: int
+    failed_range_count: int
+
+
+class SyncCoverageDataset(BaseModel):
+    dataset_key: str
+    status: SyncCoverageStatus
+    covered_through: datetime | None = None
+    requested_ranges: list[SyncCoverageRange] = Field(default_factory=list)
+    covered_ranges: list[SyncCoverageRange] = Field(default_factory=list)
+    gaps: list[SyncCoverageRange] = Field(default_factory=list)
+    stale_ranges: list[SyncCoverageRange] = Field(default_factory=list)
+    failed_ranges: list[SyncCoverageRange] = Field(default_factory=list)
+
+
+class SyncCoverageSource(BaseModel):
+    source_id: str
+    source_name: str
+    status: SyncCoverageStatus
+    covered_through: datetime | None = None
+    gap_count: int
+    failed_range_count: int
+
+
+class SyncCoverageSummaryResponse(BaseModel):
+    """Coverage for this sync config's effective source/dataset scope.
+
+    Parent configs can cover planner-managed sources tagged to the config;
+    child/source-scoped configs cover their configured source and dataset keys.
+    Coverage is derived from persisted SyncRunUnit windows, not watermarks.
+    """
+
+    config_id: str
+    provider: str
+    generated_at: datetime
+    data_basis: Literal["planner", "legacy"]
+    history_lookback_days: int
+    truncated_before: datetime
+    overall: SyncCoverageOverall
+    datasets: list[SyncCoverageDataset]
+    sources: list[SyncCoverageSource]
+
+
 class JobRunResponse(BaseModel):
     id: str
     job_id: str
@@ -223,6 +303,7 @@ class JobRunResponse(BaseModel):
     result: dict[str, Any] | None = None
     error: str | None = None
     triggered_by: str
+    sync_run: SyncRunJobEnrichment | None = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

@@ -24,18 +24,28 @@ from dev_health_ops.api.admin.schemas import (
     SyncConfigRepositorySelectionUpdate,
     SyncConfigResponse,
     SyncConfigUpdate,
+    SyncCoverageRange,
+    SyncCoverageSummaryResponse,
+    SyncRunJobEnrichment,
 )
 from dev_health_ops.api.services.configuration import (
     IntegrationCredentialsService,
     SyncConfigurationService,
 )
 from dev_health_ops.api.services.licensing import TierLimitService
+from dev_health_ops.api.services.sync_coverage import (
+    HISTORY_LOOKBACK_DAYS,
+    build_sync_coverage_summary,
+    ensure_utc,
+)
 from dev_health_ops.models import SyncRun
 from dev_health_ops.models.integrations import (
     Integration,
     IntegrationDataset,
     IntegrationSource,
     SyncRunStatus,
+    SyncRunUnit,
+    SyncRunUnitStatus,
 )
 from dev_health_ops.models.settings import (
     JobRun,
@@ -391,8 +401,82 @@ async def _planner_sync_runs_for_job_runs(
     return {str(sync_run.id): sync_run for sync_run in result.scalars().all()}
 
 
+async def _planner_sync_run_units_for_job_runs(
+    session: AsyncSession, runs: Sequence[object], org_id: str
+) -> dict[str, list[SyncRunUnit]]:
+    sync_run_ids = {
+        sync_run_id
+        for run in runs
+        if (sync_run_id := _planner_job_run_sync_run_id(run)) is not None
+    }
+    if not sync_run_ids:
+        return {}
+    result = await session.execute(
+        select(SyncRunUnit).where(
+            SyncRunUnit.sync_run_id.in_(sync_run_ids),
+            SyncRunUnit.org_id == org_id,
+        )
+    )
+    units_by_run: dict[str, list[SyncRunUnit]] = {}
+    for unit in result.scalars().all():
+        units_by_run.setdefault(str(unit.sync_run_id), []).append(unit)
+    return units_by_run
+
+
+def _sync_run_unit_range(
+    units: Sequence[SyncRunUnit], *, success_only: bool = False
+) -> SyncCoverageRange | None:
+    scoped_units = [
+        unit
+        for unit in units
+        if unit.since_at is not None
+        and unit.before_at is not None
+        and (not success_only or unit.status == SyncRunUnitStatus.SUCCESS.value)
+    ]
+    if not scoped_units:
+        return None
+    return SyncCoverageRange(
+        since=min(
+            ensure_utc(unit.since_at)
+            for unit in scoped_units
+            if unit.since_at is not None
+        ),
+        before=max(
+            ensure_utc(unit.before_at)
+            for unit in scoped_units
+            if unit.before_at is not None
+        ),
+        source_ids=sorted({str(unit.source_id) for unit in scoped_units}),
+        run_ids=sorted({str(unit.sync_run_id) for unit in scoped_units}),
+    )
+
+
+def _sync_run_job_enrichment(
+    sync_run: SyncRun | None, units: Sequence[SyncRunUnit]
+) -> SyncRunJobEnrichment | None:
+    if sync_run is None:
+        return None
+    sync_run_id = getattr(sync_run, "id", None)
+    mode = getattr(sync_run, "mode", None)
+    triggered_by = getattr(sync_run, "triggered_by", None)
+    if sync_run_id is None or mode is None or triggered_by is None:
+        return None
+    return SyncRunJobEnrichment(
+        mode=str(mode),
+        triggered_by=str(triggered_by),
+        requested_range=_sync_run_unit_range(units),
+        covered_range=_sync_run_unit_range(units, success_only=True),
+        total_units=int(sync_run.total_units),
+        completed_units=int(sync_run.completed_units),
+        failed_units=int(sync_run.failed_units),
+        sync_run_id=str(sync_run_id),
+    )
+
+
 def _job_run_response(
-    run: object, planner_sync_run: SyncRun | None = None
+    run: object,
+    planner_sync_run: SyncRun | None = None,
+    planner_sync_run_units: Sequence[SyncRunUnit] = (),
 ) -> JobRunResponse:
     status_value = int(getattr(run, "status"))
     started_at = getattr(run, "started_at")
@@ -427,7 +511,7 @@ def _job_run_response(
         {
             "id": str(getattr(run, "id")),
             "job_id": str(getattr(run, "job_id")),
-            "status": JOB_RUN_STATUS_LABELS.get(status_value, "unknown"),
+            "status": JOB_RUN_STATUS_LABELS.get(status_value, "failed"),
             "started_at": started_at,
             "completed_at": completed_at,
             "duration_seconds": duration_seconds,
@@ -435,6 +519,9 @@ def _job_run_response(
             "result": result,
             "error": error,
             "triggered_by": getattr(run, "triggered_by"),
+            "sync_run": _sync_run_job_enrichment(
+                planner_sync_run, planner_sync_run_units
+            ),
             "created_at": getattr(run, "created_at"),
         }
     )
@@ -1524,6 +1611,33 @@ async def get_sync_config_repositories(
     return await _repository_selection_for_config(session, org_id, config)
 
 
+@router.get(
+    "/sync-configs/{config_id}/coverage",
+    response_model=SyncCoverageSummaryResponse,
+)
+async def get_sync_config_coverage(
+    config_id: str,
+    history_lookback_days: int = Query(
+        default=HISTORY_LOOKBACK_DAYS,
+        ge=1,
+        le=3650,
+    ),
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+) -> SyncCoverageSummaryResponse:
+    svc = SyncConfigurationService(session, org_id)
+    config = await svc.get_by_id(config_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Sync configuration not found")
+    payload = await build_sync_coverage_summary(
+        session,
+        org_id,
+        config,
+        lookback_days=history_lookback_days,
+    )
+    return SyncCoverageSummaryResponse.model_validate(payload)
+
+
 @router.put(
     "/sync-configs/{config_id}/repositories",
     response_model=SyncConfigRepositorySelection,
@@ -1955,6 +2069,8 @@ async def trigger_sync_config_backfill(
 @router.get("/sync-configs/{config_id}/jobs", response_model=list[JobRunResponse])
 async def list_sync_config_jobs(
     config_id: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> list[JobRunResponse]:
@@ -1984,16 +2100,21 @@ async def list_sync_config_jobs(
         select(JobRun)
         .where(job_run_job_id.in_(job_ids))
         .order_by(job_run_created_at.desc())
-        .limit(50)
+        .offset(offset)
+        .limit(limit)
     )
     runs_result = await session.execute(runs_stmt)
     runs = list(runs_result.scalars().all())
     planner_sync_runs = await _planner_sync_runs_for_job_runs(session, runs, org_id)
+    planner_sync_run_units = await _planner_sync_run_units_for_job_runs(
+        session, runs, org_id
+    )
 
     return [
         _job_run_response(
             run,
             planner_sync_runs.get(str(sync_run_id)) if sync_run_id else None,
+            planner_sync_run_units.get(str(sync_run_id), ()) if sync_run_id else (),
         )
         for run in runs
         for sync_run_id in [_planner_job_run_sync_run_id(run)]

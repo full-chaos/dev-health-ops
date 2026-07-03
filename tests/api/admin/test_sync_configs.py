@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1461,6 +1462,145 @@ async def test_list_sync_config_jobs_empty(client):
 
     assert resp.status_code == 200
     assert resp.json() == []
+
+
+@pytest.mark.asyncio
+async def test_list_sync_config_jobs_enriches_planner_run_and_paginates(
+    client, session_maker
+):
+    ac, _ = client
+    create_resp = await _create_sync_config(ac, name="jobs-enriched")
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = create_resp.json()["id"]
+
+    async with session_maker() as session:
+        config = (
+            await session.execute(
+                select(SyncConfiguration).where(
+                    SyncConfiguration.id == uuid.UUID(config_id)
+                )
+            )
+        ).scalar_one()
+        job = (
+            await session.execute(
+                select(ScheduledJob).where(
+                    ScheduledJob.sync_config_id == uuid.UUID(config_id)
+                )
+            )
+        ).scalar_one()
+        source = IntegrationSource(
+            org_id=config.org_id,
+            integration_id=config.integration_id,
+            provider="github",
+            source_type="repository",
+            external_id="acme/repo",
+            name="repo",
+            full_name="acme/repo",
+            metadata_={"planner_managed_sync_config_id": str(config.id)},
+            is_enabled=True,
+        )
+        session.add(source)
+        await session.flush()
+        sync_run = SyncRun(
+            org_id=config.org_id,
+            integration_id=config.integration_id,
+            triggered_by="manual",
+            mode="incremental",
+            status="success",
+            total_units=1,
+            completed_units=1,
+            failed_units=0,
+            started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            completed_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        )
+        session.add(sync_run)
+        await session.flush()
+        session.add(
+            SyncRunUnit(
+                org_id=config.org_id,
+                sync_run_id=sync_run.id,
+                integration_id=config.integration_id,
+                source_id=source.id,
+                provider="github",
+                dataset_key="commits",
+                cost_class="standard",
+                mode="incremental",
+                since_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                before_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+                status="success",
+                attempts=1,
+            )
+        )
+        legacy_run = JobRun(
+            job.id, triggered_by="scheduler", status=JobRunStatus.PENDING.value
+        )
+        legacy_run.created_at = datetime(2026, 1, 2, tzinfo=timezone.utc)
+        enriched_run = JobRun(
+            job.id, triggered_by="manual", status=JobRunStatus.RUNNING.value
+        )
+        enriched_run.created_at = datetime(2026, 1, 3, tzinfo=timezone.utc)
+        enriched_run.result = {"sync_run_id": str(sync_run.id)}
+        session.add_all([legacy_run, enriched_run])
+        await session.commit()
+
+    first_page = await ac.get(f"/api/v1/admin/sync-configs/{config_id}/jobs?limit=1")
+    second_page = await ac.get(
+        f"/api/v1/admin/sync-configs/{config_id}/jobs?limit=1&offset=1"
+    )
+
+    assert first_page.status_code == 200, first_page.text
+    first = first_page.json()
+    assert isinstance(first, list)
+    assert len(first) == 1
+    assert first[0]["sync_run"] == {
+        "mode": "incremental",
+        "triggered_by": "manual",
+        "requested_range": {
+            "since": "2026-01-01T00:00:00Z",
+            "before": "2026-01-02T00:00:00Z",
+            "source_ids": [str(source.id)],
+            "run_ids": [str(sync_run.id)],
+        },
+        "covered_range": {
+            "since": "2026-01-01T00:00:00Z",
+            "before": "2026-01-02T00:00:00Z",
+            "source_ids": [str(source.id)],
+            "run_ids": [str(sync_run.id)],
+        },
+        "total_units": 1,
+        "completed_units": 1,
+        "failed_units": 0,
+        "sync_run_id": str(sync_run.id),
+    }
+    assert second_page.status_code == 200, second_page.text
+    second = second_page.json()
+    assert len(second) == 1
+    assert second[0]["sync_run"] is None
+
+
+def test_sync_run_unit_range_normalizes_naive_datetimes_to_utc():
+    source_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    unit = SyncRunUnit(
+        org_id="org-1",
+        sync_run_id=run_id,
+        integration_id=uuid.uuid4(),
+        source_id=source_id,
+        provider="github",
+        dataset_key="commits",
+        cost_class="standard",
+        mode="incremental",
+        since_at=datetime(2026, 1, 1),
+        before_at=datetime(2026, 1, 2),
+        status="success",
+        attempts=1,
+    )
+
+    coverage_range = sync_router_module._sync_run_unit_range([unit])
+
+    assert coverage_range is not None
+    assert coverage_range.since == datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert coverage_range.before == datetime(2026, 1, 2, tzinfo=timezone.utc)
 
 
 # ---------------------------------------------------------------------------

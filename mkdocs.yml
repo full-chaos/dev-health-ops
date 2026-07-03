@@ -33,6 +33,12 @@ nav:
   - Email Setup: email-setup.md
   - SSO Setup: sso-setup.md
   - Webhooks: webhooks.md
+  - Customer Push Ingestion:
+      - Overview: customer-push-ingestion/overview.md
+      - API Reference: customer-push-ingestion/api-reference.md
+      - Schemas & Idempotency: customer-push-ingestion/schemas-and-idempotency.md
+      - Troubleshooting: customer-push-ingestion/troubleshooting.md
+      - Setup Guide: customer-push-ingestion/setup-guide.md
   - Alerting: alerting.md
   - Architecture:
       - Overview: architecture.md
@@ -52,6 +58,7 @@ nav:
       - Enterprise Overview: architecture/enterprise-overview.md
       - Licensing: architecture/licensing.md
       - ADR-001 Enterprise Edition: architecture/adr/001-enterprise-edition.md
+      - ADR-003 External Ingest Test/Docs Strategy: architecture/adr/003-external-ingest-test-docs-strategy.md
       - BYO-LLM Architecture: architecture/byo-llm-architecture.md
   - Operations:
       - Observability Tooling: ops/observability-tooling.md
@@ -149,3 +156,7 @@ markdown_extensions:
           format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
+  - pymdownx.snippets:
+      base_path:
+        - src/dev_health_ops/api/external_ingest/examples
+      check_paths: true

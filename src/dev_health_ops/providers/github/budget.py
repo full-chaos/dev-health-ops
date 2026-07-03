@@ -327,8 +327,8 @@ def _fallback_credential_scope(
 # ---------------------------------------------------------------------------
 # Declares the full budget vocabulary the GitHub estimator emits so recorded
 # actuals key by the same (route_family, dimension) an estimate is keyed by.
-# Code-dataset families (git/commit_stats/files/blame/cicd/tests/deployments/
-# security) are budgeted but fetched through the frozen dataset path with no
+# Code-dataset families (git/commit_stats/files/blame/cicd/tests/deployments)
+# are budgeted but fetched through the frozen dataset path with no
 # instrumented client, so they carry no operation markers here (documented gap;
 # see docs/architecture/rate-limit-policy.md). Only the work-item families are
 # instrumented: every REST read in a work-item unit consumes the work_items
@@ -350,6 +350,16 @@ def _fallback_credential_scope(
 # and the REST prs traffic itself stays on the frozen connector pending
 # CHAOS-2773 CS8 -- so their markers stay empty per the plan's "never flip a
 # marker before its traffic" rule (§3).
+#
+# `security` (REST_CORE) is the first GitHub code-dataset family fully off the
+# frozen connector (CHAOS-2773 CS3): `providers/github/code_client.py::
+# GitHubCodeClient` fetches Dependabot alerts, code-scanning alerts, and
+# security advisories via `InstrumentedRESTCore` and labels every operation
+# with the explicit `"security:"` prefix, so this marker documents live
+# traffic (the CS1 explicit-prefix short-circuit resolves those labels
+# directly, irrespective of `operation_markers`) -- populated now that the
+# family's fetch path is actually instrumented, per the plan's "never flip a
+# marker before its traffic" rule (§3).
 GITHUB_USAGE_ROUTE_FAMILIES: tuple[UsageRouteFamily, ...] = (
     UsageRouteFamily("repo", BudgetDimension.REST_CORE),
     UsageRouteFamily("git", BudgetDimension.REST_CORE),
@@ -370,7 +380,9 @@ GITHUB_USAGE_ROUTE_FAMILIES: tuple[UsageRouteFamily, ...] = (
     UsageRouteFamily("tests", BudgetDimension.CONTENTS_BLOB),
     UsageRouteFamily("deployments", BudgetDimension.REST_CORE),
     UsageRouteFamily("deployments", BudgetDimension.CONTENTS_BLOB),
-    UsageRouteFamily("security", BudgetDimension.REST_CORE),
+    UsageRouteFamily(
+        "security", BudgetDimension.REST_CORE, operation_markers=("security:",)
+    ),
     UsageRouteFamily("work_items", BudgetDimension.REST_CORE),
     UsageRouteFamily("work_item_prs", BudgetDimension.GRAPHQL_COST),
     UsageRouteFamily("work_item_prs", BudgetDimension.SECONDARY_ABUSE_RISK),

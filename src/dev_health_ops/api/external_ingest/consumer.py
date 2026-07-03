@@ -276,27 +276,37 @@ class ExternalIngestStreamConsumer(StreamConsumer):
         (adversarial-review finding: a swallowed DLQ-write failure must not
         silently drop the entry with no DLQ record).
 
-        Idempotency (CHAOS-2697 adversarial rounds 2+3): a per-entry marker
-        key is set right after a successful XADD, so a source entry retried
-        across mark-failure cycles produces exactly one DLQ row instead of
-        flooding the capped/approximate stream. The check-then-write is safe
-        without WATCH/MULTI because of the CC11 deployment invariant
-        (exactly ONE consumer identity ever runs this code for a given
-        entry). The marker set itself is best-effort: if it fails after the
-        XADD landed, a later retry can write at most one extra DLQ row per
-        such blip -- bounded noise, unlike the unbounded per-cycle
-        duplication the marker exists to stop.
+        Idempotency (CHAOS-2697 adversarial rounds 2-4): a per-entry marker
+        key stores the DLQ stream-id of the row a prior attempt wrote, so a
+        source entry retried across mark-failure cycles produces exactly one
+        DLQ row instead of flooding the capped/approximate stream. The
+        check-then-write is safe without WATCH/MULTI because of the CC11
+        deployment invariant (exactly ONE consumer identity ever runs this
+        code for a given entry).
+
+        Round-4 correctness: the marker is NOT proof-of-existence on its own.
+        The DLQ is capped (``maxlen=STREAM_MAXLEN``), so under sustained
+        pressure a high-volume org can TRIM the original row while a
+        ``mark_batch_failed``/Postgres outage keeps the source entry pending.
+        On a marker hit we therefore re-read the stored stream-id and only
+        short-circuit if that exact row is STILL present; if it was trimmed
+        we fall through and write a fresh row (refreshing the marker), so a
+        failed batch can never end up ACKed with no surviving DLQ record.
+        The marker set itself is best-effort: if it fails after the XADD
+        landed, a later retry writes at most one extra DLQ row -- bounded
+        noise, unlike the unbounded per-cycle duplication the marker stops.
         """
         org_id = data.get("org_id") or self._org_id_from_stream_key(stream_key)
         dlq = dlq_name(org_id)
         marker = f"{dlq}:written:{entry_id}"
         try:
-            if rc.exists(marker):
-                # A prior attempt already landed the DLQ row (its mark or
-                # ACK failed afterwards) -- report success without a
+            prior_id = rc.get(marker)
+            if prior_id and self._dlq_entry_present(rc, dlq, prior_id):
+                # A prior attempt's DLQ row is still on the stream (its mark
+                # or ACK failed afterwards) -- report success without a
                 # duplicate XADD.
                 return org_id, True
-            rc.xadd(
+            new_id = rc.xadd(
                 dlq,
                 {
                     "original_stream": stream_key,
@@ -313,7 +323,7 @@ class ExternalIngestStreamConsumer(StreamConsumer):
             logger.exception("Failed to move entry %s to DLQ", entry_id)
             return org_id, False
         try:
-            rc.set(marker, "1", ex=DLQ_MARKER_TTL_SECONDS)
+            rc.set(marker, new_id, ex=DLQ_MARKER_TTL_SECONDS)
         except Exception:
             logger.exception(
                 "DLQ row for entry %s written but its dedup marker was not -- "
@@ -321,6 +331,21 @@ class ExternalIngestStreamConsumer(StreamConsumer):
                 entry_id,
             )
         return org_id, True
+
+    @staticmethod
+    def _dlq_entry_present(rc: Any, dlq: str, entry_id: str) -> bool:
+        """Whether a specific DLQ stream-id is still present (not trimmed out
+        of the capped stream). A re-read failure is treated as "present" --
+        the safe direction here is to NOT rewrite (avoid a duplicate on a
+        transient blip); the round-4 hole was the opposite assumption
+        (marker existence alone implying the row survived)."""
+        try:
+            return bool(rc.xrange(dlq, min=entry_id, max=entry_id))
+        except Exception:
+            logger.exception(
+                "Failed to verify DLQ row %s on %s; assuming present", entry_id, dlq
+            )
+            return True
 
     @staticmethod
     def _resolve_mark_batch_failed():

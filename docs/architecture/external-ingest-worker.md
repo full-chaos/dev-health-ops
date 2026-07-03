@@ -122,12 +122,19 @@ Postgres outage, eventually evicting distinct failures from the capped
 approximate DLQ stream. Round 3: the mark-first "fix" for that LOSES the
 DLQ row entirely when the mark lands but the XADD fails — the now-terminal
 batch makes every redelivery take the consumer's idempotent-skip guard,
-which ACKs without ever retrying the DLQ write. Resolution: DLQ-first with
-a per-entry `…:dlq:written:<entry_id>` marker (set best-effort right after
-a successful XADD; check-then-write is safe under the CC11 single-consumer
-invariant) — a failed XADD leaves the batch untouched and the entry pending
-(self-healing), a failed mark retries with the marker suppressing duplicate
-rows, and only full success ACKs. `status.mark_failed` transitions from ANY
+which ACKs without ever retrying the DLQ write. Round 4: the marker cannot be treated
+as proof the DLQ row still exists — the DLQ is `maxlen`-capped, so under
+sustained pressure a high-volume org can trim the original row while the
+mark outage keeps the entry pending, and a marker-only short-circuit would
+then mark-and-ACK with no surviving DLQ record. Resolution: DLQ-first with
+a per-entry `…:dlq:written:<entry_id>` marker that stores the DLQ
+**stream-id** of the row it wrote (set best-effort right after a successful
+XADD; check-then-write is safe under the CC11 single-consumer invariant). On
+a marker hit the code re-reads that exact stream-id and only short-circuits
+if it is still present; a trimmed row falls through to a fresh XADD. Net: a
+failed XADD leaves the batch untouched and the entry pending (self-healing),
+a failed mark retries with the marker suppressing duplicate rows *while the
+row survives*, a trimmed row is rewritten, and only full success ACKs. `status.mark_failed` transitions from ANY
 non-terminal status (permanent failures raised before `mark_processing`
 leave `accepted`), forces the counter invariant (`items_accepted=0`,
 `items_rejected=items_received`, `record_counts=NULL` — failed means

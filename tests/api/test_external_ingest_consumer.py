@@ -676,6 +676,51 @@ class TestMoveToDlqFailureIsSwallowed:
         dlq_entries = rc.xrange("external-ingest:org-dlq-flaky:dlq")
         assert len(dlq_entries) == 1
 
+    def test_marker_hit_rewrites_when_original_dlq_row_trimmed(self, fake_redis):
+        """CHAOS-2697 adversarial round 4 HIGH: the dedup marker must not
+        suppress a fresh DLQ write once the original row has been trimmed
+        from the capped stream. Otherwise a mark/ACK after trimming leaves a
+        failed batch with no surviving DLQ record -- silent DLQ loss under
+        sustained pressure. On a marker hit the code verifies the stored
+        stream-id is still present and, if trimmed, writes a fresh row."""
+        stream, entry_id = _xadd_batch(fake_redis, org_id="org-dlq-trim")
+        c = _consumer()
+        dlq = "external-ingest:org-dlq-trim:dlq"
+
+        assert c.move_to_dlq(fake_redis, stream, entry_id, "gave up") is True
+        first = fake_redis.xrange(dlq)
+        assert len(first) == 1
+        marker = f"{dlq}:written:{entry_id}"
+        # The marker stores the DLQ stream-id, not a bare flag.
+        assert fake_redis.get(marker) == first[0][0]
+
+        # Simulate the capped stream trimming the original row out.
+        fake_redis.xdel(dlq, first[0][0])
+        assert fake_redis.xrange(dlq) == []
+
+        # Retry: marker still points at the now-gone id -> must write fresh.
+        # The empty-then-non-empty transition proves a fresh XADD happened
+        # (a marker-only short-circuit would leave the stream empty -- the
+        # round-4 silent-loss bug). Not asserting id-inequality: fakeredis
+        # resets a drained stream's auto-id to <ms>-0 and can collide within
+        # one millisecond, unlike real Redis's monotonic last_id.
+        assert c.move_to_dlq(fake_redis, stream, entry_id, "gave up") is True
+        second = fake_redis.xrange(dlq)
+        assert len(second) == 1
+        assert fake_redis.get(marker) == second[0][0]
+
+    def test_marker_hit_with_surviving_row_does_not_duplicate(self, fake_redis):
+        """The dedup still holds when the original row survives (round-2
+        property preserved by the round-4 change): a marker hit whose stored
+        id is still present short-circuits without a second XADD."""
+        stream, entry_id = _xadd_batch(fake_redis, org_id="org-dlq-keep")
+        c = _consumer()
+        dlq = "external-ingest:org-dlq-keep:dlq"
+
+        assert c.move_to_dlq(fake_redis, stream, entry_id, "gave up") is True
+        assert c.move_to_dlq(fake_redis, stream, entry_id, "gave up") is True
+        assert len(fake_redis.xrange(dlq)) == 1
+
 
 class TestProcessorAvailabilityGuard:
     """Deployment-order guard (adversarial-review finding): before

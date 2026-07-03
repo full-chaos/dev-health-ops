@@ -40,6 +40,7 @@ nav:
       - Troubleshooting: customer-push-ingestion/troubleshooting.md
       - Setup Guide: customer-push-ingestion/setup-guide.md
       - Examples & Quickstart: customer-push-ingestion/examples.md
+      - CI/CD Examples: customer-push-ingestion/ci-cd.md
   - Alerting: alerting.md
   - Architecture:
       - Overview: architecture.md
@@ -160,4 +161,5 @@ markdown_extensions:
   - pymdownx.snippets:
       base_path:
         - src/dev_health_ops/api/external_ingest/examples
+        - examples/customer-push
       check_paths: true

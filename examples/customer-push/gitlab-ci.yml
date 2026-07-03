@@ -1,0 +1,23 @@
+# FullChaos customer-push via GitLab CI (dev-hops CLI).
+#
+# Copy into YOUR project as `.gitlab-ci.yml` (or include it). Store the ingest
+# token as a MASKED + PROTECTED CI/CD variable named FULLCHAOS_INGEST_TOKEN
+# (Settings -> CI/CD -> Variables). It needs only ingest:write + schema:read --
+# never a provider token or your FullChaos login.
+stages: [push]
+
+fullchaos-push:
+  stage: push
+  image: python:3.12-slim
+  variables:
+    FULLCHAOS_API_URL: "https://app.fullchaos.example"
+    # FULLCHAOS_INGEST_TOKEN / FULLCHAOS_ORG_ID come from masked CI/CD variables.
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+  script:
+    - pip install --quiet dev-health-ops
+    # Replace with your own extractor writing a batch envelope to batch.json.
+    - dev-hops push sample --all > batch.json
+    - dev-hops push validate batch.json          # local, no network call
+    - dev-hops push batch --poll batch.json        # non-zero exit fails the job

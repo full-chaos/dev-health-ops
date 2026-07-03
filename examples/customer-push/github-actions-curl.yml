@@ -1,0 +1,61 @@
+# FullChaos customer-push via GitHub Actions (raw REST, no dev-hops dependency).
+#
+# Copy into YOUR repository as `.github/workflows/fullchaos-push.yml`.
+# FULLCHAOS_INGEST_TOKEN is a repository secret (ingest:write + schema:read scopes).
+name: fullchaos-push-curl
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    env:
+      FULLCHAOS_API_URL: https://app.fullchaos.example
+      FULLCHAOS_INGEST_TOKEN: ${{ secrets.FULLCHAOS_INGEST_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Replace with your own extractor that writes a batch envelope to batch.json.
+      - name: Build batch
+        run: cp examples/batch.json batch.json
+
+      # Validate (scope schema:read); fail the job if the API reports valid:false.
+      - name: Validate
+        run: |
+          set -euo pipefail
+          resp=$(curl -sS -X POST "$FULLCHAOS_API_URL/api/v1/external-ingest/validate" \
+            -H "Authorization: Bearer $FULLCHAOS_INGEST_TOKEN" \
+            -H "Content-Type: application/json" --data @batch.json)
+          echo "$resp"
+          echo "$resp" | jq -e '.valid == true' >/dev/null
+
+      # Submit (scope ingest:write); capture ingestionId from the 202 response.
+      - name: Push
+        id: push
+        run: |
+          set -euo pipefail
+          resp=$(curl -sS -X POST "$FULLCHAOS_API_URL/api/v1/external-ingest/batches" \
+            -H "Authorization: Bearer $FULLCHAOS_INGEST_TOKEN" \
+            -H "Content-Type: application/json" --data @batch.json)
+          echo "$resp"
+          echo "id=$(echo "$resp" | jq -r '.ingestionId')" >> "$GITHUB_OUTPUT"
+
+      # Poll status (scope ingest:status) until terminal; fail on `failed`.
+      - name: Poll status
+        run: |
+          set -euo pipefail
+          id="${{ steps.push.outputs.id }}"
+          for _ in $(seq 1 60); do
+            body=$(curl -sS "$FULLCHAOS_API_URL/api/v1/external-ingest/batches/$id" \
+              -H "Authorization: Bearer $FULLCHAOS_INGEST_TOKEN")
+            status=$(echo "$body" | jq -r '.status')
+            echo "status=$status"
+            case "$status" in
+              completed|partial) echo "$body" | jq .; exit 0 ;;
+              failed)            echo "$body" | jq .; exit 1 ;;
+            esac
+            sleep 5
+          done
+          echo "timed out waiting for terminal status"; exit 1

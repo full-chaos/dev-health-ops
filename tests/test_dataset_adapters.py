@@ -645,3 +645,272 @@ def test_work_item_derivative_preserves_non_null_window_start_not_midnight(
         f"Expected window_start={mid_day_start.isoformat()!r} but got {result['window_start']!r}; "
         "adapter fell back to midnight instead of preserving context.window_start"
     )
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-2803/CS2: code-dataset usage_sink contract (_run_github_dataset /
+# _run_gitlab_dataset). Without this, code-dataset processors could drain
+# every instrumented client into a sink and it would still never reach the
+# unit result -- the adapter is the seam that turns "drained somewhere deep
+# in a processor" into "observations.provider_usage on the returned payload".
+# ---------------------------------------------------------------------------
+
+_FAKE_PR_SOCIAL_RECORD = {
+    "transport": "graphql",
+    "route_family": "pr_social",
+    "dimension": "graphql_cost",
+    "request_count": 3,
+    "example_operation": "pr_social:POST /graphql PR social data",
+}
+
+
+def test_github_dataset_result_includes_provider_usage_when_processor_drains_sink() -> (
+    None
+):
+    """The adapter passes its OWN usage_sink list into process_github_repo;
+    when the (mocked) processor drains something into it, the returned
+    payload gains observations.provider_usage with that exact content."""
+    ctx = _context(dataset_key="pr-reviews", processor_flags=_flags(sync_prs=True))
+
+    async def _fake_process_github_repo(**kwargs: object) -> None:
+        sink = kwargs["usage_sink"]
+        assert isinstance(sink, list) and sink == []
+        sink.append(dict(_FAKE_PR_SOCIAL_RECORD))
+
+    with patch(
+        "dev_health_ops.processors.github.process_github_repo",
+        _fake_process_github_repo,
+    ):
+        result = run_dataset_unit(ctx, _runtime())
+
+    assert result["observations"] == {"provider_usage": [_FAKE_PR_SOCIAL_RECORD]}
+
+
+def test_github_dataset_no_drain_omits_observations_key() -> None:
+    """A processor that drains nothing (the common case for every family
+    besides prs/pr_social until later CS waves) must not fabricate an empty
+    observations.provider_usage -- mirrors _build_work_item_observations'
+    "only emit if truthy" convention."""
+    ctx = _context(dataset_key="commits", processor_flags=_flags(sync_git=True))
+    processor = AsyncMock()
+
+    with patch("dev_health_ops.processors.github.process_github_repo", processor):
+        result = run_dataset_unit(ctx, _runtime())
+
+    processor.assert_awaited_once()
+    await_args = processor.await_args
+    assert await_args is not None
+    assert await_args.kwargs["usage_sink"] == []
+    assert "observations" not in result
+
+
+def test_github_dataset_failure_attaches_partial_observations_to_exception() -> None:
+    """CHAOS-2754 clobber rule: a processor that drains SOME usage into the
+    sink and then raises must still surface those actuals -- attached to the
+    exception via the provider-neutral alias -- so the worker's deferral/
+    failure stamp can persist them, even though run_dataset_unit itself
+    re-raises (never swallows the error)."""
+    from dev_health_ops.providers.usage import read_partial_observations
+
+    ctx = _context(dataset_key="pr-reviews", processor_flags=_flags(sync_prs=True))
+
+    async def _failing_process_github_repo(**kwargs: object) -> None:
+        sink = kwargs["usage_sink"]
+        assert isinstance(sink, list)
+        sink.append(dict(_FAKE_PR_SOCIAL_RECORD))
+        raise RuntimeError("boom mid-sync")
+
+    with patch(
+        "dev_health_ops.processors.github.process_github_repo",
+        _failing_process_github_repo,
+    ):
+        with pytest.raises(RuntimeError, match="boom mid-sync") as exc_info:
+            run_dataset_unit(ctx, _runtime())
+
+    partial = read_partial_observations(exc_info.value)
+    assert partial == {"provider_usage": [_FAKE_PR_SOCIAL_RECORD]}
+
+
+def test_github_dataset_rate_limit_propagates_with_partials_and_type_intact() -> None:
+    """Codex HIGH (PR #1151): the deferral interleaving that matters most.
+    A RateLimitException escaping the processor (the review batch now
+    re-raises it instead of degrade-and-log) must leave run_dataset_unit as
+    the SAME canonical exception type -- sync_units' deferral branch matches
+    on isinstance(RateLimitException) -- with retry_after_seconds intact AND
+    the partial pr_social usage attached, and there is no success result at
+    all (so a partial fetch can never be stamped SUCCESS with reviews
+    silently missing)."""
+    from dev_health_ops.exceptions import RateLimitException
+    from dev_health_ops.providers.usage import read_partial_observations
+
+    ctx = _context(dataset_key="pr-reviews", processor_flags=_flags(sync_prs=True))
+
+    async def _rate_limited_process_github_repo(**kwargs: object) -> None:
+        sink = kwargs["usage_sink"]
+        assert isinstance(sink, list)
+        # Mirrors the processor contract: the finally-drain has already moved
+        # the partial usage into the sink before the exception unwinds.
+        sink.append(dict(_FAKE_PR_SOCIAL_RECORD))
+        raise RateLimitException("429 Too Many Requests", retry_after_seconds=120)
+
+    with patch(
+        "dev_health_ops.processors.github.process_github_repo",
+        _rate_limited_process_github_repo,
+    ):
+        with pytest.raises(RateLimitException) as exc_info:
+            run_dataset_unit(ctx, _runtime())
+
+    assert exc_info.value.retry_after_seconds == 120
+    partial = read_partial_observations(exc_info.value)
+    assert partial == {"provider_usage": [_FAKE_PR_SOCIAL_RECORD]}
+
+
+def test_github_dataset_failure_without_any_drain_attaches_nothing() -> None:
+    """A processor that raises before draining anything must not attach an
+    empty/fabricated partial-observations payload to the exception."""
+    from dev_health_ops.providers.usage import read_partial_observations
+
+    ctx = _context(dataset_key="commits", processor_flags=_flags(sync_git=True))
+
+    async def _failing_process_github_repo(**kwargs: object) -> None:
+        raise RuntimeError("boom before any drain")
+
+    with patch(
+        "dev_health_ops.processors.github.process_github_repo",
+        _failing_process_github_repo,
+    ):
+        with pytest.raises(RuntimeError) as exc_info:
+            run_dataset_unit(ctx, _runtime())
+
+    assert read_partial_observations(exc_info.value) is None
+
+
+def test_gitlab_dataset_result_includes_provider_usage_when_processor_drains_sink() -> (
+    None
+):
+    """GitLab twin of the GitHub success-drain test: the plumbing is uniform
+    across providers even though no GitLab code client drains into it yet
+    (CHAOS-2773 Wave B) -- this proves the CONTRACT works generically."""
+    ctx = _context(
+        provider="gitlab",
+        dataset_key="pr-reviews",
+        source_external_id="123",
+        processor_flags=_flags(sync_prs=True),
+        credentials={"token": "gitlab-token", "gitlab_url": "https://gitlab.example"},
+    )
+    fake_record = {
+        "transport": "rest",
+        "route_family": "merge_requests",
+        "dimension": "rest_core",
+        "request_count": 2,
+    }
+
+    async def _fake_process_gitlab_project(**kwargs: object) -> None:
+        sink = kwargs["usage_sink"]
+        assert isinstance(sink, list) and sink == []
+        sink.append(dict(fake_record))
+
+    with patch(
+        "dev_health_ops.processors.gitlab.process_gitlab_project",
+        _fake_process_gitlab_project,
+    ):
+        result = run_dataset_unit(ctx, _runtime())
+
+    assert result["observations"] == {"provider_usage": [fake_record]}
+
+
+def test_gitlab_dataset_failure_attaches_partial_observations_to_exception() -> None:
+    """GitLab twin of the GitHub failure-drain test."""
+    from dev_health_ops.providers.usage import read_partial_observations
+
+    ctx = _context(
+        provider="gitlab",
+        dataset_key="pr-reviews",
+        source_external_id="123",
+        processor_flags=_flags(sync_prs=True),
+        credentials={"token": "gitlab-token", "gitlab_url": "https://gitlab.example"},
+    )
+    fake_record = {
+        "transport": "rest",
+        "route_family": "merge_requests",
+        "dimension": "rest_core",
+        "request_count": 1,
+    }
+
+    async def _failing_process_gitlab_project(**kwargs: object) -> None:
+        sink = kwargs["usage_sink"]
+        assert isinstance(sink, list)
+        sink.append(dict(fake_record))
+        raise RuntimeError("boom mid-sync gitlab")
+
+    with patch(
+        "dev_health_ops.processors.gitlab.process_gitlab_project",
+        _failing_process_gitlab_project,
+    ):
+        with pytest.raises(RuntimeError, match="boom mid-sync gitlab") as exc_info:
+            run_dataset_unit(ctx, _runtime())
+
+    partial = read_partial_observations(exc_info.value)
+    assert partial == {"provider_usage": [fake_record]}
+
+
+def test_github_dataset_observations_join_through_real_attach_budget_comparison() -> (
+    None
+):
+    """CHAOS-2803/CS2: the adapter's returned payload's observations shape
+    must be exactly what workers.sync_units._attach_budget_comparison expects
+    -- proven with a REAL (unmocked) call to that function AND the real
+    GitHub budget estimator, without needing a live GitHub API. This is the
+    proof that markers + draining are not enough on their own: the payload
+    shape has to join too."""
+    from dev_health_ops.sync.budget import estimate_provider_budget
+    from dev_health_ops.workers.sync_units import _attach_budget_comparison
+
+    ctx = _context(dataset_key="pr-reviews", processor_flags=_flags(sync_prs=True))
+
+    async def _fake_process_github_repo(**kwargs: object) -> None:
+        # A single aggregated observation with request_count=3 -- matching the
+        # REAL shape UsageRecorder.drain() returns (one dict per unique
+        # (transport, route_family, dimension) key, already summed), and the
+        # pr_social/graphql_cost bucket the estimator reserves for the
+        # prs/pr-reviews/pr-comments dataset family (providers/github/budget.py
+        # _dataset_estimates).
+        sink = kwargs["usage_sink"]
+        assert isinstance(sink, list)
+        sink.append(dict(_FAKE_PR_SOCIAL_RECORD))
+
+    with patch(
+        "dev_health_ops.processors.github.process_github_repo",
+        _fake_process_github_repo,
+    ):
+        result = run_dataset_unit(ctx, _runtime())
+
+    provider_usage = result["observations"]["provider_usage"]
+    assert len(provider_usage) == 1
+    assert provider_usage[0]["route_family"] == "pr_social"
+
+    budget_audit = [estimate.to_dict() for estimate in estimate_provider_budget(ctx)]
+    pr_social_estimate = next(
+        entry
+        for entry in budget_audit
+        if entry["route_family"] == "pr_social"
+        and entry["bucket"]["dimension"] == "graphql_cost"
+    )
+    assert pr_social_estimate["estimated_units"] > 0
+
+    joined = _attach_budget_comparison(
+        result,
+        budget_audit,
+        log_ctx={},
+        computed_at=datetime.now(timezone.utc),
+    )
+
+    comparisons = joined["observations"]["budget_comparison"]
+    pr_social_comparison = next(
+        row for row in comparisons if row["route_family"] == "pr_social"
+    )
+    assert pr_social_comparison["dimension"] == "graphql_cost"
+    assert pr_social_comparison["actual_requests"] == 3
+    assert (
+        pr_social_comparison["estimated_units"] == pr_social_estimate["estimated_units"]
+    )

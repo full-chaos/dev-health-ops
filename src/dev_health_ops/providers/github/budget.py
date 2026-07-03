@@ -334,6 +334,22 @@ def _fallback_credential_scope(
 # instrumented: every REST read in a work-item unit consumes the work_items
 # budget and every GraphQL POST consumes the work_item_prs budget, so resolution
 # is transport-based via the resolver defaults below.
+#
+# `pr_social` (GRAPHQL_COST) is the first code-dataset family whose fetch path
+# IS instrumented (CHAOS-2803/CS2): the PR review-batch enrichment
+# (`processors/github.py::_enrich_prs_with_reviews_batch`) constructs its own
+# local `GitHubWorkClient` and labels its GraphQL calls with the explicit
+# `"pr_social:"` prefix (CS1's resolver short-circuit, `providers/usage.py`),
+# so this marker documents that the family is now live rather than driving
+# resolution itself -- the short-circuit matches on `route_family` alone,
+# irrespective of `operation_markers`. The REST `prs` listing (raw PyGithub
+# `get_pulls`, `_collect_github_pr_objects`) and the `pr_social`
+# SECONDARY_ABUSE_RISK dimension remain uninstrumented/estimate-only: no
+# client observes a distinct secondary-limit signal on success responses (an
+# abstract reservation, like `work_item_prs`' SECONDARY_ABUSE_RISK sibling),
+# and the REST prs traffic itself stays on the frozen connector pending
+# CHAOS-2773 CS8 -- so their markers stay empty per the plan's "never flip a
+# marker before its traffic" rule (§3).
 GITHUB_USAGE_ROUTE_FAMILIES: tuple[UsageRouteFamily, ...] = (
     UsageRouteFamily("repo", BudgetDimension.REST_CORE),
     UsageRouteFamily("git", BudgetDimension.REST_CORE),
@@ -344,7 +360,9 @@ GITHUB_USAGE_ROUTE_FAMILIES: tuple[UsageRouteFamily, ...] = (
     UsageRouteFamily("blame", BudgetDimension.REST_CORE),
     UsageRouteFamily("blame", BudgetDimension.CONTENTS_BLOB),
     UsageRouteFamily("prs", BudgetDimension.REST_CORE),
-    UsageRouteFamily("pr_social", BudgetDimension.GRAPHQL_COST),
+    UsageRouteFamily(
+        "pr_social", BudgetDimension.GRAPHQL_COST, operation_markers=("pr_social:",)
+    ),
     UsageRouteFamily("pr_social", BudgetDimension.SECONDARY_ABUSE_RISK),
     UsageRouteFamily("cicd", BudgetDimension.REST_CORE),
     UsageRouteFamily("cicd", BudgetDimension.CONTENTS_BLOB),

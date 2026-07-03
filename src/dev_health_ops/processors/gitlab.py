@@ -1778,9 +1778,17 @@ async def process_gitlab_project(
     sync_commit_stats: bool | None = None,
     sync_files: bool | None = None,
     sync_blame: bool | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> None:
     """
     Process a GitLab project using the GitLab connector.
+
+    ``usage_sink`` (CHAOS-2803/CS2) mirrors ``process_github_repo``'s
+    adapter-owned drain sink for symmetry with ``dataset_adapters.py``. No
+    instrumented client is constructed by this function yet -- GitLab
+    code-dataset fetch stays on the frozen connector until CHAOS-2773 Wave B
+    migrates it -- so it is currently unused and accepted only so the
+    caller-side contract is uniform across providers.
     """
     if not CONNECTORS_AVAILABLE:
         raise RuntimeError(

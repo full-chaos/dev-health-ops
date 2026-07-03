@@ -608,6 +608,148 @@ def test_batched_pr_reviews_preserve_rest_consumed_fields() -> None:
     assert reviews[0].url == "https://github.test/review/10"
 
 
+# ---------------------------------------------------------------------------
+# CHAOS-2803/CS2: pr_social usage-drain call-count + attribution proofs.
+# ---------------------------------------------------------------------------
+
+
+def test_iter_pr_reviews_batch_with_operation_family_records_pr_social_usage() -> None:
+    """N GraphQL requests issued by the review batch (here: one initial page
+    plus one pagination follow-up, forced via hasNextPage) aggregate into
+    exactly ONE drained observation with request_count == N, keyed to the
+    pr_social route family -- proving both the re-bucketing (Task B) and that
+    every physical request is counted (not just the first)."""
+    client, graphql, _gate = _client()
+    graphql.last_response_status = 200
+    graphql.query.side_effect = [
+        {
+            "repository": {
+                "pr0": {
+                    "number": 1,
+                    "reviews": {
+                        "nodes": [_review_node(10)],
+                        "pageInfo": {"hasNextPage": True, "endCursor": "r1"},
+                    },
+                }
+            }
+        },
+        {
+            "repository": {
+                "pr0": {
+                    "number": 1,
+                    "reviews": {
+                        "nodes": [_review_node(11)],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    },
+                }
+            }
+        },
+    ]
+
+    reviews = dict(
+        client.iter_pr_reviews_batch(
+            owner="owner",
+            repo="repo",
+            prs=[_pr(1)],
+            limit=10,
+            operation_family="pr_social",
+        )
+    )[1]
+
+    assert [review.id for review in reviews] == [10, 11]
+    assert graphql.query.call_count == 2
+
+    observations = client.drain_usage_observations()
+    assert observations == [
+        {
+            "transport": "graphql",
+            "route_family": "pr_social",
+            "dimension": "graphql_cost",
+            "request_count": 2,
+            "example_operation": "pr_social:POST /graphql PR social data",
+            "latest_status": 200,
+        }
+    ]
+
+
+def test_iter_pr_reviews_batch_without_operation_family_stays_work_item_prs() -> None:
+    """No operation_family (the pre-CS2 call shape, still used by the
+    work-items PR-as-work-item path in providers/github/provider.py) keeps
+    the unprefixed label and resolves via the transport default -- proving
+    the CS2 fix is additive, not a change to the default resolution."""
+    client, graphql, _gate = _client()
+    graphql.last_response_status = 200
+    graphql.query.return_value = {
+        "repository": {
+            "pr0": {
+                "number": 1,
+                "reviews": {
+                    "nodes": [_review_node(10)],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                },
+            }
+        }
+    }
+
+    dict(
+        client.iter_pr_reviews_batch(owner="owner", repo="repo", prs=[_pr(1)], limit=10)
+    )
+
+    observations = client.drain_usage_observations()
+    assert len(observations) == 1
+    assert observations[0]["route_family"] == "work_item_prs"
+    assert observations[0]["example_operation"] == "POST /graphql PR social data"
+
+
+def test_iter_pr_reviews_batch_failure_mid_pagination_leaves_partial_usage_drained() -> (
+    None
+):
+    """A raise on the SECOND (pagination) request must not discard the
+    observation recorded for the FIRST, successful request -- the recorder
+    aggregates per physical round trip as it goes, so whatever succeeded
+    before a mid-batch failure is still present when the caller drains."""
+    client, graphql, gate = _client()
+    graphql.last_response_status = 200
+    graphql.query.side_effect = [
+        {
+            "repository": {
+                "pr0": {
+                    "number": 1,
+                    "reviews": {
+                        "nodes": [_review_node(10)],
+                        "pageInfo": {"hasNextPage": True, "endCursor": "r1"},
+                    },
+                }
+            }
+        },
+        RateLimitException("limited", retry_after_seconds=5.0),
+    ]
+
+    with pytest.raises(RateLimitException):
+        list(
+            client.iter_pr_reviews_batch(
+                owner="owner",
+                repo="repo",
+                prs=[_pr(1)],
+                limit=10,
+                operation_family="pr_social",
+            )
+        )
+
+    gate.penalize.assert_called_once_with(5.0)
+    observations = client.drain_usage_observations()
+    assert observations == [
+        {
+            "transport": "graphql",
+            "route_family": "pr_social",
+            "dimension": "graphql_cost",
+            "request_count": 1,
+            "example_operation": "pr_social:POST /graphql PR social data",
+            "latest_status": 200,
+        }
+    ]
+
+
 def _timeline_node(typename: str, created_at: str, login: str) -> dict[str, object]:
     return {
         "__typename": typename,

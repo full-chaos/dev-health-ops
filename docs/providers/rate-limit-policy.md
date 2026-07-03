@@ -822,6 +822,69 @@ built on this core (CS3+) are expected to author both the label and its
 family prefix themselves, so resolution for their traffic is deterministic
 by construction rather than by marker tuning.
 
+### Usage drain wiring + first re-bucketing (CHAOS-2773 CS2)
+
+CS1 landed the shared transport/resolver plumbing but migrated no traffic.
+[CHAOS-2803](https://linear.app/fullchaos/issue/CHAOS-2803) (CS2) is the
+proof-of-pipe that the plumbing actually reaches a `budget_comparison` row:
+
+- **`usage_sink` contract.** `processors/dataset_adapters.py::_run_github_dataset`
+  / `_run_gitlab_dataset` own a `usage_sink: list[dict]` list, pass it into
+  `process_github_repo` / `process_gitlab_project`, and the processor drains
+  every instrumented client it constructs into it in a `finally:` block — on
+  BOTH the success and failure path. On success the returned payload gains
+  `observations: {provider_usage: <sink>}`, the exact shape
+  `workers/sync_units.py::_attach_budget_comparison` joins as-is. On a
+  mid-sync raise, whatever was drained before the exception is attached to it
+  via `providers/usage.py::attach_partial_observations` — a provider-neutral
+  alias for the mechanism `metrics/job_work_items.py` already used for the
+  work-items sync path (`attach_work_item_partial_observations`, which now
+  delegates to it); both write the SAME exception attribute, so
+  `workers/sync_units.py::_merge_partial_observations_into_result` reads
+  either origin unchanged. Within the review batch itself, failure semantics
+  are split: a `RateLimitException` PROPAGATES (after the finally-drain) so
+  the unit defers to RETRYING with the partial actuals preserved — swallowing
+  it would stamp SUCCESS with reviews silently missing and bypass the
+  deferral branch entirely (codex HIGH on the CS2 review); any other
+  review-fetch error keeps the pre-existing degrade-and-log behavior, since
+  reviews are optional enrichment on top of the PR rows. Legacy entry points
+  that call a processor without an adapter-owned sink (the CLI
+  `processors/sync.py` batch path, webhooks) get `usage_sink=None`; the
+  processor still drains any client it builds (so its recorder never leaks
+  across calls) but only logs the observations at debug level — never
+  persisted.
+- **First intentional re-bucketing: `prs` / `pr_social`.** GitHub's PR
+  review-batch enrichment (`processors/github.py::_enrich_prs_with_reviews_batch`)
+  constructs a local `GitHubWorkClient` to batch-fetch reviews over GraphQL,
+  but never drained it and emitted an unprefixed operation label — so its
+  traffic silently fell through the resolver's transport default onto
+  `work_item_prs` (documented as a gap below) and was discarded outright (no
+  drain at all). CS2 fixes both: the client is now drained via the
+  `usage_sink` contract above, and its GraphQL calls are labeled with the
+  `pr_social:` prefix (the CS1 short-circuit convention), so they resolve
+  DIRECTLY to the `pr_social` route family the estimator already reserves for
+  the `prs`/`pr-reviews`/`pr-comments` dataset family. The unprefixed call
+  shape (`operation_family=None`) is preserved exactly for the work-items
+  PR-as-work-item path (`providers/github/provider.py`), which keeps
+  resolving to `work_item_prs` unshifted — pinned by
+  `tests/providers/test_usage_resolver_prefix.py`'s new
+  `pr_social:`-prefixed cases alongside its existing unshifted-attribution
+  proof, and by call-count tests in
+  `tests/providers/test_github_pr_social_batch.py` (N physical GraphQL
+  requests → one aggregated `pr_social`/`graphql_cost` observation with
+  `request_count == N`; a mid-pagination failure leaves the prior successful
+  request(s) drained). The REST `prs` listing itself (raw PyGithub
+  `get_pulls`) stays on the frozen connector, unlabeled, until CHAOS-2773 CS8
+  — `providers/github/budget.py`'s `prs` marker is therefore left empty
+  (never flip a marker before its traffic exists, per the migration
+  strategy above), while `pr_social`'s GRAPHQL_COST marker is flipped to
+  document it as now-instrumented.
+- **GitLab.** `process_gitlab_project` accepts the same `usage_sink`
+  parameter for a uniform cross-provider adapter contract, but no GitLab code
+  client drains into it yet — GitLab code-dataset fetch stays entirely on the
+  frozen connector until CHAOS-2773 Wave B. The sink is inert (always empty)
+  for GitLab today; this is expected, not a bug.
+
 ## Per-provider policy
 
 ### GitHub
@@ -849,8 +912,15 @@ by construction rather than by marker tuning.
   - **(c) permission / SSO / other 403** — no rate-limit markers → non-retryable
     `AuthenticationException`. This short-circuits the otherwise-wasteful retry
     spin on an unfixable permission/SAML-SSO error.
-- **Known gaps.** `pr_social` / `work_item_prs` secondary-limit pressure is
-  *estimated*, not measured from real header actuals; see
+- **Known gaps.** `pr_social` / `work_item_prs` **secondary-limit** pressure
+  (the `secondary_abuse_risk` dimension) is still *estimated*, not measured —
+  no client observes a distinct secondary-limit signal on a success response,
+  so this stays an abstract reservation for both families. `pr_social`'s
+  primary (`graphql_cost`) traffic IS now measured as of
+  [CHAOS-2803](https://linear.app/fullchaos/issue/CHAOS-2803) (CS2, see
+  [Usage drain wiring](#usage-drain-wiring-first-re-bucketing-chaos-2773-cs2)
+  above) for the PR review-batch enrichment; the REST `prs` listing itself
+  remains on the frozen connector, unmeasured, pending CHAOS-2773 CS8. See
   [Known gaps](#known-gaps).
 
 #### Route families
@@ -1072,11 +1142,19 @@ paper over:
   [Actual-vs-estimated calibration](#actual-vs-estimated-calibration-chaos-2759)
   above) wherever CHAOS-2754's recorder actually drained actuals for a
   route_family, but the recorder only records where a client calls it.
-  GitHub `pr_social`/`work_item_prs` secondary pressure, Linear
-  request/complexity actuals, and LaunchDarkly route-remaining are still
-  **uninstrumented**, so those families never produce a comparison row.
-  There is also no cross-run aggregation/dashboard yet — calibration today is
-  visible per-unit (result + structured log), not rolled up over time.
+  GitHub/GitLab `pr_social`/`work_item_prs` **secondary** (`secondary_abuse_risk`)
+  pressure, Linear request/complexity actuals, and LaunchDarkly
+  route-remaining are still **uninstrumented**, so those families never
+  produce a comparison row for that dimension. GitHub `pr_social`'s primary
+  (`graphql_cost`) traffic from the PR review-batch enrichment IS now
+  instrumented as of [CHAOS-2803](https://linear.app/fullchaos/issue/CHAOS-2803)
+  (CS2) — see
+  [Usage drain wiring](#usage-drain-wiring-first-re-bucketing-chaos-2773-cs2)
+  above; the REST `prs` listing and every other GitHub/GitLab code-dataset
+  family remain uninstrumented pending their own CHAOS-2773 changeset (see
+  "Frozen `connectors/` path" below). There is also no cross-run
+  aggregation/dashboard yet — calibration today is visible per-unit (result +
+  structured log), not rolled up over time.
 - **Frozen `connectors/` path.** GitHub's `git`/`commit_stats`/`files`/`blame`/
   `cicd`/`tests`/`deployments`/`security` route families and the equivalent
   GitLab code-dataset paths remain under the frozen `connectors/` tree

@@ -151,13 +151,17 @@ async def test_github_pr_sync_writes_changes_requested_count_from_reviews():
             raise AssertionError("per-PR review fetch should not be used")
 
     class _BatchReviewClient:
-        calls: list[tuple[str, str, list[int], int | None]] = []
+        calls: list[tuple[str, str, list[int], int | None, str | None]] = []
 
         def __init__(self, **_kwargs):
             self.graphql = None
 
-        def iter_pr_reviews_batch(self, *, owner, repo, prs, limit):
-            self.calls.append((owner, repo, [pr.number for pr in prs], limit))
+        def iter_pr_reviews_batch(
+            self, *, owner, repo, prs, limit, operation_family=None
+        ):
+            self.calls.append(
+                (owner, repo, [pr.number for pr in prs], limit, operation_family)
+            )
             for pr in prs:
                 yield pr.number, tuple(reviews_by_pr.get(pr.number, []))
 
@@ -180,7 +184,9 @@ async def test_github_pr_sync_writes_changes_requested_count_from_reviews():
         )
 
     assert total == 2
-    assert _BatchReviewClient.calls == [("o", "r", [1, 2], None)]
+    # CHAOS-2803/CS2: the review batch labels its GraphQL calls with the
+    # "pr_social" family so they re-bucket off the work_item_prs default.
+    assert _BatchReviewClient.calls == [("o", "r", [1, 2], None, "pr_social")]
 
     prs = {pr.number: pr for batch in store.pr_batches for pr in batch}
     assert prs[1].changes_requested_count == 2

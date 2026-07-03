@@ -161,9 +161,11 @@ The system registers Celery tasks under the `workers/` directory. The primary re
 | ~~`sync_team_drift` / `reconcile_team_members`~~ | — | — | **Deleted in CHAOS-2600 CS6 (CHAOS-2607).** Both Celery tasks and `workers/sync_team.py` are removed (they were fail-closed no-ops in CS5). ClickHouse is the team/identity system of record; the Postgres drift engine + member-reconcile no longer exist. |
 | `run_daily_metrics` | `metrics daily` | `metrics` | Computes daily repository and user metrics. Source: `metrics_daily.py`. |
 | `dispatch_daily_metrics_partitioned` | `metrics daily` (partitioned) | `default` | Partitions daily metrics across organizations and fans out. Source: `metrics_partitioned.py`. |
+| `dispatch_daily_metrics_for_all_orgs` | None | `default` | Fans out `dispatch_daily_metrics_partitioned` per active organization (CHAOS-2849) so `repo_metrics_daily` is populated for real (UUID-scoped) tenants, not just the blank-org default. Source: `metrics_partitioned.py`. |
 | `run_daily_metrics_batch` | None | `metrics` | Processes a batch of repositories for daily metrics. Source: `metrics_partitioned.py`. |
 | `run_daily_metrics_finalize_task` | None | `default` | Finalizes daily metrics computation. Source: `metrics_partitioned.py`. |
 | `run_complexity_job` | None | `metrics` | Analyzes code complexity for repositories. Source: `metrics_extra.py:16-319`. |
+| `dispatch_complexity_job` | None | `default` | Fans out `run_complexity_job` per active organization on an independent daily cadence (CHAOS-2850), so complexity refreshes even for orgs with infrequent syncs. Source: `metrics_extra.py`. |
 | `run_dora_metrics` | None | `metrics` | Computes DORA metrics. Source: `metrics_extra.py:16-319`. |
 | `run_release_impact_job` | None | `metrics` | Computes release impact metrics. Source: `metrics_extra.py:16-319`. |
 | `dispatch_release_impact` | None | `default` | Fans out release impact computation. Source: `metrics_extra.py`. |
@@ -193,7 +195,8 @@ The system registers Celery tasks under the `workers/` directory. The primary re
 |----------|------|----------|-------|
 | `dispatch-scheduled-syncs` | `dispatch_scheduled_syncs` | Every 300 seconds (5 minutes) | `default` |
 | `dispatch-scheduled-metrics` | `dispatch_scheduled_metrics` | Every 300 seconds (5 minutes) | `default` |
-| `run-daily-metrics` | `dispatch_daily_metrics_partitioned` | Daily at 01:00 UTC | `default` |
+| `run-complexity-daily` | `dispatch_complexity_job` | Daily at 00:45 UTC | `default` |
+| `run-daily-metrics` | `dispatch_daily_metrics_for_all_orgs` | Daily at 01:00 UTC | `default` |
 | `run-recommendations` | `run_recommendations_job` | Daily at 02:00 UTC | `metrics` |
 | `run-release-impact-daily` | `dispatch_release_impact` | Daily at 01:30 UTC | `default` |
 | `run-capacity-forecast` | `run_capacity_forecast_job` | Mondays at 04:00 UTC | `metrics` |

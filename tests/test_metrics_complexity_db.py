@@ -150,3 +150,99 @@ def test_complexity_db_job_falls_back_to_blame(monkeypatch):
         "src/alpha.py",
         "src/beta.py",
     }
+
+
+def test_complexity_db_job_backfill_writes_single_day_not_duplicate_flat_rows(
+    monkeypatch,
+):
+    """CHAOS-2850: backfill_days > 1 must not fabricate duplicate flat rows.
+
+    Historical file snapshots are not stored, so re-using the CURRENT
+    git_files content across N backfill days would write N identical
+    cyclomatic_per_kloc rows -- flatlining complexity_delta's trailing
+    30-day window (load_repo_complexity_delta_30d) for the whole backfill
+    period. Only the target day's row may be written.
+    """
+    repo_id = uuid.uuid4()
+    files = [("src/alpha.py", "def alpha():\n    return 1\n")]
+    client = FakeClickHouseClient(files)
+    sink = FakeClickHouseSink(client)
+    monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: sink)
+
+    rc = job.run_complexity_db_job(
+        repo_id=repo_id,
+        db_url="clickhouse://localhost:8123/default",
+        date=date(2025, 1, 30),
+        backfill_days=30,
+        language_globs=None,
+        max_files=None,
+        org_id="test-org",
+    )
+
+    assert rc == 0
+    assert len(sink.dailies) == 1, (
+        f"Expected exactly one repo_complexity_daily row (the target day), "
+        f"got {len(sink.dailies)} -- backfill must not fabricate duplicate "
+        f"flat historical rows."
+    )
+    assert sink.dailies[0].day == date(2025, 1, 30)
+
+
+def test_complexity_db_job_produces_distinct_values_across_days_when_code_differs(
+    monkeypatch,
+):
+    """CHAOS-2850: complexity must NOT be static across days when code changes.
+
+    Each real calendar day's run scans whatever is CURRENTLY in git_files at
+    that moment. A simple function on day 1 and a heavily-branching version
+    of the same file on day 2 must yield genuinely different
+    cyclomatic_per_kloc -- proving the daily cadence (not a fabricated
+    backfill) is what produces a real trend.
+    """
+    repo_id = uuid.uuid4()
+
+    day1_files = [("src/alpha.py", "def alpha():\n    return 1\n")]
+    day2_files = [
+        (
+            "src/alpha.py",
+            "def alpha(x):\n"
+            "    if x > 0 and x < 100 or x == 5:\n"
+            "        return 1\n"
+            "    return 0\n",
+        )
+    ]
+
+    sink1 = FakeClickHouseSink(FakeClickHouseClient(day1_files))
+    monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: sink1)
+    rc1 = job.run_complexity_db_job(
+        repo_id=repo_id,
+        db_url="clickhouse://localhost:8123/default",
+        date=date(2025, 1, 5),
+        backfill_days=1,
+        language_globs=None,
+        max_files=None,
+        org_id="test-org",
+    )
+    assert rc1 == 0
+    day1_daily = sink1.dailies[0]
+
+    sink2 = FakeClickHouseSink(FakeClickHouseClient(day2_files))
+    monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: sink2)
+    rc2 = job.run_complexity_db_job(
+        repo_id=repo_id,
+        db_url="clickhouse://localhost:8123/default",
+        date=date(2025, 1, 6),
+        backfill_days=1,
+        language_globs=None,
+        max_files=None,
+        org_id="test-org",
+    )
+    assert rc2 == 0
+    day2_daily = sink2.dailies[0]
+
+    assert day1_daily.day == date(2025, 1, 5)
+    assert day2_daily.day == date(2025, 1, 6)
+    assert day1_daily.cyclomatic_per_kloc != day2_daily.cyclomatic_per_kloc, (
+        "Complexity must reflect the actual code scanned on each day, not "
+        "stay static across days."
+    )

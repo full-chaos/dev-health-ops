@@ -209,8 +209,14 @@ def run_complexity_db_job(
     """
     Compute complexity metrics from ClickHouse git_files/git_blame contents.
 
-    Note: For backfill_days > 1, this job reuses the current file snapshot
-    across the requested days because historical file snapshots are not stored.
+    Note: complexity has no historical snapshot storage. Regardless of
+    ``backfill_days``, this job always writes exactly ONE row -- for
+    ``date`` -- computed from the CURRENT git_files/git_blame contents.
+    Reusing that single snapshot across a multi-day backfill window would
+    fabricate duplicate flat ``cyclomatic_per_kloc`` rows and flatline
+    ``complexity_delta``'s trailing 30-day trend (CHAOS-2850). A genuine
+    trend only comes from the daily ``dispatch_complexity_job`` cadence
+    running on distinct real days as the code actually changes.
     """
     resolved_db_url = db_url or os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
     if not resolved_db_url:
@@ -239,11 +245,19 @@ def run_complexity_db_job(
             return 0
 
         if backfill_days > 1:
-            logger.info(
-                "Backfill requested; reusing current file snapshot for each day."
+            logger.warning(
+                "complexity backfill_days=%d requested, but historical file "
+                "snapshots are not stored -- complexity can only be computed "
+                "from the CURRENT git_files/git_blame contents. Writing a "
+                "single row for %s only, not %d duplicate flat rows, to avoid "
+                "fabricating a misleading flat complexity_delta trend "
+                "(CHAOS-2850).",
+                backfill_days,
+                date.isoformat(),
+                backfill_days,
             )
 
-        days = _date_range(date, max(1, int(backfill_days)))
+        days = _date_range(date, 1)
         repos_with_data = 0
         for repo_uuid, repo_name in repos:
             repo_label = repo_name or str(repo_uuid)

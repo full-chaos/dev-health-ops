@@ -37,6 +37,8 @@ late_ack_excluded_tasks = (
     "dev_health_ops.workers.tasks.dispatch_scheduled_syncs",
     "dev_health_ops.workers.tasks.dispatch_scheduled_metrics",
     "dev_health_ops.workers.tasks.dispatch_daily_metrics_partitioned",
+    "dev_health_ops.workers.tasks.dispatch_daily_metrics_for_all_orgs",
+    "dev_health_ops.workers.tasks.dispatch_complexity_job",
     "dev_health_ops.workers.tasks.dispatch_investment_materialize_partitioned",
     "dev_health_ops.workers.tasks.dispatch_release_impact",
     "dev_health_ops.workers.tasks.dispatch_membership_backfill",
@@ -129,9 +131,26 @@ beat_schedule = {
         "schedule": 300.0,
         "options": {"queue": "default"},
     },
+    # Fans out per active organization (CHAOS-2849): discover_repos (job_daily.py)
+    # scopes the repos query by org_id, so a single blank-org run would never
+    # match a real (UUID-scoped) tenant's rows and repo_metrics_daily would never
+    # be populated. dispatch_daily_metrics_for_all_orgs enumerates active orgs and
+    # enqueues one dispatch_daily_metrics_partitioned per org_id.
     "run-daily-metrics": {
-        "task": "dev_health_ops.workers.tasks.dispatch_daily_metrics_partitioned",
+        "task": "dev_health_ops.workers.tasks.dispatch_daily_metrics_for_all_orgs",
         "schedule": crontab(hour=1, minute=0),
+        "options": {"queue": "default"},
+    },
+    # Complexity daily floor cadence (CHAOS-2850): run_complexity_job previously
+    # only ran chained after a git sync, so an org with infrequent syncs left
+    # repo_complexity_daily stale, and complexity_delta's trailing 30-day window
+    # (compounding_risk.py) read a flat trend. This dispatcher fans out one
+    # run_complexity_job per active org daily, independent of sync activity.
+    # Scheduled before run-daily-metrics (01:00) so the daily hotspot/risk compute
+    # reads a freshly-refreshed complexity snapshot for the day.
+    "run-complexity-daily": {
+        "task": "dev_health_ops.workers.tasks.dispatch_complexity_job",
+        "schedule": crontab(hour=0, minute=45),
         "options": {"queue": "default"},
     },
     # Daily safety net for recommendations_daily (CHAOS-2373). The primary

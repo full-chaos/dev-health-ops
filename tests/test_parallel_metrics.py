@@ -39,7 +39,7 @@ class TestDispatchDailyMetricsPartitioned:
             dispatch_daily_metrics_partitioned,
         )
 
-        fake_rows = [(str(uuid.uuid4()),) for _ in range(7)]
+        fake_rows = [(str(uuid.uuid4()), f"repo-{i}", None, "github") for i in range(7)]
         mock_sink_instance = MagicMock()
         mock_sink_instance.client.query.return_value.result_rows = fake_rows
         mock_sink_cls.return_value = mock_sink_instance
@@ -64,6 +64,100 @@ class TestDispatchDailyMetricsPartitioned:
         assert result["batch_count"] == 3
         mock_chord.assert_called_once()
         mock_chord_instance.assert_called_once()
+
+    @patch("dev_health_ops.workers.metrics_partitioned.chord")
+    @patch("dev_health_ops.metrics.sinks.clickhouse.ClickHouseMetricsSink")
+    def test_repo_discovery_is_scoped_to_requested_org(self, mock_sink_cls, mock_chord):
+        from dev_health_ops.workers.metrics_partitioned import (
+            dispatch_daily_metrics_partitioned,
+        )
+
+        org_a_repo = str(uuid.uuid4())
+        org_b_repo = str(uuid.uuid4())
+
+        def query(_sql, parameters=None):
+            org_id = str((parameters or {}).get("org_id") or "")
+            rows = (
+                [(org_a_repo, "org-a/repo", None, "github")]
+                if org_id == "org-a"
+                else [(org_b_repo, "org-b/repo", None, "github")]
+            )
+            return MagicMock(result_rows=rows)
+
+        mock_sink_instance = MagicMock()
+        mock_sink_instance.client.query.side_effect = query
+        mock_sink_cls.return_value = mock_sink_instance
+        mock_chord_instance = MagicMock()
+        mock_chord.return_value = mock_chord_instance
+
+        task = dispatch_daily_metrics_partitioned
+        task.push_request(id="dispatch-tenant-scope")
+        try:
+            result = task(
+                org_id="org-a",
+                db_url="clickhouse://fake",
+                day="2025-01-15",
+                backfill_days=1,
+                batch_size=10,
+            )
+        finally:
+            task.pop_request()
+
+        assert result["repo_count"] == 1
+        query_text, query_kwargs = (
+            mock_sink_instance.client.query.call_args.args[0],
+            mock_sink_instance.client.query.call_args.kwargs,
+        )
+        assert "WHERE org_id = {org_id:String}" in query_text
+        assert query_kwargs["parameters"] == {"org_id": "org-a"}
+        batch_signatures = mock_chord.call_args.args[0]
+        assert batch_signatures[0].kwargs["repo_ids"] == [org_a_repo]
+        assert org_b_repo not in batch_signatures[0].kwargs["repo_ids"]
+
+    @patch("dev_health_ops.workers.metrics_partitioned.chord")
+    @patch("dev_health_ops.metrics.sinks.clickhouse.ClickHouseMetricsSink")
+    def test_org_scoped_dispatch_cannot_batch_another_org_repo(
+        self, mock_sink_cls, mock_chord
+    ):
+        from dev_health_ops.workers.metrics_partitioned import (
+            dispatch_daily_metrics_partitioned,
+        )
+
+        org_a_repo = str(uuid.uuid4())
+        org_b_repo = str(uuid.uuid4())
+
+        def query(_sql, parameters=None):
+            org_id = str((parameters or {}).get("org_id") or "")
+            rows_by_org = {
+                "org-a": [(org_a_repo, "org-a/repo", None, "github")],
+                "org-b": [(org_b_repo, "org-b/repo", None, "github")],
+            }
+            return MagicMock(result_rows=rows_by_org.get(org_id, []))
+
+        mock_sink_instance = MagicMock()
+        mock_sink_instance.client.query.side_effect = query
+        mock_sink_cls.return_value = mock_sink_instance
+        mock_chord_instance = MagicMock()
+        mock_chord.return_value = mock_chord_instance
+
+        task = dispatch_daily_metrics_partitioned
+        task.push_request(id="dispatch-no-cross-tenant-batch")
+        try:
+            result = task(
+                org_id="org-a",
+                db_url="clickhouse://fake",
+                day="2025-01-15",
+                backfill_days=1,
+                batch_size=10,
+            )
+        finally:
+            task.pop_request()
+
+        assert result["repo_count"] == 1
+        batch_signatures = mock_chord.call_args.args[0]
+        assert batch_signatures[0].kwargs["repo_ids"] == [org_a_repo]
+        assert org_b_repo not in batch_signatures[0].kwargs["repo_ids"]
+        assert batch_signatures[0].kwargs["org_id"] == "org-a"
 
     @patch("dev_health_ops.workers.metrics_partitioned.chord")
     @patch("dev_health_ops.metrics.sinks.clickhouse.ClickHouseMetricsSink")
@@ -95,7 +189,7 @@ class TestDispatchDailyMetricsPartitioned:
             run_daily_metrics_finalize_task,
         )
 
-        fake_rows = [(str(uuid.uuid4()),)]
+        fake_rows = [(str(uuid.uuid4()), "repo", None, "github")]
         mock_sink_instance = MagicMock()
         mock_sink_instance.client.query.return_value.result_rows = fake_rows
         mock_sink_cls.return_value = mock_sink_instance

@@ -48,6 +48,7 @@ def dispatch_daily_metrics_partitioned(
     Returns:
         dict with dispatched count, batch_count, and days
     """
+    from dev_health_ops.metrics.job_daily import discover_repos
     from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
     db_url = db_url or _get_db_url()
@@ -63,8 +64,13 @@ def dispatch_daily_metrics_partitioned(
 
     try:
         ch_sink = ClickHouseMetricsSink(db_url)
-        rows = ch_sink.client.query("SELECT id FROM repos").result_rows
-        repo_ids = [str(row[0]) for row in rows]
+        repos = discover_repos(
+            "clickhouse",
+            ch_sink,
+            org_id=org_id,
+            provider=provider,
+        )
+        repo_ids = [str(repo.repo_id) for repo in repos]
     except Exception as exc:
         logger.exception("Failed to discover repos for partitioned dispatch: %s", exc)
         return {"status": "error", "error": str(exc)}

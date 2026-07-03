@@ -52,6 +52,7 @@ from dev_health_ops.processors.testops_ingest import (
     ingest_report_members,
 )
 from dev_health_ops.providers.github.client import GitHubAuth, GitHubWorkClient
+from dev_health_ops.providers.github.code_client import GitHubCodeClient
 from dev_health_ops.providers.pr_state import normalize_pr_state
 from dev_health_ops.providers.usage import drain_provider_usage
 from dev_health_ops.utils import (
@@ -478,19 +479,68 @@ def _fetch_github_incidents_sync(gh_repo, repo_id, max_issues, since):
     return incidents
 
 
-def _fetch_github_security_alerts_sync(
-    connector, owner, repo_name, repo_id, max_alerts, since
-):
-    """Sync helper to fetch GitHub security alerts (Dependabot, code scanning, advisories)."""
+def _github_code_client_from_connector(connector) -> GitHubCodeClient:
+    """Build a ``GitHubCodeClient`` from an already-authenticated connector.
+
+    Mirrors ``_github_work_client_from_connector`` (below): the connector has
+    already resolved a plain PAT or a GitHub App installation token onto
+    ``self.token`` (and, for GHE, its REST base URL onto
+    ``_rest_base_url()``), so this helper reuses that resolution rather than
+    duplicating GitHub App auth in the httpx client (CHAOS-2773 CS3 scope).
+    """
+    rest_base_url = getattr(connector, "_rest_base_url", None)
+    raw_base_url = rest_base_url() if callable(rest_base_url) else None
+    base_url = raw_base_url if isinstance(raw_base_url, str) else None
+    token = getattr(connector, "token", None)
+    return GitHubCodeClient(auth=GitHubAuth(token=token, base_url=base_url))
+
+
+async def _fetch_github_security_alerts_async(
+    connector,
+    owner: str,
+    repo_name: str,
+    repo_id,
+    max_alerts: int | None,
+    since: datetime | None,
+    usage_sink: list[dict[str, Any]] | None = None,
+) -> list[Any]:
+    """Fetch GitHub security alerts (Dependabot, code scanning, advisories) via
+    the instrumented httpx ``GitHubCodeClient`` (CHAOS-2773 CS3), replacing
+    the frozen connector's ``get_dependabot_alerts`` / ``get_code_scanning_alerts``
+    / ``get_security_advisories``.
+
+    Preserves the pre-existing per-endpoint degrade-and-log semantics
+    byte-for-byte: a fetch failure on any ONE of the three endpoints
+    (including an exhausted ``RateLimitException``) is logged at debug level
+    and does NOT fail the other two endpoints or the overall repo sync --
+    security alerts are optional enrichment, never a blocking dataset. This
+    was already true of the pre-migration sync helper (each ``fetch_fn`` call
+    was wrapped in its own ``try/except Exception``); the client swap changes
+    WHERE the alerts come from, not this contract.
+
+    ``usage_sink`` (CHAOS-2803/CS2), when given, is drained into in a
+    ``finally:`` block on BOTH the success and failure path, so a mid-sync
+    raise elsewhere in the caller still carries these actuals via the
+    adapter's ``attach_partial_observations`` at the outer boundary
+    (``processors/dataset_adapters.py``). ``usage_sink=None`` (the legacy
+    ``process_github_repos_batch`` entry point, which owns no sink) still
+    drains the client so its recorder never leaks across calls, but only
+    logs the observations at debug level -- never persisted.
+    """
     security_alert_cls = getattr(git_models, "SecurityAlert")
-    alerts = []
-    for fetch_fn in [
-        connector.get_dependabot_alerts,
-        connector.get_code_scanning_alerts,
-        connector.get_security_advisories,
-    ]:
-        try:
-            raw_alerts = fetch_fn(owner, repo_name, max_alerts=max_alerts)
+    alerts: list[Any] = []
+    client = _github_code_client_from_connector(connector)
+    try:
+        for fetch in (
+            client.get_dependabot_alerts,
+            client.get_code_scanning_alerts,
+            client.get_security_advisories,
+        ):
+            try:
+                raw_alerts = await fetch(owner, repo_name, max_alerts=max_alerts)
+            except Exception as exc:
+                logging.debug("Failed to fetch %s: %s", fetch.__name__, exc)
+                continue
             for item in raw_alerts:
                 created_at = item.created_at
                 if not created_at:
@@ -514,9 +564,21 @@ def _fetch_github_security_alerts_sync(
                         dismissed_at=item.dismissed_at,
                     )
                 )
-        except Exception as exc:
-            logging.debug("Failed to fetch %s: %s", fetch_fn.__name__, exc)
-    return alerts
+        return alerts
+    finally:
+        drained = client.drain_usage_observations()
+        if usage_sink is not None:
+            usage_sink.extend(drained)
+        elif drained:
+            logging.debug(
+                "_fetch_github_security_alerts_async: drained %d security usage "
+                "observation(s) for %s/%s with no adapter-owned sink (legacy "
+                "entry point) -- logging only, not persisted",
+                len(drained),
+                owner,
+                repo_name,
+            )
+        await client.close()
 
 
 def _collect_github_pr_objects(
@@ -1794,15 +1856,14 @@ async def process_github_repo(
 
             if sync_security:
                 logging.info("Fetching security alerts from GitHub...")
-                security_alerts = await loop.run_in_executor(
-                    None,
-                    _fetch_github_security_alerts_sync,
+                security_alerts = await _fetch_github_security_alerts_async(
                     connector,
                     owner,
                     repo_name,
                     db_repo.id,
                     BATCH_SIZE,
                     since,
+                    usage_sink=usage_sink,
                 )
                 security_alerts = _filter_after(security_alerts, until, "created_at")
                 if security_alerts:
@@ -2150,9 +2211,7 @@ async def process_github_repos_batch(
         if sync_security:
             try:
                 owner, repo_name = _split_full_name(repo_info.full_name)
-                security_alerts = await loop.run_in_executor(
-                    None,
-                    _fetch_github_security_alerts_sync,
+                security_alerts = await _fetch_github_security_alerts_async(
                     connector,
                     owner,
                     repo_name,

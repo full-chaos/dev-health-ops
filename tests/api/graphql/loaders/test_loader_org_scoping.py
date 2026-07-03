@@ -29,6 +29,13 @@ async def test_repo_loader_scopes_query_by_org_id(monkeypatch):
     loader = RepoLoader(client=object(), org_id="org-A")
     await loader.batch_load(["repo-1"])
 
+    sql = str(captured["sql"])
+    assert "toString(id) as repo_id" in sql
+    assert "argMax(repo, last_synced) as repo_name" in sql
+    assert "NULL AS default_branch" in sql
+    assert "NULL AS language" in sql
+    assert "GROUP BY org_id, id" in sql
+    assert "name as repo_name" not in sql
     assert "AND org_id = %(org_id)s" in str(captured["sql"])
     assert captured["params"]["org_id"] == "org-A"
 
@@ -49,7 +56,14 @@ async def test_repo_by_name_loader_scopes_query_by_org_id(monkeypatch):
     loader = RepoByNameLoader(client=object(), org_id="org-A")
     await loader.batch_load(["Repo-One"])
 
-    assert "AND org_id = %(org_id)s" in str(captured["sql"])
+    sql = str(captured["sql"])
+    assert "toString(id) as repo_id" in sql
+    assert "argMax(repo, last_synced) as repo_name" in sql
+    assert "GROUP BY org_id, id" in sql
+    assert "HAVING lower(repo_name) IN %(repo_names)s" in sql
+    assert "lower(name)" not in sql
+    assert "name as repo_name" not in sql
+    assert "WHERE org_id = %(org_id)s" in sql
     assert captured["params"]["org_id"] == "org-A"
 
 

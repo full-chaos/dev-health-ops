@@ -351,15 +351,12 @@ def _fallback_credential_scope(
 # CHAOS-2773 CS8 -- so their markers stay empty per the plan's "never flip a
 # marker before its traffic" rule (§3).
 #
-# `security` (REST_CORE) is the first GitHub code-dataset family fully off the
-# frozen connector (CHAOS-2773 CS3): `providers/github/code_client.py::
-# GitHubCodeClient` fetches Dependabot alerts, code-scanning alerts, and
-# security advisories via `InstrumentedRESTCore` and labels every operation
-# with the explicit `"security:"` prefix, so this marker documents live
-# traffic (the CS1 explicit-prefix short-circuit resolves those labels
-# directly, irrespective of `operation_markers`) -- populated now that the
-# family's fetch path is actually instrumented, per the plan's "never flip a
-# marker before its traffic" rule (§3).
+# `security` (REST_CORE) and deployments REST_CORE now fetch through
+# `providers/github/code_client.py::GitHubCodeClient`, labeling operations
+# with explicit family prefixes so CS1's resolver short-circuit resolves them
+# directly. deployments CONTENTS_BLOB remains empty/deferred until artifact or
+# blob traffic is migrated; markers are populated only for live instrumented
+# traffic.
 GITHUB_USAGE_ROUTE_FAMILIES: tuple[UsageRouteFamily, ...] = (
     UsageRouteFamily("repo", BudgetDimension.REST_CORE),
     UsageRouteFamily("git", BudgetDimension.REST_CORE),
@@ -378,7 +375,9 @@ GITHUB_USAGE_ROUTE_FAMILIES: tuple[UsageRouteFamily, ...] = (
     UsageRouteFamily("cicd", BudgetDimension.CONTENTS_BLOB),
     UsageRouteFamily("tests", BudgetDimension.REST_CORE),
     UsageRouteFamily("tests", BudgetDimension.CONTENTS_BLOB),
-    UsageRouteFamily("deployments", BudgetDimension.REST_CORE),
+    UsageRouteFamily(
+        "deployments", BudgetDimension.REST_CORE, operation_markers=("deployments:",)
+    ),
     UsageRouteFamily("deployments", BudgetDimension.CONTENTS_BLOB),
     UsageRouteFamily(
         "security", BudgetDimension.REST_CORE, operation_markers=("security:",)

@@ -23,7 +23,10 @@ Behavior parity with the connector is pinned by
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime
+from math import ceil
 from typing import Any
 
 import httpx
@@ -51,9 +54,29 @@ logger = logging.getLogger(__name__)
 
 # CS1 resolver explicit-prefix short-circuit (providers/usage.py::
 # OperationResolver): every operation this client labels resolves DIRECTLY to
-# the "security" route family (providers/github/budget.py's
+# the matching route family (providers/github/budget.py's
 # GITHUB_USAGE_ROUTE_FAMILIES entry), bypassing the substring marker scan.
 SECURITY_ROUTE_FAMILY = "security"
+DEPLOYMENTS_ROUTE_FAMILY = "deployments"
+_GITHUB_DEPLOYMENTS_PER_PAGE = 100
+
+
+@dataclass(frozen=True)
+class GitHubReleaseData:
+    tag_name: str | None
+
+
+@dataclass(frozen=True)
+class GitHubDeploymentData:
+    deployment_id: str
+    state: str | None
+    environment: str | None
+    created_at: datetime | None
+    sha: str | None
+    ref: str | None
+    tag: str | None
+    tag_name: str | None
+    payload: Mapping[str, Any] | None
 
 
 def _lowered_github_headers(response: httpx.Response) -> dict[str, str]:
@@ -226,6 +249,68 @@ def _security_advisory_from_item(item: dict[str, Any]) -> SecurityAlertData:
     )
 
 
+def _release_from_item(item: Mapping[str, Any]) -> GitHubReleaseData:
+    tag_name = item.get("tag_name")
+    return GitHubReleaseData(tag_name=str(tag_name) if tag_name is not None else None)
+
+
+def _deployment_from_item(item: Mapping[str, Any]) -> GitHubDeploymentData:
+    payload = item.get("payload")
+    deployment_id = item.get("id")
+    sha = item.get("sha")
+    ref = item.get("ref")
+    tag = item.get("tag")
+    tag_name = item.get("tag_name")
+    state = item.get("state") or item.get("status")
+    environment = item.get("environment")
+    return GitHubDeploymentData(
+        deployment_id=str(deployment_id or ""),
+        state=str(state) if state is not None else None,
+        environment=str(environment) if environment is not None else None,
+        created_at=_parse_alert_datetime(item.get("created_at")),
+        sha=str(sha) if sha is not None else None,
+        ref=str(ref) if ref is not None else None,
+        tag=str(tag) if tag is not None else None,
+        tag_name=str(tag_name) if tag_name is not None else None,
+        payload=payload if isinstance(payload, Mapping) else None,
+    )
+
+
+def _pull_request_merged_at(item: Mapping[str, Any]) -> datetime | None:
+    return _parse_alert_datetime(item.get("merged_at"))
+
+
+def _pull_request_number(item: Mapping[str, Any]) -> int | None:
+    raw_number = item.get("number")
+    try:
+        return int(raw_number) if raw_number is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _choose_deployment_pull_request(
+    pulls: list[Mapping[str, Any]], sha: str
+) -> tuple[int | None, datetime | None]:
+    merged = [pull for pull in pulls if _pull_request_merged_at(pull) is not None]
+    direct = [pull for pull in merged if pull.get("merge_commit_sha") == sha]
+    chosen = (
+        direct[0]
+        if direct
+        else (merged[0] if merged else (pulls[0] if pulls else None))
+    )
+    if chosen is None:
+        return None, None
+    return _pull_request_number(chosen), _pull_request_merged_at(chosen)
+
+
+def _page_cap_for_limit(
+    limit: int | None, per_page: int = _GITHUB_DEPLOYMENTS_PER_PAGE
+) -> int:
+    if limit is None:
+        return 100
+    return max(1, ceil(limit / per_page))
+
+
 class GitHubCodeClient:
     """Instrumented httpx client for GitHub code-dataset families
     (CHAOS-2773 CS3+). CS3 exposes the ``security`` family only.
@@ -327,6 +412,73 @@ class GitHubCodeClient:
             build=_security_advisory_from_item,
         )
 
+    async def get_deployment_releases(
+        self,
+        owner: str,
+        repo: str,
+        *,
+        max_releases: int | None = None,
+    ) -> list[GitHubReleaseData]:
+        operation = f"{DEPLOYMENTS_ROUTE_FAMILY}:GET /repos/{owner}/{repo}/releases"
+        items = await self._core.paginate_link_header(
+            f"/repos/{owner}/{repo}/releases",
+            operation=operation,
+            params={"per_page": _GITHUB_DEPLOYMENTS_PER_PAGE},
+            max_pages=_page_cap_for_limit(max_releases),
+        )
+        if max_releases is not None:
+            items = items[:max_releases]
+        return [_release_from_item(item) for item in items if isinstance(item, Mapping)]
+
+    async def get_deployments(
+        self,
+        owner: str,
+        repo: str,
+        *,
+        max_deployments: int | None = None,
+    ) -> list[GitHubDeploymentData]:
+        operation = f"{DEPLOYMENTS_ROUTE_FAMILY}:GET /repos/{owner}/{repo}/deployments"
+        items = await self._core.paginate_link_header(
+            f"/repos/{owner}/{repo}/deployments",
+            operation=operation,
+            params={"per_page": _GITHUB_DEPLOYMENTS_PER_PAGE},
+            max_pages=_page_cap_for_limit(max_deployments),
+        )
+        if max_deployments is not None:
+            items = items[:max_deployments]
+        return [
+            _deployment_from_item(item) for item in items if isinstance(item, Mapping)
+        ]
+
+    async def get_deployment_pull_request(
+        self,
+        owner: str,
+        repo: str,
+        sha: str | None,
+    ) -> tuple[int | None, datetime | None]:
+        if not sha:
+            return None, None
+        operation = (
+            f"{DEPLOYMENTS_ROUTE_FAMILY}:GET /repos/{owner}/{repo}/commits/{sha}/pulls"
+        )
+        try:
+            response = await self._core.request(
+                "GET",
+                f"/repos/{owner}/{repo}/commits/{sha}/pulls",
+                operation=operation,
+                params={"per_page": 10},
+                headers={"Accept": "application/vnd.github.groot-preview+json"},
+            )
+            pulls = response.json()
+        except Exception as exc:
+            logger.debug("Failed PR lookup for deployed commit %s: %s", sha, exc)
+            return None, None
+        if not isinstance(pulls, list):
+            logger.debug("Unexpected PR lookup payload for deployed commit %s", sha)
+            return None, None
+        pull_items = [pull for pull in pulls if isinstance(pull, Mapping)]
+        return _choose_deployment_pull_request(pull_items, sha)
+
     async def _get_security_alerts(
         self,
         owner: str,
@@ -382,6 +534,9 @@ class GitHubCodeClient:
 
 
 __all__ = [
+    "DEPLOYMENTS_ROUTE_FAMILY",
     "GitHubCodeClient",
+    "GitHubDeploymentData",
+    "GitHubReleaseData",
     "SECURITY_ROUTE_FAMILY",
 ]

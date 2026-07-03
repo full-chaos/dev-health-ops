@@ -120,12 +120,19 @@ async def fetch_work_item_team_assignments(
     query = """
         SELECT
             work_item_id,
-            argMax(team_id, computed_at) AS team_id,
-            argMax(team_name, computed_at) AS team_name
-        FROM work_item_cycle_times
+            team_id,
+            team_name
+        FROM work_item_team_attributions FINAL
         WHERE work_item_id IN {work_item_ids:Array(String)}
           AND org_id = {org_id:String}
-        GROUP BY work_item_id
+          AND is_primary = 1
+          AND (work_item_id, computed_at) IN (
+              SELECT work_item_id, max(computed_at)
+              FROM work_item_team_attributions
+              WHERE work_item_id IN {work_item_ids:Array(String)}
+                AND org_id = {org_id:String}
+              GROUP BY work_item_id
+          )
     """
     rows: list[dict[str, Any]] = []
     for chunk in _chunks(ids):

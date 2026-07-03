@@ -1389,7 +1389,7 @@ Submits a batch to `POST /api/v1/external-ingest/batches`. Reads a JSON file, or
 |------|-------|
 | `--api-url`, `--token`, `--org` | See [Credentials](#credentials-batch-status) above. |
 | `--poll` | Poll `GET /batches/{id}` until the batch reaches a terminal status, instead of returning immediately after the `202`/`200`. |
-| `--poll-interval` | Seconds between polls. Default 2 (an internal floor of 0.5s is enforced). |
+| `--poll-interval` | Seconds between polls. Default 5 (an internal floor of 0.5s is enforced). |
 | `--poll-timeout` | Give up polling after this many seconds. |
 | `--skip-limits-check` | Skip the `GET /schemas` limits pre-flight; enforce hardcoded client defaults (1000 records / 10MB) instead of the server's live limits. |
 | `--json` | Emit machine-readable JSON to stdout. |

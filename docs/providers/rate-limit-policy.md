@@ -924,7 +924,7 @@ paper over:
   GitLab code-dataset paths remain under the frozen `connectors/` tree
   (`connectors/github.py`'s PyGithub-based `GitHubConnector`, `connectors/
   gitlab.py`'s python-gitlab-based `GitLabConnector`). No new code may be added
-  there (see [`AGENTS.md`](../../AGENTS.md)); rate-limit/actuals
+  there (see the repo-root `AGENTS.md`, outside this docs site); rate-limit/actuals
   instrumentation for those datasets lands as the fetch moves to
   `providers/github/` / `providers/gitlab/` — tracked as its own
   canonical-provider-migration effort in

@@ -1330,6 +1330,111 @@ dev-hops sync git --provider github \
 
 ---
 
+## push
+
+`dev-hops push` is the client CLI for [Customer Push Ingestion](../customer-push-ingestion/overview.md)
+— submitting your own data to `/api/v1/external-ingest/*` instead of relying on a FullChaos-managed
+connector. See [Setup Guide](../customer-push-ingestion/setup-guide.md) for a full first-batch
+walkthrough and [Schemas & Idempotency](../customer-push-ingestion/schemas-and-idempotency.md)
+for the record kinds. `push` subcommands are excluded from `dev-hops`'s global `--org` auto-resolution
+and ClickHouse/Postgres preflight entirely — `validate`/`sample` are fully offline; `batch`/`status`
+talk to the FullChaos API over HTTP and resolve their own credentials (below).
+
+### Credentials (`batch` / `status`)
+
+| Flag | Env var | Notes |
+|------|---------|-------|
+| `--api-url` | `FULLCHAOS_API_URL` | FullChaos API base URL. |
+| `--token` | `FULLCHAOS_INGEST_TOKEN` (deprecated alias: `FULLCHAOS_API_TOKEN`) | An `fcpush_...` ingest token — see [Setup Guide](../customer-push-ingestion/setup-guide.md). |
+| `--org` | `FULLCHAOS_ORG_ID` | Organization id. |
+
+A flag always wins over its env var. If any of the three can't be resolved, the command prints
+`error: missing required: ...` to stderr and exits 2 — not an argparse `required=True` error,
+so the env-var fallback still works.
+
+### `dev-hops push validate <payload>`
+
+Validates a batch envelope locally — **no network call**. Reads a JSON file, or `-` for stdin.
+
+| Flag | Notes |
+|------|-------|
+| `--schema` | Schema version to validate against. Default and only supported value: `external-ingest.v1`. |
+| `--json` | Emit machine-readable JSON to stdout instead of a human rejection table. |
+
+```bash
+dev-hops push validate batch.json
+dev-hops push validate - < batch.json --json
+```
+
+### `dev-hops push sample`
+
+Prints a canonical sample batch envelope built from the packaged example payloads (the same
+files `GET /schemas/{version}` embeds) — no network call.
+
+| Flag | Notes |
+|------|-------|
+| `--kind KIND` | One record kind, bare or versioned (e.g. `pull_request` or `pull_request.v1`). Mutually exclusive with `--all`. |
+| `--all` | Combined batch envelope with one record of every kind. Mutually exclusive with `--kind`. |
+
+```bash
+dev-hops push sample --kind pull_request > sample.json
+dev-hops push sample --all | dev-hops push validate -
+```
+
+### `dev-hops push batch <payload>`
+
+Submits a batch to `POST /api/v1/external-ingest/batches`. Reads a JSON file, or `-` for stdin.
+
+| Flag | Notes |
+|------|-------|
+| `--api-url`, `--token`, `--org` | See [Credentials](#credentials-batch-status) above. |
+| `--poll` | Poll `GET /batches/{id}` until the batch reaches a terminal status, instead of returning immediately after the `202`/`200`. |
+| `--poll-interval` | Seconds between polls. Default 2 (an internal floor of 0.5s is enforced). |
+| `--poll-timeout` | Give up polling after this many seconds. |
+| `--skip-limits-check` | Skip the `GET /schemas` limits pre-flight; enforce hardcoded client defaults (1000 records / 10MB) instead of the server's live limits. |
+| `--json` | Emit machine-readable JSON to stdout. |
+
+```bash
+dev-hops push batch sample.json --poll
+dev-hops push batch - --json < sample.json
+```
+
+### `dev-hops push status <ingestion_id>`
+
+Fetches (and optionally polls) a batch's status via `GET /batches/{id}`.
+
+| Flag | Notes |
+|------|-------|
+| `--api-url`, `--token`, `--org` | See [Credentials](#credentials-batch-status) above. |
+| `--poll`, `--poll-interval`, `--poll-timeout` | Same semantics as `push batch`. |
+| `--json` | Emit machine-readable JSON to stdout. |
+
+```bash
+dev-hops push status b6c1e6b0-...-uuid --poll
+```
+
+### `dev-hops push export <provider>`
+
+Reserved extension point for provider-native export helpers (e.g. `github`, `gitlab`). **Not
+implemented in v1** — every provider currently prints an error and exits with a data-failure
+status. Use `dev-hops push sample` plus a hand-written export, or the provider's native
+FullChaos connector, in the meantime.
+
+### `push` exit codes
+
+`push` uses its own exit-code contract, distinct from the rest of `dev-hops` (see
+[Exit Codes](#exit-codes) below):
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | Data-level failure — invalid payload, or a batch that completed with rejections / reached a terminal `failed` status |
+| 2 | Usage error — bad/missing CLI args, or unresolved `--api-url`/`--token`/`--org` |
+| 3 | Transport/API error after retries, or `stream_unavailable` |
+| 4 | Poll timeout — the batch was still non-terminal when `--poll-timeout` elapsed |
+
+---
+
 ## Exit Codes
 
 | Code | Meaning |

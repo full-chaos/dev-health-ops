@@ -2,6 +2,14 @@
 
 This document describes how to configure webhooks for real-time data synchronization in Dev Health Ops.
 
+!!! note "Not the same thing as customer-push ingestion"
+    These provider webhooks (`/api/v1/webhooks/*`) are part of **FullChaos-managed sync** —
+    FullChaos reacting to GitHub/GitLab/Jira events on your behalf once you've connected an
+    integration. If instead you want to actively push normalized data from your own systems
+    (CI pipelines, ETL jobs, air-gapped environments) over a versioned REST API, see
+    [Customer Push Ingestion](customer-push-ingestion/overview.md) — a separate ingestion
+    path under `/api/v1/external-ingest/*`.
+
 ## GitHub Configuration
 
 1. Go to your repository or organization **Settings**.

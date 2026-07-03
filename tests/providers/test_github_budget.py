@@ -3,7 +3,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import datetime, timezone
 
-from dev_health_ops.providers.github.budget import GitHubBudgetEstimator
+from dev_health_ops.providers.github.budget import (
+    GITHUB_USAGE_ROUTE_FAMILIES,
+    GitHubBudgetEstimator,
+)
 from dev_health_ops.sync.budget import BudgetDimension, estimate_provider_budget
 from dev_health_ops.sync.budget_guard import (
     _budget_key,
@@ -67,6 +70,17 @@ def test_github_budget_light_metadata_stays_on_core_route_family() -> None:
     assert [
         (estimate.bucket.dimension, estimate.route_family) for estimate in estimates
     ] == [(BudgetDimension.REST_CORE, "repo")]
+
+
+def test_github_git_and_commit_stats_actuals_markers_are_live() -> None:
+    markers = {
+        (family.route_family, family.dimension): family.operation_markers
+        for family in GITHUB_USAGE_ROUTE_FAMILIES
+    }
+
+    assert markers[("git", BudgetDimension.REST_CORE)] == ("git:",)
+    assert markers[("commit_stats", BudgetDimension.REST_CORE)] == ("commit_stats:",)
+    assert markers[("commit_stats", BudgetDimension.CONTENTS_BLOB)] == ()
 
 
 def test_github_budget_estimator_splits_pr_social_pressure() -> None:

@@ -195,7 +195,7 @@ CHAOS-2754's normalized `provider_usage` actuals, one row per
   `actual_requests`; the two are reported side by side, not blended into one
   number.
 - **A route_family/dimension with an estimate but no drained actuals this
-  run produces no row** (GitHub/GitLab code datasets still on the frozen
+  run produces no row** (remaining GitHub/GitLab code datasets still on the frozen
   connector path, a `contents_blob`/`secondary_abuse_risk` dimension sharing
   its single REST call with an already-recorded `rest_core` dimension, …) —
   never a fabricated 100% over-estimation.
@@ -922,6 +922,13 @@ proof-of-pipe that the plumbing actually reaches a `budget_comparison` row:
   above) for the PR review-batch enrichment; the REST `prs` listing itself
   remains on the frozen connector, unmeasured, pending CHAOS-2773 CS8. See
   [Known gaps](#known-gaps).
+- **Actuals instrumentation (CHAOS-2807).** Commit listing (`git`) and
+  per-commit file stats (`commit_stats`) now fetch through
+  `providers/github/code_client.py::GitHubCodeClient` from processor/backfill paths,
+  drain into the shared `usage_sink`, and resolve through explicit `git:` /
+  `commit_stats:` operation prefixes. The `commit_stats` `contents_blob`
+  reservation remains estimate-only because the migrated REST commit-detail call
+  reports as `rest_core`.
 
 #### Route families
 <!-- route-families:github -->
@@ -929,8 +936,8 @@ proof-of-pipe that the plumbing actually reaches a `budget_comparison` row:
 | Route family | Dimension(s) | Covers | Confidence |
 | --- | --- | --- | --- |
 | `repo` | `rest_core` | Repository metadata | high |
-| `git` | `rest_core` | Commit listing | medium |
-| `commit_stats` | `rest_core`, `contents_blob` | Per-commit file/stat expansion | low |
+| `git` | `rest_core` | Commit listing (`GitHubCodeClient`, CHAOS-2773 CS6) | medium |
+| `commit_stats` | `rest_core`, `contents_blob` | Per-commit file/stat expansion (`GitHubCodeClient` REST core, CHAOS-2773 CS6; contents/blob still estimate-only) | low |
 | `files` | `rest_core`, `contents_blob` | Repository tree/blob reads | low |
 | `blame` | `rest_core`, `contents_blob` | Blame expansion (file-count dependent) | low |
 | `prs` | `rest_core` | Pull requests / reviews / comments core | medium |
@@ -1153,14 +1160,15 @@ paper over:
   instrumented as of [CHAOS-2803](https://linear.app/fullchaos/issue/CHAOS-2803)
   (CS2) — see
   [Usage drain wiring](#usage-drain-wiring-first-re-bucketing-chaos-2773-cs2)
-  above; the REST `prs` listing and every other GitHub/GitLab code-dataset
-  family remain uninstrumented pending their own CHAOS-2773 changeset (see
+  above. GitHub `git` and `commit_stats` REST-core traffic is instrumented as of
+  CHAOS-2807; the REST `prs` listing and remaining GitHub/GitLab code-dataset
+  families stay uninstrumented pending their own CHAOS-2773 changesets (see
   "Frozen `connectors/` path" below). There is also no cross-run
   aggregation/dashboard yet — calibration today is visible per-unit (result +
   structured log), not rolled up over time.
-- **Frozen `connectors/` path.** GitHub's `git`/`commit_stats`/`files`/`blame`/
-  `cicd`/`tests`/`deployments`/`security` route families and the equivalent
-  GitLab code-dataset paths remain under the frozen `connectors/` tree
+- **Frozen `connectors/` path.** GitHub's `files`/`blame`/`prs` and repo
+  metadata/batch orchestration, plus the remaining equivalent GitLab
+  code-dataset paths, remain under the frozen `connectors/` tree
   (`connectors/github.py`'s PyGithub-based `GitHubConnector`, `connectors/
   gitlab.py`'s python-gitlab-based `GitLabConnector`). No new code may be added
   there (see [`AGENTS.md`](../../AGENTS.md)); rate-limit/actuals
@@ -1175,14 +1183,16 @@ paper over:
   [LaunchDarkly](#launchdarkly) above. GitLab's feature-flags fetch
   (`get_feature_flags` / `get_project_name`) is likewise closed as of
   [CHAOS-2785](https://linear.app/fullchaos/issue/CHAOS-2785) — see
-  [GitLab](#gitlab) above — while GitLab's `security`
+  [GitLab](#gitlab) above. GitHub's `git`/`commit_stats`
+  ([CHAOS-2807](https://linear.app/fullchaos/issue/CHAOS-2807), CS6) moved to
+  `providers/github/code_client.py::GitHubCodeClient`; GitLab's `security`
   ([CHAOS-2811](https://linear.app/fullchaos/issue/CHAOS-2811), CS10),
   `pipelines`+`deployments`
   ([CHAOS-2812](https://linear.app/fullchaos/issue/CHAOS-2812), CS11), and
   `tests` (+CI adapter usage draining;
   [CHAOS-2813](https://linear.app/fullchaos/issue/CHAOS-2813), CS12)
   code-dataset families are migrated onto the canonical, instrumented
-  `providers/gitlab/code_client.py::GitLabCodeClient` — GitLab's remaining
+  `providers/gitlab/code_client.py::GitLabCodeClient`. GitLab's remaining
   frozen code-dataset methods (`git`/`commit_stats`/`files`/`blame`/
   `merge_requests` listing + repo-metadata/batch orchestration) stay
   unmigrated pending their own CHAOS-2773 changesets through CS17.

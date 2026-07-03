@@ -17,12 +17,14 @@ from __future__ import annotations
 import time
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
+from typing import Any, cast
 
 import httpx
 import pytest
 
 from dev_health_ops.exceptions import (
     AuthenticationException,
+    NotFoundException,
     RateLimitException,
 )
 from dev_health_ops.providers.gitlab.code_client import GitLabCodeClient
@@ -702,6 +704,174 @@ class TestDeploymentsParity:
 
         assert len(deployments) == 1
         assert calls[_DEPLOYMENTS_PATH] == 1
+
+
+_TEST_REPORT_PATH = "/api/v4/projects/42/pipelines/11/test_report"
+_PIPELINE_JOBS_PATH = "/api/v4/projects/42/pipelines/11/jobs"
+_ARTIFACT_PATH = "/api/v4/projects/42/jobs/99/artifacts"
+_ARTIFACT_REDIRECT_PATH = "/artifact.zip"
+
+
+class TestTestsFamilyParity:
+    """CHAOS-2773 CS12: GitLab ``tests`` family (pipeline listing scoped to
+    the test-report scan, native JUnit test_report, pipeline jobs, job
+    artifact download) -- parity with the legacy
+    ``connectors/utils/rest.py::GitLabRESTClient.get_pipeline_test_report``
+    / ``get_list`` / ``download_job_artifacts`` (FROZEN) and the
+    python-gitlab ``gl_project.pipelines.list()`` call both used to ride,
+    now on ``GitLabCodeClient`` (built on the shared
+    ``InstrumentedRESTCore``). Every request carries the ``tests:`` family
+    prefix so tests usage is distinct from base CI/CD pipeline usage."""
+
+    @pytest.mark.asyncio
+    async def test_iter_pipelines_since_request_params_and_usage_family(
+        self,
+    ) -> None:
+        pipeline = {
+            "id": 11,
+            "ref": "main",
+            "created_at": "2026-02-01T00:00:00Z",
+        }
+        transport, calls = _router_transport(
+            {_PIPELINES_PATH: _json_response(200, [pipeline])}
+        )
+        client = _client(transport)
+        since = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+        pipelines = await client.iter_pipelines_since(42, since=since)
+
+        assert pipelines == [pipeline]
+        assert calls[_PIPELINES_PATH] == 1
+        query = dict(transport.captured_urls[_PIPELINES_PATH].params)  # type: ignore[attr-defined]
+        assert query == {
+            "order_by": "updated_at",
+            "sort": "desc",
+            "updated_after": "2026-01-01T00:00:00+00:00",
+            "page": "1",
+            "per_page": "100",
+        }
+        observations = client.drain_usage_observations()
+        assert observations[0]["route_family"] == "tests"
+
+    @pytest.mark.asyncio
+    async def test_iter_pipelines_since_omits_updated_after_when_since_none(
+        self,
+    ) -> None:
+        transport, calls = _router_transport({_PIPELINES_PATH: _json_response(200, [])})
+        client = _client(transport)
+
+        await client.iter_pipelines_since(42)
+
+        query = dict(transport.captured_urls[_PIPELINES_PATH].params)  # type: ignore[attr-defined]
+        assert "updated_after" not in query
+        assert calls[_PIPELINES_PATH] == 1
+
+    @pytest.mark.asyncio
+    async def test_get_pipeline_test_report_returns_parsed_json(self) -> None:
+        report_body = {"test_suites": [{"name": "unit", "total_count": 3}]}
+        transport, calls = _router_transport(
+            {_TEST_REPORT_PATH: _json_response(200, report_body)}
+        )
+        client = _client(transport)
+
+        report = await client.get_pipeline_test_report(42, 11)
+
+        assert report == report_body
+        assert calls[_TEST_REPORT_PATH] == 1
+        observations = client.drain_usage_observations()
+        assert observations[0]["route_family"] == "tests"
+
+    @pytest.mark.asyncio
+    async def test_get_pipeline_test_report_404_propagates(self) -> None:
+        transport, _ = _router_transport({_TEST_REPORT_PATH: _empty_response(404)})
+        client = _client(transport)
+
+        with pytest.raises(NotFoundException):
+            await client.get_pipeline_test_report(42, 11)
+
+    @pytest.mark.asyncio
+    async def test_iter_pipeline_jobs_single_page_no_include_retried(
+        self,
+    ) -> None:
+        jobs_page = [{"id": i, "name": f"job-{i}"} for i in range(100)]
+        transport, calls = _router_transport(
+            {
+                _PIPELINE_JOBS_PATH: _json_response(
+                    200, jobs_page, headers={"X-Next-Page": "2"}
+                )
+            }
+        )
+        client = _client(transport)
+
+        jobs = await client.iter_pipeline_jobs(42, 11)
+
+        assert len(jobs) == 100
+        assert calls[_PIPELINE_JOBS_PATH] == 1
+        query = dict(transport.captured_urls[_PIPELINE_JOBS_PATH].params)  # type: ignore[attr-defined]
+        assert "include_retried" not in query
+
+    @pytest.mark.asyncio
+    async def test_download_job_artifact_returns_bytes_on_200(self) -> None:
+        transport, calls = _router_transport(
+            {_ARTIFACT_PATH: httpx.Response(200, content=b"zip-bytes", headers={})}
+        )
+        client = _client(transport)
+
+        data = await client.download_job_artifact(42, 99)
+
+        assert data == b"zip-bytes"
+        assert calls[_ARTIFACT_PATH] == 1
+        observations = client.drain_usage_observations()
+        assert observations[0]["route_family"] == "tests"
+
+    @pytest.mark.asyncio
+    async def test_download_job_artifact_follows_presigned_redirect(self) -> None:
+        transport, calls = _router_transport(
+            {
+                _ARTIFACT_PATH: httpx.Response(
+                    302,
+                    headers={"Location": "https://storage.example/artifact.zip"},
+                ),
+                _ARTIFACT_REDIRECT_PATH: httpx.Response(
+                    200,
+                    content=b"redirected-zip-bytes",
+                    headers={},
+                ),
+            }
+        )
+        client = _client(transport)
+
+        data = await client.download_job_artifact(42, 99)
+
+        assert data == b"redirected-zip-bytes"
+        assert calls[_ARTIFACT_PATH] == 1
+        assert calls[_ARTIFACT_REDIRECT_PATH] == 1
+        captured_headers = cast(Any, transport).captured_headers
+        assert "PRIVATE-TOKEN" not in captured_headers[_ARTIFACT_REDIRECT_PATH]
+        observations = client.drain_usage_observations()
+        assert len(observations) == 1
+        assert observations[0]["route_family"] == "tests"
+        assert observations[0]["request_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_download_job_artifact_returns_empty_on_404(self) -> None:
+        transport, _ = _router_transport({_ARTIFACT_PATH: _empty_response(404)})
+        client = _client(transport)
+
+        data = await client.download_job_artifact(42, 99)
+
+        assert data == b""
+
+    @pytest.mark.asyncio
+    async def test_download_job_artifact_discards_over_byte_cap(self) -> None:
+        transport, _ = _router_transport(
+            {_ARTIFACT_PATH: httpx.Response(200, content=b"x" * 100, headers={})}
+        )
+        client = _client(transport)
+
+        data = await client.download_job_artifact(42, 99, max_bytes=10)
+
+        assert data == b""
 
 
 # ---------------------------------------------------------------------------

@@ -133,29 +133,54 @@ class TestFetchGithubSecurityAlertsSync:
 
 
 class TestFetchGitlabSecurityAlertsSync:
-    def test_fetches_alerts(self):
-        from dev_health_ops.processors.gitlab import (
-            _fetch_gitlab_security_alerts_sync,
-        )
+    class _StubClient:
+        def __init__(self, alerts=None, error=None):
+            self._alerts = alerts or []
+            self._error = error
 
-        connector = MagicMock()
-        connector.get_security_alerts.return_value = [
-            _make_alert("gitlab_vulnerability", "gitlab_vuln:1"),
-            _make_alert("gitlab_dependency", "gitlab_dep:1"),
-        ]
-        result = _fetch_gitlab_security_alerts_sync(
-            connector, 123, FAKE_REPO_ID, 100, None
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get_security_alerts(self, project_id, max_alerts=None):
+            if self._error is not None:
+                raise self._error
+            return self._alerts
+
+        def drain_usage_observations(self):
+            return []
+
+    def test_fetches_alerts(self, monkeypatch):
+        from dev_health_ops.processors import gitlab as gitlab_processor
+
+        stub = self._StubClient(
+            alerts=[
+                _make_alert("gitlab_vulnerability", "gitlab_vuln:1"),
+                _make_alert("gitlab_dependency", "gitlab_dep:1"),
+            ]
+        )
+        monkeypatch.setattr(
+            gitlab_processor,
+            "_gitlab_code_client_from_connector",
+            lambda connector: stub,
+        )
+        result = gitlab_processor._fetch_gitlab_security_alerts_sync(
+            MagicMock(), 123, FAKE_REPO_ID, 100, None
         )
         assert len(result) == 2
 
-    def test_handles_failure_gracefully(self):
-        from dev_health_ops.processors.gitlab import (
-            _fetch_gitlab_security_alerts_sync,
-        )
+    def test_handles_failure_gracefully(self, monkeypatch):
+        from dev_health_ops.processors import gitlab as gitlab_processor
 
-        connector = MagicMock()
-        connector.get_security_alerts.side_effect = Exception("403 Forbidden")
-        result = _fetch_gitlab_security_alerts_sync(
-            connector, 123, FAKE_REPO_ID, 100, None
+        stub = self._StubClient(error=Exception("403 Forbidden"))
+        monkeypatch.setattr(
+            gitlab_processor,
+            "_gitlab_code_client_from_connector",
+            lambda connector: stub,
+        )
+        result = gitlab_processor._fetch_gitlab_security_alerts_sync(
+            MagicMock(), 123, FAKE_REPO_ID, 100, None
         )
         assert result == []

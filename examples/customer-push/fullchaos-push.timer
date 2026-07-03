@@ -1,0 +1,18 @@
+# FullChaos customer-push -- systemd timer (drives fullchaos-push.service hourly).
+# Install to /etc/systemd/system/fullchaos-push.timer, then:
+#   systemctl enable --now fullchaos-push.timer
+#
+# For a plain crontab instead of systemd, the equivalent hourly line is:
+#   0 * * * * FULLCHAOS_API_URL=https://app.fullchaos.example \
+#     FULLCHAOS_INGEST_TOKEN="$(cat /etc/fullchaos/token)" \
+#     /opt/fullchaos/generic-runner.sh /var/lib/fullchaos/batch.json
+# (keep /etc/fullchaos/token at mode 0600; never inline the token in crontab).
+[Unit]
+Description=Run the FullChaos customer-push hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target

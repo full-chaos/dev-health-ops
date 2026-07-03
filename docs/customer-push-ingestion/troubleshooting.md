@@ -79,9 +79,12 @@ never saw the pointer) only becomes retryable after 15 minutes (see
 **Remediation:**
 
 - `unsupported_kind_for_system` — only send record kinds that are valid for the source's
-  system (e.g. don't send `work_item.v1` under a `github`/`gitlab`/`custom` source, and don't
-  send git-family kinds under a `jira`/`linear` source). See the matrix in
-  [Schemas & Idempotency](schemas-and-idempotency.md#kind-x-system-matrix).
+  system: a `custom` source rejects the work-item family (`work_item.v1`,
+  `work_item_transition.v1`, `work_item_dependency.v1`) — send those under a
+  `github`/`gitlab`/`jira`/`linear` source instead. A `jira`/`linear` source rejects the git
+  family (`repository.v1`, `pull_request.v1`, `review.v1`, `commit.v1`) — send those under a
+  `github`/`gitlab`/`custom` source instead. `github` and `gitlab` sources accept all 9 kinds.
+  See the matrix in [Schemas & Idempotency](schemas-and-idempotency.md#kind-x-system-matrix).
 - `record_outside_source_instance` — keep every git-family record's repository identifier
   (`externalId` for `repository.v1`, `repositoryExternalId` elsewhere) equal to the batch's
   `source.instance`. A batch pushing data for multiple repositories must be split into one

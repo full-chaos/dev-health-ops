@@ -109,8 +109,8 @@ dev-hops metrics complexity \
 
 dev-hops metrics compounding-risk \
   --org <org_id> \
-  --day 2024-01-08 \
-  --backfill 7
+  --since 2024-01-01 \
+  --before 2024-01-08
 ```
 
 ### 3. Historical Backfill

@@ -195,9 +195,9 @@ CHAOS-2754's normalized `provider_usage` actuals, one row per
   `actual_requests`; the two are reported side by side, not blended into one
   number.
 - **A route_family/dimension with an estimate but no drained actuals this
-  run produces no row** (GitHub/GitLab code datasets still on the frozen
-  connector path, a `contents_blob`/`secondary_abuse_risk` dimension sharing
-  its single REST call with an already-recorded `rest_core` dimension, …) —
+  run produces no row** (code datasets that have not yet migrated off the
+  frozen connector path, a `contents_blob`/`secondary_abuse_risk` dimension
+  sharing its single REST call with an already-recorded `rest_core` dimension, …) —
   never a fabricated 100% over-estimation.
 - **`unbudgeted_actual`** is the reverse case: actual traffic on a
   route_family/dimension with **no matching estimate at all**, including the
@@ -880,10 +880,12 @@ proof-of-pipe that the plumbing actually reaches a `budget_comparison` row:
   strategy above), while `pr_social`'s GRAPHQL_COST marker is flipped to
   document it as now-instrumented.
 - **GitLab.** `process_gitlab_project` accepts the same `usage_sink`
-  parameter for a uniform cross-provider adapter contract, but no GitLab code
-  client drains into it yet — GitLab code-dataset fetch stays entirely on the
-  frozen connector until CHAOS-2773 Wave B. The sink is inert (always empty)
-  for GitLab today; this is expected, not a bug.
+  parameter for a uniform cross-provider adapter contract. Migrated
+  GitLabCodeClient-backed families drain into it on both success and failure:
+  `security` (CS10), `pipelines`/`deployments` (CS11), `tests` (CS12), and
+  commits + aggregate commit stats under the existing `project` family (CS13).
+  Frozen connector-only paths still leave the sink untouched until their own
+  migration changeset lands.
 
 ## Per-provider policy
 
@@ -1159,8 +1161,8 @@ paper over:
   aggregation/dashboard yet — calibration today is visible per-unit (result +
   structured log), not rolled up over time.
 - **Frozen `connectors/` path.** GitHub's `git`/`commit_stats`/`files`/`blame`/
-  `cicd`/`tests`/`deployments`/`security` route families and the equivalent
-  GitLab code-dataset paths remain under the frozen `connectors/` tree
+  `cicd`/`tests`/`deployments`/`security` route families and GitLab code-dataset
+  paths that have not been explicitly called out as migrated remain under the frozen `connectors/` tree
   (`connectors/github.py`'s PyGithub-based `GitHubConnector`, `connectors/
   gitlab.py`'s python-gitlab-based `GitLabConnector`). No new code may be added
   there (see [`AGENTS.md`](../../AGENTS.md)); rate-limit/actuals
@@ -1180,10 +1182,12 @@ paper over:
   `pipelines`+`deployments`
   ([CHAOS-2812](https://linear.app/fullchaos/issue/CHAOS-2812), CS11), and
   `tests` (+CI adapter usage draining;
-  [CHAOS-2813](https://linear.app/fullchaos/issue/CHAOS-2813), CS12)
+  [CHAOS-2813](https://linear.app/fullchaos/issue/CHAOS-2813), CS12), and
+  commits + aggregate commit stats under the `project` family
+  ([CHAOS-2814](https://linear.app/fullchaos/issue/CHAOS-2814), CS13)
   code-dataset families are migrated onto the canonical, instrumented
   `providers/gitlab/code_client.py::GitLabCodeClient` — GitLab's remaining
-  frozen code-dataset methods (`git`/`commit_stats`/`files`/`blame`/
+  frozen code-dataset methods (`files`/`blame`/
   `merge_requests` listing + repo-metadata/batch orchestration) stay
   unmigrated pending their own CHAOS-2773 changesets through CS17.
 

@@ -346,6 +346,62 @@ def _fetch_github_workflow_runs_sync(gh_repo, repo_id, max_runs, since):
     return runs
 
 
+async def _fetch_github_workflow_runs_async(
+    connector,
+    owner: str,
+    repo_name: str,
+    repo_id,
+    max_runs: int,
+    since: datetime | None,
+    usage_sink: list[dict[str, Any]] | None = None,
+) -> list[CiPipelineRun]:
+    runs: list[CiPipelineRun] = []
+    client = _github_code_client_from_connector(connector)
+    try:
+        try:
+            raw_runs = await client.get_workflow_runs(
+                owner,
+                repo_name,
+                max_runs=max_runs,
+            )
+        except Exception as exc:
+            logging.debug("Failed to fetch workflow runs: %s", exc)
+            return runs
+
+        for run in raw_runs:
+            started_at = run.started_at
+            if started_at is None:
+                continue
+            if since is not None and started_at.astimezone(timezone.utc) < since:
+                continue
+            runs.append(
+                build_ci_pipeline_run(
+                    repo_id=repo_id,
+                    run_id=run.run_id,
+                    status=run.status,
+                    queued_at=run.queued_at,
+                    started_at=started_at,
+                    finished_at=run.finished_at,
+                    retry_count=run.retry_count,
+                )
+            )
+        return runs
+    finally:
+        drained = client.drain_usage_observations()
+        if usage_sink is not None:
+            usage_sink.extend(drained)
+        elif drained:
+            logging.debug(
+                "_fetch_github_workflow_runs_async: drained %d cicd usage "
+                "observation(s) for %s/%s with no adapter-owned sink (legacy "
+                "entry point) -- logging only, not persisted",
+                len(drained),
+                owner,
+                repo_name,
+            )
+        await client.close()
+
+
 async def _fetch_github_deployments_async(
     connector,
     owner: str,
@@ -1507,6 +1563,7 @@ async def _sync_github_test_reports(
     loop: asyncio.AbstractEventLoop,
     since: datetime | None,
     until: datetime | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> None:
     """Ingest TestOps data for one GitHub repo (CHAOS-2370).
 
@@ -1528,16 +1585,30 @@ async def _sync_github_test_reports(
             base_url=connector._rest_base_url(), token=connector.token
         )
         processor = TestOpsPipelineProcessor(ingestion_sink)
-        async with adapter:
-            result = await processor.fetch_and_store(
-                adapter,
-                since_date=since,
-                until_date=until,
-                owner=owner,
-                repo=repo_name,
-                repo_id=repo_id,
-                org_id=org_id,
-            )
+        try:
+            async with adapter:
+                result = await processor.fetch_and_store(
+                    adapter,
+                    since_date=since,
+                    until_date=until,
+                    owner=owner,
+                    repo=repo_name,
+                    repo_id=repo_id,
+                    org_id=org_id,
+                )
+        finally:
+            drained = adapter.drain_usage_observations()
+            if usage_sink is not None:
+                usage_sink.extend(drained)
+            elif drained:
+                logging.debug(
+                    "_sync_github_test_reports: drained %d tests usage "
+                    "observation(s) for %s/%s with no adapter-owned sink "
+                    "(legacy entry point) -- logging only, not persisted",
+                    len(drained),
+                    owner,
+                    repo_name,
+                )
         logging.info(
             "TestOps GitHub %s/%s: %d pipelines, %d jobs",
             owner,
@@ -1790,13 +1861,14 @@ async def process_github_repo(
 
             if sync_cicd:
                 logging.info("Fetching CI/CD workflow runs from GitHub...")
-                pipeline_runs = await loop.run_in_executor(
-                    None,
-                    _fetch_github_workflow_runs_sync,
-                    gh_repo,
+                pipeline_runs = await _fetch_github_workflow_runs_async(
+                    connector,
+                    owner,
+                    repo_name,
                     db_repo.id,
                     BATCH_SIZE,
                     since,
+                    usage_sink=usage_sink,
                 )
                 pipeline_runs = _filter_after(pipeline_runs, until, "started_at")
                 if pipeline_runs:
@@ -1815,6 +1887,7 @@ async def process_github_repo(
                     loop=loop,
                     since=since,
                     until=until,
+                    usage_sink=usage_sink,
                 )
 
             if sync_deployments:
@@ -2121,15 +2194,15 @@ async def process_github_repos_batch(
 
         if sync_cicd:
             try:
-                if gh_repo is None:
-                    gh_repo = connector.github.get_repo(repo_info.full_name)
-                pipeline_runs = await loop.run_in_executor(
-                    None,
-                    _fetch_github_workflow_runs_sync,
-                    gh_repo,
+                batch_owner, _, batch_repo = repo_info.full_name.partition("/")
+                pipeline_runs = await _fetch_github_workflow_runs_async(
+                    connector,
+                    batch_owner,
+                    batch_repo,
                     db_repo.id,
                     BATCH_SIZE,
                     since,
+                    usage_sink=usage_sink,
                 )
                 if pipeline_runs:
                     await ingestion_sink.insert_ci_pipeline_runs(pipeline_runs)
@@ -2155,6 +2228,7 @@ async def process_github_repos_batch(
                     ingestion_sink=ingestion_sink,
                     loop=loop,
                     since=since,
+                    usage_sink=usage_sink,
                 )
             except Exception as e:
                 logging.warning(

@@ -58,6 +58,7 @@ logger = logging.getLogger(__name__)
 # GITHUB_USAGE_ROUTE_FAMILIES entry), bypassing the substring marker scan.
 SECURITY_ROUTE_FAMILY = "security"
 DEPLOYMENTS_ROUTE_FAMILY = "deployments"
+CICD_ROUTE_FAMILY = "cicd"
 _GITHUB_DEPLOYMENTS_PER_PAGE = 100
 
 
@@ -77,6 +78,16 @@ class GitHubDeploymentData:
     tag: str | None
     tag_name: str | None
     payload: Mapping[str, Any] | None
+
+
+@dataclass(frozen=True)
+class GitHubWorkflowRunData:
+    run_id: str
+    status: str | None
+    queued_at: datetime | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    retry_count: int
 
 
 def _lowered_github_headers(response: httpx.Response) -> dict[str, str]:
@@ -276,6 +287,24 @@ def _deployment_from_item(item: Mapping[str, Any]) -> GitHubDeploymentData:
     )
 
 
+def _workflow_run_from_item(item: Mapping[str, Any]) -> GitHubWorkflowRunData:
+    queued_at = _parse_alert_datetime(item.get("created_at"))
+    started_at = _parse_alert_datetime(item.get("run_started_at")) or queued_at
+    run_attempt = item.get("run_attempt")
+    try:
+        retry_count = max(0, int(run_attempt or 1) - 1)
+    except (TypeError, ValueError):
+        retry_count = 0
+    return GitHubWorkflowRunData(
+        run_id=str(item.get("id", "")),
+        status=item.get("conclusion") or item.get("status"),
+        queued_at=queued_at,
+        started_at=started_at,
+        finished_at=_parse_alert_datetime(item.get("updated_at")),
+        retry_count=retry_count,
+    )
+
+
 def _pull_request_merged_at(item: Mapping[str, Any]) -> datetime | None:
     return _parse_alert_datetime(item.get("merged_at"))
 
@@ -430,6 +459,29 @@ class GitHubCodeClient:
             items = items[:max_releases]
         return [_release_from_item(item) for item in items if isinstance(item, Mapping)]
 
+    async def get_workflow_runs(
+        self,
+        owner: str,
+        repo: str,
+        *,
+        max_runs: int,
+    ) -> list[GitHubWorkflowRunData]:
+        if max_runs <= 0:
+            return []
+        operation = f"{CICD_ROUTE_FAMILY}:GET /repos/{owner}/{repo}/actions/runs"
+        items = await self._core.paginate_link_header(
+            f"/repos/{owner}/{repo}/actions/runs",
+            operation=operation,
+            params={"per_page": _GITHUB_DEPLOYMENTS_PER_PAGE},
+            data_key="workflow_runs",
+            max_pages=_page_cap_for_limit(max_runs),
+        )
+        return [
+            _workflow_run_from_item(item)
+            for item in items[:max_runs]
+            if isinstance(item, Mapping)
+        ]
+
     async def get_deployments(
         self,
         owner: str,
@@ -534,9 +586,11 @@ class GitHubCodeClient:
 
 
 __all__ = [
+    "CICD_ROUTE_FAMILY",
     "DEPLOYMENTS_ROUTE_FAMILY",
     "GitHubCodeClient",
     "GitHubDeploymentData",
+    "GitHubWorkflowRunData",
     "GitHubReleaseData",
     "SECURITY_ROUTE_FAMILY",
 ]

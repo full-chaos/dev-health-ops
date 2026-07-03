@@ -7,6 +7,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
@@ -1365,7 +1366,15 @@ async def test_process_gitlab_projects_batch_stores_commits_and_stats(monkeypatc
 
     result = BatchResult(repository=project, stats=None, success=True)
 
-    def fake_fetch_commits(gl_project, max_commits, repo_id, since=None):
+    def fake_fetch_commits(
+        connector,
+        project_id,
+        max_commits,
+        repo_id,
+        since=None,
+        until=None,
+        usage_sink=None,
+    ):
         commit = GitCommit(
             repo_id=repo_id,
             hash="gitlab123",
@@ -1380,7 +1389,15 @@ async def test_process_gitlab_projects_batch_stores_commits_and_stats(monkeypatc
         )
         return ["raw"], [commit]
 
-    def fake_fetch_commit_stats(gl_project, commit_hashes, repo_id, max_stats):
+    def fake_fetch_commit_stats(
+        connector,
+        project_id,
+        commit_hashes,
+        repo_id,
+        max_stats,
+        gate=None,
+        usage_sink=None,
+    ):
         return [
             GitCommitStat(
                 repo_id=repo_id,
@@ -1450,6 +1467,173 @@ async def test_process_gitlab_projects_batch_stores_commits_and_stats(monkeypatc
     expected_repo_id = get_repo_uuid_from_repo(project.full_name)
     assert all(c.repo_id == expected_repo_id for c in recorded_commits)
     assert "gitlab123" in {s.commit_hash for s in recorded_stats}
+
+
+@pytest.mark.asyncio
+async def test_process_gitlab_projects_batch_commit_rate_limit_propagates(
+    monkeypatch,
+):
+    """CHAOS-2814/CS13: an exhausted RateLimitException raised while fetching
+    commits/commit-stats for one project in the batch must propagate out of
+    ``process_gitlab_projects_batch`` (mirrors
+    ``process_github_repos_batch``'s ``except (RateLimitException,
+    RateLimitExceededException): raise`` before the broad
+    ``except Exception`` in ``store_result``), not be swallowed as a
+    per-project warning."""
+    _enable_connector_stubs(monkeypatch)
+
+    recorded_stats: list[Any] = []
+
+    class DummyStore:
+        async def insert_repo(self, repo):
+            return
+
+        async def insert_git_commit_data(self, commit_data):
+            return
+
+        async def insert_git_commit_stats(self, commit_stats):
+            recorded_stats.extend(commit_stats)
+
+        async def insert_git_pull_requests(self, pr_data):
+            return
+
+    project = Mock()
+    project.id = 501
+    project.full_name = "group/rate-limited"
+    project.url = "https://example.com/group/rate-limited"
+    project.default_branch = "main"
+
+    result = BatchResult(repository=project, stats=None, success=True)
+
+    def fake_fetch_commits(*args, **kwargs):
+        raise RateLimitException("limited", retry_after_seconds=42.0)
+
+    class DummyConnector:
+        def __init__(self, url: str, private_token: str):
+            self.url = url
+            self.private_token = private_token
+
+        async def get_projects_with_stats_async(self, **kwargs):
+            on_project_complete = kwargs.get("on_project_complete")
+            if on_project_complete:
+                on_project_complete(result)
+            return [result]
+
+        def close(self):
+            return
+
+    monkeypatch.setattr(processors.gitlab, "GitLabConnector", DummyConnector)
+    monkeypatch.setattr(
+        processors.gitlab, "_fetch_gitlab_commits_sync", fake_fetch_commits
+    )
+
+    with pytest.raises(RateLimitException) as exc_info:
+        await processors.gitlab.process_gitlab_projects_batch(
+            store=DummyStore(),
+            token="test_token",
+            gitlab_url="https://gitlab.com",
+            group_name="group",
+            pattern="group/*",
+            batch_size=1,
+            max_concurrent=1,
+            rate_limit_delay=0,
+            use_async=True,
+            sync_prs=False,
+            sync_cicd=False,
+            sync_deployments=False,
+            sync_incidents=False,
+            sync_security=False,
+            sync_tests=False,
+            backfill_missing=False,
+        )
+
+    assert exc_info.value.retry_after_seconds == 42.0
+    assert recorded_stats == []
+
+
+@pytest.mark.asyncio
+async def test_process_gitlab_projects_batch_multi_project_rate_limit_does_not_hang(
+    monkeypatch,
+):
+    """The consumer-death FIRST_COMPLETED guard (mirrors
+    ``process_github_repos_batch``) must stop ``results_queue.join()`` from
+    hanging forever when the consumer task dies mid-batch with un-task_done()'d
+    items still queued behind the failing project."""
+    _enable_connector_stubs(monkeypatch)
+
+    recorded_stats: list[Any] = []
+
+    class DummyStore:
+        async def insert_repo(self, repo):
+            return
+
+        async def insert_git_commit_data(self, commit_data):
+            return
+
+        async def insert_git_commit_stats(self, commit_stats):
+            recorded_stats.extend(commit_stats)
+
+        async def insert_git_pull_requests(self, pr_data):
+            return
+
+    def make_result(index: int):
+        project = Mock()
+        project.id = index
+        project.full_name = f"group/rate-limited-{index}"
+        project.url = f"https://example.com/group/rate-limited-{index}"
+        project.default_branch = "main"
+        return BatchResult(repository=project, stats=None, success=True)
+
+    results = [make_result(index) for index in range(3)]
+
+    def fake_fetch_commits(*args, **kwargs):
+        raise RateLimitException("limited", retry_after_seconds=42.0)
+
+    class DummyConnector:
+        def __init__(self, url: str, private_token: str):
+            self.url = url
+            self.private_token = private_token
+
+        async def get_projects_with_stats_async(self, **kwargs):
+            on_project_complete = kwargs.get("on_project_complete")
+            if on_project_complete:
+                for result in results:
+                    on_project_complete(result)
+            return results
+
+        def close(self):
+            return
+
+    monkeypatch.setattr(processors.gitlab, "GitLabConnector", DummyConnector)
+    monkeypatch.setattr(
+        processors.gitlab, "_fetch_gitlab_commits_sync", fake_fetch_commits
+    )
+
+    with pytest.raises(RateLimitException) as exc_info:
+        await asyncio.wait_for(
+            processors.gitlab.process_gitlab_projects_batch(
+                store=DummyStore(),
+                token="test_token",
+                gitlab_url="https://gitlab.com",
+                group_name="group",
+                pattern="group/*",
+                batch_size=1,
+                max_concurrent=1,
+                rate_limit_delay=0,
+                use_async=True,
+                sync_prs=False,
+                sync_cicd=False,
+                sync_deployments=False,
+                sync_incidents=False,
+                sync_security=False,
+                sync_tests=False,
+                backfill_missing=False,
+            ),
+            timeout=2,
+        )
+
+    assert exc_info.value.retry_after_seconds == 42.0
+    assert recorded_stats == []
 
 
 @pytest.mark.asyncio

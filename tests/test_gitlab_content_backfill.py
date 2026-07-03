@@ -9,6 +9,8 @@ upgrade through ``_backfill_gitlab_missing_data``.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
+from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -21,6 +23,10 @@ from dev_health_ops.connectors import GitLabConnector
 from dev_health_ops.processors.gitlab import (
     _backfill_gitlab_missing_data,
     _fetch_scannable_contents,
+)
+from dev_health_ops.providers.gitlab.code_client import (
+    GitLabCommitData,
+    GitLabCommitStatsData,
 )
 
 
@@ -299,3 +305,161 @@ class TestGitLabBackfillContents:
 
         connector.gitlab.projects.get.assert_not_called()
         sink.insert_git_file_data.assert_not_called()
+
+
+class _FakeGitLabCodeClientForStats:
+    """Minimal instrumented GitLabCodeClient stand-in for the commit-stats
+    backfill branch (CHAOS-2814/CS13)."""
+
+    def __init__(self, *, commits=None, commit_stats=None, observations=None):
+        self.commits = commits or []
+        self.commit_stats = commit_stats or {}
+        self.observations = observations or []
+        self.get_commits_calls: list[Any] = []
+        self.get_commit_stats_calls: list[Any] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def get_commits(
+        self, project_id, *, max_commits, since=None, until=None, per_page=100
+    ):
+        self.get_commits_calls.append(project_id)
+        return self.commits[:max_commits] if max_commits is not None else self.commits
+
+    async def get_commit_stats(self, project_id, commit_sha):
+        self.get_commit_stats_calls.append((project_id, commit_sha))
+        return self.commit_stats[commit_sha]
+
+    def drain_usage_observations(self):
+        observations = list(self.observations)
+        self.observations.clear()
+        return observations
+
+
+class TestGitLabBackfillCommitStats:
+    """CHAOS-2814/CS13: the commit-stats backfill branch must fetch through
+    the canonical, instrumented GitLabCodeClient (``_fetch_gitlab_commits_sync``
+    / ``_fetch_gitlab_commit_stats_sync``) -- never the frozen python-gitlab
+    ``project.commits.list()`` or the un-instrumented
+    ``connector.get_commit_stats_by_project()``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_backfill_commit_stats_uses_gitlab_code_client(self, monkeypatch):
+        store = Mock()
+        store.has_any_git_files = AsyncMock(return_value=True)
+        store.has_any_git_file_contents = AsyncMock(return_value=True)
+        store.has_any_git_commit_stats = AsyncMock(return_value=False)
+        store.has_any_git_blame = AsyncMock(return_value=True)
+
+        recorded_stats: list[Any] = []
+        sink = Mock()
+        sink.insert_git_commit_stats = AsyncMock(side_effect=recorded_stats.extend)
+
+        commit = GitLabCommitData(
+            commit_id="abc123",
+            message="ship it",
+            author_name="Ada",
+            authored_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            committer_name="Ada",
+            committed_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            parent_ids=(),
+        )
+        fake_client = _FakeGitLabCodeClientForStats(
+            commits=[commit],
+            commit_stats={"abc123": GitLabCommitStatsData("abc123", 5, 2)},
+            observations=[{"route_family": "project"}],
+        )
+        monkeypatch.setattr(
+            "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+            lambda connector: fake_client,
+        )
+
+        connector = Mock()
+        connector.gitlab.projects.get.return_value = Mock()
+        # The legacy, frozen connector API must never be invoked by the fixed
+        # backfill path.
+        connector.get_commit_stats_by_project = Mock(
+            side_effect=AssertionError(
+                "legacy connector.get_commit_stats_by_project must not be called"
+            )
+        )
+
+        db_repo = Mock()
+        db_repo.id = uuid.uuid4()
+
+        usage_sink: list[dict[str, Any]] = []
+
+        await _backfill_gitlab_missing_data(
+            store=store,
+            ingestion_sink=sink,
+            connector=connector,
+            db_repo=db_repo,
+            project_full_name="group/proj",
+            default_branch="main",
+            max_commits=None,
+            include_files=False,
+            include_blame=False,
+            include_commit_stats=True,
+            usage_sink=usage_sink,
+        )
+
+        # Fetched via the canonical GitLabCodeClient, keyed by project_full_name
+        # (the caller-supplied project id/path), not the frozen connector API.
+        assert fake_client.get_commits_calls == ["group/proj"]
+        assert fake_client.get_commit_stats_calls == [("group/proj", "abc123")]
+        connector.get_commit_stats_by_project.assert_not_called()
+        connector.gitlab.projects.get.return_value.commits.list.assert_not_called()
+
+        assert len(recorded_stats) == 1
+        assert recorded_stats[0].commit_hash == "abc123"
+        assert recorded_stats[0].additions == 5
+        assert recorded_stats[0].deletions == 2
+        assert recorded_stats[0].repo_id == db_repo.id
+
+        # usage_sink plumbing (CHAOS-2803/CS2): the client's drained per-request
+        # observations must reach the caller-supplied sink.
+        assert usage_sink == [{"route_family": "project"}]
+
+    @pytest.mark.asyncio
+    async def test_backfill_skips_commit_stats_when_already_present(self, monkeypatch):
+        """Regression guard: when the store already has commit stats, the
+        GitLabCodeClient must not be invoked at all."""
+        store = Mock()
+        store.has_any_git_files = AsyncMock(return_value=True)
+        store.has_any_git_file_contents = AsyncMock(return_value=True)
+        store.has_any_git_commit_stats = AsyncMock(return_value=True)
+        store.has_any_git_blame = AsyncMock(return_value=True)
+
+        sink = Mock()
+        sink.insert_git_commit_stats = AsyncMock()
+
+        connector = Mock()
+        db_repo = Mock()
+        db_repo.id = uuid.uuid4()
+
+        client_factory = Mock()
+        monkeypatch.setattr(
+            "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+            client_factory,
+        )
+
+        await _backfill_gitlab_missing_data(
+            store=store,
+            ingestion_sink=sink,
+            connector=connector,
+            db_repo=db_repo,
+            project_full_name="group/proj",
+            default_branch="main",
+            max_commits=None,
+            include_files=False,
+            include_blame=False,
+            include_commit_stats=True,
+        )
+
+        client_factory.assert_not_called()
+        sink.insert_git_commit_stats.assert_not_called()

@@ -1,10 +1,14 @@
 from datetime import datetime, timezone
+from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.models.git import CiPipelineRun, Deployment, Incident
 from dev_health_ops.processors.gitlab import (
+    _fetch_gitlab_commit_stats_sync,
+    _fetch_gitlab_commits_sync,
     _fetch_gitlab_deployments_sync,
     _fetch_gitlab_incidents_sync,
     _fetch_gitlab_pipelines_sync,
@@ -12,6 +16,8 @@ from dev_health_ops.processors.gitlab import (
     process_gitlab_project,
 )
 from dev_health_ops.providers.gitlab.code_client import (
+    GitLabCommitData,
+    GitLabCommitStatsData,
     GitLabDeploymentData,
     GitLabPipelineData,
 )
@@ -23,6 +29,9 @@ class _FakeGitLabCodeClient:
         *,
         pipelines=None,
         deployments=None,
+        commits=None,
+        commit_stats=None,
+        commit_stats_errors=None,
         releases=None,
         merge_requests=None,
         observations=None,
@@ -33,6 +42,9 @@ class _FakeGitLabCodeClient:
     ):
         self.pipelines = pipelines or []
         self.deployments = deployments or []
+        self.commits = commits or []
+        self.commit_stats = commit_stats or {}
+        self.commit_stats_errors = commit_stats_errors or {}
         self.releases = releases or []
         self.merge_requests = merge_requests or []
         self.observations = observations or []
@@ -60,6 +72,16 @@ class _FakeGitLabCodeClient:
 
     async def get_deployment_merge_requests(self, project_id, sha):
         return self.merge_requests
+
+    async def get_commits(
+        self, project_id, *, max_commits, since=None, until=None, per_page=100
+    ):
+        return self.commits[:max_commits]
+
+    async def get_commit_stats(self, project_id, commit_sha):
+        if commit_sha in self.commit_stats_errors:
+            raise self.commit_stats_errors[commit_sha]
+        return self.commit_stats[commit_sha]
 
     async def iter_pipelines_since(self, project_id, *, since=None, per_page=100):
         return self.pipelines_raw
@@ -394,6 +416,99 @@ def test_fetch_gitlab_pipelines_sync(monkeypatch):
     assert pipelines[0].queued_at == datetime(2023, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
     assert pipelines[0].started_at == datetime(2023, 1, 1, 0, 1, 0, tzinfo=timezone.utc)
     assert usage_sink == [{"route_family": "pipelines"}]
+
+
+def test_fetch_gitlab_commits_sync(monkeypatch):
+    committed_at = datetime(2023, 1, 1, 0, 1, 0, tzinfo=timezone.utc)
+    commit = GitLabCommitData(
+        commit_id="abc123",
+        message="ship it",
+        author_name="Ada",
+        authored_date=datetime(2023, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+        committer_name="Grace",
+        committed_date=committed_at,
+        parent_ids=("parent",),
+    )
+    usage_sink: list[dict[str, Any]] = []
+    fake_client = _FakeGitLabCodeClient(
+        commits=[commit], observations=[{"route_family": "project"}]
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        lambda connector: fake_client,
+    )
+
+    commit_hashes, commit_objects = _fetch_gitlab_commits_sync(
+        Mock(), project_id=1, max_commits=10, repo_id=None, usage_sink=usage_sink
+    )
+
+    assert commit_hashes == ["abc123"]
+    assert len(commit_objects) == 1
+    assert commit_objects[0].hash == "abc123"
+    assert commit_objects[0].message == "ship it"
+    assert commit_objects[0].parents == 1
+    assert commit_objects[0].committer_when == committed_at
+    assert usage_sink == [{"route_family": "project"}]
+
+
+def test_fetch_gitlab_commit_stats_sync_drains_on_success(monkeypatch):
+    usage_sink: list[dict[str, Any]] = []
+    fake_client = _FakeGitLabCodeClient(
+        commit_stats={"abc123": GitLabCommitStatsData("abc123", 12, 3)},
+        observations=[{"route_family": "project"}],
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        lambda connector: fake_client,
+    )
+
+    stats = _fetch_gitlab_commit_stats_sync(
+        Mock(), 1, ["abc123"], None, 10, usage_sink=usage_sink
+    )
+
+    assert len(stats) == 1
+    assert stats[0].commit_hash == "abc123"
+    assert stats[0].additions == 12
+    assert stats[0].deletions == 3
+    assert usage_sink == [{"route_family": "project"}]
+
+
+def test_fetch_gitlab_commit_stats_sync_drains_on_failure(monkeypatch):
+    usage_sink: list[dict[str, Any]] = []
+    fake_client = _FakeGitLabCodeClient(
+        commit_stats_errors={"abc123": RuntimeError("boom")},
+        observations=[{"route_family": "project"}],
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        lambda connector: fake_client,
+    )
+
+    stats = _fetch_gitlab_commit_stats_sync(
+        Mock(), 1, ["abc123"], None, 10, usage_sink=usage_sink
+    )
+
+    assert stats == []
+    assert usage_sink == [{"route_family": "project"}]
+
+
+def test_fetch_gitlab_commit_stats_sync_reraises_rate_limit(monkeypatch):
+    usage_sink: list[dict[str, Any]] = []
+    fake_client = _FakeGitLabCodeClient(
+        commit_stats_errors={"abc123": RateLimitException("limited")},
+        observations=[{"route_family": "project"}],
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        lambda connector: fake_client,
+    )
+
+    with pytest.raises(RateLimitException):
+        _fetch_gitlab_commit_stats_sync(
+            Mock(), 1, ["abc123"], None, 10, usage_sink=usage_sink
+        )
+
+    assert usage_sink == [{"route_family": "project"}]
 
 
 def test_fetch_gitlab_deployments_sync(monkeypatch):

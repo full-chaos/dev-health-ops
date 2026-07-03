@@ -206,3 +206,12 @@ def test_outer_task_fractional_retry_after_is_ceiled() -> None:
         RateLimitException("limited", retry_after_seconds=90.5)
     )
     assert countdown == 91
+
+
+def test_outer_task_huge_int_retry_after_is_clamped_without_overflow() -> None:
+    """An integer too large to convert to float (math.isfinite/float would raise
+    OverflowError) is clamped via pure-int comparison, not dropped."""
+    countdown = _capture_outer_countdown(
+        RateLimitException("limited", retry_after_seconds=10**400)
+    )
+    assert countdown == system_webhooks._MAX_RETRY_COUNTDOWN_SECONDS

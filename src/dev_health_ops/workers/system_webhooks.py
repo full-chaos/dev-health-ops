@@ -109,21 +109,27 @@ def process_webhook_event(
         )
         # Honor a provider-supplied rate-limit delay when the escaping exception
         # carries one (RateLimitException.retry_after_seconds); otherwise fall
-        # back to the generic exponential backoff. Guard against non-finite or
-        # absurd values (e.g. a proxy echoing ``Retry-After: inf`` -> float(inf)):
-        # int(inf) raises OverflowError, which would escape this handler and drop
-        # the very webhook the retry exists to preserve. Round fractional delays
-        # up so a sub-second value still yields a real (>=1s) countdown.
+        # back to the generic exponential backoff. Any value that would raise
+        # while being turned into a countdown must degrade to the fallback rather
+        # than escape this handler and drop the very webhook the retry exists to
+        # preserve. int and float are handled separately on purpose:
+        #   * a huge int (e.g. Retry-After echoed as a 400-digit number) makes
+        #     math.isfinite() / float() raise OverflowError, so clamp ints with a
+        #     pure-int min() that never coerces to float;
+        #   * a float may be inf/nan, so gate on math.isfinite() and ceil() so a
+        #     sub-second value still yields a real (>=1s) countdown.
         retry_after = getattr(exc, "retry_after_seconds", None)
-        if (
-            isinstance(retry_after, (int, float))
-            and not isinstance(retry_after, bool)
+        countdown = 30 * (2**self.request.retries)
+        if isinstance(retry_after, bool):
+            pass  # bool is an int subclass; never a real delay
+        elif isinstance(retry_after, int) and retry_after > 0:
+            countdown = min(retry_after, _MAX_RETRY_COUNTDOWN_SECONDS)
+        elif (
+            isinstance(retry_after, float)
             and math.isfinite(retry_after)
             and retry_after > 0
         ):
             countdown = min(math.ceil(retry_after), _MAX_RETRY_COUNTDOWN_SECONDS)
-        else:
-            countdown = 30 * (2**self.request.retries)
         raise self.retry(exc=exc, countdown=countdown)
 
 

@@ -4,6 +4,7 @@ import logging
 import os
 from datetime import datetime, timezone
 
+from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.utils.datetime import utc_today
 from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
@@ -99,7 +100,16 @@ def process_webhook_event(
             event_type,
             exc,
         )
-        raise self.retry(exc=exc, countdown=30 * (2**self.request.retries))
+        # Honor a provider-supplied rate-limit delay when the escaping exception
+        # carries one (RateLimitException.retry_after_seconds); otherwise fall
+        # back to the generic exponential backoff.
+        retry_after = getattr(exc, "retry_after_seconds", None)
+        countdown = (
+            int(retry_after)
+            if isinstance(retry_after, (int, float)) and retry_after > 0
+            else 30 * (2**self.request.retries)
+        )
+        raise self.retry(exc=exc, countdown=countdown)
 
 
 def _is_duplicate_delivery(provider: str, delivery_id: str) -> bool:
@@ -251,6 +261,16 @@ def _process_github_event(
     try:
         run_async(run_with_store(db_url, db_type, _sync_handler, org_id=org_id))
         return {"processed": True, "repo": f"{owner}/{repo}", "event": event_type}
+    except RateLimitException:
+        # Rate limits must reach the outer task's Celery retry path, not be
+        # degraded to a successful {processed: False} result — GitHub will not
+        # resend the webhook, so a swallowed rate limit permanently drops the
+        # sync. Let it escape after the finally-drains in the processor have run.
+        logger.warning(
+            "Rate limited processing GitHub webhook %s; deferring for retry",
+            event_type,
+        )
+        raise
     except Exception as e:
         logger.error("Failed to process GitHub webhook %s: %s", event_type, e)
         return {"processed": False, "error": str(e)}
@@ -423,6 +443,14 @@ def _process_gitlab_event(
     try:
         run_async(run_with_store(db_url, db_type, _sync_handler, org_id=org_id))
         return {"processed": True, "project_id": project_id, "event": event_type}
+    except RateLimitException:
+        # Same contract as the GitHub path: rate limits must reach the outer
+        # Celery retry rather than being degraded to a successful result.
+        logger.warning(
+            "Rate limited processing GitLab webhook %s; deferring for retry",
+            event_type,
+        )
+        raise
     except Exception as e:
         logger.error("Failed to process GitLab webhook %s: %s", event_type, e)
         return {"processed": False, "error": str(e)}
@@ -451,6 +479,14 @@ def _process_jira_event(
             org_id=org_id or "",
         )
         return {"processed": True, "event": event_type}
+    except RateLimitException:
+        # Same contract as the GitHub/GitLab paths: rate limits must reach the
+        # outer Celery retry rather than being degraded to a successful result.
+        logger.warning(
+            "Rate limited processing Jira webhook %s; deferring for retry",
+            event_type,
+        )
+        raise
     except Exception as e:
         logger.error("Failed to process Jira webhook %s: %s", event_type, e)
         return {"processed": False, "error": str(e)}

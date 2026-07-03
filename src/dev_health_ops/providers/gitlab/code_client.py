@@ -90,6 +90,7 @@ _RESET_HEADER_NAME = "RateLimit-Reset"
 _SECURITY_FAMILY_PREFIX = "security"
 _PIPELINES_FAMILY_PREFIX = "pipelines"
 _DEPLOYMENTS_FAMILY_PREFIX = "deployments"
+_TESTS_FAMILY_PREFIX = "tests"
 
 
 @dataclass(frozen=True)
@@ -490,6 +491,162 @@ class GitLabCodeClient:
             paginate=False,
             max_items=100,
         )
+
+    async def iter_pipelines_since(
+        self,
+        project_id: int | str,
+        *,
+        since: datetime | None = None,
+        per_page: int = 100,
+        max_pages: int = 30,
+    ) -> list[dict[str, Any]]:
+        """Raw (unmapped) pipeline list dicts, newest-``updated_at`` first,
+        optionally server-side filtered to ``updated_after=since`` -- mirrors
+        the legacy python-gitlab ``gl_project.pipelines.list(order_by=
+        "updated_at", sort="desc", updated_after=...)`` call in
+        ``processors/gitlab.py::_fetch_gitlab_test_reports_sync`` (CHAOS-2773
+        CS12).
+
+        Returns RAW dicts rather than :class:`GitLabPipelineData` because the
+        ``tests`` family's caller needs the ``ref`` field for default-branch
+        filtering (the narrower dataclass built for the ``cicd``/``pipelines``
+        families does not carry it), and needs a scan bounded by PAGES rather
+        than by matching-item count -- the legacy lazy python-gitlab generator
+        stopped once enough REF-MATCHING pipelines were found, but this
+        core's paginators are eager, so ``max_pages`` intentionally leaves
+        headroom above a single-branch scan of ``MAX_RUNS_PER_SYNC`` pipelines
+        so branch filtering downstream doesn't silently shrink the effective
+        search window. See :meth:`get_pipelines` for the mapped,
+        item-capped sibling the ``cicd``/``pipelines`` families use.
+        """
+        params: dict[str, Any] = {"order_by": "updated_at", "sort": "desc"}
+        if since is not None:
+            params["updated_after"] = since.isoformat()
+        return await self._core.paginate_page_param(
+            f"/projects/{project_id}/pipelines",
+            operation=f"{_TESTS_FAMILY_PREFIX}:GET /projects/{{id}}/pipelines",
+            params=params,
+            per_page=per_page,
+            max_pages=max_pages,
+        )
+
+    async def get_pipeline_test_report(
+        self, project_id: int | str, pipeline_id: int | str
+    ) -> dict[str, Any]:
+        """Fetch GitLab's native parsed JUnit test report for a pipeline.
+
+        Mirrors ``GitLabRESTClient.get_pipeline_test_report``
+        (``connectors/utils/rest.py``, FROZEN) field-for-field: ``GET
+        /projects/{id}/pipelines/{pipeline_id}/test_report`` returns
+        already-parsed test suites/cases JSON, so no artifact download or
+        XML parsing is needed for GitLab pass/fail/duration metrics
+        (CHAOS-2370). Errors -- INCLUDING a 404 (no report for this
+        pipeline) -- propagate, matching the connector's own ``get()``
+        contract; callers handle best-effort (pre-existing behavior:
+        ``processors/gitlab.py`` wraps this in a broad ``except Exception``
+        per pipeline).
+        """
+        response = await self._core.request(
+            "GET",
+            f"/projects/{project_id}/pipelines/{pipeline_id}/test_report",
+            operation=(
+                f"{_TESTS_FAMILY_PREFIX}:GET "
+                "/projects/{id}/pipelines/{id}/test_report"
+            ),
+        )
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise APIException(
+                f"Unexpected GitLab test report response: {type(payload)!r}"
+            )
+        return payload
+
+    async def iter_pipeline_jobs(
+        self,
+        project_id: int | str,
+        pipeline_id: int | str,
+        *,
+        per_page: int = 100,
+    ) -> list[dict[str, Any]]:
+        """List jobs for a pipeline -- SINGLE PAGE only. This is a
+        pre-existing connector quirk (``GitLabRESTClient.get_list`` never
+        looped on ``page``/``X-Next-Page``), preserved here for strict
+        parity with the ``tests``-family coverage/artifact-discovery call
+        site in ``processors/gitlab.py::_fetch_gitlab_test_reports_sync``
+        (CHAOS-2773 CS12 -- default is parity, not a behavior change, same
+        philosophy as CS10's security pathfinder). Deliberately does NOT
+        pass ``include_retried`` -- unlike ``GitLabCIAdapter``'s own jobs
+        fetch for the ``job_runs`` rows, the legacy coverage/artifact scan
+        never requested retried jobs either.
+        """
+        return await self._get_gitlab_list(
+            f"/projects/{project_id}/pipelines/{pipeline_id}/jobs",
+            operation=(
+                f"{_TESTS_FAMILY_PREFIX}:GET /projects/{{id}}/pipelines/{{id}}/jobs"
+            ),
+            params={},
+            per_page=per_page,
+            paginate=False,
+            max_items=per_page,
+        )
+
+    async def download_job_artifact(
+        self,
+        project_id: int | str,
+        job_id: int | str,
+        *,
+        max_bytes: int = 100 * 1024 * 1024,
+    ) -> bytes:
+        """Download a job's artifacts ZIP (for coverage / fallback JUnit).
+
+        Mirrors ``GitLabRESTClient.download_job_artifacts``
+        (``connectors/utils/rest.py``, FROZEN): returns ``b""`` when the job
+        has no artifacts or they have expired (404), matching the
+        connector's own best-effort, convenience-empty contract. Unlike the
+        legacy ``requests``-streamed download, the shared
+        ``InstrumentedRESTCore`` buffers the full response before this
+        method can inspect its size (CS1 exposes no streaming primitive) --
+        the byte cap is therefore enforced POST-fetch: an oversized payload
+        is discarded (empty bytes returned, warning logged) rather than
+        aborting the transfer early. The pre-CS12 memory-cap intent
+        (CHAOS-2370) is preserved; only the enforcement point moves.
+        """
+        operation = f"{_TESTS_FAMILY_PREFIX}:GET /projects/{{id}}/jobs/{{id}}/artifacts"
+        try:
+            response = await self._core.request(
+                "GET",
+                f"/projects/{project_id}/jobs/{job_id}/artifacts",
+                operation=operation,
+                raw_redirect=True,
+            )
+        except NotFoundException:
+            return b""
+        if response.status_code in {301, 302, 303, 307, 308}:
+            location = response.headers.get("Location")
+            if not location:
+                raise APIException(
+                    f"GitLab artifact redirect for job {job_id} omitted Location"
+                )
+            response = await self._core.request_unauthenticated(
+                location,
+                operation=f"{operation} follow",
+            )
+            if response.status_code in {404, 410}:
+                return b""
+            if response.status_code >= 400:
+                raise APIException(
+                    "GitLab artifact redirect download failed for job "
+                    f"{job_id}: HTTP {response.status_code}"
+                )
+        content = response.content
+        if len(content) > max_bytes:
+            logger.warning(
+                "GitLab job artifact for job %s exceeds %d byte cap; discarding",
+                job_id,
+                max_bytes,
+            )
+            return b""
+        return content
 
     async def _get_gitlab_list(
         self,

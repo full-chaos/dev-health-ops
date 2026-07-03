@@ -8,6 +8,7 @@ from dev_health_ops.processors.gitlab import (
     _fetch_gitlab_deployments_sync,
     _fetch_gitlab_incidents_sync,
     _fetch_gitlab_pipelines_sync,
+    _fetch_gitlab_test_reports_sync,
     process_gitlab_project,
 )
 from dev_health_ops.providers.gitlab.code_client import (
@@ -25,12 +26,22 @@ class _FakeGitLabCodeClient:
         releases=None,
         merge_requests=None,
         observations=None,
+        pipelines_raw=None,
+        test_reports=None,
+        jobs=None,
+        artifacts=None,
     ):
         self.pipelines = pipelines or []
         self.deployments = deployments or []
         self.releases = releases or []
         self.merge_requests = merge_requests or []
         self.observations = observations or []
+        self.pipelines_raw = pipelines_raw or []
+        # CHAOS-2773 CS12: per-pipeline-id test_report / jobs / artifact-bytes
+        # fixtures for the ``tests`` family fetch.
+        self.test_reports = test_reports or {}
+        self.jobs = jobs or {}
+        self.artifacts = artifacts or {}
 
     async def __aenter__(self):
         return self
@@ -49,6 +60,18 @@ class _FakeGitLabCodeClient:
 
     async def get_deployment_merge_requests(self, project_id, sha):
         return self.merge_requests
+
+    async def iter_pipelines_since(self, project_id, *, since=None, per_page=100):
+        return self.pipelines_raw
+
+    async def get_pipeline_test_report(self, project_id, pipeline_id):
+        return self.test_reports.get(pipeline_id, {})
+
+    async def iter_pipeline_jobs(self, project_id, pipeline_id, *, per_page=100):
+        return self.jobs.get(pipeline_id, [])
+
+    async def download_job_artifact(self, project_id, job_id, *, max_bytes=None):
+        return self.artifacts.get(job_id, b"")
 
     def drain_usage_observations(self):
         observations = list(self.observations)
@@ -417,6 +440,72 @@ def test_fetch_gitlab_deployments_sync(monkeypatch):
         2023, 1, 2, 0, 0, 0, tzinfo=timezone.utc
     )
     assert usage_sink == [{"route_family": "deployments"}]
+
+
+def test_fetch_gitlab_test_reports_sync(monkeypatch):
+    pipeline_raw = {
+        "id": 1,
+        "ref": "main",
+        "created_at": "2023-01-01T00:00:00Z",
+        "started_at": "2023-01-01T00:01:00Z",
+        "finished_at": "2023-01-01T00:05:00Z",
+    }
+    usage_sink: list[dict[str, str]] = []
+    fake_client = _FakeGitLabCodeClient(
+        pipelines_raw=[pipeline_raw],
+        test_reports={1: {"test_suites": [{"name": "suite"}]}},
+        jobs={1: [{"id": 9, "artifacts_file": {"filename": "a.zip"}}]},
+        artifacts={9: b""},  # no artifact bytes -> no coverage members
+        observations=[{"route_family": "tests"}],
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        lambda connector: fake_client,
+    )
+
+    test_reports, coverage_members = _fetch_gitlab_test_reports_sync(
+        Mock(),
+        project_id=1,
+        since=None,
+        default_branch="main",
+        max_pipelines=10,
+        usage_sink=usage_sink,
+    )
+
+    assert len(test_reports) == 1
+    run_id, report, started_at, finished_at = test_reports[0]
+    assert run_id == "1"
+    assert report == {"test_suites": [{"name": "suite"}]}
+    assert started_at == datetime(2023, 1, 1, 0, 1, 0, tzinfo=timezone.utc)
+    assert coverage_members == []
+    assert usage_sink == [{"route_family": "tests"}]
+
+
+def test_fetch_gitlab_test_reports_sync_skips_other_branch_pipelines(monkeypatch):
+    other_branch_pipeline = {
+        "id": 2,
+        "ref": "feature-x",
+        "created_at": "2023-01-01T00:00:00Z",
+    }
+    fake_client = _FakeGitLabCodeClient(
+        pipelines_raw=[other_branch_pipeline],
+        test_reports={2: {"test_suites": [{"name": "suite"}]}},
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        lambda connector: fake_client,
+    )
+
+    test_reports, coverage_members = _fetch_gitlab_test_reports_sync(
+        Mock(),
+        project_id=1,
+        since=None,
+        default_branch="main",
+        max_pipelines=10,
+    )
+
+    assert test_reports == []
+    assert coverage_members == []
 
 
 def test_fetch_gitlab_incidents_sync():

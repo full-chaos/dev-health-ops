@@ -1585,12 +1585,12 @@ def _is_report_name(name: str) -> bool:
 
 def _fetch_gitlab_test_reports_sync(
     connector: Any,
-    gl_project: Any,
     project_id: int,
     since: datetime | None,
     default_branch: str | None,
     max_pipelines: int,
     until: datetime | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> tuple[
     list[tuple[str, dict[str, Any], datetime | None, datetime | None]],
     list[tuple[str, list[tuple[str, bytes]]]],
@@ -1601,108 +1601,163 @@ def _fetch_gitlab_test_reports_sync(
     ``[(run_id, test_report_json, started_at, finished_at), ...]`` (GitLab's
     parsed JUnit JSON + the pipeline timestamps used to date the suites) and
     ``coverage_members`` is ``[(run_id, [(filename, bytes), ...]), ...]`` from
-    job artifact ZIPs. ``run_id`` is ``str(pipeline.id)`` so rows join to the
-    pipeline. Bounded to the default branch and ``max_pipelines`` pipelines.
+    job artifact ZIPs. ``run_id`` is ``str(pipeline["id"])`` so rows join to
+    the pipeline. Bounded to the default branch and ``max_pipelines``
+    pipelines.
+
+    CHAOS-2773 CS12: fetches via the canonical, instrumented
+    ``providers.gitlab.code_client.GitLabCodeClient`` (built on the shared
+    ``InstrumentedRESTCore``) instead of the frozen python-gitlab
+    ``gl_project.pipelines.list()`` + the un-instrumented
+    ``connectors/utils/rest.py`` (``get_pipeline_test_report`` / ``get_list``
+    / ``download_job_artifacts``). Dispatched via ``loop.run_in_executor``
+    (a plain worker thread with no running event loop), so bridging to the
+    async client with ``asyncio.run()`` here is safe -- mirrors
+    ``_fetch_gitlab_pipelines_sync`` / ``_fetch_gitlab_deployments_sync`` /
+    ``_fetch_gitlab_security_alerts_sync``. ONE client instance covers the
+    whole project scan (pipeline listing + every pipeline's test_report +
+    jobs + artifact downloads), matching the CS2 "one client per unit"
+    drain contract.
+
+    ``usage_sink`` (CHAOS-2803/CS2), when given, receives the client's
+    drained per-request usage observations in a ``finally:`` on BOTH the
+    success and failure path.
     """
     from dev_health_ops.connectors.utils.safe_archive import iter_zip_members
 
-    test_reports: list[
-        tuple[str, dict[str, Any], datetime | None, datetime | None]
-    ] = []
-    coverage_members: list[tuple[str, list[tuple[str, bytes]]]] = []
     since_aware = since
     if since_aware is not None and since_aware.tzinfo is None:
         since_aware = since_aware.replace(tzinfo=timezone.utc)
 
-    # Filter by update time SERVER-SIDE. We must NOT early-`break` on created_at:
-    # the list is ordered by updated_at, and a recently-updated pipeline can be
-    # old by created_at, so breaking would silently skip valid in-window
-    # pipelines (Codex review). The max_pipelines cap bounds the scan instead.
-    list_params: dict[str, Any] = {
-        "per_page": 100,
-        "order_by": "updated_at",
-        "sort": "desc",
-    }
-    if since_aware is not None:
-        list_params["updated_after"] = since_aware.isoformat()
+    drained_observations: list[dict[str, Any]] = []
+
+    async def _run() -> tuple[
+        list[tuple[str, dict[str, Any], datetime | None, datetime | None]],
+        list[tuple[str, list[tuple[str, bytes]]]],
+    ]:
+        test_reports: list[
+            tuple[str, dict[str, Any], datetime | None, datetime | None]
+        ] = []
+        coverage_members: list[tuple[str, list[tuple[str, bytes]]]] = []
+
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                # Filter by update time SERVER-SIDE. We must NOT early-`break`
+                # on created_at: the list is ordered by updated_at, and a
+                # recently-updated pipeline can be old by created_at, so
+                # breaking would silently skip valid in-window pipelines
+                # (Codex review). The max_pipelines cap (applied below, AFTER
+                # the default-branch filter) bounds the scan instead.
+                try:
+                    raw_pipelines = await client.iter_pipelines_since(
+                        project_id, since=since_aware, per_page=100
+                    )
+                except Exception as exc:
+                    logging.warning(
+                        "Could not list pipelines for GitLab project %s: %s",
+                        project_id,
+                        exc,
+                    )
+                    return test_reports, coverage_members
+
+                count = 0
+                for pipeline in raw_pipelines:
+                    if count >= max_pipelines:
+                        break
+                    ref = pipeline.get("ref")
+                    if default_branch and ref and ref != default_branch:
+                        continue
+                    pipeline_id = pipeline.get("id")
+                    if pipeline_id is None:
+                        continue
+                    count += 1
+                    run_id = str(pipeline_id)
+                    created_at = safe_parse_datetime(pipeline.get("created_at"))
+                    started_at = (
+                        safe_parse_datetime(pipeline.get("started_at")) or created_at
+                    )
+                    finished_at = safe_parse_datetime(pipeline.get("finished_at"))
+
+                    if (
+                        until is not None
+                        and isinstance(started_at, datetime)
+                        and started_at.astimezone(timezone.utc) > until
+                    ):
+                        continue
+
+                    # Native parsed test report (pass/fail/duration) — preferred over XML.
+                    try:
+                        report = await client.get_pipeline_test_report(
+                            project_id, pipeline_id
+                        )
+                        if report and report.get("test_suites"):
+                            test_reports.append(
+                                (run_id, report, started_at, finished_at)
+                            )
+                    except Exception as exc:
+                        logging.debug(
+                            "test_report failed for pipeline %s: %s",
+                            pipeline_id,
+                            exc,
+                        )
+
+                    # Coverage from job artifacts (best-effort, bounded).
+                    try:
+                        jobs = await client.iter_pipeline_jobs(
+                            project_id, pipeline_id, per_page=100
+                        )
+                    except Exception:
+                        jobs = []
+                    members: list[tuple[str, bytes]] = []
+                    artifact_jobs = 0
+                    for job in jobs:
+                        if artifact_jobs >= MAX_ARTIFACTS_PER_RUN:
+                            break
+                        if not (job.get("artifacts_file") or job.get("artifacts")):
+                            continue
+                        job_id = job.get("id")
+                        if job_id is None:
+                            continue
+                        artifact_jobs += 1
+                        try:
+                            data = await client.download_job_artifact(
+                                project_id, job_id
+                            )
+                        except Exception as exc:
+                            logging.debug(
+                                "artifact download failed for job %s: %s",
+                                job_id,
+                                exc,
+                            )
+                            continue
+                        if not data:
+                            continue
+                        try:
+                            members.extend(
+                                iter_zip_members(data, name_filter=_is_report_name)
+                            )
+                        except zipfile.BadZipFile:
+                            continue
+                    if members:
+                        coverage_members.append((run_id, members))
+
+                return test_reports, coverage_members
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
+
     try:
-        if max_pipelines > 100:
-            raw_pipelines = gl_project.pipelines.list(**list_params, as_list=False)
-        else:
-            raw_pipelines = gl_project.pipelines.list(**list_params, get_all=False)
+        test_reports, coverage_members = asyncio.run(_run())
     except Exception as exc:
         logging.warning(
-            "Could not list pipelines for GitLab project %s: %s", project_id, exc
+            "Failed to fetch GitLab test reports for project %s: %s",
+            project_id,
+            exc,
         )
-        return test_reports, coverage_members
-
-    count = 0
-    for pipeline in raw_pipelines:
-        if count >= max_pipelines:
-            break
-        ref = getattr(pipeline, "ref", None)
-        if default_branch and ref and ref != default_branch:
-            continue
-        pipeline_id = getattr(pipeline, "id", None)
-        if pipeline_id is None:
-            continue
-        count += 1
-        run_id = str(pipeline_id)
-        created_at = safe_parse_datetime(getattr(pipeline, "created_at", None))
-        started_at = (
-            safe_parse_datetime(getattr(pipeline, "started_at", None)) or created_at
+        test_reports, coverage_members = [], []
+    finally:
+        _drain_gitlab_code_usage(
+            "_fetch_gitlab_test_reports_sync", drained_observations, usage_sink
         )
-        finished_at = safe_parse_datetime(getattr(pipeline, "finished_at", None))
-
-        if (
-            until is not None
-            and isinstance(started_at, datetime)
-            and started_at.astimezone(timezone.utc) > until
-        ):
-            continue
-
-        # Native parsed test report (pass/fail/duration) — preferred over XML.
-        try:
-            report = connector.rest_client.get_pipeline_test_report(
-                project_id, pipeline_id
-            )
-            if report and report.get("test_suites"):
-                test_reports.append((run_id, report, started_at, finished_at))
-        except Exception as exc:
-            logging.debug("test_report failed for pipeline %s: %s", pipeline_id, exc)
-
-        # Coverage from job artifacts (best-effort, bounded).
-        try:
-            jobs = connector.rest_client.get_list(
-                f"projects/{project_id}/pipelines/{pipeline_id}/jobs",
-                params={"per_page": 100},
-            )
-        except Exception:
-            jobs = []
-        members: list[tuple[str, bytes]] = []
-        artifact_jobs = 0
-        for job in jobs:
-            if artifact_jobs >= MAX_ARTIFACTS_PER_RUN:
-                break
-            if not (job.get("artifacts_file") or job.get("artifacts")):
-                continue
-            job_id = job.get("id")
-            if job_id is None:
-                continue
-            artifact_jobs += 1
-            try:
-                data = connector.rest_client.download_job_artifacts(project_id, job_id)
-            except Exception as exc:
-                logging.debug("artifact download failed for job %s: %s", job_id, exc)
-                continue
-            if not data:
-                continue
-            try:
-                members.extend(iter_zip_members(data, name_filter=_is_report_name))
-            except zipfile.BadZipFile:
-                continue
-        if members:
-            coverage_members.append((run_id, members))
 
     return test_reports, coverage_members
 
@@ -1719,6 +1774,7 @@ async def _sync_gitlab_test_reports(
     loop: asyncio.AbstractEventLoop,
     since: datetime | None,
     until: datetime | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> None:
     """Ingest TestOps data for one GitLab project (CHAOS-2370).
 
@@ -1732,6 +1788,13 @@ async def _sync_gitlab_test_reports(
     from dev_health_ops.providers.gitlab.testops_pipeline import GitLabCIAdapter
 
     # (1) Extended pipelines + jobs. Explicit token (Codex review item G).
+    # ``adapter`` (CHAOS-2773 CS12) now opts into instrumentation via
+    # ``BasePipelineAdapter``'s ``usage_resolver``/``diagnostic_header_names``
+    # class attributes (shared foundation with CHAOS-2806/CS5's
+    # GitHubActionsAdapter) -- drained unconditionally in the ``finally:``
+    # below on BOTH the success and failure path, mirroring the code-client
+    # helpers above.
+    adapter: GitLabCIAdapter | None = None
     try:
         adapter = GitLabCIAdapter(base_url=connector.rest_client.base_url, token=token)
         processor = TestOpsPipelineProcessor(ingestion_sink)
@@ -1756,18 +1819,25 @@ async def _sync_gitlab_test_reports(
             project_id,
             exc,
         )
+    finally:
+        if adapter is not None:
+            _drain_gitlab_code_usage(
+                "_sync_gitlab_test_reports[adapter]",
+                adapter.drain_usage_observations(),
+                usage_sink,
+            )
 
     default_branch = getattr(gl_project, "default_branch", None)
     test_reports, coverage_members = await loop.run_in_executor(
         None,
         _fetch_gitlab_test_reports_sync,
         connector,
-        gl_project,
         project_id,
         since,
         default_branch,
         MAX_RUNS_PER_SYNC,
         until,
+        usage_sink,
     )
 
     suite_rows: list[Any] = []
@@ -2031,6 +2101,7 @@ async def process_gitlab_project(
                 loop=loop,
                 since=since,
                 until=until,
+                usage_sink=usage_sink,
             )
 
         if sync_deployments:
@@ -2379,6 +2450,7 @@ async def process_gitlab_projects_batch(
                     ingestion_sink=ingestion_sink,
                     loop=loop,
                     since=since,
+                    usage_sink=usage_sink,
                 )
             except Exception as e:
                 logging.warning(

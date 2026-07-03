@@ -416,6 +416,23 @@ GITLAB_USAGE_ROUTE_FAMILIES: tuple[UsageRouteFamily, ...] = (
         transport="rest",
         operation_markers=("security:",),
     ),
+    # CHAOS-2773 CS12: the "tests" code-dataset client (pipeline test_report
+    # + pipeline jobs + job artifact download) likewise authors its own
+    # "tests:" prefix rather than reusing "pipelines:" -- even though the
+    # ESTIMATOR (``_dataset_estimates`` above) buckets ``TESTS`` under the
+    # SAME "pipelines" dimension as ``CICD``/``DEPLOYMENTS`` (estimate
+    # vocabulary is frozen, CHAOS-2773 non-goals), the ACTUALS resolver is a
+    # separate concern: a dedicated family per code-client method group lets
+    # ``budget_comparison`` distinguish tests-specific traffic from bare
+    # pipeline-listing traffic, mirroring CS10's "security"/CS11's
+    # "deployments" precedent (both also actuals-only splits from their
+    # estimator bucket).
+    UsageRouteFamily(
+        "tests",
+        BudgetDimension.REST_CORE,
+        transport="rest",
+        operation_markers=("tests:",),
+    ),
 )
 
 GITLAB_USAGE_ROUTE_FAMILY_KEYS = frozenset(

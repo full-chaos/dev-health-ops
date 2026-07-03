@@ -989,10 +989,13 @@ proof-of-pipe that the plumbing actually reaches a `budget_comparison` row:
 
 | Route family | Dimension(s) | Covers | Confidence |
 | --- | --- | --- | --- |
-| `project` | `rest_core` | Project metadata, commits, files/blame, security, feature-flags | high–low |
+| `project` | `rest_core` | Project metadata, commits, files/blame, feature-flags | high–low |
 | `merge_requests` | `rest_core` | Merge request iterators (pagination-heavy) | medium |
 | `notes` | `rest_core` | MR/issue note + discussion expansion | low |
-| `pipelines` | `rest_core` | CI/CD pipeline + job expansion | low |
+| `pipelines` | `rest_core` | CI/CD pipeline listing + job expansion (`GitLabCodeClient.get_pipelines`) | low |
+| `deployments` | `rest_core` | Deployments, releases, deployment→MR resolution (`GitLabCodeClient`, CHAOS-2773 CS11) | low |
+| `security` | `rest_core` | Vulnerability findings + dependency-scan alerts (`GitLabCodeClient`, CHAOS-2773 CS10) | low |
+| `tests` | `rest_core` | Pipeline test_report, pipeline jobs, job artifact download (`GitLabCodeClient`, CHAOS-2773 CS12) | low |
 | `issues` | `rest_core` | Issue iterator + per-issue events | medium |
 | `milestones` | `rest_core` | Project/group milestone iterators | medium |
 | `epics` | `rest_core` | Group epic expansion (premium APIs) | low |
@@ -1172,8 +1175,17 @@ paper over:
   [LaunchDarkly](#launchdarkly) above. GitLab's feature-flags fetch
   (`get_feature_flags` / `get_project_name`) is likewise closed as of
   [CHAOS-2785](https://linear.app/fullchaos/issue/CHAOS-2785) — see
-  [GitLab](#gitlab) above — while the rest of GitLab's frozen
-  code-dataset methods remain unmigrated pending CHAOS-2773 CS17.
+  [GitLab](#gitlab) above — while GitLab's `security`
+  ([CHAOS-2811](https://linear.app/fullchaos/issue/CHAOS-2811), CS10),
+  `pipelines`+`deployments`
+  ([CHAOS-2812](https://linear.app/fullchaos/issue/CHAOS-2812), CS11), and
+  `tests` (+CI adapter usage draining;
+  [CHAOS-2813](https://linear.app/fullchaos/issue/CHAOS-2813), CS12)
+  code-dataset families are migrated onto the canonical, instrumented
+  `providers/gitlab/code_client.py::GitLabCodeClient` — GitLab's remaining
+  frozen code-dataset methods (`git`/`commit_stats`/`files`/`blame`/
+  `merge_requests` listing + repo-metadata/batch orchestration) stay
+  unmigrated pending their own CHAOS-2773 changesets through CS17.
 
 
 ## References

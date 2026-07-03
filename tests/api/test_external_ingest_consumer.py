@@ -15,6 +15,7 @@ import time
 import types
 import uuid
 from contextlib import asynccontextmanager
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -216,11 +217,13 @@ class TestPermanentFailure:
     def test_mark_batch_failed_raising_leaves_entry_unacked(
         self, fake_redis, monkeypatch
     ):
-        """Adversarial-review rounds 2 (2693) + 2 (2697): when the
-        failed-status write raises, the entry must NOT be ACKed (the batch
-        would strand non-terminal with the entry gone) AND -- mark-first
-        ordering -- no DLQ row may be written yet, or every retry would XADD
-        a duplicate into the capped DLQ during a Postgres outage."""
+        """Adversarial-review rounds 1-3 (CHAOS-2697): when the failed-status
+        write raises, the entry must NOT be ACKed (the batch would strand
+        non-terminal with the entry gone), the DLQ row IS written (DLQ-first
+        ordering -- round 3: mark-first lost the row entirely when the XADD
+        failed after a successful mark), and retry cycles must NOT
+        accumulate duplicate DLQ rows (round 2: the per-entry marker
+        dedups)."""
         monkeypatch.setattr(
             consumer_mod.ExternalIngestStreamConsumer,
             "_resolve_mark_batch_failed",
@@ -236,19 +239,26 @@ class TestPermanentFailure:
         stream, _entry_id = _xadd_batch(
             fake_redis, org_id="org-mark-raises", ingestion_id="ingest-mark-raises"
         )
-        c = _consumer()
+        c = _consumer(reclaim_idle_ms=0)
         with patch.object(
             consumer_mod.ExternalIngestStreamConsumer,
             "_process_entry_async",
             AsyncMock(side_effect=PermanentProcessingError("nope")),
         ):
             c.consume(max_iterations=1)
+            # Retry cycle (reclaim redelivers the still-pending entry; the
+            # sleep is the fakeredis XPENDING-idle requirement documented in
+            # TestReclaim): the mark fails again, and the marker must
+            # suppress a duplicate DLQ row.
+            time.sleep(0.01)
+            c.consume(max_iterations=1)
 
-        mark_failed.assert_awaited_once()
-        # Mark-first ordering: no DLQ row until the status write is durable
-        # (retries must not accumulate duplicates in the capped DLQ)...
+        assert mark_failed.await_count == 2
+        # DLQ-first ordering: the row IS written (round 3: mark-first lost it
+        # when the XADD failed after the mark landed) -- exactly once across
+        # both attempts (round 2: marker dedup)...
         dlq_entries = fake_redis.xrange("external-ingest:org-mark-raises:dlq")
-        assert dlq_entries == []
+        assert len(dlq_entries) == 1
         # ...and the source entry remains pending (NOT acked) for a retry.
         pending = fake_redis.xpending_range(
             stream, consumer_mod.CONSUMER_GROUP, min="-", max="+", count=10
@@ -428,9 +438,10 @@ class TestReclaim:
         (``reclaim_stale() -> move_to_dlq``) must NOT ACK when
         ``mark_batch_failed`` raised -- ACKing would strand the batch in a
         non-terminal status with its only retry handle gone (a ``processing``
-        row REPLAYs, never RETRYs). Round-2 refinement: mark-first ordering
-        means no DLQ row is written either, so outage retries cannot flood
-        the capped DLQ. Sync twin of
+        row REPLAYs, never RETRYs). Rounds 2-3 refinement: the DLQ row IS
+        written (DLQ-first; mark-first lost it on XADD failure) but exactly
+        once across retry cycles (marker dedup -- outage retries previously
+        flooded the capped DLQ). Sync twin of
         ``test_mark_batch_failed_raising_leaves_entry_unacked`` above."""
         monkeypatch.setattr(
             consumer_mod.ExternalIngestStreamConsumer,
@@ -459,11 +470,15 @@ class TestReclaim:
             # move_to_dlq must return False -> entry must stay pending.
             time.sleep(0.01)
             c.consume(max_iterations=1)
+            # iter 3: give-up retried -- the marker must dedup the DLQ row
+            # while the mark keeps failing.
+            time.sleep(0.01)
+            c.consume(max_iterations=1)
 
-        mark_failed.assert_awaited_once()
-        # Mark-first: no DLQ row while the status write keeps failing...
+        assert mark_failed.await_count == 2
+        # DLQ-first: exactly one DLQ row across both give-up attempts...
         dlq_entries = fake_redis.xrange("external-ingest:org-giveup-markfail:dlq")
-        assert dlq_entries == []
+        assert len(dlq_entries) == 1
         pending = fake_redis.xpending_range(
             stream, consumer_mod.CONSUMER_GROUP, min="-", max="+", count=10
         )
@@ -611,6 +626,55 @@ class TestMoveToDlqFailureIsSwallowed:
         assert len(pending) == 1
         assert pending[0]["message_id"] == entry_id
         assert broken.xrange("external-ingest:org-dlq-broken-reclaim:dlq") == []
+
+    def test_broken_dlq_xadd_never_marks_batch_failed(self, monkeypatch):
+        """CHAOS-2697 adversarial round 3: with DLQ-first ordering, a failed
+        DLQ XADD must leave the batch UNMARKED. Marking first would let the
+        idempotent-skip guard ACK the redelivered entry (the batch is now
+        terminal) before the DLQ write is ever retried -- silent DLQ loss.
+        Once the DLQ write recovers, the mark proceeds and the entry may be
+        ACKed."""
+
+        class FlakyDlq(FakeValkey):
+            fail_next = True
+
+            def xadd(self, name, *args, **kwargs):
+                if name.endswith(":dlq") and FlakyDlq.fail_next:
+                    FlakyDlq.fail_next = False
+                    raise ConnectionError("dlq blip")
+                return super().xadd(name, *args, **kwargs)
+
+        FlakyDlq.fail_next = True
+        # Any: valkey's sync xrange is typed Awaitable-or-value; the untyped
+        # fake fixtures elsewhere in this file get the same treatment.
+        rc: Any = FlakyDlq(decode_responses=True)
+        stream, entry_id = _xadd_batch(rc, org_id="org-dlq-flaky")
+
+        monkeypatch.setattr(
+            consumer_mod.ExternalIngestStreamConsumer,
+            "_resolve_mark_batch_failed",
+            staticmethod(_REAL_RESOLVE_MARK_BATCH_FAILED),
+        )
+        fake_processor = types.ModuleType("dev_health_ops.external_ingest.processor")
+        mark_failed = AsyncMock()
+        setattr(fake_processor, "mark_batch_failed", mark_failed)
+        monkeypatch.setitem(
+            sys.modules, "dev_health_ops.external_ingest.processor", fake_processor
+        )
+        c = _consumer()
+
+        # Attempt 1: XADD fails -> not safe to ACK, and crucially the batch
+        # was never marked (nothing for the terminal-skip guard to see).
+        assert c.move_to_dlq(rc, stream, entry_id, "gave up") is False
+        mark_failed.assert_not_awaited()
+        assert rc.xrange("external-ingest:org-dlq-flaky:dlq") == []
+
+        # Attempt 2 (retry): DLQ recovers -> row written -> mark runs ->
+        # safe to ACK.
+        assert c.move_to_dlq(rc, stream, entry_id, "gave up") is True
+        mark_failed.assert_awaited_once()
+        dlq_entries = rc.xrange("external-ingest:org-dlq-flaky:dlq")
+        assert len(dlq_entries) == 1
 
 
 class TestProcessorAvailabilityGuard:

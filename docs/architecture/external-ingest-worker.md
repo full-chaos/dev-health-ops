@@ -112,22 +112,28 @@ does the same on the give-up path. A subsequent same-key resubmission
 (RETRY) re-upserts the payload under the same `ingestion_id`. Never-retried
 orphans are the CHAOS-2769 reconciler's job.
 
-**`mark_batch_failed` raises on failure; the consumer marks FIRST, DLQs
-second.** The consumer's ACK gate depends on the raise: if the
-terminal-`failed` write cannot land, the entry must stay un-ACKed so a later
-redelivery retries the status write — ACKing past a lost write strands the
-batch non-terminal with the pointer gone (2693 adversarial-review round-2).
-Both give-up paths (sync `move_to_dlq` from `reclaim_stale`, async
-permanent-failure) write the DLQ row only AFTER the mark is durable
-(2697 round-2): the old DLQ-then-mark order XADDed a duplicate DLQ row on
-every retry during a Postgres outage, eventually evicting distinct failures
-from the capped approximate DLQ stream. `status.mark_failed` transitions
-from ANY non-terminal status (permanent failures raised before
-`mark_processing` leave `accepted`), forces the counter invariant
-(`items_accepted=0`, `items_rejected=items_received`, `record_counts=NULL`
-— failed means nothing accepted, and GET/list consumers key off these), and
-is a no-op for terminal/unknown batches, so DLQ re-drives and duplicate
-pointers stay idempotent.
+**Give-up ordering: idempotent DLQ write FIRST, then `mark_batch_failed`
+(which raises on failure); ACK only after both.** Three adversarial rounds
+converged here. Round 1: the ACK must gate on the mark result — ACKing past
+a raised `mark_batch_failed` strands the batch non-terminal with the
+pointer gone (a `processing` row REPLAYs, never RETRYs). Round 2: naive
+DLQ-first XADDed a duplicate DLQ row on every mark-failure retry during a
+Postgres outage, eventually evicting distinct failures from the capped
+approximate DLQ stream. Round 3: the mark-first "fix" for that LOSES the
+DLQ row entirely when the mark lands but the XADD fails — the now-terminal
+batch makes every redelivery take the consumer's idempotent-skip guard,
+which ACKs without ever retrying the DLQ write. Resolution: DLQ-first with
+a per-entry `…:dlq:written:<entry_id>` marker (set best-effort right after
+a successful XADD; check-then-write is safe under the CC11 single-consumer
+invariant) — a failed XADD leaves the batch untouched and the entry pending
+(self-healing), a failed mark retries with the marker suppressing duplicate
+rows, and only full success ACKs. `status.mark_failed` transitions from ANY
+non-terminal status (permanent failures raised before `mark_processing`
+leave `accepted`), forces the counter invariant (`items_accepted=0`,
+`items_rejected=items_received`, `record_counts=NULL` — failed means
+nothing accepted, and GET/list consumers key off these), and is a no-op for
+terminal/unknown batches, so DLQ re-drives and duplicate pointers stay
+idempotent.
 
 **Give-up with unrecoverable entry fields.** `reclaim_stale` hands
 `move_to_dlq` only a message ID; the fields are re-read via XRANGE. A

@@ -58,6 +58,10 @@ BATCH_SIZE = 50
 BLOCK_MS = 5000
 RECLAIM_IDLE_MS = 900_000  # 15 min, master-spec CC11 post-critique
 MAX_DELIVERIES = 5
+# TTL for the per-entry "DLQ row written" idempotency marker -- matches the
+# payload-store prune horizon (EXTERNAL_INGEST_PAYLOAD_MAX_AGE_HOURS=168);
+# any retry cycle still alive after that has long since been re-driven.
+DLQ_MARKER_TTL_SECONDS = 7 * 24 * 3600
 
 _TERMINAL_STATUS_VALUES = {s.value for s in TERMINAL_STATUSES}
 
@@ -164,14 +168,20 @@ class ExternalIngestStreamConsumer(StreamConsumer):
         use :func:`run_async` for the ``mark_batch_failed`` side effect.
 
         Returns whether it is safe to ACK the source entry (base class
-        contract). MARK-FIRST ordering (CHAOS-2697 adversarial review rounds
-        1+2): the terminal-``failed`` status write must be durable BEFORE the
-        DLQ row is written -- ACKing past a raised ``mark_batch_failed``
-        strands the batch in a non-terminal status with the entry gone (a
-        ``processing`` row REPLAYs rather than RETRYs, no customer recovery),
-        and writing the DLQ row first meant every mark-failure retry XADDed a
-        duplicate, flooding the capped/approximate DLQ during a Postgres
-        outage until distinct failures evicted.
+        contract): requires BOTH the (idempotent) DLQ write to succeed AND,
+        when an ingestion_id is present, the failed-status write to be safe.
+
+        Ordering (adversarial rounds 1-3): DLQ-FIRST, with the write made
+        idempotent via ``_xadd_dlq_entry``'s marker. Round 1 gated the ACK
+        on the mark result; round 2 flipped to mark-first to stop
+        mark-failure retries from flooding the capped DLQ with duplicates;
+        round 3 showed mark-first LOSES the DLQ row entirely when the mark
+        lands but the XADD fails (the now-terminal batch makes every
+        redelivery take the idempotent-skip guard, which ACKs without ever
+        retrying the DLQ write). DLQ-first + marker dedup satisfies all
+        three: a failed XADD leaves the batch untouched and the entry
+        pending (self-healing retry), a failed mark retries with the marker
+        suppressing duplicate rows, and only full success ACKs.
 
         Unrecoverable-fields path: a transient XRANGE failure returns
         ``False`` (retry later); an authoritatively-absent entry
@@ -185,17 +195,7 @@ class ExternalIngestStreamConsumer(StreamConsumer):
             # Transient re-read failure: retrying later is productive.
             return False
         ingestion_id = data.get("ingestion_id")
-        if ingestion_id:
-            org_id = data.get("org_id") or self._org_id_from_stream_key(stream_key)
-            marked_ok = self._mark_batch_failed_best_effort(
-                org_id=org_id, ingestion_id=ingestion_id, reason=reason
-            )
-            if not marked_ok:
-                # No DLQ write on this attempt: the retry (entry stays
-                # pending) re-runs the mark, and only a durable mark
-                # proceeds to XADD -- at most one DLQ row per entry.
-                return False
-        else:
+        if not ingestion_id:
             logger.error(
                 "Entry %s on %s has no recoverable fields (trimmed while "
                 "pending?) -- writing tombstone DLQ row and ACKing; any "
@@ -203,9 +203,18 @@ class ExternalIngestStreamConsumer(StreamConsumer):
                 entry_id,
                 stream_key,
             )
-        _org_id, dlq_written = self._xadd_dlq_entry(
+        org_id, dlq_written = self._xadd_dlq_entry(
             rc, stream_key, entry_id, reason, data
         )
+        if not dlq_written:
+            # Batch deliberately not yet marked: the retry re-runs this
+            # whole method with nothing terminal to short-circuit it.
+            return False
+        if ingestion_id:
+            marked_ok = self._mark_batch_failed_best_effort(
+                org_id=org_id, ingestion_id=ingestion_id, reason=reason
+            )
+            return marked_ok
         return dlq_written
 
     async def _dlq_entry_async(
@@ -222,22 +231,16 @@ class ExternalIngestStreamConsumer(StreamConsumer):
         than call :meth:`_mark_batch_failed_best_effort` (which itself calls
         :func:`run_async`), or ``run_async``'s own re-entrancy guard raises.
 
-        Same MARK-FIRST ordering and ACK contract as :meth:`move_to_dlq`
-        (see its docstring): the failed-status write must be durable before
-        the DLQ row is written, so a Postgres outage leaves the entry
-        pending with NO duplicate DLQ rows accumulating across retries.
-        Entries on this path always carry their field dict, so the
-        tombstone branch here only covers a malformed producer entry.
+        Same DLQ-FIRST-with-idempotent-write ordering and ACK contract as
+        :meth:`move_to_dlq` (see its docstring for the round 1-3 history):
+        a failed XADD returns ``False`` with the batch untouched (retry
+        reproduces the permanent error and re-attempts); a failed mark
+        returns ``False`` with the marker suppressing duplicate DLQ rows on
+        the retry. Entries on this path always carry their field dict, so
+        the tombstone branch here only covers a malformed producer entry.
         """
         ingestion_id = data.get("ingestion_id")
-        if ingestion_id:
-            org_id = data.get("org_id") or self._org_id_from_stream_key(stream_key)
-            marked_ok = await self._mark_batch_failed_best_effort_async(
-                org_id=org_id, ingestion_id=ingestion_id, reason=reason
-            )
-            if not marked_ok:
-                return False
-        else:
+        if not ingestion_id:
             logger.error(
                 "Entry %s on %s carries no ingestion_id -- writing tombstone "
                 "DLQ row and ACKing; any stranded batch row is the "
@@ -245,9 +248,16 @@ class ExternalIngestStreamConsumer(StreamConsumer):
                 entry_id,
                 stream_key,
             )
-        _org_id, dlq_written = self._xadd_dlq_entry(
+        org_id, dlq_written = self._xadd_dlq_entry(
             rc, stream_key, entry_id, reason, data
         )
+        if not dlq_written:
+            return False
+        if ingestion_id:
+            marked_ok = await self._mark_batch_failed_best_effort_async(
+                org_id=org_id, ingestion_id=ingestion_id, reason=reason
+            )
+            return marked_ok
         return dlq_written
 
     def _xadd_dlq_entry(
@@ -258,17 +268,34 @@ class ExternalIngestStreamConsumer(StreamConsumer):
         reason: str,
         data: dict[str, str],
     ) -> tuple[str, bool]:
-        """XADD to the per-org DLQ (sync -- the redis client itself is never
-        async). Per-org (D1): a single bad-actor/misconfigured org flooding
-        poison batches must not crowd out DLQ visibility for other orgs.
-        Returns ``(org_id, succeeded)`` -- callers use ``succeeded`` to
-        decide whether it is safe to ack the source entry (adversarial-review
-        finding: a swallowed DLQ-write failure must not silently drop the
-        entry with no DLQ record).
+        """Idempotently XADD to the per-org DLQ (sync -- the redis client
+        itself is never async). Per-org (D1): a single bad-actor/misconfigured
+        org flooding poison batches must not crowd out DLQ visibility for
+        other orgs. Returns ``(org_id, succeeded)`` -- callers use
+        ``succeeded`` to decide whether it is safe to ack the source entry
+        (adversarial-review finding: a swallowed DLQ-write failure must not
+        silently drop the entry with no DLQ record).
+
+        Idempotency (CHAOS-2697 adversarial rounds 2+3): a per-entry marker
+        key is set right after a successful XADD, so a source entry retried
+        across mark-failure cycles produces exactly one DLQ row instead of
+        flooding the capped/approximate stream. The check-then-write is safe
+        without WATCH/MULTI because of the CC11 deployment invariant
+        (exactly ONE consumer identity ever runs this code for a given
+        entry). The marker set itself is best-effort: if it fails after the
+        XADD landed, a later retry can write at most one extra DLQ row per
+        such blip -- bounded noise, unlike the unbounded per-cycle
+        duplication the marker exists to stop.
         """
         org_id = data.get("org_id") or self._org_id_from_stream_key(stream_key)
         dlq = dlq_name(org_id)
+        marker = f"{dlq}:written:{entry_id}"
         try:
+            if rc.exists(marker):
+                # A prior attempt already landed the DLQ row (its mark or
+                # ACK failed afterwards) -- report success without a
+                # duplicate XADD.
+                return org_id, True
             rc.xadd(
                 dlq,
                 {
@@ -285,6 +312,14 @@ class ExternalIngestStreamConsumer(StreamConsumer):
         except Exception:
             logger.exception("Failed to move entry %s to DLQ", entry_id)
             return org_id, False
+        try:
+            rc.set(marker, "1", ex=DLQ_MARKER_TTL_SECONDS)
+        except Exception:
+            logger.exception(
+                "DLQ row for entry %s written but its dedup marker was not -- "
+                "a later retry may write one duplicate row",
+                entry_id,
+            )
         return org_id, True
 
     @staticmethod

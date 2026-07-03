@@ -13,6 +13,7 @@ from dev_health_ops.api.queries.investment import (
     LATEST_WORK_UNIT_AUTHORS_CTE,
     LATEST_WORK_UNIT_INVESTMENTS_CTE,
     LATEST_WORK_UNIT_REPO_EFFORT_CTE,
+    PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE,
 )
 
 from ..authz import enforce_org_scope
@@ -193,7 +194,7 @@ def _get_context_params(
 
         # Add team join if TEAM dimension is used or filters require it
         if Dimension.TEAM in dimensions or needs_team_join:
-            team_join = """
+            team_join = f"""
             LEFT JOIN (
                 SELECT
                     work_unit_id,
@@ -210,15 +211,7 @@ def _get_context_params(
                         JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
                         [work_unit_investments.work_unit_id]
                     )) AS issue_id
-                    LEFT JOIN (
-                        SELECT
-                            work_item_id,
-                            argMax(team_id, computed_at) AS team_id,
-                            argMax(team_name, computed_at) AS team_name
-                        FROM work_item_cycle_times
-                        WHERE org_id = %(org_id)s
-                        GROUP BY work_item_id
-                    ) AS t ON t.work_item_id = issue_id
+                    LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t ON t.work_item_id = issue_id
                     GROUP BY work_unit_id, team_id, team_label
                 )
                 GROUP BY work_unit_id

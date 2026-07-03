@@ -23,6 +23,14 @@ def _assert_team_attribution_sql(sql: str) -> None:
     assert "JSONExtract(structural_evidence_json, 'issues', 'Array(String)')" in sql
     assert "[work_unit_investments.work_unit_id]" in sql
     assert "t.work_item_id = issue_id" in sql
+    # CHAOS-2833: the GraphQL Sankey TEAM join and coverage query must read
+    # the primary ClickHouse attribution rows, never the legacy cycle-times
+    # rollup that produced false unassigned team nodes.
+    assert "FROM work_item_team_attributions FINAL" in sql
+    assert "is_primary = 1" in sql
+    assert "(work_item_id, computed_at) IN" in sql
+    assert "max(computed_at)" in sql
+    assert "work_item_cycle_times" not in sql
 
 
 def test_graphql_sankey_team_join_scopes_org_and_uses_work_unit_fallback() -> None:

@@ -1,0 +1,27 @@
+{
+  "kind": "team.v1",
+  "valid": {
+    "kind": "team.v1",
+    "externalId": "team-platform",
+    "payload": {
+      "id": "team-platform",
+      "name": "Platform",
+      "description": "Core platform engineering team",
+      "members": ["acme-user-42"],
+      "projectKeys": ["ABC"],
+      "repoPatterns": ["acme/*"],
+      "isActive": true,
+      "updatedAt": "2026-06-25T00:00:00Z",
+      "nativeTeamKey": "PLAT"
+    }
+  },
+  "invalid": {
+    "kind": "team.v1",
+    "externalId": "team-platform-invalid",
+    "payload": {
+      "id": "team-platform",
+      "name": "Platform"
+    },
+    "expectedError": {"code": "missing_required_field", "field": "updatedAt"}
+  }
+}

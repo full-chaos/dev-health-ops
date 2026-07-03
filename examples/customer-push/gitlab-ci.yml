@@ -17,7 +17,10 @@ fullchaos-push:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
     - if: '$CI_PIPELINE_SOURCE == "web"'
   script:
-    - pip install --quiet dev-health-ops
+    # PIN to the version you validated -- this job holds the ingest token, so
+    # never install an unpinned package. Prefer a trusted prebuilt image or a
+    # hash/lockfile-verified install in CI.
+    - pip install --quiet "dev-health-ops==1.0.0"
     # Replace with your own extractor writing a batch envelope to batch.json.
     - dev-hops push sample --all > batch.json
     - dev-hops push validate batch.json          # local, no network call

@@ -42,6 +42,10 @@ These apply to **every** example below — they are not optional:
 - **Rotate tokens regularly.** Mint a new token via the sources/tokens API,
   update the secret, then revoke the old one — overlap the two during cutover so
   in-flight jobs don't fail. See the [Setup Guide](setup-guide.md).
+- **Pin the `dev-hops` install.** The push job holds the ingest token, so never
+  `pip install` an unpinned package — a compromised release could exfiltrate the
+  token. Install a fixed `dev-health-ops==<version>` you validated, or run from a
+  trusted prebuilt image; the CLI examples below pin by default.
 
 ## GitHub Actions
 

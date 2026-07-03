@@ -117,11 +117,15 @@ curl -sS -X POST "$FULLCHAOS_API_URL/api/v1/external-ingest/batches" \
 ```
 
 !!! note "Idempotency & source ownership"
-    Re-posting the same `idempotencyKey` + payload returns `200` with the same
-    `ingestionId` (replay); a different payload under the same key returns `409`. A source
-    instance has exactly one active owner — a second registration of the same instance
-    (case-insensitive) is rejected `409`, and at push time `source.instance` must match the
-    registered casing exactly. See the [Setup Guide](setup-guide.md#1-register-a-source).
+    Re-posting the same `idempotencyKey` + payload returns `200` (replay, same
+    `ingestionId`) **when the prior batch is not retryable**; if it's in a retryable state
+    (`stream_unavailable`, `failed`, or a stale `accepted`), the same `ingestionId` is reset
+    and re-enqueued with a fresh `202` — so a recovery retry after a stream outage is
+    expected to return `202`, not `200`. A different payload under the same key always
+    returns `409`. A source instance has exactly one active owner — a second registration of
+    the same instance (case-insensitive) is rejected `409`, and at push time
+    `source.instance` must match the registered casing exactly. See the
+    [Setup Guide](setup-guide.md#1-register-a-source).
 
 ## 4. Poll status & verify it landed
 

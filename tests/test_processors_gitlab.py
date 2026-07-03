@@ -10,6 +10,50 @@ from dev_health_ops.processors.gitlab import (
     _fetch_gitlab_pipelines_sync,
     process_gitlab_project,
 )
+from dev_health_ops.providers.gitlab.code_client import (
+    GitLabDeploymentData,
+    GitLabPipelineData,
+)
+
+
+class _FakeGitLabCodeClient:
+    def __init__(
+        self,
+        *,
+        pipelines=None,
+        deployments=None,
+        releases=None,
+        merge_requests=None,
+        observations=None,
+    ):
+        self.pipelines = pipelines or []
+        self.deployments = deployments or []
+        self.releases = releases or []
+        self.merge_requests = merge_requests or []
+        self.observations = observations or []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def get_pipelines(self, project_id, *, max_pipelines):
+        return self.pipelines[:max_pipelines]
+
+    async def get_deployment_releases(self, project_id, *, per_page):
+        return self.releases[:per_page]
+
+    async def get_deployments(self, project_id, *, max_deployments, per_page=None):
+        return self.deployments[:max_deployments]
+
+    async def get_deployment_merge_requests(self, project_id, sha):
+        return self.merge_requests
+
+    def drain_usage_observations(self):
+        observations = list(self.observations)
+        self.observations.clear()
+        return observations
 
 
 @pytest.mark.asyncio
@@ -295,19 +339,30 @@ async def test_process_gitlab_project_userinfo_stripped_from_discriminator(monke
     assert account_label not in written_repo.settings["gitlab_instance_url"]
 
 
-def test_fetch_gitlab_pipelines_sync():
-    mock_pipeline = Mock()
-    mock_pipeline.id = 1
-    mock_pipeline.status = "success"
-    mock_pipeline.created_at = "2023-01-01T00:00:00Z"
-    mock_pipeline.started_at = "2023-01-01T00:01:00Z"
-    mock_pipeline.finished_at = "2023-01-01T00:05:00Z"
-
-    mock_gl_project = Mock()
-    mock_gl_project.pipelines.list.return_value = [mock_pipeline]
+def test_fetch_gitlab_pipelines_sync(monkeypatch):
+    pipeline = GitLabPipelineData(
+        pipeline_id="1",
+        status="success",
+        created_at=datetime(2023, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+        started_at=datetime(2023, 1, 1, 0, 1, 0, tzinfo=timezone.utc),
+        finished_at=datetime(2023, 1, 1, 0, 5, 0, tzinfo=timezone.utc),
+    )
+    usage_sink: list[dict[str, str]] = []
+    fake_client = _FakeGitLabCodeClient(
+        pipelines=[pipeline], observations=[{"route_family": "pipelines"}]
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        lambda connector: fake_client,
+    )
 
     pipelines = _fetch_gitlab_pipelines_sync(
-        mock_gl_project, repo_id=None, max_pipelines=10, since=None
+        Mock(),
+        project_id=1,
+        repo_id=None,
+        max_pipelines=10,
+        since=None,
+        usage_sink=usage_sink,
     )
 
     assert len(pipelines) == 1
@@ -315,35 +370,53 @@ def test_fetch_gitlab_pipelines_sync():
     assert pipelines[0].status == "success"
     assert pipelines[0].queued_at == datetime(2023, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
     assert pipelines[0].started_at == datetime(2023, 1, 1, 0, 1, 0, tzinfo=timezone.utc)
+    assert usage_sink == [{"route_family": "pipelines"}]
 
 
-def test_fetch_gitlab_deployments_sync():
-    mock_connector = Mock()
-    mock_connector.rest_client.get_releases.return_value = [{"tag_name": "v1.2.3"}]
-    mock_connector.rest_client.get_deployments.return_value = [
-        {
-            "id": 101,
-            "iid": 12,
-            "status": "success",
-            "ref": "v1.2.3",
-            "environment": {"name": "production"},
-            "created_at": "2023-01-02T00:00:00Z",
-            "finished_at": "2023-01-02T00:10:00Z",
-        }
-    ]
+def test_fetch_gitlab_deployments_sync(monkeypatch):
+    deployment = GitLabDeploymentData(
+        deployment_id="101",
+        deployment_iid=12,
+        status="success",
+        environment="production",
+        created_at=datetime(2023, 1, 2, 0, 0, 0, tzinfo=timezone.utc),
+        finished_at=datetime(2023, 1, 2, 0, 10, 0, tzinfo=timezone.utc),
+        sha="abc123",
+        raw_payload={"id": 101, "iid": 12, "ref": "v1.2.3"},
+    )
+    usage_sink: list[dict[str, str]] = []
+    fake_client = _FakeGitLabCodeClient(
+        deployments=[deployment],
+        releases=[{"tag_name": "v1.2.3"}],
+        merge_requests=[
+            {"iid": 44, "state": "merged", "merged_at": "2023-01-02T00:09:00Z"}
+        ],
+        observations=[{"route_family": "deployments"}],
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        lambda connector: fake_client,
+    )
 
     deployments = _fetch_gitlab_deployments_sync(
-        mock_connector, project_id=1, repo_id=None, max_deployments=10, since=None
+        Mock(),
+        project_id=1,
+        repo_id=None,
+        max_deployments=10,
+        since=None,
+        usage_sink=usage_sink,
     )
 
     assert len(deployments) == 1
     assert deployments[0].deployment_id == "101"
     assert deployments[0].environment == "production"
+    assert deployments[0].pull_request_number == 44
     assert deployments[0].release_ref == "v1.2.3"
     assert deployments[0].release_ref_confidence == pytest.approx(1.0)
     assert deployments[0].deployed_at == datetime(
         2023, 1, 2, 0, 0, 0, tzinfo=timezone.utc
     )
+    assert usage_sink == [{"route_family": "deployments"}]
 
 
 def test_fetch_gitlab_incidents_sync():

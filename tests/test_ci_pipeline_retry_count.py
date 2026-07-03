@@ -27,6 +27,7 @@ import dev_health_ops.connectors  # noqa: F401
 from dev_health_ops.processors.base_git import build_ci_pipeline_run
 from dev_health_ops.processors.github import _fetch_github_workflow_runs_sync
 from dev_health_ops.processors.gitlab import _fetch_gitlab_pipelines_sync
+from dev_health_ops.providers.gitlab.code_client import GitLabPipelineData
 from dev_health_ops.storage.mixins.cicd import CicdMixin
 
 _STARTED = datetime(2023, 1, 1, 0, 1, 0, tzinfo=timezone.utc)
@@ -110,22 +111,39 @@ def test_github_workflow_run_absent_run_attempt_defaults_to_zero():
     assert runs[0].retry_count == 0
 
 
-def test_gitlab_pipeline_retry_count_defaults_to_zero():
+class _GitLabPipelineClient:
+    def __init__(self, pipelines: list[GitLabPipelineData]) -> None:
+        self.pipelines = pipelines
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def get_pipelines(self, project_id: int, *, max_pipelines: int):
+        return self.pipelines[:max_pipelines]
+
+    def drain_usage_observations(self):
+        return []
+
+
+def test_gitlab_pipeline_retry_count_defaults_to_zero(monkeypatch):
     """GitLab pipelines have no clean attempt counter -> retry_count=0."""
-    from unittest.mock import Mock
-
-    pipeline = Mock()
-    pipeline.id = 1
-    pipeline.status = "success"
-    pipeline.created_at = "2023-01-01T00:00:00Z"
-    pipeline.started_at = "2023-01-01T00:01:00Z"
-    pipeline.finished_at = "2023-01-01T00:05:00Z"
-
-    gl_project = Mock()
-    gl_project.pipelines.list.return_value = [pipeline]
+    pipeline = GitLabPipelineData(
+        pipeline_id="1",
+        status="success",
+        created_at=datetime(2023, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+        started_at=datetime(2023, 1, 1, 0, 1, 0, tzinfo=timezone.utc),
+        finished_at=datetime(2023, 1, 1, 0, 5, 0, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        lambda connector: _GitLabPipelineClient([pipeline]),
+    )
 
     pipelines = _fetch_gitlab_pipelines_sync(
-        gl_project, repo_id=None, max_pipelines=10, since=None
+        object(), project_id=1, repo_id=None, max_pipelines=10, since=None
     )
 
     assert len(pipelines) == 1

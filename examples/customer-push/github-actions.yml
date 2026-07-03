@@ -3,7 +3,8 @@
 # Copy into YOUR repository as `.github/workflows/fullchaos-push.yml`.
 # Store the ingest token as a repository/organization secret named
 # FULLCHAOS_INGEST_TOKEN (Settings -> Secrets and variables -> Actions).
-# The token needs only the `ingest:write` + `schema:read` scopes -- never a
+# The token needs the `schema:read` + `ingest:write` + `ingest:status` scopes
+# (validate / push / poll) -- never a
 # provider PAT, and never your FullChaos login.
 name: fullchaos-push
 on:

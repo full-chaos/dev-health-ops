@@ -6,7 +6,7 @@
 #
 # /etc/fullchaos/push.env contains (0600, never world-readable):
 #   FULLCHAOS_API_URL=https://app.fullchaos.example
-#   FULLCHAOS_INGEST_TOKEN=fcpush_...          # ingest:write + schema:read only
+#   FULLCHAOS_INGEST_TOKEN=fcpush_...    # schema:read + ingest:write + ingest:status
 [Unit]
 Description=Push a customer batch to FullChaos
 After=network-online.target

@@ -1,7 +1,7 @@
 # FullChaos customer-push via GitLab CI (raw REST, no dev-hops dependency).
 #
 # Copy into YOUR project as `.gitlab-ci.yml`. FULLCHAOS_INGEST_TOKEN is a
-# masked + protected CI/CD variable (ingest:write + schema:read scopes).
+# masked + protected CI/CD variable (schema:read + ingest:write + ingest:status).
 stages: [push]
 
 fullchaos-push-curl:
@@ -16,8 +16,25 @@ fullchaos-push-curl:
     - apk add --no-cache curl jq
   script:
     - set -euo pipefail
-    # Replace with your own extractor writing a batch envelope to batch.json.
-    - cp examples/batch.json batch.json
+    # YOUR extractor must write a batch envelope to batch.json. This
+    # dependency-free placeholder writes a minimal valid single-record batch;
+    # replace it. `source.instance` must equal the records' repository.
+    - |
+      cat > batch.json <<'JSON'
+      {
+        "schemaVersion": "external-ingest.v1",
+        "idempotencyKey": "ci-sample-2026-06-26",
+        "source": {"type": "customer_push", "system": "github", "instance": "acme/api"},
+        "window": {"startedAt": "2026-06-20T00:00:00Z", "endedAt": "2026-06-26T00:00:00Z"},
+        "records": [
+          {"kind": "pull_request.v1", "externalId": "acme/api#482",
+           "payload": {"repositoryExternalId": "acme/api", "number": 482,
+             "title": "Fix login redirect loop", "state": "merged",
+             "authorName": "Alice Doe", "authorEmail": "alice@acme.example",
+             "createdAt": "2026-06-21T10:00:00Z", "mergedAt": "2026-06-22T15:30:00Z"}}
+        ]
+      }
+      JSON
     # Validate (schema:read); abort if valid:false.
     - |
       resp=$(curl -sS -X POST "$FULLCHAOS_API_URL/api/v1/external-ingest/validate" \
@@ -37,8 +54,14 @@ fullchaos-push-curl:
           -H "Authorization: Bearer $FULLCHAOS_INGEST_TOKEN")
         status=$(echo "$body" | jq -r '.status'); echo "status=$status"
         case "$status" in
-          completed|partial) echo "$body" | jq .; exit 0 ;;
-          failed)            echo "$body" | jq .; exit 1 ;;
+          completed) echo "$body" | jq .; exit 0 ;;
+          partial)
+            # Some records were REJECTED -- fail so CI surfaces dropped data
+            # (set ALLOW_PARTIAL=1 to accept partial batches).
+            echo "$body" | jq .
+            [ "${ALLOW_PARTIAL:-0}" = "1" ] && exit 0
+            echo "batch 'partial': records rejected (see errors above)"; exit 1 ;;
+          failed) echo "$body" | jq .; exit 1 ;;
         esac
         sleep 5
       done

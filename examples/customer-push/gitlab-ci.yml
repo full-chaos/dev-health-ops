@@ -2,7 +2,8 @@
 #
 # Copy into YOUR project as `.gitlab-ci.yml` (or include it). Store the ingest
 # token as a MASKED + PROTECTED CI/CD variable named FULLCHAOS_INGEST_TOKEN
-# (Settings -> CI/CD -> Variables). It needs only ingest:write + schema:read --
+# (Settings -> CI/CD -> Variables). It needs schema:read + ingest:write + ingest:status
+# (validate / push / poll) --
 # never a provider token or your FullChaos login.
 stages: [push]
 

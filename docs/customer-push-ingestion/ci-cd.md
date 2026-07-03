@@ -12,6 +12,13 @@ and raw `curl` + `jq` (no dev-hops dependency). The full runnable files live in
 
 ## Security requirements
 
+!!! note "Required environment for the `dev-hops` CLI examples"
+    `dev-hops push batch` / `push status` require **`FULLCHAOS_API_URL`**,
+    **`FULLCHAOS_INGEST_TOKEN`**, and **`FULLCHAOS_ORG_ID`** (flag or env) — the command
+    exits `2` with a usage error if any is unset. Store the token as a secret and the org id
+    as a non-secret variable. The raw-`curl` examples don't need `FULLCHAOS_ORG_ID` (the
+    token already binds the org server-side).
+
 These apply to **every** example below — they are not optional:
 
 - **Store the ingest token in the platform's secret store**, never in the repo:

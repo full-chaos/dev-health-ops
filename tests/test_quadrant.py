@@ -81,18 +81,19 @@ async def test_quadrant_resolves_team_uuid_label_from_team_catalog(monkeypatch):
     async def _fake_client(_db_url):
         yield object()
 
-    async def _fake_metric(
+    async def _unexpected_rollup_metric(*_args, **_kwargs):
+        raise AssertionError("cycle_throughput team axes must use primary attribution")
+
+    async def _fake_attributed_metric(
         _sink,
         *,
-        value_expr,
+        metric,
         start_day,
         end_day,
         bucket,
-        entity_expr,
-        label_expr,
         **_,
     ):
-        value = 100.0 if "loc_touched" in value_expr else 8.0
+        value = 100.0 if metric == "cycle_time" else 8.0
         return [
             {
                 "bucket": date(2024, 1, 1),
@@ -110,7 +111,12 @@ async def test_quadrant_resolves_team_uuid_label_from_team_catalog(monkeypatch):
         "dev_health_ops.api.services.quadrant.clickhouse_client", _fake_client
     )
     monkeypatch.setattr(
-        "dev_health_ops.api.services.quadrant.fetch_quadrant_metric", _fake_metric
+        "dev_health_ops.api.services.quadrant.fetch_quadrant_metric",
+        _unexpected_rollup_metric,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.api.services.quadrant.fetch_work_item_team_quadrant_metric",
+        _fake_attributed_metric,
     )
     monkeypatch.setattr(
         "dev_health_ops.api.services.quadrant.query_dicts",
@@ -197,3 +203,59 @@ async def test_churn_quadrant_forces_repo_grain(monkeypatch):
     assert any("prs_merged" in expr for expr in captured_value_exprs)
     # Repo labels pass through untouched (no team-catalog resolution).
     assert response.points[0].entity_label == "checkout-service"
+
+
+@pytest.mark.asyncio
+async def test_wip_quadrant_keeps_rollup_throughput_source(monkeypatch):
+    @asynccontextmanager
+    async def _fake_client(_db_url):
+        yield object()
+
+    captured_metrics: list[str] = []
+
+    async def _fake_metric(_sink, *, value_expr, **_):
+        captured_metrics.append(value_expr)
+        return [
+            {
+                "bucket": date(2024, 1, 1),
+                "entity_id": "team-a",
+                "entity_label": "team-a",
+                "value": 8.0,
+            }
+        ]
+
+    async def _unexpected_attributed_metric(*_args, **_kwargs):
+        raise AssertionError("only cycle_throughput should use attributed raw rows")
+
+    async def _fake_query_dicts(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.services.quadrant.clickhouse_client", _fake_client
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.api.services.quadrant.fetch_quadrant_metric", _fake_metric
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.api.services.quadrant.fetch_work_item_team_quadrant_metric",
+        _unexpected_attributed_metric,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.api.services.quadrant.query_dicts",
+        _fake_query_dicts,
+        raising=False,
+    )
+
+    await build_quadrant_response(
+        db_url="clickhouse://test",
+        org_id="test-org",
+        type="wip_throughput",
+        scope_type="team",
+        scope_id="",
+        range_days=30,
+        bucket="week",
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 1, 8),
+    )
+
+    assert any("items_completed" in metric for metric in captured_metrics)

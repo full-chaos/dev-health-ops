@@ -7,6 +7,7 @@ from dev_health_ops.clickhouse_dedup import dedup_from
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 from .client import query_dicts
+from .investment import PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE
 
 
 def _bucket_expr(bucket: str) -> str:
@@ -53,5 +54,55 @@ async def fetch_quadrant_metric(
     params: dict[str, Any] = {"start_day": start_day, "end_day": end_day}
     if scope_params:
         params.update(scope_params)
+    params["org_id"] = org_id
+    return await query_dicts(sink, query, params)
+
+
+async def fetch_work_item_team_quadrant_metric(
+    sink: BaseMetricsSink,
+    *,
+    metric: str,
+    start_day: date,
+    end_day: date,
+    bucket: str,
+    org_id: str = "",
+) -> list[dict[str, Any]]:
+    bucket_expr = _bucket_expr(bucket)
+    if metric == "throughput":
+        value_expr = "uniqExact(work_item_id)"
+        metric_filter = ""
+    elif metric == "cycle_time":
+        value_expr = "avg(cycle_time_hours)"
+        metric_filter = "AND cycle_time_hours IS NOT NULL"
+    else:
+        raise ValueError(f"Unsupported attributed team quadrant metric: {metric}")
+
+    query = f"""
+        WITH team_activity AS (
+            SELECT
+                wct.day,
+                wct.work_item_id,
+                wct.cycle_time_hours,
+                t.team_id AS team_id,
+                t.team_name AS team_name
+            FROM work_item_cycle_times AS wct FINAL
+            INNER JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t
+              ON t.work_item_id = wct.work_item_id
+            WHERE wct.day >= %(start_day)s AND wct.day < %(end_day)s
+              AND wct.org_id = %(org_id)s
+              AND t.team_id IS NOT NULL
+              AND t.team_id != ''
+              {metric_filter}
+        )
+        SELECT
+            {bucket_expr} AS bucket,
+            toString(team_id) AS entity_id,
+            ifNull(nullIf(any(team_name), ''), toString(team_id)) AS entity_label,
+            {value_expr} AS value
+        FROM team_activity
+        GROUP BY bucket, entity_id
+        ORDER BY bucket
+    """
+    params: dict[str, Any] = {"start_day": start_day, "end_day": end_day}
     params["org_id"] = org_id
     return await query_dicts(sink, query, params)

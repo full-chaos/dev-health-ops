@@ -22,7 +22,10 @@ from ..models.schemas import (
 )
 from ..queries.client import clickhouse_client, query_dicts
 from ..queries.people import fetch_person_team_id, resolve_person_identity
-from ..queries.quadrant import fetch_quadrant_metric
+from ..queries.quadrant import (
+    fetch_quadrant_metric,
+    fetch_work_item_team_quadrant_metric,
+)
 from ..utils import build_reverse_alias_map, normalize_alias
 from .filtering import time_window
 from .people_identity import (
@@ -45,6 +48,7 @@ class MetricSpec:
     join_clause: str = ""
     where_clause: str = ""
     transform: Callable[[float], float] = lambda value: value
+    use_primary_team_attribution: bool = False
 
 
 @dataclass(frozen=True)
@@ -85,6 +89,7 @@ TEAM_METRICS: dict[str, MetricSpec] = {
         entity_expr="m.team_id",
         label_expr=TEAM_LABEL,
         where_clause="AND m.team_id != ''",
+        use_primary_team_attribution=True,
     ),
     "cycle_time": MetricSpec(
         metric="cycle_time",
@@ -96,6 +101,7 @@ TEAM_METRICS: dict[str, MetricSpec] = {
         label_expr=TEAM_LABEL,
         where_clause="AND m.cycle_time_p50_hours IS NOT NULL AND m.team_id != ''",
         transform=lambda value: value / 24.0,
+        use_primary_team_attribution=True,
     ),
     "wip": MetricSpec(
         metric="wip",
@@ -532,37 +538,39 @@ async def build_quadrant_response(
         x_spec = _metric_spec(definition.x.metric, group_scope)
         y_spec = _metric_spec(definition.y.metric, group_scope)
 
+        async def _fetch_metric_rows(spec: MetricSpec) -> list[dict[str, Any]]:
+            if (
+                definition.type == "cycle_throughput"
+                and group_scope == "team"
+                and spec.use_primary_team_attribution
+            ):
+                return await fetch_work_item_team_quadrant_metric(
+                    sink,
+                    metric=spec.metric,
+                    start_day=start_day,
+                    end_day=end_day,
+                    bucket=bucket,
+                    org_id=org_id,
+                )
+            return await fetch_quadrant_metric(
+                sink,
+                table=spec.table,
+                value_expr=spec.value_expr,
+                start_day=start_day,
+                end_day=end_day,
+                bucket=bucket,
+                entity_expr=spec.entity_expr,
+                label_expr=spec.label_expr,
+                join_clause=spec.join_clause,
+                where_clause=spec.where_clause,
+                scope_filter=scope_filter,
+                scope_params=scope_params,
+                org_id=org_id,
+            )
+
         x_rows, y_rows = await asyncio.gather(
-            fetch_quadrant_metric(
-                sink,
-                table=x_spec.table,
-                value_expr=x_spec.value_expr,
-                start_day=start_day,
-                end_day=end_day,
-                bucket=bucket,
-                entity_expr=x_spec.entity_expr,
-                label_expr=x_spec.label_expr,
-                join_clause=x_spec.join_clause,
-                where_clause=x_spec.where_clause,
-                scope_filter=scope_filter,
-                scope_params=scope_params,
-                org_id=org_id,
-            ),
-            fetch_quadrant_metric(
-                sink,
-                table=y_spec.table,
-                value_expr=y_spec.value_expr,
-                start_day=start_day,
-                end_day=end_day,
-                bucket=bucket,
-                entity_expr=y_spec.entity_expr,
-                label_expr=y_spec.label_expr,
-                join_clause=y_spec.join_clause,
-                where_clause=y_spec.where_clause,
-                scope_filter=scope_filter,
-                scope_params=scope_params,
-                org_id=org_id,
-            ),
+            _fetch_metric_rows(x_spec),
+            _fetch_metric_rows(y_spec),
         )
 
         team_labels = (

@@ -45,6 +45,7 @@ from urllib.parse import urlparse
 import pytest
 
 import dev_health_ops.api.queries.investment as investment_queries
+from dev_health_ops.metrics.schemas import WorkItemTeamAttributionRecord
 
 CLICKHOUSE_URI = os.environ.get("CLICKHOUSE_URI")
 
@@ -161,6 +162,7 @@ def _cleanup(sink: Any, org_id: str) -> None:
         "work_unit_repo_effort",
         "repos",
         "work_item_cycle_times",
+        "work_item_team_attributions",
     ):
         sink.client.command(
             f"ALTER TABLE {table} DELETE WHERE org_id = {{o:String}} "
@@ -443,11 +445,27 @@ async def test_scope_filter_resolves_team_for_multi_repo_unit(sink):
             ],
             column_names=_wure_cols(),
         )
-        # The unit's issue is owned by a team.
-        sink.client.insert(
-            "work_item_cycle_times",
-            [["ISSUE-SCOPE-1", "Team Scope", COMPUTED_AT, org]],
-            column_names=["work_item_id", "team_name", "computed_at", "org_id"],
+        # CHAOS-2833: the unit's issue is owned by a team via the primary
+        # ClickHouse attribution row (work_item_cycle_times is no longer read
+        # for Sankey/repo-team team resolution -- proving this fixture still
+        # resolves 'Team Scope' pins the migration for the repo-scope-filter
+        # interaction, not just the plain team join).
+        sink.write_work_item_team_attributions(
+            [
+                WorkItemTeamAttributionRecord(
+                    work_item_id="ISSUE-SCOPE-1",
+                    provider="linear",
+                    source="native_team",
+                    is_primary=1,
+                    confidence="high",
+                    evidence="native_team_key=team-scope",
+                    computed_at=COMPUTED_AT,
+                    repo_id=repo_in,
+                    team_id="team-scope",
+                    team_name="Team Scope",
+                    org_id=org,
+                )
+            ]
         )
 
         # Scope to the in-scope repo only (mirrors build_scope_filter_multi).

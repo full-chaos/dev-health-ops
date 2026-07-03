@@ -70,6 +70,11 @@ async def test_work_unit_lookup_queries_use_typed_array_params(monkeypatch):
     )
 
     assert "work_item_id IN {work_item_ids:Array(String)}" in captured[0]["query"]
+    assert "FROM work_item_team_attributions FINAL" in captured[0]["query"]
+    assert "is_primary = 1" in captured[0]["query"]
+    assert "(work_item_id, computed_at) IN" in captured[0]["query"]
+    assert "max(computed_at)" in captured[0]["query"]
+    assert "work_item_cycle_times" not in captured[0]["query"]
     assert "%(work_item_ids)s" not in captured[0]["query"]
     assert captured[0]["params"]["work_item_ids"] == [
         "linear:CHAOS-1",

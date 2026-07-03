@@ -10,7 +10,6 @@ from dev_health_ops.analytics.complexity import (
     ComplexityScanner,
 )
 from dev_health_ops.connectors.models import SecurityAlertData
-from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.models import git as git_models
 from dev_health_ops.models.git import (
@@ -78,6 +77,12 @@ else:
     ConnectorException = Exception
     RateLimitConfig = None
     RateLimitGate = None
+
+
+def _is_rate_limit_exception(exc: Exception) -> bool:
+    from dev_health_ops.exceptions import RateLimitException
+
+    return isinstance(exc, RateLimitException)
 
 
 # --- GitLab Sync Helpers ---
@@ -187,9 +192,9 @@ def _fetch_gitlab_commit_stats_sync(
                                 new_file_mode="unknown",
                             )
                         )
-                    except RateLimitException:
-                        raise
                     except Exception as e:
+                        if _is_rate_limit_exception(e):
+                            raise
                         logging.warning(
                             "Failed to get stats for commit %s: %s",
                             commit_hash,
@@ -2359,14 +2364,12 @@ async def process_gitlab_projects_batch(
                 )
                 if stats_objects:
                     await ingestion_sink.insert_git_commit_stats(stats_objects)
-            except RateLimitException:
-                # CHAOS-2814/CS13: mirror the GitHub batch's
-                # ``except (RateLimitException, RateLimitExceededException): raise``
-                # -- an exhausted rate limit must propagate so the batch/job is
-                # marked failed and retried, not be swallowed by the broad
-                # ``except Exception`` below as a per-project warning.
-                raise
             except Exception as e:
+                if _is_rate_limit_exception(e):
+                    # CHAOS-2814/CS13: an exhausted rate limit must propagate so
+                    # the batch/job is marked failed and retried, not swallowed
+                    # as a per-project warning.
+                    raise
                 logging.warning(
                     "Failed to fetch commits for GitLab project %s: %s",
                     project_info.full_name,
@@ -2651,6 +2654,7 @@ async def process_gitlab_projects_batch(
                 try:
                     await join_task
                 except asyncio.CancelledError:
+                    # Expected: join_task was cancelled after consumer_task ended first.
                     pass
                 await consumer_task  # re-raises the consumer's exception
             await results_queue.put(_queue_sentinel)

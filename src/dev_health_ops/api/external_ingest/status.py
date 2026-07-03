@@ -71,6 +71,7 @@ __all__ = [
     "mark_stream_unavailable",
     "reset_for_retry",
     "complete_batch",
+    "mark_failed",
     "get_batch",
     "list_batches",
     "list_rejections",
@@ -431,16 +432,34 @@ async def _transition_status(
 async def mark_processing(
     session: AsyncSession, *, org_id: str, ingestion_id: uuid.UUID
 ) -> None:
-    """``accepted -> processing``. Idempotent: a no-op UPDATE (``WHERE
-    status = 'accepted'``) if already processing/terminal, so redelivered
-    stream entries (at-least-once) never regress a terminal status back to
-    processing."""
-    await _transition_status(
-        session,
-        org_id=org_id,
-        ingestion_id=ingestion_id,
-        from_status=BatchStatus.ACCEPTED,
-        to_status=BatchStatus.PROCESSING,
+    """``accepted|stream_unavailable -> processing``. Idempotent: a no-op
+    UPDATE if already processing/terminal, so redelivered stream entries
+    (at-least-once) never regress a terminal status back to processing.
+
+    ``stream_unavailable`` is included (CHAOS-2697): a 503'd accept whose
+    XADD actually landed before the error surfaced leaves a live pointer for
+    a ``stream_unavailable`` row (the expected-duplicate-pointer case,
+    docs/architecture/external-ingest-idempotency-ownership.md). Processing
+    it is strictly better than wedging: the payload row is durable, and the
+    client's same-key retry then REPLAYs the terminal outcome instead of
+    re-accepting. A concurrent ``reset_for_retry`` serializes against this
+    CAS on the row lock — whichever loses re-reads and yields."""
+    now = datetime.now(timezone.utc)
+    await session.execute(
+        # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
+        text(
+            f"UPDATE {_BATCHES_TABLE} SET status = :new_status, updated_at = :updated_at "
+            "WHERE org_id = :org_id AND ingestion_id = :ingestion_id "
+            "AND status IN (:accepted, :stream_unavailable)"
+        ),
+        {
+            "new_status": BatchStatus.PROCESSING.value,
+            "updated_at": now,
+            "org_id": org_id,
+            "ingestion_id": str(ingestion_id),
+            "accepted": BatchStatus.ACCEPTED.value,
+            "stream_unavailable": BatchStatus.STREAM_UNAVAILABLE.value,
+        },
     )
 
 
@@ -529,6 +548,7 @@ async def complete_batch(
     items_accepted: int,
     items_rejected: int,
     rejections: list[RejectedRecord],
+    record_counts: dict[str, int] | None = None,
 ) -> BatchRow:
     """``processing -> {completed, partial, failed}`` (derived from counts,
     see ``terminal_status_for``). Idempotent: if called twice for the same
@@ -557,7 +577,11 @@ async def complete_batch(
     that commits afterward never exposes a terminal status without its
     rejection rows already durable, and the ``(ingestion_id, record_index)``
     unique index is a second, DB-enforced backstop against ever
-    double-inserting a rejection row."""
+    double-inserting a rejection row.
+
+    ``record_counts`` (CHAOS-2697): per-kind accepted counts keyed by FULL
+    kind name (``{"pull_request.v1": 12}``) — the worker is this column's
+    only writer (see the model comment in ``models/external_ingest.py``)."""
     current = await get_batch(session, org_id=org_id, ingestion_id=ingestion_id)
     if current is None:
         raise ValueError(f"external ingest batch not found: {ingestion_id}")
@@ -594,6 +618,7 @@ async def complete_batch(
             UPDATE {_BATCHES_TABLE}
             SET status = :status, items_accepted = :items_accepted,
                 items_rejected = :items_rejected, error_summary = :error_summary,
+                record_counts = :record_counts,
                 completed_at = :completed_at, updated_at = :updated_at
             WHERE org_id = :org_id AND ingestion_id = :ingestion_id
                 AND status = :expected_status
@@ -605,6 +630,9 @@ async def complete_batch(
             "items_rejected": items_rejected,
             "error_summary": (
                 json.dumps(error_summary) if error_summary is not None else None
+            ),
+            "record_counts": (
+                json.dumps(record_counts) if record_counts is not None else None
             ),
             "completed_at": now,
             "updated_at": now,
@@ -655,6 +683,58 @@ async def complete_batch(
     updated = await get_batch(session, org_id=org_id, ingestion_id=ingestion_id)
     assert updated is not None
     return updated
+
+
+async def mark_failed(
+    session: AsyncSession,
+    *,
+    org_id: str,
+    ingestion_id: uuid.UUID,
+    reason: str,
+) -> bool:
+    """Force a batch to terminal ``failed`` from ANY non-terminal status —
+    the consumer's give-up path (CHAOS-2697 ``mark_batch_failed``, master-spec
+    CC11: max_deliveries exhausted or a ``PermanentProcessingError`` DLQ'd the
+    entry). Unlike ``complete_batch`` this deliberately does not require
+    ``processing`` or count reconciliation: the whole point is that the worker
+    never got far enough to produce counts (schema-version mismatch and
+    missing-payload failures raise before ``mark_processing``, leaving
+    ``accepted``). The published counter invariant still holds (adversarial
+    round 2): ``failed`` means zero accepted, so ``items_rejected`` is forced
+    to ``items_received`` (a system failure rejects the whole batch as far as
+    GET/list consumers are concerned; no per-record rejection rows exist --
+    ``error_summary.system_failure`` carries the cause) and ``record_counts``
+    is cleared. Idempotent: returns ``False`` (untouched row) when already
+    terminal or missing. Does NOT commit."""
+    now = datetime.now(timezone.utc)
+    result = await session.execute(
+        # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
+        text(
+            f"""
+            UPDATE {_BATCHES_TABLE}
+            SET status = :status, error_summary = :error_summary,
+                items_accepted = 0, items_rejected = items_received,
+                record_counts = NULL,
+                completed_at = :completed_at, updated_at = :updated_at
+            WHERE org_id = :org_id AND ingestion_id = :ingestion_id
+                AND status NOT IN (:completed, :partial, :failed)
+            """
+        ),
+        {
+            "status": BatchStatus.FAILED.value,
+            "error_summary": json.dumps(
+                {"system_failure": True, "reason": reason[:500]}
+            ),
+            "completed_at": now,
+            "updated_at": now,
+            "org_id": org_id,
+            "ingestion_id": str(ingestion_id),
+            "completed": BatchStatus.COMPLETED.value,
+            "partial": BatchStatus.PARTIAL.value,
+            "failed": BatchStatus.FAILED.value,
+        },
+    )
+    return int(getattr(result, "rowcount", 0) or 0) == 1
 
 
 async def get_batch(

@@ -2,9 +2,16 @@
 
 Runnable, copy-paste examples for pushing batches from common automation
 environments. Every example follows the same **validate → push → poll** shape
-covered in [Examples & Quickstart](examples.md), so a malformed batch fails the
-job before it reaches the ingest API, and the job only succeeds once the batch
-reaches a terminal `completed` / `partial` status.
+covered in [Examples & Quickstart](examples.md), so a malformed batch is caught
+at the validate step before it is submitted to `POST /batches`. (The `dev-hops`
+validate runs entirely locally with no network call; the raw-`curl` validate
+calls `POST /validate` — an authenticated shape check that never enqueues.)
+
+The job succeeds only when the batch reaches `completed` with **zero rejected
+records**. `partial` is terminal but means some records were rejected, so the
+examples treat it as a **failure** by default (set `ALLOW_PARTIAL=1` to accept
+it); `failed` always fails. This mirrors `dev-hops push --poll`, which is
+non-zero unless the batch completed without rejections.
 
 Each example is available in two flavours: the `dev-hops push` CLI (less code)
 and raw `curl` + `jq` (no dev-hops dependency). The full runnable files live in

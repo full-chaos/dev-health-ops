@@ -47,7 +47,8 @@ fullchaos-push-curl:
         -H "Authorization: Bearer $FULLCHAOS_INGEST_TOKEN" \
         -H "Content-Type: application/json" --data @batch.json)
       echo "$resp"; id=$(echo "$resp" | jq -r '.ingestionId')
-    # Poll (ingest:status) until terminal; fail on `failed`.
+    # Poll (ingest:status) until terminal; success only on `completed`,
+    # fail on `partial` (records rejected) and `failed`.
     - |
       for _ in $(seq 1 60); do
         body=$(curl -sS "$FULLCHAOS_API_URL/api/v1/external-ingest/batches/$id" \

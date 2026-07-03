@@ -892,6 +892,7 @@ async def drilldown_issues_post(
                 metric_scope="team",
                 filters=payload.filters,
                 org_id=current_user.org_id,
+                team_column="t.team_id",
             )
             items = await fetch_issues(
                 sink,
@@ -930,6 +931,7 @@ async def drilldown_issues(
                 metric_scope="team",
                 filters=filters,
                 org_id=current_user.org_id,
+                team_column="t.team_id",
             )
             items = await fetch_issues(
                 sink,

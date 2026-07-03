@@ -273,7 +273,27 @@ SETTINGS max_execution_time = %(timeout)s
 """
 
 
-_FLOW_MATRIX_ENRICHED_CTE = """WITH enriched AS (
+_FLOW_MATRIX_REPO_ENRICHED_CTE = f"""WITH enriched AS (
+    SELECT
+        wct.work_item_id,
+        t.team_id,
+        wct.day,
+        wct.org_id,
+        wi.repo_id,
+        wi.type AS work_item_type
+    FROM work_item_cycle_times AS wct FINAL
+    INNER JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t
+      ON t.work_item_id = wct.work_item_id
+    INNER JOIN work_items AS wi FINAL ON wct.work_item_id = wi.work_item_id
+    WHERE wct.org_id = %(org_id)s
+      AND wct.day >= %(start_date)s AND wct.day <= %(end_date)s
+      AND wi.org_id = %(org_id)s
+      AND t.team_id IS NOT NULL
+      AND t.team_id != ''
+)"""
+
+
+_FLOW_MATRIX_WORK_TYPE_ENRICHED_CTE = """WITH enriched AS (
     SELECT
         wct.work_item_id,
         wct.team_id,
@@ -318,11 +338,12 @@ SETTINGS max_execution_time = %(timeout)s
 def flow_matrix_repo_edges_template() -> str:
     """Asymmetric cross-repo edges bridged through (team_id, day).
 
-    work_item_cycle_times carries team_id + day per work item but NOT repo_id;
-    work_items carries repo_id. An INNER JOIN on work_item_id produces an
-    enriched per-item row. Self-joining that enriched set on (team_id, day,
-    org_id) gives every pair of repos that the same team touched on the same
-    day — the REPO analog of TEAM's (work_scope_id, day) bridge.
+    work_item_cycle_times carries day per work item but its denormalized
+    team_id is not authoritative for identity. The enriched CTE joins
+    work_item_team_attributions for latest-primary team identity and
+    work_items for repo_id. Self-joining that enriched set on (team_id, day,
+    org_id) gives every pair of repos that the same authoritative team touched
+    on the same day — the REPO analog of TEAM's (work_scope_id, day) bridge.
 
     The edge value is `uniqExact(a.work_item_id)` — the count of SOURCE
     repo's distinct work items in the shared team+day cell, not the cartesian
@@ -337,7 +358,7 @@ def flow_matrix_repo_edges_template() -> str:
     signal that populates on any org with teams spanning multiple repos.
     """
     return f"""
-{_FLOW_MATRIX_ENRICHED_CTE}
+{_FLOW_MATRIX_REPO_ENRICHED_CTE}
 SELECT
     'REPO' AS source_dimension,
     'REPO' AS target_dimension,
@@ -389,7 +410,7 @@ SETTINGS max_execution_time = %(timeout)s
 def flow_matrix_work_type_edges_template() -> str:
     """Asymmetric cross-work_type edges bridged through (repo_id, day).
 
-    Uses the same enrichment CTE as the REPO edges template. Self-joins on
+    Uses cycle-time activity enriched with work item metadata. Self-joins on
     (repo_id, day, org_id) so every pair of work_types completed in the same
     repo on the same day becomes an edge. Excludes self-loops.
 
@@ -401,7 +422,7 @@ def flow_matrix_work_type_edges_template() -> str:
     work_type B" — cross-type cooperation within a repo on a single day.
     """
     return f"""
-{_FLOW_MATRIX_ENRICHED_CTE}
+{_FLOW_MATRIX_WORK_TYPE_ENRICHED_CTE}
 SELECT
     'WORK_TYPE' AS source_dimension,
     'WORK_TYPE' AS target_dimension,

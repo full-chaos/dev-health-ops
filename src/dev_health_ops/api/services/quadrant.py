@@ -331,11 +331,12 @@ async def _resolve_identity_variants(
     sink: BaseMetricsSink,
     *,
     person_id: str,
+    org_id: str,
 ) -> list[str]:
     aliases = load_identity_aliases()
     reverse = build_reverse_alias_map(aliases)
 
-    identity = await resolve_person_identity(sink, person_id=person_id)
+    identity = await resolve_person_identity(sink, person_id=person_id, org_id=org_id)
     if identity:
         normalized = normalize_alias(identity)
         canonical = reverse.get(normalized, identity)
@@ -529,10 +530,14 @@ async def build_quadrant_response(
         scope_params: dict[str, Any] = {}
 
         if group_scope == "person":
-            identities = await _resolve_identity_variants(sink, person_id=scope_id)
+            identities = await _resolve_identity_variants(
+                sink, person_id=scope_id, org_id=org_id
+            )
             if not identities:
                 raise HTTPException(status_code=404, detail="Individual not found")
-            team_filter = await fetch_person_team_id(sink, identities=identities)
+            team_filter = await fetch_person_team_id(
+                sink, identities=identities, org_id=org_id
+            )
             scope_filter, scope_params = _cohort_scope_filter(team_filter)
 
         x_spec = _metric_spec(definition.x.metric, group_scope)

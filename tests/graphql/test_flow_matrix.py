@@ -193,13 +193,22 @@ class TestCompileFlowMatrix:
 
 class TestRepoEdgesTemplate:
     """CHAOS-1292: REPO edges use the same asymmetric-cooccurrence shape as
-    TEAM, bridged via (team_id, day) instead of (work_scope_id, day)."""
+    TEAM, bridged via latest-primary WITA team identity and day instead of
+    (work_scope_id, day)."""
 
     def test_self_joins_on_team_day_bridge(self) -> None:
         sql = flow_matrix_repo_edges_template()
         assert "a.team_id = b.team_id" in sql
         assert "a.day = b.day" in sql
         assert "a.org_id = b.org_id" in sql
+
+    def test_bridge_team_identity_comes_from_primary_attribution(self) -> None:
+        sql = flow_matrix_repo_edges_template()
+        assert "FROM work_item_cycle_times AS wct FINAL" in sql
+        assert "FROM work_item_team_attributions FINAL" in sql
+        assert "is_primary = 1" in sql
+        assert "t.team_id" in sql
+        assert "wct.team_id" not in sql
 
     def test_excludes_self_loops(self) -> None:
         """a.repo_id != b.repo_id drops self-loops at the SQL layer so the
@@ -227,13 +236,11 @@ class TestRepoEdgesTemplate:
         assert "'REPO' AS source_dimension" in sql
         assert "'REPO' AS target_dimension" in sql
 
-    def test_guards_both_sides_of_bridge_against_null_and_empty_team(self) -> None:
-        """Without b-side guards, empty-string team_ids would match each other
-        via the JOIN on a.team_id = b.team_id and emit spurious edges. Both
-        sides of the join must filter NULL + empty."""
+    def test_guards_bridge_against_null_and_empty_team(self) -> None:
+        """Empty latest-primary WITA team_ids must not emit repo edges."""
         sql = flow_matrix_repo_edges_template()
-        assert "a.team_id IS NOT NULL AND a.team_id != ''" in sql
-        assert "b.team_id IS NOT NULL AND b.team_id != ''" in sql
+        assert "t.team_id IS NOT NULL" in sql
+        assert "t.team_id != ''" in sql
 
 
 class TestWorkTypeEdgesTemplate:

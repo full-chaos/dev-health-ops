@@ -8,11 +8,16 @@ from dev_health_ops.clickhouse_dedup import dedup_from
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 from .client import query_dicts
+from .investment import PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE
 from .sql_loader import load_sql
 
 
 def _sql_params(value: Iterable[str]) -> list[str]:
     return [str(item) for item in value if item]
+
+
+def _primary_team_source_sql() -> str:
+    return PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE
 
 
 async def search_people(
@@ -267,8 +272,11 @@ async def fetch_person_issues(
     template = load_sql("people/person_drilldown_issues.sql")
     cursor_filter = ""
     if cursor is not None:
-        cursor_filter = "AND completed_at < %(cursor)s"
-    sql = template.format(cursor_filter=cursor_filter)
+        cursor_filter = "AND wct.completed_at < %(cursor)s"
+    sql = template.format(
+        cursor_filter=cursor_filter,
+        primary_team_attribution_source=_primary_team_source_sql(),
+    )
     params = {
         "start_day": start_day,
         "end_day": end_day,

@@ -199,11 +199,16 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   same-provider donor), Jira (`test_jira_issue_project_wins_over_linked_issue`,
   `test_assignee_membership_wins_over_jira_linked_donor`). (Provider *link-capture* — distinct from
   the resolver — is also tested per provider, e.g. `test_gitlab_captures_external_key_*`.)
-- **Chart team attribution:** Investment Sankey, GraphQL TEAM flow-matrix/chord, team
-  Cycle Time × Throughput quadrant axes, and work-unit investment team evidence read the
-  primary `work_item_team_attributions` snapshot before rolling up team totals. Cycle-time
-  rows can still provide activity windows, durations, and co-occurrence bridges, but not the
-  owning team identity.
+- **Chart and drilldown team attribution:** Investment Sankey, GraphQL TEAM
+  flow-matrix/chord, GraphQL REPO flow-matrix's cross-repo team bridge, team
+  Cycle Time × Throughput quadrant axes, work-unit investment team evidence,
+  issue drilldowns, and flame issue details read the primary
+  `work_item_team_attributions` snapshot before rolling up or displaying team
+  identity. Cycle-time rows can still provide activity windows, durations,
+  work-scope/repo/type bridges, and unassigned/no-WITA detail rows, but not the
+  owning team identity. Person cohort selection reads ClickHouse `identities`
+  membership (`team_ids`) instead of metric rollup team snapshots so a person's
+  current team comparison does not lag behind admin/team-autoimport membership.
 - **Why it matters:** the team/project/member **dimension** is populated by the per-provider
   team/project/member sync. **"Auto Import" is a UX option** (checkboxes to import teams, projects,
   and members from an integration → `run_team_autoimport`, writing ClickHouse directly); manual

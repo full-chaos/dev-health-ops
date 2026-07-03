@@ -478,13 +478,13 @@ def compile_flow_matrix(
     team's distinct work_item count. That yields an asymmetric signal that
     unlocks the chord's directional modes.
 
-    For REPO (CHAOS-1292), edges come from the same table joined to
-    work_items (for repo_id) and bridged through (team_id, day) — i.e., when
-    the same team touches multiple repos on one day those repos become
-    cross-edges. For WORK_TYPE, the bridge is (repo_id, day) — multiple
-    work_types on the same repo+day become cross-edges. In all three cases
-    nodes are sourced from the same underlying data so node ids and edge
-    endpoints stay consistent.
+    For REPO (CHAOS-1292/CHAOS-2848), edges come from cycle-time activity
+    joined to work_items (for repo_id) and latest-primary WITA (for team_id),
+    then bridge through (team_id, day) — i.e., when the same authoritative team
+    touches multiple repos on one day those repos become cross-edges. For
+    WORK_TYPE, the bridge is (repo_id, day) — multiple work_types on the same
+    repo+day become cross-edges. In all three cases nodes are sourced from the
+    same underlying data so node ids and edge endpoints stay consistent.
     """
     dimension = validate_dimension(request.dimension)
     measure = validate_measure(request.measure)

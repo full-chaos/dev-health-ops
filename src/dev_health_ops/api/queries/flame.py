@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .client import query_dicts
+from .investment import PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE
 
 
 async def fetch_pull_request(
@@ -76,20 +77,23 @@ async def fetch_issue(
     work_item_id: str,
     org_id: str = "",
 ) -> dict[str, Any] | None:
-    query = """
+    query = f"""
         SELECT
-            work_item_id,
-            provider,
-            type,
-            status,
-            created_at,
-            started_at,
-            completed_at,
-            team_id,
-            work_scope_id
-        FROM work_item_cycle_times
-        WHERE work_item_id = %(work_item_id)s
-          AND org_id = %(org_id)s
+            wct.work_item_id,
+            wct.provider,
+            wct.type,
+            wct.status,
+            wct.created_at,
+            wct.started_at,
+            wct.completed_at,
+            nullIf(t.team_id, '') AS team_id,
+            wct.work_scope_id
+        FROM work_item_cycle_times AS wct FINAL
+        LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t
+          ON t.work_item_id = wct.work_item_id
+        WHERE wct.work_item_id = %(work_item_id)s
+          AND wct.org_id = %(org_id)s
+        ORDER BY wct.day DESC
         LIMIT 1
     """
     params = {"work_item_id": work_item_id}

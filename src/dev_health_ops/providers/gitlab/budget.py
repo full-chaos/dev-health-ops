@@ -390,6 +390,21 @@ GITLAB_USAGE_ROUTE_FAMILIES: tuple[UsageRouteFamily, ...] = (
     UsageRouteFamily("pipelines", BudgetDimension.REST_CORE),
     UsageRouteFamily("milestones", BudgetDimension.REST_CORE),
     UsageRouteFamily("epics", BudgetDimension.REST_CORE),
+    # CHAOS-2773 CS10: the "security" code-dataset client
+    # (providers/gitlab/code_client.py::GitLabCodeClient) is the FIRST
+    # canonical GitLab client to author its own operation labels rather than
+    # reuse the work client's undifferentiated "GET iterator page"/project
+    # labels above -- every request it issues carries the explicit
+    # "security:" prefix (OperationResolver's prefix short-circuit,
+    # providers/usage.py), so this entry's operation_markers are declared for
+    # completeness/estimator-coverage but the prefix match alone is already
+    # deterministic.
+    UsageRouteFamily(
+        "security",
+        BudgetDimension.REST_CORE,
+        transport="rest",
+        operation_markers=("security:",),
+    ),
 )
 
 GITLAB_USAGE_ROUTE_FAMILY_KEYS = frozenset(

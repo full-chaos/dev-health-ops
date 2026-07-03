@@ -9,6 +9,7 @@ from dev_health_ops.analytics.complexity import (
     DEFAULT_COMPLEXITY_CONFIG_PATH,
     ComplexityScanner,
 )
+from dev_health_ops.connectors.models import SecurityAlertData
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.models import git as git_models
 from dev_health_ops.models.git import (
@@ -1019,16 +1020,60 @@ def _fetch_gitlab_incidents_sync(connector, project_id, repo_id, max_issues, sin
     return incidents
 
 
+def _gitlab_code_client_from_connector(connector):
+    """Build an instrumented ``GitLabCodeClient`` from a legacy connector's
+    resolved credentials (CHAOS-2773 CS10). Mirrors
+    ``processors/github.py::_github_code_client_from_connector`` so both
+    provider pathfinders expose the same factory seam -- also the monkeypatch
+    point for the security-family unit tests."""
+    from dev_health_ops.providers.gitlab.code_client import GitLabCodeClient
+
+    return GitLabCodeClient(
+        private_token=str(connector.private_token or ""),
+        base_url=connector.url,
+    )
+
+
 def _fetch_gitlab_security_alerts_sync(
-    connector, project_id, repo_id, max_alerts, since
+    connector, project_id, repo_id, max_alerts, since, usage_sink=None
 ):
-    """Sync helper to fetch GitLab security alerts (vulnerability findings, dependency scanning)."""
+    """Sync helper to fetch GitLab security alerts (vulnerability findings, dependency scanning).
+
+    CHAOS-2773 CS10: fetches via the canonical, instrumented
+    ``providers.gitlab.code_client.GitLabCodeClient`` (built on the shared
+    ``InstrumentedRESTCore``) instead of the frozen
+    ``GitLabConnector.get_security_alerts`` (python-gitlab + the
+    un-instrumented ``connectors/utils/rest.py``). Both callers dispatch this
+    helper via ``loop.run_in_executor`` (a plain worker thread with no
+    running event loop), so bridging to the async client with
+    ``asyncio.run()`` here is safe.
+
+    ``usage_sink`` (CHAOS-2803/CS2), when given, receives the client's
+    drained per-request usage observations in a ``finally:`` on BOTH the
+    success and failure path, mirroring
+    ``processors/github.py::_enrich_prs_with_reviews_batch``. Any fetch
+    failure is still swallowed here (pre-existing behavior: security alerts
+    are best-effort optional enrichment that must never fail the whole
+    project sync), so there is never an in-flight exception to attach
+    partial observations to -- the unconditional drain below already covers
+    both the success AND failure path.
+    """
+
     security_alert_cls = getattr(git_models, "SecurityAlert")
     alerts = []
+    drained_observations: list[dict[str, Any]] = []
+
+    async def _run() -> list[SecurityAlertData]:
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                return await client.get_security_alerts(
+                    project_id, max_alerts=max_alerts
+                )
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
+
     try:
-        raw_alerts = connector.get_security_alerts(
-            project_id=project_id, max_alerts=max_alerts
-        )
+        raw_alerts = asyncio.run(_run())
         for item in raw_alerts:
             created_at = item.created_at
             if not created_at:
@@ -1054,6 +1099,16 @@ def _fetch_gitlab_security_alerts_sync(
             )
     except Exception as exc:
         logging.debug("Failed to fetch GitLab security alerts: %s", exc)
+    finally:
+        if usage_sink is not None:
+            usage_sink.extend(drained_observations)
+        elif drained_observations:
+            logging.debug(
+                "_fetch_gitlab_security_alerts_sync: drained %d security usage "
+                "observation(s) with no adapter-owned sink (legacy entry "
+                "point) -- logging only, not persisted",
+                len(drained_observations),
+            )
     return alerts
 
 
@@ -1990,6 +2045,7 @@ async def process_gitlab_project(
                 db_repo.id,
                 BATCH_SIZE,
                 since,
+                usage_sink,
             )
             security_alerts = _filter_after(security_alerts, until, "created_at")
             if security_alerts:

@@ -69,7 +69,10 @@ async def test_team_loader_scopes_query_by_org_id(monkeypatch):
     loader = TeamLoader(client=object(), org_id="org-A")
     await loader.batch_load(["team-1"])
 
-    assert "AND org_id = %(org_id)s" in str(captured["sql"])
+    assert "WHERE org_id = %(org_id)s" in str(captured["sql"])
+    assert "FROM work_item_team_attributions FINAL" in str(captured["sql"])
+    assert "is_primary = 1" in str(captured["sql"])
+    assert "work_item_cycle_times" not in str(captured["sql"])
     assert captured["params"]["org_id"] == "org-A"
 
 
@@ -89,5 +92,8 @@ async def test_team_by_name_loader_scopes_query_by_org_id(monkeypatch):
     loader = TeamByNameLoader(client=object(), org_id="org-A")
     await loader.batch_load(["Core Team"])
 
-    assert "AND org_id = %(org_id)s" in str(captured["sql"])
+    assert "WHERE org_id = %(org_id)s" in str(captured["sql"])
+    assert "FROM work_item_team_attributions FINAL" in str(captured["sql"])
+    assert "is_primary = 1" in str(captured["sql"])
+    assert "work_item_cycle_times" not in str(captured["sql"])
     assert captured["params"]["org_id"] == "org-A"

@@ -918,7 +918,7 @@ proof-of-pipe that the plumbing actually reaches a `budget_comparison` row:
   so this stays an abstract reservation for both families. `pr_social`'s
   primary (`graphql_cost`) traffic IS now measured as of
   [CHAOS-2803](https://linear.app/fullchaos/issue/CHAOS-2803) (CS2, see
-  [Usage drain wiring](#usage-drain-wiring--first-re-bucketing-chaos-2773-cs2)
+  [Usage drain wiring](#usage-drain-wiring-first-re-bucketing-chaos-2773-cs2)
   above) for the PR review-batch enrichment; the REST `prs` listing itself
   remains on the frozen connector, unmeasured, pending CHAOS-2773 CS8. See
   [Known gaps](#known-gaps).
@@ -1149,7 +1149,7 @@ paper over:
   (`graphql_cost`) traffic from the PR review-batch enrichment IS now
   instrumented as of [CHAOS-2803](https://linear.app/fullchaos/issue/CHAOS-2803)
   (CS2) — see
-  [Usage drain wiring](#usage-drain-wiring--first-re-bucketing-chaos-2773-cs2)
+  [Usage drain wiring](#usage-drain-wiring-first-re-bucketing-chaos-2773-cs2)
   above; the REST `prs` listing and every other GitHub/GitLab code-dataset
   family remain uninstrumented pending their own CHAOS-2773 changeset (see
   "Frozen `connectors/` path" below). There is also no cross-run

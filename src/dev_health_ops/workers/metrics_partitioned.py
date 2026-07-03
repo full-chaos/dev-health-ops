@@ -121,6 +121,76 @@ def dispatch_daily_metrics_partitioned(
 @celery_app.task(
     bind=True,
     max_retries=3,
+    queue="default",
+    name="dev_health_ops.workers.tasks.dispatch_daily_metrics_for_all_orgs",
+)
+def dispatch_daily_metrics_for_all_orgs(
+    self,
+    db_url: str | None = None,
+    day: str | None = None,
+    backfill_days: int = 1,
+    batch_size: int = 5,
+    sink: str = "auto",
+    provider: str = "auto",
+) -> dict:
+    """Fan out ``dispatch_daily_metrics_partitioned`` per active org (CHAOS-2849).
+
+    ``discover_repos`` (job_daily.py) scopes the ``repos`` query by
+    ``org_id``. The beat-scheduled 01:00 UTC ``run-daily-metrics`` entry
+    previously called ``dispatch_daily_metrics_partitioned`` directly with
+    NO ``org_id``, which defaults to the literal string ``"default"`` --
+    never a real (UUID-scoped) tenant's rows. ``repo_metrics_daily`` was
+    therefore never populated for any real organization. This dispatcher
+    enumerates active organizations and enqueues one per-org partitioned
+    dispatch, the same fan-out shape used by ``dispatch_release_impact``
+    and ``dispatch_membership_backfill``.
+
+    Args:
+        db_url: Database connection string (defaults to env)
+        day: Target day as ISO string (defaults to today, resolved per task)
+        backfill_days: Number of days to backfill
+        batch_size: Number of repos per batch task
+        sink: Sink type (auto|clickhouse)
+        provider: Work item provider (auto|all|jira|github|gitlab|none)
+
+    Returns:
+        dict with the list of dispatched org_ids and a skipped count
+    """
+    from dev_health_ops.workers.recommendations_tasks import _discover_active_org_ids
+
+    try:
+        # strict=True: a Postgres enumeration failure must RAISE (not
+        # collapse to ["default"]) so the once-daily run retries instead of
+        # silently reporting a clean empty success while computing zero
+        # orgs (mirrors dispatch_release_impact / dispatch_membership_backfill).
+        org_ids = _discover_active_org_ids(strict=True)
+    except Exception as exc:
+        logger.exception("dispatch_daily_metrics_for_all_orgs failed to enumerate orgs")
+        raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
+
+    dispatched: list[str] = []
+    for org_id in org_ids:
+        dispatch_daily_metrics_partitioned.apply_async(
+            kwargs={
+                "org_id": org_id,
+                "db_url": db_url,
+                "day": day,
+                "backfill_days": backfill_days,
+                "batch_size": batch_size,
+                "sink": sink,
+                "provider": provider,
+            },
+            queue="default",
+        )
+        dispatched.append(org_id)
+
+    logger.info("Daily metrics dispatch: dispatched=%d organizations", len(dispatched))
+    return {"dispatched": dispatched, "skipped": 0}
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=3,
     queue="metrics",
     name="dev_health_ops.workers.tasks.run_daily_metrics_batch",
 )

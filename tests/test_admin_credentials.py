@@ -454,12 +454,28 @@ async def test_test_connection_sanitizes_exception_in_response_and_persisted_err
 
 
 @pytest.mark.asyncio
-async def test_gitlab_connection_helper_sanitizes_raw_response_body():
+async def test_gitlab_connection_helper_sanitizes_raw_response_body(monkeypatch):
     """Direct unit test on the OTHER error-bearing response field codex
     flagged: provider helpers echo up to 200 chars of the raw external HTTP
     response body into details['error']. Some providers echo request
     details (including the submitted credential) back in error bodies, so
-    this must be redacted too, not just the top-level exception path."""
+    this must be redacted too, not just the top-level exception path.
+
+    CHAOS-2830: _test_gitlab_connection runs its request through
+    _validate_external_url first, which does a live socket.getaddrinfo SSRF
+    check on the hostname. Mock it the same way the other
+    _validate_external_url tests in this file do (see
+    test_validate_external_url_allows_public_host above) so this test is
+    hermetic and doesn't depend on real DNS resolution -- without this it
+    fails offline/no-network with a stray "Cannot resolve hostname" result
+    (no 'status' key) before ever reaching the mocked httpx.AsyncClient
+    below.
+    """
+
+    def _fake_getaddrinfo(*_args, **_kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("172.65.251.78", 0))]
+
+    monkeypatch.setattr(admin_router_module.socket, "getaddrinfo", _fake_getaddrinfo)
 
     class _FakeResponse:
         status_code = 401

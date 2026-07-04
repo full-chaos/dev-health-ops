@@ -48,6 +48,8 @@ dependencies = [
   "alembic>=1.18.4",
   "uvicorn>=0.46.0",
   "radon>=6.0.1",
+  # Multi-language cyclomatic complexity (TS/JS/Go/Java/...); radon stays for Python.
+  "lizard>=1.17.10",
   "openai>=2.36.0",
   "anthropic>=0.101.0",
   "strawberry-graphql[fastapi]>=0.315.4",
@@ -203,6 +205,8 @@ module = [
   "atlassian.*",
   "radon",
   "radon.*",
+  "lizard",
+  "lizard.*",
   "croniter",
   "croniter.*",
   "defusedxml",

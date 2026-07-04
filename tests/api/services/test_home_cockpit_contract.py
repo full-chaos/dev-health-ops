@@ -1,17 +1,24 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from typing import Any
+from unittest.mock import MagicMock
+
+import pytest
 
 from dev_health_ops.api.models.filters import MetricFilter, ScopeFilter
 from dev_health_ops.api.models.schemas import MetricDelta, SparkPoint
+from dev_health_ops.api.services import home as home_service
 from dev_health_ops.api.services.home import (
     HomeDataConfidence,
+    _fetch_risk_signals,
     _risk_signal,
     build_data_confidence,
     build_health_state,
     build_limiting_factor,
     build_metric_signals,
 )
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 
 def _spark(count: int) -> list[SparkPoint]:
@@ -250,3 +257,102 @@ def test_risk_signal_affected_scope_uses_scope_type_plural() -> None:
 
     assert signal is not None
     assert signal.affected_scope == "repos"
+
+
+@pytest.mark.asyncio
+async def test_fetch_risk_signals_uses_latest_scored_day_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queries: list[tuple[str, dict[str, Any]]] = []
+
+    async def fake_query_dicts(
+        sink: BaseMetricsSink,
+        query: str,
+        parameters: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        queries.append((query, parameters))
+        return [
+            {
+                "scope": "repo",
+                "scope_id": "repo-1",
+                "score": 0.4996,
+                "severity": "elevated",
+            }
+        ]
+
+    async def fake_resolve_scope_labels(
+        sink: BaseMetricsSink,
+        *,
+        org_id: str,
+        rows: list[dict[str, Any]],
+    ) -> dict[str, str]:
+        return {"repo-1": "acme/backend"}
+
+    monkeypatch.setattr(home_service, "query_dicts", fake_query_dicts)
+    monkeypatch.setattr(
+        home_service, "_resolve_scope_labels", fake_resolve_scope_labels
+    )
+    sink: BaseMetricsSink = MagicMock(spec=BaseMetricsSink)
+
+    signals = await _fetch_risk_signals(
+        sink,
+        filters=MetricFilter(),
+        start_day=date(2026, 5, 1),
+        end_day=date(2026, 5, 31),
+        org_id="org-test",
+        data_confidence=_risk_confidence(),
+    )
+
+    assert len(signals) == 1
+    assert signals[0].current_value == "50.0 %"
+    query, parameters = queries[0]
+    assert "maxOrNull(day)" in query
+    assert "argMax(tuple(compounding_risk), computed_at) AS latest_row" in query
+    assert "countIf(tupleElement(latest_row, 1) IS NULL) AS missing_scores" in query
+    assert "missing_scores = 0" in query
+    assert "AND day < {end_day:Date}" in query
+    assert "AND day <= {end_day:Date}" not in query
+    assert parameters == {
+        "org_id": "org-test",
+        "start_day": date(2026, 5, 1),
+        "end_day": date(2026, 5, 31),
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_risk_signals_applies_scope_filter_to_latest_day(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queries: list[tuple[str, dict[str, Any]]] = []
+
+    async def fake_query_dicts(
+        sink: BaseMetricsSink,
+        query: str,
+        parameters: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        queries.append((query, parameters))
+        return []
+
+    monkeypatch.setattr(home_service, "query_dicts", fake_query_dicts)
+    sink: BaseMetricsSink = MagicMock(spec=BaseMetricsSink)
+
+    signals = await _fetch_risk_signals(
+        sink,
+        filters=MetricFilter(scope=ScopeFilter(level="team", ids=["team-A"])),
+        start_day=date(2026, 5, 1),
+        end_day=date(2026, 5, 31),
+        org_id="org-test",
+        data_confidence=_risk_confidence(),
+    )
+
+    assert signals == []
+    query, parameters = queries[0]
+    assert query.count("AND scope = {scope:String}") == 2
+    assert query.count("AND scope_id IN {scope_ids:Array(String)}") == 2
+    assert parameters == {
+        "org_id": "org-test",
+        "start_day": date(2026, 5, 1),
+        "end_day": date(2026, 5, 31),
+        "scope": "team",
+        "scope_ids": ["team-A"],
+    }

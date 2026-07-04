@@ -295,10 +295,7 @@ class _FakeRepoMetrics:
 class _FakeSink:
     """Stand-in for the ClickHouse sink. Returns canned ``query_dicts`` results."""
 
-    def __init__(
-        self,
-        complexity_by_repo: dict[str, dict[str, float | None] | None],
-    ):
+    def __init__(self, complexity_by_repo: dict[str, dict[str, float | None] | None]):
         self._data = complexity_by_repo
         self.calls: list[dict] = []
 
@@ -424,6 +421,33 @@ def test_orchestrator_emits_unknown_severity_when_inputs_missing() -> None:
         computed_at=NOW,
     )
     assert len(out) == 1
+    assert out[0].compounding_risk is None
+    assert out[0].severity == "unknown"
+
+
+def test_orchestrator_keeps_missing_review_latency_when_window_has_no_value() -> None:
+    repo = uuid.uuid4()
+    sink = _FakeSink({str(repo): {"first_half": 100.0, "second_half": 110.0}})
+    repo_rows = [
+        _FakeRepoMetrics(
+            repo_id=repo,
+            rework_churn_ratio_30d=0.10,
+            single_owner_file_ratio_30d=0.50,
+            code_ownership_gini=0.40,
+            pr_first_review_p90_hours=None,
+        ),
+    ]
+
+    out = build_compounding_risk_rows_for_day(
+        sink=sink,
+        day=DAY,
+        org_id="acme",
+        repo_metrics_rows=repo_rows,
+        computed_at=NOW,
+    )
+
+    assert len(out) == 1
+    assert out[0].review_latency_p90h is None
     assert out[0].compounding_risk is None
     assert out[0].severity == "unknown"
 

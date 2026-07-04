@@ -992,6 +992,35 @@ CONTENT_FETCH_MAX_FILES = 2_000
 # onboarding; full coverage remains available via the dedicated blame sync
 # target (CHAOS-2376).
 BLAME_BACKFILL_MAX_FILES = 500
+BLAME_FAILURE_WARNING_LIMIT = 5
+
+
+class _BoundedBlameFailureLogger:
+    def __init__(
+        self, repo_full_name: str, warning_limit: int = BLAME_FAILURE_WARNING_LIMIT
+    ) -> None:
+        self._repo_full_name = repo_full_name
+        self._warning_limit = warning_limit
+        self._failed_count = 0
+
+    def record_failure(self, path: str, error: Exception) -> None:
+        self._failed_count += 1
+        if self._failed_count <= self._warning_limit:
+            logging.warning(
+                "Failed blame fetch for %s:%s: %s",
+                self._repo_full_name,
+                path,
+                error,
+            )
+
+    def log_summary(self, total_fetches: int) -> None:
+        if self._failed_count > self._warning_limit:
+            logging.warning(
+                "%d of %d blame fetches failed for %s",
+                self._failed_count,
+                total_fetches,
+                self._repo_full_name,
+            )
 
 
 class _GitHubFileContentClient(Protocol):
@@ -1229,6 +1258,7 @@ async def _backfill_github_missing_data(
                 async with AsyncBatchCollector(
                     ingestion_sink.insert_blame_data
                 ) as blame_collector:
+                    failure_logger = _BoundedBlameFailureLogger(repo_full_name)
                     for path in blame_paths:
                         try:
                             blame = await code_client.get_file_blame(
@@ -1241,9 +1271,7 @@ async def _backfill_github_missing_data(
                         except (RateLimitException, RateLimitExceededException):
                             raise
                         except Exception as e:
-                            logging.debug(
-                                f"Failed blame fetch for {repo_full_name}:{path}: {e}"
-                            )
+                            failure_logger.record_failure(path, e)
                             continue
 
                         for rng in blame.ranges:
@@ -1264,6 +1292,7 @@ async def _backfill_github_missing_data(
                                     )
                                 )
                                 await blame_collector.maybe_flush()
+                    failure_logger.log_summary(total_fetches=len(blame_paths))
                 logging.info(
                     "Backfilled blame for %d files in %s",
                     processed_files,

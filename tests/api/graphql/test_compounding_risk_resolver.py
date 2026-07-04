@@ -13,14 +13,20 @@ verify:
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+import os
+import uuid
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import MagicMock
+from urllib.parse import urlparse
 
 import pytest
 
 from dev_health_ops.api.graphql.context import GraphQLContext
 from dev_health_ops.api.graphql.resolvers.compounding_risk import (
+    _fetch_latest_rows,
+    _latest_day_for_org,
     resolve_compounding_risk,
 )
 from dev_health_ops.api.graphql.types.compounding_risk import (
@@ -34,6 +40,103 @@ ORG_ID = "org-test"
 NOW = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)
 DAY = date(2026, 5, 20)
 PARTIAL_DAY = date(2026, 5, 21)
+CLICKHOUSE_URI = os.environ.get("CLICKHOUSE_URI")
+LIVE_CLICKHOUSE = pytest.mark.skipif(
+    not CLICKHOUSE_URI,
+    reason="Requires CLICKHOUSE_URI pointed at an ISOLATED scratch DB",
+)
+RISK_COLUMNS = [
+    "org_id",
+    "day",
+    "scope",
+    "scope_id",
+    "compounding_risk",
+    "severity",
+    "churn_norm",
+    "complexity_norm",
+    "ownership_norm",
+    "review_norm",
+    "rework_churn",
+    "complexity_delta",
+    "bus_factor",
+    "ownership_gini",
+    "single_owner_ratio",
+    "review_latency_p90h",
+    "w_churn",
+    "w_complexity",
+    "w_ownership",
+    "w_review",
+    "threshold_elevated",
+    "threshold_high",
+    "computed_at",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class RiskSeed:
+    org_id: str
+    day: date
+    score: float | None
+    severity: str
+    computed_at: datetime
+
+
+def _scratch_db() -> str:
+    assert CLICKHOUSE_URI is not None
+    return (urlparse(CLICKHOUSE_URI).path or "").lstrip("/")
+
+
+def _cleanup_risk_rows(sink: Any, org_id: str) -> None:
+    sink.client.command(
+        "ALTER TABLE compounding_risk_daily DELETE WHERE org_id = {org_id:String} "
+        "SETTINGS mutations_sync=2",
+        parameters={"org_id": org_id},
+    )
+
+
+def _risk_row(seed: RiskSeed) -> list[Any]:
+    return [
+        seed.org_id,
+        seed.day,
+        "repo",
+        "repo-live",
+        seed.score,
+        seed.severity,
+        seed.score,
+        seed.score,
+        seed.score,
+        seed.score,
+        seed.score,
+        seed.score,
+        seed.score,
+        seed.score,
+        seed.score,
+        seed.score,
+        0.30,
+        0.30,
+        0.20,
+        0.20,
+        0.40,
+        0.65,
+        seed.computed_at,
+    ]
+
+
+@pytest.fixture(scope="module")
+def clickhouse_sink():
+    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+
+    assert CLICKHOUSE_URI is not None
+    db = _scratch_db()
+    if db in ("", "default"):
+        pytest.skip(
+            "refusing to run against the 'default' database; point CLICKHOUSE_URI "
+            "at an isolated scratch DB (e.g. .../ci_live_2855)"
+        )
+    sink = ClickHouseMetricsSink(CLICKHOUSE_URI)
+    sink.ensure_schema(force=True)
+    yield sink
+    sink.close()
 
 
 def _ctx() -> GraphQLContext:
@@ -134,12 +237,134 @@ async def test_latest_day_skips_partial_null_day_and_returns_complete_score() ->
         "parameters"
     ]
     assert "maxOrNull(day) AS day" in latest_query
-    assert "argMax(compounding_risk, computed_at) AS score" in latest_query
-    assert "countIf(score IS NULL) AS missing_scores" in latest_query
+    assert "argMax(tuple(compounding_risk), computed_at) AS latest_row" in latest_query
+    assert (
+        "countIf(tupleElement(latest_row, 1) IS NULL) AS missing_scores" in latest_query
+    )
     assert "missing_scores = 0" in latest_query
-    assert latest_params == {"org_id": ORG_ID, "scope": "repo"}
+    assert latest_params["org_id"] == ORG_ID
+    assert latest_params["scope"] == "repo"
+    assert "start_day" in latest_params
+    assert "end_day" in latest_params
     assert result.rows[0].day == DAY
     assert result.rows[0].score == pytest.approx(0.4996)
+
+
+@pytest.mark.clickhouse
+@LIVE_CLICKHOUSE
+@pytest.mark.asyncio
+async def test_live_latest_day_preserves_newer_null_score(clickhouse_sink: Any) -> None:
+    org_id = f"test-chaos-2855-{uuid.uuid4()}"
+    end_day = datetime.now(timezone.utc).date()
+    complete_day = end_day - timedelta(days=1)
+    start_day = complete_day - timedelta(days=1)
+    earlier_run = datetime(2026, 5, 21, 1, 0, tzinfo=timezone.utc)
+    later_run = datetime(2026, 5, 21, 2, 0, tzinfo=timezone.utc)
+    try:
+        clickhouse_sink.client.insert(
+            "compounding_risk_daily",
+            [
+                _risk_row(
+                    RiskSeed(
+                        org_id=org_id,
+                        day=complete_day,
+                        score=0.42,
+                        severity="elevated",
+                        computed_at=earlier_run,
+                    )
+                ),
+                _risk_row(
+                    RiskSeed(
+                        org_id=org_id,
+                        day=end_day,
+                        score=0.88,
+                        severity="high",
+                        computed_at=earlier_run,
+                    )
+                ),
+                _risk_row(
+                    RiskSeed(
+                        org_id=org_id,
+                        day=end_day,
+                        score=None,
+                        severity="unknown",
+                        computed_at=later_run,
+                    )
+                ),
+            ],
+            column_names=RISK_COLUMNS,
+        )
+
+        latest_day = await _latest_day_for_org(
+            clickhouse_sink,
+            org_id,
+            scope="repo",
+            scope_ids=None,
+            start_day=start_day,
+            end_day=end_day,
+        )
+        latest_rows = await _fetch_latest_rows(
+            clickhouse_sink,
+            org_id=org_id,
+            day=end_day,
+            scope="repo",
+            scope_ids=None,
+        )
+        ctx = GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI or "")
+        ctx.client = clickhouse_sink
+
+        result = await resolve_compounding_risk(
+            ctx, org_id, CompoundingRiskFilterInput(trend_days=3)
+        )
+
+        assert latest_day == complete_day
+        assert latest_rows[0]["score"] is None
+        assert latest_rows[0]["severity"] == "unknown"
+        assert result.rows[0].day == complete_day
+        assert result.rows[0].score == pytest.approx(0.42)
+    finally:
+        _cleanup_risk_rows(clickhouse_sink, org_id)
+
+
+@pytest.mark.clickhouse
+@LIVE_CLICKHOUSE
+@pytest.mark.asyncio
+async def test_live_latest_day_ignores_scored_days_outside_window(
+    clickhouse_sink: Any,
+) -> None:
+    org_id = f"test-chaos-2855-window-{uuid.uuid4()}"
+    end_day = datetime.now(timezone.utc).date()
+    start_day = end_day - timedelta(days=2)
+    outside_day = start_day - timedelta(days=1)
+    try:
+        clickhouse_sink.client.insert(
+            "compounding_risk_daily",
+            [
+                _risk_row(
+                    RiskSeed(
+                        org_id=org_id,
+                        day=outside_day,
+                        score=0.77,
+                        severity="high",
+                        computed_at=datetime(2026, 5, 20, tzinfo=timezone.utc),
+                    )
+                )
+            ],
+            column_names=RISK_COLUMNS,
+        )
+
+        latest_day = await _latest_day_for_org(
+            clickhouse_sink,
+            org_id,
+            scope="repo",
+            scope_ids=None,
+            start_day=start_day,
+            end_day=end_day,
+        )
+
+        assert latest_day is None
+    finally:
+        _cleanup_risk_rows(clickhouse_sink, org_id)
 
 
 @pytest.mark.asyncio
@@ -351,7 +576,11 @@ async def test_latest_day_selection_is_repo_scope_and_filter_isolated() -> None:
     ]
     assert "AND scope = {scope:String}" in latest_query
     _assert_scope_id_slug_or_uuid_predicate(latest_query)
-    assert latest_params == {"org_id": ORG_ID, "scope": "repo", "repo_ids": [slug]}
+    assert latest_params["org_id"] == ORG_ID
+    assert latest_params["scope"] == "repo"
+    assert latest_params["repo_ids"] == [slug]
+    assert "start_day" in latest_params
+    assert "end_day" in latest_params
 
 
 @pytest.mark.asyncio
@@ -382,11 +611,11 @@ async def test_latest_day_selection_is_team_scope_and_filter_isolated() -> None:
     ]
     assert "AND scope = {scope:String}" in latest_query
     assert "AND scope_id IN {scope_ids:Array(String)}" in latest_query
-    assert latest_params == {
-        "org_id": ORG_ID,
-        "scope": "team",
-        "scope_ids": ["team-A"],
-    }
+    assert latest_params["org_id"] == ORG_ID
+    assert latest_params["scope"] == "team"
+    assert latest_params["scope_ids"] == ["team-A"]
+    assert "start_day" in latest_params
+    assert "end_day" in latest_params
 
 
 @pytest.mark.asyncio
@@ -531,7 +760,6 @@ async def test_team_breakout_filters_by_team_ids() -> None:
     ]
     base = [0.30, 0.30, 0.20, 0.20, 0.40, 0.65]
     rows = [
-        ["repo-1", 0.8, "high", *base, NOW],
         ["repo-2", 0.4, "elevated", *base, NOW],
     ]
     teams_rows = [
@@ -541,6 +769,8 @@ async def test_team_breakout_filters_by_team_ids() -> None:
     _setup_client(
         ctx.client,
         [
+            _qresult(["day"], [[None]]),
+            _qresult(["id", "name", "repo_patterns"], teams_rows),
             _qresult(["day"], [[DAY]]),
             _qresult([], []),  # team-scope query empty → fallback
             _qresult(columns, rows),  # repo rows for fallback aggregation
@@ -557,6 +787,15 @@ async def test_team_breakout_filters_by_team_ids() -> None:
         ),
     )
     assert [r.scope_id for r in result.rows] == ["team-B"]
+
+    fallback_latest_params: dict[str, Any] = ctx.client.query.call_args_list[2].kwargs[
+        "parameters"
+    ]
+    fallback_repo_params: dict[str, Any] = ctx.client.query.call_args_list[4].kwargs[
+        "parameters"
+    ]
+    assert fallback_latest_params["repo_ids"] == ["repo-2"]
+    assert fallback_repo_params["repo_ids"] == ["repo-2"]
 
 
 @pytest.mark.asyncio

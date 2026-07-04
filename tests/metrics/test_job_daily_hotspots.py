@@ -623,6 +623,28 @@ class _FakeGitHubCodeClient:
         return []
 
 
+class _FakeGitLabCodeClientForBlame:
+    """Minimal instrumented GitLabCodeClient stand-in for the blame backfill
+    branch (CHAOS-2815/CS14): the real backfill now fetches blame via
+    ``GitLabCodeClient.get_file_blame``, never ``connector.rest_client.
+    get_file_blame`` (frozen, un-instrumented)."""
+
+    def __init__(self, blame_fn):
+        self._blame_fn = blame_fn
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def get_file_blame(self, project_id, file_path, *, ref):
+        return self._blame_fn(project_id, file_path, ref)
+
+    def drain_usage_observations(self):
+        return []
+
+
 @pytest.mark.asyncio
 async def test_github_blame_backfill_is_capped(monkeypatch: pytest.MonkeyPatch) -> None:
     """Onboarding blame must stop at BLAME_BACKFILL_MAX_FILES files.
@@ -718,6 +740,7 @@ async def test_gitlab_blame_backfill_is_capped(
 ) -> None:
     """Onboarding blame must stop at BLAME_BACKFILL_MAX_FILES files (GitLab)."""
     import dev_health_ops.processors.gitlab as gitlab_mod
+    from dev_health_ops.connectors.models import BlameRange, FileBlame
 
     n_files = gitlab_mod.BLAME_BACKFILL_MAX_FILES + 9
 
@@ -750,11 +773,18 @@ async def test_gitlab_blame_backfill_is_capped(
 
     blame_calls: list[str] = []
 
-    def fake_rest_blame(project_id: int, path: str, ref: str) -> list[dict[str, Any]]:
+    def fake_blame(project_id: int, path: str, ref: str) -> FileBlame:
         blame_calls.append(path)
-        return [{"commit": {"author_email": "a@ex.com"}, "lines": ["x = 1"]}]
+        return FileBlame(
+            file_path=path,
+            ranges=[BlameRange(1, 1, "sha", "Ada", "a@ex.com", 0)],
+        )
 
-    connector.rest_client.get_file_blame = Mock(side_effect=fake_rest_blame)
+    monkeypatch.setattr(
+        gitlab_mod,
+        "_gitlab_code_client_from_connector",
+        lambda connector: _FakeGitLabCodeClientForBlame(fake_blame),
+    )
 
     db_repo = Mock()
     db_repo.id = uuid.uuid4()
@@ -1045,6 +1075,7 @@ async def test_gitlab_blame_backfill_resumes_on_second_sync(
 ) -> None:
     """A second GitLab sync blames the files the first sync left uncovered."""
     import dev_health_ops.processors.gitlab as gitlab_mod
+    from dev_health_ops.connectors.models import BlameRange, FileBlame
 
     n_files = gitlab_mod.BLAME_BACKFILL_MAX_FILES + 11
     all_paths = {f"src/f{i}.py" for i in range(n_files)}
@@ -1060,10 +1091,17 @@ async def test_gitlab_blame_backfill_resumes_on_second_sync(
     connector = Mock()
     connector.gitlab.projects.get.return_value = project
 
-    def fake_rest_blame(project_id: int, path: str, ref: str) -> list[dict[str, Any]]:
-        return [{"commit": {"author_email": "a@ex.com"}, "lines": ["x = 1"]}]
+    def fake_blame(project_id: int, path: str, ref: str) -> FileBlame:
+        return FileBlame(
+            file_path=path,
+            ranges=[BlameRange(1, 1, "sha", "Ada", "a@ex.com", 0)],
+        )
 
-    connector.rest_client.get_file_blame = Mock(side_effect=fake_rest_blame)
+    monkeypatch.setattr(
+        gitlab_mod,
+        "_gitlab_code_client_from_connector",
+        lambda connector: _FakeGitLabCodeClientForBlame(fake_blame),
+    )
 
     db_repo = Mock()
     db_repo.id = uuid.uuid4()

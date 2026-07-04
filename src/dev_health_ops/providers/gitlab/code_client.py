@@ -63,8 +63,12 @@ from typing import Any
 
 import httpx
 
-from dev_health_ops.connectors.models import SecurityAlertData
-from dev_health_ops.exceptions import APIException, NotFoundException
+from dev_health_ops.connectors.models import BlameRange, FileBlame, SecurityAlertData
+from dev_health_ops.exceptions import (
+    APIException,
+    NotFoundException,
+    RateLimitException,
+)
 from dev_health_ops.providers._http import (
     GITLAB_DIAGNOSTIC_HEADER_NAMES,
     InstrumentedRESTCore,
@@ -258,6 +262,47 @@ def _map_dependency_alert(
     )
 
 
+def _parse_gitlab_blame_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        logger.debug("Failed to parse GitLab blame authored date: %s", value)
+        return None
+
+
+def _map_file_blame(file_path: str, items: list[Any]) -> FileBlame:
+    now = datetime.now(timezone.utc)
+    line_no = 1
+    ranges: list[BlameRange] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        raw_lines = item.get("lines") or []
+        lines = [line for line in raw_lines if isinstance(line, str)]
+        if not lines:
+            continue
+        commit = item.get("commit") or {}
+        if not isinstance(commit, dict):
+            commit = {}
+        authored_at = _parse_gitlab_blame_datetime(commit.get("authored_date"))
+        age_seconds = int((now - authored_at).total_seconds()) if authored_at else 0
+        ending_line = line_no + len(lines) - 1
+        ranges.append(
+            BlameRange(
+                starting_line=line_no,
+                ending_line=ending_line,
+                commit_sha=str(commit.get("id") or ""),
+                author=str(commit.get("author_name") or "Unknown"),
+                author_email=str(commit.get("author_email") or ""),
+                age_seconds=age_seconds,
+            )
+        )
+        line_no = ending_line + 1
+    return FileBlame(file_path=file_path, ranges=ranges)
+
+
 def _parse_gitlab_datetime(value: object) -> datetime | None:
     if not isinstance(value, str) or not value:
         return None
@@ -396,6 +441,7 @@ class GitLabCodeClient:
             classify_error=_classify_error,
             transport=transport,
         )
+        self._graphql_url = f"{base_url.rstrip('/')}/api/graphql"
 
     async def _resolve_project_id(self, project_id_or_path: int | str) -> int:
         """Resolve a project id/path to its numeric id, mirroring the
@@ -612,6 +658,197 @@ class GitLabCodeClient:
         if not isinstance(payload, dict):
             raise APIException(f"Unexpected GitLab commit response: {type(payload)!r}")
         return _map_commit_stats(commit_sha, payload)
+
+    async def get_file_contents(
+        self,
+        project_full_path: str,
+        paths: list[str],
+        *,
+        ref: str = "HEAD",
+        batch_size: int = 50,
+        max_bytes: int | None = 1_000_000,
+    ) -> dict[str, str]:
+        """Fetch text contents for many files via batched GraphQL blob queries.
+
+        Mirrors ``GitLabConnector.get_file_contents`` (``connectors/gitlab.py``,
+        FROZEN) field-for-field: GitLab's GraphQL API resolves multiple blobs
+        natively through ``repository.blobs(ref:, paths:)``; ``rawTextBlob``
+        is null for binary blobs, so those (and missing paths) are omitted
+        from the result. When ``max_bytes`` is set, a cheap ``rawSize``-only
+        pass filters oversized blobs first so their text never crosses the
+        wire.
+
+        Per-chunk resilience mirrors ``get_commit_stats``'s per-commit caller
+        contract (CHAOS-2814/CS13 precedent): a ``RateLimitException`` from
+        any chunk PROPAGATES (an exhausted rate limit must fail the sync,
+        not silently truncate file coverage); any other chunk failure
+        degrades -- a failed size-pass chunk falls back to an unfiltered
+        text fetch, a failed text-pass chunk is logged and skipped,
+        preserving earlier chunks' results.
+
+        :param project_full_path: Project full path (``group/project``).
+        :param paths: Repository-relative file paths.
+        :param ref: Git reference the paths are resolved against.
+        :param batch_size: Number of blobs to resolve per GraphQL request.
+        :param max_bytes: Skip blobs larger than this (None disables).
+        :return: Mapping of path -> file text for blobs with usable text.
+        """
+        if not paths:
+            return {}
+
+        eligible = paths
+        if max_bytes is not None:
+            eligible = []
+            for start in range(0, len(paths), batch_size):
+                chunk = paths[start : start + batch_size]
+                try:
+                    nodes = await self._graphql_blobs(
+                        project_full_path, ref, chunk, "path rawSize"
+                    )
+                except RateLimitException:
+                    raise
+                except Exception as exc:
+                    logger.warning(
+                        "Size pass failed for %d paths in %s (%s); "
+                        "fetching text without size filter",
+                        len(chunk),
+                        project_full_path,
+                        exc,
+                    )
+                    eligible.extend(chunk)
+                    continue
+                for node in nodes:
+                    path = node.get("path")
+                    raw_size = node.get("rawSize")
+                    if not path:
+                        continue
+                    if raw_size is not None and int(raw_size) > max_bytes:
+                        continue
+                    eligible.append(path)
+
+        contents: dict[str, str] = {}
+        for start in range(0, len(eligible), batch_size):
+            chunk = eligible[start : start + batch_size]
+            try:
+                nodes = await self._graphql_blobs(
+                    project_full_path, ref, chunk, "path rawTextBlob"
+                )
+            except RateLimitException:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "Content fetch failed for %d paths in %s: %s",
+                    len(chunk),
+                    project_full_path,
+                    exc,
+                )
+                continue
+            for node in nodes:
+                text = node.get("rawTextBlob")
+                path = node.get("path")
+                if path and text is not None:
+                    contents[path] = text
+
+        return contents
+
+    async def _graphql_blobs(
+        self,
+        project_full_path: str,
+        ref: str,
+        paths: list[str],
+        fields: str,
+    ) -> list[dict[str, Any]]:
+        """Resolve one chunk of blobs via GitLab GraphQL.
+
+        Mirrors ``GitLabConnector._graphql_blobs`` (``connectors/gitlab.py``,
+        FROZEN): one POST per chunk to the instance's GraphQL endpoint
+        (``{base_url}/api/graphql`` -- distinct from the REST v4 base every
+        other method on this client targets). Routed through the SAME
+        ``InstrumentedRESTCore`` -- retry, rate-limit classification, and
+        usage recording included -- because httpx treats an absolute URL
+        passed to a base-url-configured client as an override, not a join,
+        so ``self._graphql_url`` reaches the GraphQL endpoint unchanged
+        regardless of the core's REST ``base_url``. Labeled with the
+        ``project:`` prefix like ``get_commits``/``get_commit_stats`` above:
+        ``providers/gitlab/budget.py`` buckets FILES/BLAME datasets under
+        the existing ``project`` route family (CHAOS-2815/CS14), not a new
+        one.
+        """
+        query = (
+            "query($fullPath: ID!, $ref: String!, $paths: [String!]!) {\n"
+            "  project(fullPath: $fullPath) {\n"
+            "    repository {\n"
+            "      blobs(ref: $ref, paths: $paths) {\n"
+            f"        nodes {{ {fields} }}\n"
+            "      }\n"
+            "    }\n"
+            "  }\n"
+            "}"
+        )
+        response = await self._core.request(
+            "POST",
+            self._graphql_url,
+            operation=f"{_PROJECT_FAMILY_PREFIX}:POST /api/graphql blobs",
+            json={
+                "query": query,
+                "variables": {
+                    "fullPath": project_full_path,
+                    "ref": ref,
+                    "paths": paths,
+                },
+            },
+        )
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise APIException(f"Unexpected GitLab GraphQL response: {type(payload)!r}")
+        errors = payload.get("errors")
+        if errors:
+            messages = "; ".join(
+                str(item.get("message", item)) if isinstance(item, dict) else str(item)
+                for item in errors
+            )
+            raise APIException(f"GitLab GraphQL errors: {messages}")
+        project_data = (payload.get("data") or {}).get("project") or {}
+        repository = project_data.get("repository") or {}
+        nodes = (repository.get("blobs") or {}).get("nodes")
+        return [node for node in nodes or [] if isinstance(node, dict)]
+
+    async def get_file_blame(
+        self,
+        project_id: int | str,
+        file_path: str,
+        *,
+        ref: str = "HEAD",
+    ) -> FileBlame:
+        """Fetch normalized GitLab blame ranges for one file.
+
+        Mirrors ``GitLabRESTClient.get_file_blame``
+        (``connectors/utils/rest.py``, FROZEN): ``GET
+        /projects/{id}/repository/files/{path}/blame`` returns GitLab's raw
+        ``{"lines": [...], "commit": {...}}`` ranges, and this provider
+        normalizes them to the shared ``FileBlame`` DTO before the processor
+        sees them. GitLab's blame endpoint
+        returns the full per-file breakdown in one response (no pagination
+        concept), so this is a single request. Errors -- INCLUDING a 404
+        (no blame for this ref/path) -- propagate; callers handle
+        best-effort per-file (pre-existing behavior, mirroring
+        ``get_pipeline_test_report``).
+        """
+        encoded_project_id = _encode_project_id(project_id)
+        encoded_path = urllib.parse.quote(file_path, safe="")
+        response = await self._core.request(
+            "GET",
+            f"/projects/{encoded_project_id}/repository/files/{encoded_path}/blame",
+            operation=(
+                f"{_PROJECT_FAMILY_PREFIX}:GET "
+                "/projects/{id}/repository/files/{path}/blame"
+            ),
+            params={"ref": ref},
+        )
+        payload = response.json()
+        if not isinstance(payload, list):
+            raise APIException(f"Unexpected GitLab blame response: {type(payload)!r}")
+        return _map_file_blame(file_path, payload)
 
     async def get_deployment_merge_requests(
         self, project_id: int | str, sha: str

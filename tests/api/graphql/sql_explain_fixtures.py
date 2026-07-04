@@ -57,7 +57,12 @@ async def _fixture_compounding_risk(sink: CapturingSink) -> None:
         _load_team_assignments,
     )
 
-    await _latest_day_for_org(sink, SAMPLE_ORG_ID)
+    await _latest_day_for_org(
+        sink, SAMPLE_ORG_ID, scope="repo", scope_ids=[SAMPLE_REPO_ID]
+    )
+    await _latest_day_for_org(
+        sink, SAMPLE_ORG_ID, scope="team", scope_ids=[SAMPLE_TEAM_ID]
+    )
 
     # Both scope=repo and scope=team paths plus with/without scope_ids filter
     # — bug #2 (max(computed_at) AS computed_at) lives in this query.
@@ -98,6 +103,31 @@ async def _fixture_compounding_risk(sink: CapturingSink) -> None:
     # `repo`) lives here.
     await _load_repo_labels(sink, SAMPLE_ORG_ID, [SAMPLE_REPO_ID])
     await _load_team_assignments(sink, SAMPLE_ORG_ID)
+
+
+async def _fixture_testops_risk(sink: CapturingSink) -> None:
+    from dev_health_ops.api.graphql.resolvers.testops_risk import (
+        _fetch_daily_rows,
+        _fetch_quadrant_rows,
+    )
+    from dev_health_ops.api.graphql.types.testops_risk import TestOpsRiskInput
+
+    await _fetch_daily_rows(
+        sink,
+        SAMPLE_ORG_ID,
+        TestOpsRiskInput(
+            start_date=SAMPLE_DAY - timedelta(days=14),
+            end_date=SAMPLE_DAY,
+        ),
+    )
+    await _fetch_quadrant_rows(
+        sink,
+        SAMPLE_ORG_ID,
+        TestOpsRiskInput(
+            start_date=SAMPLE_DAY - timedelta(days=14),
+            end_date=SAMPLE_DAY,
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -552,6 +582,7 @@ async def _fixture_analytics(sink: CapturingSink) -> None:
 
 ALL_RESOLVER_SQL_FIXTURES: list[tuple[str, ResolverSQLFixture]] = [
     ("compounding_risk", _fixture_compounding_risk),
+    ("testops_risk", _fixture_testops_risk),
     ("forecast", _fixture_forecast),
     ("home", _fixture_home),
     ("capacity", _fixture_capacity),

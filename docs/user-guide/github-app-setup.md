@@ -75,6 +75,11 @@ The same secret must be set as `GITHUB_WEBHOOK_SECRET` on the ops backend; the
 | Actions | Read‑only | Workflow runs (CI/CD, DORA) |
 | Deployments | Read‑only | Delivery / change‑failure signals |
 | Commit statuses | Read‑only | CI status (optional) |
+| Dependabot alerts | Read‑only | Security view / compounding‑risk security signals |
+| Code scanning alerts | Read‑only | Security view / compounding‑risk security signals |
+| Secret scanning alerts | Read‑only | Security view / compounding‑risk security signals |
+
+Dependabot alerts, Code scanning alerts, and Secret scanning alerts are distinct from the **Repository security advisories** permission and the **Security advisory** event (see [Subscribe to events](#subscribe-to-events)) — neither of those enables `security_alerts` sync. After changing permissions on an already‑installed App, the organization must **approve the pending permission request** before the installation token receives the new scopes.
 
 **Organization**
 

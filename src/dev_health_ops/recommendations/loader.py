@@ -309,12 +309,15 @@ class ClickHouseMetricsLoader:
         params = self._p(team_id, ws, we)
         query = f"""
             SELECT
-                argMax(compounding_risk, computed_at) AS score,
-                argMax(severity,         computed_at) AS severity
-            FROM compounding_risk_daily
-            WHERE scope = 'team'
-              AND scope_id = %(team_id)s
-              AND day >= %(start)s AND day < %(end)s {oc}
+                tupleElement(latest_row, 1) AS score,
+                tupleElement(latest_row, 2) AS severity
+            FROM (
+                SELECT argMax(tuple(compounding_risk, severity), computed_at) AS latest_row
+                FROM compounding_risk_daily
+                WHERE scope = 'team'
+                  AND scope_id = %(team_id)s
+                  AND day >= %(start)s AND day < %(end)s {oc}
+            )
         """
         rows = self._qd(query, params)
         if not rows:

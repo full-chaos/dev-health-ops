@@ -398,8 +398,9 @@ def build_compounding_risk_rows_for_day(
         repo_id = getattr(row, "repo_id", None)
         if repo_id is None:
             continue
+        repo_id_str = str(repo_id)
         complexity_delta = load_repo_complexity_delta_30d(
-            sink, repo_id=str(repo_id), day=day, org_id=org_id
+            sink, repo_id=repo_id_str, day=day, org_id=org_id
         )
         inputs = CompoundingInputs(
             rework_churn=_nullable_float(getattr(row, "rework_churn_ratio_30d", None)),
@@ -413,7 +414,7 @@ def build_compounding_risk_rows_for_day(
             ownership_gini=_nullable_float(getattr(row, "code_ownership_gini", None)),
             bus_factor=_nullable_float(getattr(row, "bus_factor", None)),
         )
-        repo_inputs_for_team[str(repo_id)] = inputs
+        repo_inputs_for_team[repo_id_str] = inputs
         repo_rows.append(
             compute_compounding_risk(
                 day=day,

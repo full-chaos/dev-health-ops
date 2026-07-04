@@ -126,6 +126,7 @@ from .types.review_edges import (
     ReviewEdgesInput,
     ReviewEdgesResult,
 )
+from .types.testops_risk import TestOpsRiskInput, TestOpsRiskResult
 
 logger = logging.getLogger(__name__)
 
@@ -540,6 +541,23 @@ class Query:
     ) -> CompoundingRiskResult:
         context = get_context(info)
         return await resolve_compounding_risk(context, org_id, filter)
+
+    @strawberry.field(
+        description=(
+            "Persisted TestOps Delivery Risk metrics from release confidence, "
+            "quality drag, and pipeline stability tables."
+        )
+    )
+    async def testops_risk(
+        self,
+        info: Info,
+        org_id: str,
+        input: TestOpsRiskInput,
+    ) -> TestOpsRiskResult:
+        from .resolvers.testops_risk import resolve_testops_risk
+
+        context = get_context(info)
+        return await resolve_testops_risk(context, org_id, input)
 
     @strawberry.field(
         description=(

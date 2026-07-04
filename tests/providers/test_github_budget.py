@@ -78,6 +78,7 @@ def test_github_git_and_commit_stats_actuals_markers_are_live() -> None:
         for family in GITHUB_USAGE_ROUTE_FAMILIES
     }
 
+    assert markers[("repo", BudgetDimension.REST_CORE)] == ("repo:",)
     assert markers[("git", BudgetDimension.REST_CORE)] == ("git:",)
     assert markers[("commit_stats", BudgetDimension.REST_CORE)] == ("commit_stats:",)
     assert markers[("commit_stats", BudgetDimension.CONTENTS_BLOB)] == ()

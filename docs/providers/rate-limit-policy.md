@@ -99,7 +99,7 @@ cooperating layers:
    | --- | --- | --- |
    | GitHub REST connector | 3 (`retry_with_backoff(max_retries=3)`) | `connectors/github.py` |
    | GitHub GraphQL client | 5 (`max_retries=5`) | `connectors/utils/graphql.py` |
-| GitHub code client (canonical: git/commit_stats/security/deployments REST, files/blame GraphQL) | 5 (`InstrumentedRESTCore` default) | `providers/github/code_client.py` + `providers/github/graphql.py` |
+| GitHub code client (canonical: repo metadata/listing, git/commit_stats/security/deployments REST, files/blame GraphQL) | 5 (`InstrumentedRESTCore` default) | `providers/github/code_client.py` + `providers/github/graphql.py` |
 | GitLab REST connector | 3 (`retry_with_backoff(max_retries=3)`) | `connectors/gitlab.py` |
 | GitLab code client (canonical: security/pipelines/deployments/tests/commits/files/blame/merge_requests/notes) | 5 (`InstrumentedRESTCore` default) | `providers/gitlab/code_client.py` |
 | GitLab feature-flags (canonical) | 5 (`max_retries=5`) | `providers/gitlab/feature_flags.py` |
@@ -950,13 +950,20 @@ proof-of-pipe that the plumbing actually reaches a `budget_comparison` row:
   resolver/actuals-only family so the estimator vocabulary stays frozen while
   real incident issue traffic still appears in calibration output as an
   unbudgeted actual when present.
+- **Actuals instrumentation (CHAOS-2810).** Repository metadata (`get_repo`)
+  and discovery/listing (`list_repositories`, `list_installation_repositories`)
+  now fetch through `GitHubCodeClient`, resolving through an explicit `repo:`
+  operation prefix; `process_github_repos_batch`'s repo discovery/metadata
+  fan-out and the admin credential repo-list endpoint
+  (`api/admin/routers/credentials.py`) both moved off `GitHubConnector`/PyGithub
+  onto the same client.
 
 #### Route families
 <!-- route-families:github -->
 
 | Route family | Dimension(s) | Covers | Confidence |
 | --- | --- | --- | --- |
-| `repo` | `rest_core` | Repository metadata | high |
+| `repo` | `rest_core` | Repository metadata + discovery (`GitHubCodeClient`, CHAOS-2773 CS9) | high |
 | `git` | `rest_core` | Commit listing (`GitHubCodeClient`, CHAOS-2773 CS6) | medium |
 | `commit_stats` | `rest_core`, `contents_blob` | Per-commit file/stat expansion (`GitHubCodeClient` REST core, CHAOS-2773 CS6; contents/blob still estimate-only) | low |
 | `files` | `rest_core`, `contents_blob` | Repository tree listing (`rest_core`, frozen/estimate-only) + blob-text reads (`contents_blob`, `GitHubCodeClient` GraphQL, CHAOS-2773 CS7) | low |
@@ -1182,19 +1189,22 @@ paper over:
   instrumented as of [CHAOS-2803](https://linear.app/fullchaos/issue/CHAOS-2803)
   (CS2) — see
   [Usage drain wiring](#usage-drain-wiring-first-re-bucketing-chaos-2773-cs2)
-  above. GitHub `git` and `commit_stats` REST-core traffic is instrumented as of
+above. GitHub `git` and `commit_stats` REST-core traffic is instrumented as of
   CHAOS-2807, `files`/`blame` `contents_blob` traffic (GraphQL) as of
-  CHAOS-2808, and REST `prs` listing / PR commits / incident-label issue
-  fetches as of CHAOS-2809; GitLab merge-request and MR-note REST-core traffic
+  CHAOS-2808, REST `prs` listing / PR commits / incident-label issue
+  fetches as of CHAOS-2809, and `repo` metadata/discovery traffic as of
+  CHAOS-2810 (CS9); GitLab merge-request and MR-note REST-core traffic
   is instrumented as of CHAOS-2816 (CS15). The `files`/`blame` `rest_core` tree
   listing and remaining GitHub/GitLab code-dataset families stay uninstrumented
   pending their own CHAOS-2773 changesets (see
   "Frozen `connectors/` path" below). There is also no cross-run
   aggregation/dashboard yet — calibration today is visible per-unit (result +
   structured log), not rolled up over time.
-- **Frozen `connectors/` path.** GitHub's repo metadata/batch orchestration,
-  the frozen-but-retained connector PR-commit method pending CS16 retirement,
-  plus the remaining equivalent GitLab code-dataset paths, remain under the frozen `connectors/` tree
+- **Frozen `connectors/` path.** GitHub repo metadata/listing and batch
+  orchestration now use `GitHubCodeClient` and emit `repo:` usage actuals. The
+  frozen-but-retained GitHub connector PR-commit method (pending CS16
+  retirement), plus the remaining equivalent GitLab code-dataset paths
+  (repo-metadata/batch orchestration among them), remain under the frozen `connectors/` tree
   (`connectors/github.py`'s PyGithub-based `GitHubConnector`, `connectors/
   gitlab.py`'s python-gitlab-based `GitLabConnector`). No new code may be added
   there (see [`AGENTS.md`](../../AGENTS.md)); rate-limit/actuals
@@ -1216,7 +1226,9 @@ paper over:
   `providers/github/graphql.py`) moved to
   `providers/github/code_client.py::GitHubCodeClient`; GitHub `prs` REST
   listing, PR commits, and incident-label issue fetches
-  ([CHAOS-2809](https://linear.app/fullchaos/issue/CHAOS-2809), CS8) also moved
+  ([CHAOS-2809](https://linear.app/fullchaos/issue/CHAOS-2809), CS8), and
+  GitHub repo metadata + batch discovery/orchestration
+  ([CHAOS-2810](https://linear.app/fullchaos/issue/CHAOS-2810), CS9) also moved
   onto `GitHubCodeClient`. GitLab's `security`
   ([CHAOS-2811](https://linear.app/fullchaos/issue/CHAOS-2811), CS10),
   `pipelines`+`deployments`

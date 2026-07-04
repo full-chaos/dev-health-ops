@@ -80,6 +80,14 @@ def _github_commit_stats_async_from_sync(fake_fetch):
 
 
 class _EmptyGithubPrCodeClient:
+    def __init__(self, repos=None):
+        self._repos = list(repos or [])
+        self.list_repository_calls = []
+
+    async def list_repositories(self, **kwargs):
+        self.list_repository_calls.append(kwargs)
+        return list(self._repos)
+
     async def iter_pulls(self, owner, repo, *, state, sort, direction, since=None):
         return []
 
@@ -91,6 +99,80 @@ class _EmptyGithubPrCodeClient:
 
     async def close(self):
         return None
+
+
+def _repo_client_for(*repos):
+    return _EmptyGithubPrCodeClient(repos)
+
+
+@pytest.mark.asyncio
+async def test_process_github_repos_batch_uses_pattern_owner_for_repo_discovery(
+    monkeypatch,
+):
+    _enable_connector_stubs(monkeypatch)
+
+    inserted_repos = []
+
+    class DummyStore:
+        async def insert_repo(self, repo):
+            inserted_repos.append(repo)
+
+    class DummyConnector:
+        def __init__(self, token: str):
+            self.token = token
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+    repo = SimpleNamespace(
+        id=1,
+        name="service",
+        full_name="org/service",
+        default_branch="main",
+        description=None,
+        url="https://github.com/org/service",
+        created_at=None,
+        updated_at=None,
+        language="Python",
+        stars=0,
+        forks=0,
+    )
+    code_client = _repo_client_for(repo)
+
+    monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
+    monkeypatch.setattr(
+        processors.github,
+        "_github_code_client_from_connector",
+        lambda _connector: code_client,
+    )
+
+    await processors.github.process_github_repos_batch(
+        store=DummyStore(),
+        token="test_token",
+        pattern="org/*",
+        batch_size=1,
+        max_concurrent=1,
+        rate_limit_delay=0,
+        sync_git=False,
+        sync_prs=False,
+        sync_cicd=False,
+        sync_deployments=False,
+        sync_incidents=False,
+        sync_security=False,
+    )
+
+    assert len(inserted_repos) == 1
+    assert code_client.list_repository_calls == [
+        {
+            "org_name": None,
+            "user_name": "org",
+            "pattern": "org/*",
+            "max_repos": None,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -474,7 +556,7 @@ async def test_process_github_repos_batch_upserts_during_async_processing(monkey
     monkeypatch.setattr(
         processors.github,
         "_github_code_client_from_connector",
-        lambda _connector: _EmptyGithubPrCodeClient(),
+        lambda _connector: _repo_client_for(repo),
     )
 
     await processors.github.process_github_repos_batch(
@@ -591,6 +673,11 @@ async def test_process_github_repos_batch_stores_commits_and_stats(monkeypatch):
     )
     monkeypatch.setattr(
         processors.github,
+        "_github_code_client_from_connector",
+        lambda _connector: _repo_client_for(repo),
+    )
+    monkeypatch.setattr(
+        processors.github,
         "_fetch_github_commits_async",
         _github_commits_async_from_sync(fake_fetch_commits),
     )
@@ -701,6 +788,11 @@ async def test_process_github_repos_batch_over_cap_window_skips_stats(monkeypatc
             self.close()
 
     monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
+    monkeypatch.setattr(
+        processors.github,
+        "_github_code_client_from_connector",
+        lambda _connector: _repo_client_for(repo),
+    )
     monkeypatch.setattr(
         processors.github,
         "_fetch_github_commits_async",
@@ -818,6 +910,11 @@ async def test_process_github_repos_batch_truncated_window_skips_stats(monkeypat
             self.close()
 
     monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
+    monkeypatch.setattr(
+        processors.github,
+        "_github_code_client_from_connector",
+        lambda _connector: _repo_client_for(repo),
+    )
     monkeypatch.setattr(
         processors.github,
         "_fetch_github_commits_async",
@@ -945,6 +1042,11 @@ async def test_process_github_repos_batch_undersized_window_writes_stats(monkeyp
             self.close()
 
     monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
+    monkeypatch.setattr(
+        processors.github,
+        "_github_code_client_from_connector",
+        lambda _connector: _repo_client_for(repo),
+    )
     monkeypatch.setattr(
         processors.github,
         "_fetch_github_commits_async",
@@ -1080,6 +1182,11 @@ async def test_process_github_repos_batch_exact_complete_window_writes_stats(
     monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
     monkeypatch.setattr(
         processors.github,
+        "_github_code_client_from_connector",
+        lambda _connector: _repo_client_for(repo),
+    )
+    monkeypatch.setattr(
+        processors.github,
         "_fetch_github_commits_async",
         _github_commits_async_from_sync(fake_fetch_commits),
     )
@@ -1185,6 +1292,11 @@ async def test_process_github_repos_batch_commit_stats_rate_limit_propagates(
     monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
     monkeypatch.setattr(
         processors.github,
+        "_github_code_client_from_connector",
+        lambda _connector: _repo_client_for(repo),
+    )
+    monkeypatch.setattr(
+        processors.github,
         "_fetch_github_commits_async",
         _github_commits_async_from_sync(fake_fetch_commits),
     )
@@ -1285,6 +1397,11 @@ async def test_process_github_repos_batch_multi_repo_rate_limit_does_not_hang(
             self.close()
 
     monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
+    monkeypatch.setattr(
+        processors.github,
+        "_github_code_client_from_connector",
+        lambda _connector: _repo_client_for(*[result.repository for result in results]),
+    )
     monkeypatch.setattr(
         processors.github,
         "_fetch_github_commits_async",
@@ -1397,6 +1514,11 @@ async def test_process_github_repos_batch_commit_detail_rate_limit_propagates(
     monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
     monkeypatch.setattr(
         processors.github,
+        "_github_code_client_from_connector",
+        lambda _connector: _repo_client_for(repo),
+    )
+    monkeypatch.setattr(
+        processors.github,
         "_fetch_github_commits_async",
         _github_commits_async_from_sync(fake_fetch_commits),
     )
@@ -1491,6 +1613,11 @@ async def test_process_github_repos_batch_incident_rate_limit_propagates(
         return [], [], False
 
     monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
+    monkeypatch.setattr(
+        processors.github,
+        "_github_code_client_from_connector",
+        lambda _connector: _repo_client_for(repo),
+    )
     monkeypatch.setattr(
         processors.github,
         "_fetch_github_commits_async",

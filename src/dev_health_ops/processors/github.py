@@ -51,7 +51,6 @@ from dev_health_ops.processors.testops_ingest import (
     ingest_report_members,
 )
 from dev_health_ops.providers.github.client import GitHubAuth, GitHubWorkClient
-from dev_health_ops.providers.github.code_client import GitHubCodeClient
 from dev_health_ops.providers.pr_state import normalize_pr_state
 from dev_health_ops.providers.usage import drain_provider_usage
 from dev_health_ops.utils import (
@@ -73,6 +72,10 @@ if TYPE_CHECKING:
     )
     from dev_health_ops.connectors.models import Repository
     from dev_health_ops.connectors.utils import RateLimitConfig, RateLimitGate
+    from dev_health_ops.providers.github.code_client import (
+        GitHubCodeClient,
+        GitHubRepositoryData,
+    )
 elif CONNECTORS_AVAILABLE:
     from github import RateLimitExceededException
 
@@ -100,11 +103,41 @@ else:
 # --- GitHub Sync Helpers ---
 
 
-def _fetch_github_repo_info_sync(connector, owner, repo_name):
-    """Sync helper to fetch GitHub repository info."""
-    gh_repo = connector.github.get_repo(f"{owner}/{repo_name}")
-    _ = gh_repo.id
-    return gh_repo
+def _repository_from_code_repo(repo: "GitHubRepositoryData") -> Repository:
+    return Repository(
+        id=repo.id,
+        name=repo.name,
+        full_name=repo.full_name,
+        default_branch=repo.default_branch,
+        description=repo.description,
+        url=repo.url,
+        created_at=repo.created_at,
+        updated_at=repo.updated_at,
+        language=repo.language,
+        stars=repo.stars,
+        forks=repo.forks,
+    )
+
+
+async def _fetch_github_repo_info_async(
+    connector,
+    owner: str,
+    repo_name: str,
+    usage_sink: list[dict[str, Any]] | None = None,
+) -> Repository:
+    client = _github_code_client_from_connector(connector)
+    try:
+        return _repository_from_code_repo(await client.get_repo(owner, repo_name))
+    finally:
+        observations = client.drain_usage_observations()
+        await client.close()
+        if usage_sink is not None:
+            usage_sink.extend(observations)
+        elif observations:
+            logging.debug(
+                "_fetch_github_repo_info_async: drained %d repo usage observations",
+                len(observations),
+            )
 
 
 def _github_commit_to_model(commit: Any, repo_id: Any) -> GitCommit:
@@ -491,7 +524,7 @@ async def _fetch_github_incidents_async(
             )
 
 
-def _github_code_client_from_connector(connector) -> GitHubCodeClient:
+def _github_code_client_from_connector(connector) -> "GitHubCodeClient":
     """Build a ``GitHubCodeClient`` from an already-authenticated connector.
 
     Mirrors ``_github_work_client_from_connector`` (below): the connector has
@@ -504,7 +537,47 @@ def _github_code_client_from_connector(connector) -> GitHubCodeClient:
     raw_base_url = rest_base_url() if callable(rest_base_url) else None
     base_url = raw_base_url if isinstance(raw_base_url, str) else None
     token = getattr(connector, "token", None)
+    from dev_health_ops.providers.github.code_client import GitHubCodeClient
+
     return GitHubCodeClient(auth=GitHubAuth(token=token, base_url=base_url))
+
+
+async def _list_github_repositories_for_batch(
+    connector,
+    *,
+    org_name: str | None,
+    user_name: str | None,
+    pattern: str | None,
+    max_repos: int | None,
+    usage_sink: list[dict[str, Any]] | None,
+) -> list[Repository]:
+    effective_org = org_name
+    effective_user = user_name
+    if not org_name and not user_name and pattern and "/" in pattern:
+        owner_part = pattern.split("/", 1)[0]
+        if owner_part and "*" not in owner_part and "?" not in owner_part:
+            effective_user = owner_part
+            logging.info("Extracted owner '%s' from pattern '%s'", owner_part, pattern)
+
+    client = _github_code_client_from_connector(connector)
+    try:
+        repos = await client.list_repositories(
+            org_name=effective_org,
+            user_name=effective_user,
+            pattern=pattern,
+            max_repos=max_repos,
+        )
+        return [_repository_from_code_repo(repo) for repo in repos]
+    finally:
+        observations = client.drain_usage_observations()
+        await client.close()
+        if usage_sink is not None:
+            usage_sink.extend(observations)
+        elif observations:
+            logging.debug(
+                "_list_github_repositories_for_batch: drained %d repo usage observations",
+                len(observations),
+            )
 
 
 async def _fetch_github_security_alerts_async(
@@ -1765,25 +1838,11 @@ async def process_github_repo(
         with connector:
             # 1. Fetch Repo Info
             logging.info("Fetching repository information...")
-            gh_repo = await loop.run_in_executor(
-                None, _fetch_github_repo_info_sync, connector, owner, repo_name
+            repo_info = await _fetch_github_repo_info_async(
+                connector, owner, repo_name, usage_sink=usage_sink
             )
 
             # Create/Insert Repo
-            repo_info = Repository(
-                id=gh_repo.id,
-                name=gh_repo.name,
-                full_name=gh_repo.full_name,
-                default_branch=gh_repo.default_branch,
-                description=gh_repo.description,
-                url=gh_repo.html_url,
-                created_at=gh_repo.created_at,
-                updated_at=gh_repo.updated_at,
-                language=gh_repo.language,
-                stars=gh_repo.stargazers_count,
-                forks=gh_repo.forks_count,
-            )
-
             db_repo = Repo(
                 repo_path=None,
                 repo=repo_info.full_name,
@@ -1892,6 +1951,7 @@ async def process_github_repo(
                     logging.info("Stored %d workflow runs", len(pipeline_runs))
 
             if sync_tests:
+                gh_repo = connector.github.get_repo(repo_info.full_name)
                 await _sync_github_test_reports(
                     connector=connector,
                     gh_repo=gh_repo,
@@ -1962,6 +2022,7 @@ async def process_github_repo(
             # 5. Fetch Blame (Optional & Stubbed)
             if fetch_blame:
                 logging.info("Fetching blame data (file list) from GitHub...")
+                gh_repo = connector.github.get_repo(repo_info.full_name)
                 await loop.run_in_executor(
                     None, _fetch_github_blame_sync, gh_repo, db_repo.id
                 )
@@ -2065,9 +2126,6 @@ async def process_github_repos_batch(
     # Track results for summary and incremental storage
     all_results: list[BatchResult] = []
     stored_count = 0
-
-    results_queue: asyncio.Queue | None = None
-    _queue_sentinel = object()
 
     async def store_result(result: BatchResult) -> None:
         """Store a single result in the database (upsert)."""
@@ -2382,118 +2440,41 @@ async def process_github_repos_batch(
                 f"  ✗ Failed: {result.repository.full_name}: {result.error}"
             )
 
-        if results_queue is not None:
-            try:
-                running_loop = asyncio.get_running_loop()
-            except RuntimeError:
-                running_loop = None
-
-            def _enqueue() -> None:
-                assert results_queue is not None
-                try:
-                    results_queue.put_nowait(result)
-                except asyncio.QueueFull:
-                    asyncio.create_task(results_queue.put(result))
-
-            if running_loop is loop:
-                _enqueue()
-            else:
-                loop.call_soon_threadsafe(_enqueue)
-
     try:
         with connector:
-            if sync_git:
-                results_queue = asyncio.Queue(maxsize=max(1, max_concurrent * 2))
+            repos = await _list_github_repositories_for_batch(
+                connector,
+                org_name=org_name,
+                user_name=user_name,
+                pattern=pattern,
+                max_repos=max_repos,
+                usage_sink=usage_sink,
+            )
+            semaphore = asyncio.Semaphore(max(1, max_concurrent))
 
-                async def _consume_results() -> None:
-                    assert results_queue is not None
-                    while True:
-                        item = await results_queue.get()
-                        try:
-                            if item is _queue_sentinel:
-                                return
-                            await store_result(item)
-                        finally:
-                            results_queue.task_done()
-
-                consumer_task = asyncio.create_task(_consume_results())
-
-                if use_async:
-                    await connector.get_repos_with_stats_async(
-                        org_name=org_name,
-                        user_name=user_name,
-                        pattern=pattern,
-                        batch_size=batch_size,
-                        max_concurrent=max_concurrent,
-                        rate_limit_delay=rate_limit_delay,
-                        max_commits_per_repo=max_commits_per_repo,
-                        max_repos=max_repos,
-                        on_repo_complete=on_repo_complete,
+            async def _process_repo(repo_info) -> None:
+                async with semaphore:
+                    result = BatchResult(
+                        repository=repo_info,
+                        stats=None,
+                        success=True,
                     )
-                else:
-                    await loop.run_in_executor(
-                        None,
-                        lambda: connector.get_repos_with_stats(
-                            org_name=org_name,
-                            user_name=user_name,
-                            pattern=pattern,
-                            batch_size=batch_size,
-                            max_concurrent=max_concurrent,
-                            rate_limit_delay=rate_limit_delay,
-                            max_commits_per_repo=max_commits_per_repo,
-                            max_repos=max_repos,
-                            on_repo_complete=on_repo_complete,
-                        ),
-                    )
-
-                # Wait for the queue to drain, but bail out if the consumer dies
-                # first: store_result may propagate a RateLimitException, leaving
-                # un-task_done()'d items so results_queue.join() would hang forever.
-                # FIRST_COMPLETED lets us detect that and re-raise instead.
-                join_task = asyncio.create_task(results_queue.join())
-                done, _pending = await asyncio.wait(
-                    {join_task, consumer_task}, return_when=asyncio.FIRST_COMPLETED
-                )
-                if consumer_task in done:
-                    join_task.cancel()
                     try:
-                        await join_task
-                    except asyncio.CancelledError:
-                        pass
-                    await consumer_task  # re-raises the consumer's exception
-                await results_queue.put(_queue_sentinel)
-                await consumer_task
-            else:
-                repos = await loop.run_in_executor(
-                    None,
-                    lambda: connector.list_repositories(
-                        org_name=org_name,
-                        user_name=user_name,
-                        pattern=pattern,
-                        max_repos=max_repos,
-                    ),
-                )
-                semaphore = asyncio.Semaphore(max(1, max_concurrent))
-
-                async def _process_repo(repo_info) -> None:
-                    async with semaphore:
+                        await store_result(result)
+                    except (RateLimitException, RateLimitExceededException):
+                        raise
+                    except Exception as e:
                         result = BatchResult(
                             repository=repo_info,
                             stats=None,
-                            success=True,
+                            error=str(e),
+                            success=False,
                         )
-                        try:
-                            await store_result(result)
-                        except Exception as e:
-                            result = BatchResult(
-                                repository=repo_info,
-                                stats=None,
-                                error=str(e),
-                                success=False,
-                            )
-                        on_repo_complete(result)
+                    on_repo_complete(result)
 
-                tasks = [asyncio.create_task(_process_repo(repo)) for repo in repos]
+            for batch_start in range(0, len(repos), max(1, batch_size)):
+                batch = repos[batch_start : batch_start + max(1, batch_size)]
+                tasks = [asyncio.create_task(_process_repo(repo)) for repo in batch]
                 if tasks:
                     await asyncio.gather(*tasks)
 

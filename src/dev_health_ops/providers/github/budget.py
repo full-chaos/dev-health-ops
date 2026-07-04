@@ -345,8 +345,8 @@ def _fallback_credential_scope(
 # secondary-limit signal on success responses (an abstract reservation, like
 # `work_item_prs`' SECONDARY_ABUSE_RISK sibling), so its marker stays empty.
 #
-# `git` (REST_CORE), `commit_stats` (REST_CORE), `security` (REST_CORE), and
-# deployments REST_CORE now fetch through
+# `repo` (REST_CORE), `git` (REST_CORE), `commit_stats` (REST_CORE), `security`
+# (REST_CORE), and deployments REST_CORE now fetch through
 # `providers/github/code_client.py::GitHubCodeClient`, labeling operations
 # with explicit family prefixes so CS1's resolver short-circuit resolves them
 # directly. `commit_stats` CONTENTS_BLOB and deployments CONTENTS_BLOB remain
@@ -364,13 +364,14 @@ def _fallback_credential_scope(
 # label resolve to the instrumented dimension instead of the still-frozen
 # REST_CORE one (the repository tree listing that discovers candidate paths
 # stays on the frozen PyGithub connector, uninstrumented, out of CS7 scope).
-# `prs` REST_CORE and the processor's incident-label issue fetches (CHAOS-2809/
-# CS8) now share the same `GitHubCodeClient` REST core as git/commit_stats and
-# emit explicit `prs:`/`incidents:` labels. `incidents` is a resolver-only
-# actuals family: the estimator constants remain frozen, and incident issue
-# traffic is attached to observed actuals without adding a new planned estimate.
+# `repo` REST_CORE (metadata/listing), `prs` REST_CORE, and the processor's
+# incident-label issue fetches now share the same `GitHubCodeClient` REST core as
+# git/commit_stats and emit explicit `repo:`/`prs:`/`incidents:` labels.
+# `incidents` is a resolver-only actuals family: the estimator constants remain
+# frozen, and incident issue traffic is attached to observed actuals without
+# adding a new planned estimate.
 GITHUB_USAGE_ROUTE_FAMILIES: tuple[UsageRouteFamily, ...] = (
-    UsageRouteFamily("repo", BudgetDimension.REST_CORE),
+    UsageRouteFamily("repo", BudgetDimension.REST_CORE, operation_markers=("repo:",)),
     UsageRouteFamily("git", BudgetDimension.REST_CORE, operation_markers=("git:",)),
     UsageRouteFamily(
         "commit_stats", BudgetDimension.REST_CORE, operation_markers=("commit_stats:",)

@@ -29,6 +29,7 @@ from dev_health_ops.connectors.exceptions import (
     RateLimitException,
 )
 from dev_health_ops.connectors.models import Repository
+from dev_health_ops.exceptions import APIException
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.settings import IntegrationCredential
@@ -181,6 +182,9 @@ _FAKE_REPOS = [
 
 _DECRYPT_PATCH = "dev_health_ops.api.services.configuration.IntegrationCredentialsService.get_decrypted_credentials_by_id"
 _GH_CONNECTOR = "dev_health_ops.connectors.github.GitHubConnector"
+_GH_REPO_CLIENT = (
+    "dev_health_ops.api.admin.routers.credentials._github_repo_list_client"
+)
 _GL_CONNECTOR = "dev_health_ops.connectors.gitlab.GitLabConnector"
 _GH_APP_PROVIDER = "dev_health_ops.connectors.utils.github_app.GitHubAppTokenProvider"
 _GL_MEMBERSHIP_HELPER = (
@@ -196,6 +200,31 @@ def _mock_credential(provider="github", config=None, credentials=None):
     return credentials or {"token": "ghp_fake123"}, cred
 
 
+class _FakeGithubRepoClient:
+    def __init__(self, repos=None, exc=None):
+        self.repos = list(_FAKE_REPOS if repos is None else repos)
+        self.exc = exc
+        self.calls = []
+
+    async def list_repositories(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.exc is not None:
+            raise self.exc
+        return list(self.repos)
+
+    async def list_installation_repositories(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.exc is not None:
+            raise self.exc
+        return list(self.repos)
+
+    def drain_usage_observations(self):
+        return []
+
+    async def close(self):
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Tests — Happy path
 # ---------------------------------------------------------------------------
@@ -203,15 +232,13 @@ def _mock_credential(provider="github", config=None, credentials=None):
 
 @pytest.mark.asyncio
 async def test_list_repos_success(client):
-    """Connector returns repos → 200 with DiscoveredReposResponse."""
     ac, state = client
+    fake_client = _FakeGithubRepoClient()
 
     with (
         patch(_DECRYPT_PATCH, return_value=_mock_credential()) as _,
-        patch(_GH_CONNECTOR) as MockConnector,
+        patch(_GH_REPO_CLIENT, return_value=fake_client),
     ):
-        MockConnector.return_value.list_repositories.return_value = _FAKE_REPOS
-
         resp = await ac.get(
             f"/api/v1/admin/credentials/{state['cred_id']}/repos",
             params={"owner": "my-org"},
@@ -228,6 +255,7 @@ async def test_list_repos_success(client):
 @pytest.mark.asyncio
 async def test_list_repos_accepts_github_app_credentials(client):
     ac, state = client
+    fake_client = _FakeGithubRepoClient()
     app_credentials = {
         "app_id": "12345",
         "private_key": "not-a-real-github-app-private-key",
@@ -239,10 +267,8 @@ async def test_list_repos_accepts_github_app_credentials(client):
             _DECRYPT_PATCH,
             return_value=_mock_credential(credentials=app_credentials),
         ),
-        patch(_GH_CONNECTOR) as MockConnector,
+        patch(_GH_REPO_CLIENT, return_value=fake_client) as MockRepoClient,
     ):
-        MockConnector.return_value.list_repositories.return_value = _FAKE_REPOS
-
         resp = await ac.get(
             f"/api/v1/admin/credentials/{state['cred_id']}/repos",
             params={"owner": "my-org"},
@@ -250,9 +276,9 @@ async def test_list_repos_accepts_github_app_credentials(client):
 
     assert resp.status_code == 200
     assert resp.json()["total"] == 2
-    _, kwargs = MockConnector.call_args
-    assert kwargs["credentials"].is_app_auth is True
-    assert kwargs["credentials"].installation_id == "67890"
+    passed_credentials = MockRepoClient.call_args.args[0]
+    assert passed_credentials.is_app_auth is True
+    assert passed_credentials.installation_id == "67890"
 
 
 @pytest.mark.asyncio
@@ -303,17 +329,15 @@ async def test_github_app_test_connection_accepts_camel_case_fields():
 
 @pytest.mark.asyncio
 async def test_not_found_returns_empty_list(client):
-    """NotFoundException (invalid/partial org name) → 200 with empty repos."""
     ac, state = client
+    fake_client = _FakeGithubRepoClient(
+        exc=NotFoundException("GitHub resource not found (404)")
+    )
 
     with (
         patch(_DECRYPT_PATCH, return_value=_mock_credential()) as _,
-        patch(_GH_CONNECTOR) as MockConnector,
+        patch(_GH_REPO_CLIENT, return_value=fake_client),
     ):
-        MockConnector.return_value.list_repositories.side_effect = NotFoundException(
-            "GitHub resource not found (404)"
-        )
-
         resp = await ac.get(
             f"/api/v1/admin/credentials/{state['cred_id']}/repos",
             params={"owner": "full-"},
@@ -328,17 +352,13 @@ async def test_not_found_returns_empty_list(client):
 
 @pytest.mark.asyncio
 async def test_auth_exception_returns_401(client):
-    """AuthenticationException (bad/revoked token) → HTTP 401."""
     ac, state = client
+    fake_client = _FakeGithubRepoClient(exc=AuthenticationException("Bad credentials"))
 
     with (
         patch(_DECRYPT_PATCH, return_value=_mock_credential()) as _,
-        patch(_GH_CONNECTOR) as MockConnector,
+        patch(_GH_REPO_CLIENT, return_value=fake_client),
     ):
-        MockConnector.return_value.list_repositories.side_effect = (
-            AuthenticationException("Bad credentials")
-        )
-
         resp = await ac.get(
             f"/api/v1/admin/credentials/{state['cred_id']}/repos",
             params={"owner": "my-org"},
@@ -350,17 +370,15 @@ async def test_auth_exception_returns_401(client):
 
 @pytest.mark.asyncio
 async def test_rate_limit_returns_429(client):
-    """RateLimitException (GitHub API rate limit) → HTTP 429."""
     ac, state = client
+    fake_client = _FakeGithubRepoClient(
+        exc=RateLimitException("API rate limit exceeded")
+    )
 
     with (
         patch(_DECRYPT_PATCH, return_value=_mock_credential()) as _,
-        patch(_GH_CONNECTOR) as MockConnector,
+        patch(_GH_REPO_CLIENT, return_value=fake_client),
     ):
-        MockConnector.return_value.list_repositories.side_effect = RateLimitException(
-            "API rate limit exceeded"
-        )
-
         resp = await ac.get(
             f"/api/v1/admin/credentials/{state['cred_id']}/repos",
             params={"owner": "my-org"},
@@ -382,15 +400,15 @@ async def test_no_owner_github_enumerates_token_wide(client):
     CHAOS-2449: previously returned empty list; now enumerates all accessible repos.
     """
     ac, state = client
+    fake_client = _FakeGithubRepoClient()
 
     with (
         patch(
             _DECRYPT_PATCH,
             return_value=_mock_credential(config={}),  # no org in config
         ) as _,
-        patch(_GH_CONNECTOR) as MockConnector,
+        patch(_GH_REPO_CLIENT, return_value=fake_client),
     ):
-        MockConnector.return_value.list_repositories.return_value = _FAKE_REPOS
         resp = await ac.get(
             f"/api/v1/admin/credentials/{state['cred_id']}/repos",
             # no owner query param
@@ -400,23 +418,21 @@ async def test_no_owner_github_enumerates_token_wide(client):
     body = resp.json()
     assert body["total"] == 2
     assert body["repos"][0]["name"] == "api-gateway"
-    # Connector must be called without org_name (None → token-wide)
-    MockConnector.return_value.list_repositories.assert_called_once_with(
-        org_name=None, search=None, max_repos=100
-    )
+    assert fake_client.calls == [
+        {"org_name": None, "search": None, "pattern": None, "max_repos": 100}
+    ]
 
 
 @pytest.mark.asyncio
 async def test_owner_falls_back_to_config_org(client):
     """When owner param is missing, uses config.org from credential."""
     ac, state = client
+    fake_client = _FakeGithubRepoClient()
 
     with (
         patch(_DECRYPT_PATCH, return_value=_mock_credential()) as _,
-        patch(_GH_CONNECTOR) as MockConnector,
+        patch(_GH_REPO_CLIENT, return_value=fake_client),
     ):
-        MockConnector.return_value.list_repositories.return_value = _FAKE_REPOS
-
         resp = await ac.get(
             f"/api/v1/admin/credentials/{state['cred_id']}/repos",
             # no owner param — should fall back to config["org"] = "my-org"
@@ -424,9 +440,9 @@ async def test_owner_falls_back_to_config_org(client):
 
     assert resp.status_code == 200
     assert resp.json()["total"] == 2
-    MockConnector.return_value.list_repositories.assert_called_once_with(
-        org_name="my-org", search=None, max_repos=100
-    )
+    assert fake_client.calls == [
+        {"org_name": "my-org", "search": None, "pattern": None, "max_repos": 100}
+    ]
 
 
 @pytest.mark.asyncio
@@ -490,30 +506,24 @@ async def test_no_owner_github_search_uses_pattern_not_global_search(client):
     Fix: enumerate token-wide repos and apply search as a pattern filter.
     """
     ac, state = client
+    fake_client = _FakeGithubRepoClient()
 
     with (
         patch(
             _DECRYPT_PATCH,
             return_value=_mock_credential(config={}),  # no org in config
         ) as _,
-        patch(_GH_CONNECTOR) as MockConnector,
+        patch(_GH_REPO_CLIENT, return_value=fake_client),
     ):
-        MockConnector.return_value.list_repositories.return_value = _FAKE_REPOS
         resp = await ac.get(
             f"/api/v1/admin/credentials/{state['cred_id']}/repos",
             params={"search": "api"},  # search but no owner
         )
 
     assert resp.status_code == 200
-    # Must NOT have called search_repositories (global search)
-    MockConnector.return_value.search_repositories = MagicMock()
-    MockConnector.return_value.search_repositories.assert_not_called()
-    # Must have called list_repositories with pattern= (client-side filter), search=None
-    call_kwargs = MockConnector.return_value.list_repositories.call_args
-    assert call_kwargs is not None
-    assert call_kwargs.kwargs.get("search") is None or call_kwargs.args[1:2] == ()
-    assert call_kwargs.kwargs.get("pattern") == "*api*"
-    assert call_kwargs.kwargs.get("org_name") is None
+    assert fake_client.calls == [
+        {"org_name": None, "search": None, "pattern": "*api*", "max_repos": 100}
+    ]
 
 
 @pytest.mark.asyncio
@@ -530,34 +540,18 @@ async def test_no_owner_github_app_uses_installation_repos(client):
         "private_key": "not-a-real-github-app-private-key",
         "installation_id": "67890",
     }
-
-    class _FakeResp:
-        status_code = 200
-
-        def json(self):
-            return {
-                "repositories": [
-                    {
-                        "id": 1,
-                        "name": "install-repo",
-                        "full_name": "org/install-repo",
-                        "default_branch": "main",
-                        "description": "Installation repo",
-                        "html_url": "https://github.com/org/install-repo",
-                    }
-                ],
-                "total_count": 1,
-            }
-
-    class _FakeAsyncClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            return None
-
-        async def get(self, *args, **kwargs):
-            return _FakeResp()
+    fake_client = _FakeGithubRepoClient(
+        repos=[
+            Repository(
+                id=1,
+                name="install-repo",
+                full_name="org/install-repo",
+                default_branch="main",
+                description="Installation repo",
+                url="https://github.com/org/install-repo",
+            )
+        ]
+    )
 
     with (
         patch(
@@ -565,10 +559,8 @@ async def test_no_owner_github_app_uses_installation_repos(client):
             return_value=_mock_credential(config={}, credentials=app_credentials),
         ) as _,
         patch(_GH_CONNECTOR) as MockConnector,
-        patch(_GH_APP_PROVIDER) as MockProvider,
-        patch("httpx.AsyncClient", return_value=_FakeAsyncClient()),
+        patch(_GH_REPO_CLIENT, return_value=fake_client),
     ):
-        MockProvider.return_value.get_token.return_value = "ghs_installation_token"
         resp = await ac.get(
             f"/api/v1/admin/credentials/{state['cred_id']}/repos",
             # no owner — App auth blank-owner path
@@ -578,9 +570,8 @@ async def test_no_owner_github_app_uses_installation_repos(client):
     body = resp.json()
     assert body["total"] == 1
     assert body["repos"][0]["name"] == "install-repo"
-    # The connector's list_repositories must NOT have been called
-    # (we bypass it for App auth + blank owner)
     MockConnector.return_value.list_repositories.assert_not_called()
+    assert fake_client.calls == [{"search": None, "max_repos": 100}]
 
 
 @pytest.mark.asyncio
@@ -703,31 +694,15 @@ async def test_gitlab_base_url_key_used_for_self_hosted(client):
 
 @pytest.mark.asyncio
 async def test_github_app_installation_401_raises_auth_error(client):
-    """App installation helper: 401 response → HTTP 401, not a silent empty list."""
     ac, state = client
     app_credentials = {
         "app_id": "12345",
         "private_key": "not-a-real-github-app-private-key",
         "installation_id": "67890",
     }
-
-    class _FakeResp:
-        status_code = 401
-        text = "Bad credentials"
-        headers: dict = {}
-
-        def json(self):
-            return {"message": "Bad credentials"}
-
-    class _FakeAsyncClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            return None
-
-        async def get(self, *args, **kwargs):
-            return _FakeResp()
+    fake_client = _FakeGithubRepoClient(
+        exc=AuthenticationException("GitHub App authentication failed")
+    )
 
     with (
         patch(
@@ -735,10 +710,8 @@ async def test_github_app_installation_401_raises_auth_error(client):
             return_value=_mock_credential(config={}, credentials=app_credentials),
         ) as _,
         patch(_GH_CONNECTOR),
-        patch(_GH_APP_PROVIDER) as MockProvider,
-        patch("httpx.AsyncClient", return_value=_FakeAsyncClient()),
+        patch(_GH_REPO_CLIENT, return_value=fake_client),
     ):
-        MockProvider.return_value.get_token.return_value = "ghs_bad_token"
         resp = await ac.get(
             f"/api/v1/admin/credentials/{state['cred_id']}/repos",
         )
@@ -749,31 +722,13 @@ async def test_github_app_installation_401_raises_auth_error(client):
 
 @pytest.mark.asyncio
 async def test_github_app_installation_429_raises_rate_limit(client):
-    """App installation helper: 429 response → HTTP 429, not a silent empty list."""
     ac, state = client
     app_credentials = {
         "app_id": "12345",
         "private_key": "not-a-real-github-app-private-key",
         "installation_id": "67890",
     }
-
-    class _FakeResp:
-        status_code = 429
-        text = "rate limit exceeded"
-        headers: dict = {}
-
-        def json(self):
-            return {"message": "rate limit exceeded"}
-
-    class _FakeAsyncClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            return None
-
-        async def get(self, *args, **kwargs):
-            return _FakeResp()
+    fake_client = _FakeGithubRepoClient(exc=RateLimitException("rate limit exceeded"))
 
     with (
         patch(
@@ -781,10 +736,8 @@ async def test_github_app_installation_429_raises_rate_limit(client):
             return_value=_mock_credential(config={}, credentials=app_credentials),
         ) as _,
         patch(_GH_CONNECTOR),
-        patch(_GH_APP_PROVIDER) as MockProvider,
-        patch("httpx.AsyncClient", return_value=_FakeAsyncClient()),
+        patch(_GH_REPO_CLIENT, return_value=fake_client),
     ):
-        MockProvider.return_value.get_token.return_value = "ghs_token"
         resp = await ac.get(
             f"/api/v1/admin/credentials/{state['cred_id']}/repos",
         )
@@ -795,31 +748,13 @@ async def test_github_app_installation_429_raises_rate_limit(client):
 
 @pytest.mark.asyncio
 async def test_github_app_installation_5xx_raises_502(client):
-    """App installation helper: 5xx response → HTTP 502, not a silent empty list."""
     ac, state = client
     app_credentials = {
         "app_id": "12345",
         "private_key": "not-a-real-github-app-private-key",
         "installation_id": "67890",
     }
-
-    class _FakeResp:
-        status_code = 503
-        text = "Service Unavailable"
-        headers: dict = {}
-
-        def json(self):
-            return {}
-
-    class _FakeAsyncClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            return None
-
-        async def get(self, *args, **kwargs):
-            return _FakeResp()
+    fake_client = _FakeGithubRepoClient(exc=APIException("GitHub API error: 503"))
 
     with (
         patch(
@@ -827,10 +762,8 @@ async def test_github_app_installation_5xx_raises_502(client):
             return_value=_mock_credential(config={}, credentials=app_credentials),
         ) as _,
         patch(_GH_CONNECTOR),
-        patch(_GH_APP_PROVIDER) as MockProvider,
-        patch("httpx.AsyncClient", return_value=_FakeAsyncClient()),
+        patch(_GH_REPO_CLIENT, return_value=fake_client),
     ):
-        MockProvider.return_value.get_token.return_value = "ghs_token"
         resp = await ac.get(
             f"/api/v1/admin/credentials/{state['cred_id']}/repos",
         )
@@ -958,24 +891,9 @@ async def test_github_app_403_permission_not_rate_limit(client):
         "private_key": "not-a-real-github-app-private-key",
         "installation_id": "67890",
     }
-
-    class _FakeResp:
-        status_code = 403
-        text = "Resource not accessible by integration"
-        headers = {"x-ratelimit-remaining": "4999"}
-
-        def json(self):
-            return {"message": "Resource not accessible by integration"}
-
-    class _FakeAsyncClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            return None
-
-        async def get(self, *args, **kwargs):
-            return _FakeResp()
+    fake_client = _FakeGithubRepoClient(
+        exc=AuthenticationException("Resource not accessible by integration")
+    )
 
     with (
         patch(
@@ -983,10 +901,8 @@ async def test_github_app_403_permission_not_rate_limit(client):
             return_value=_mock_credential(config={}, credentials=app_credentials),
         ) as _,
         patch(_GH_CONNECTOR),
-        patch(_GH_APP_PROVIDER) as MockProvider,
-        patch("httpx.AsyncClient", return_value=_FakeAsyncClient()),
+        patch(_GH_REPO_CLIENT, return_value=fake_client),
     ):
-        MockProvider.return_value.get_token.return_value = "ghs_token"
         resp = await ac.get(
             f"/api/v1/admin/credentials/{state['cred_id']}/repos",
         )

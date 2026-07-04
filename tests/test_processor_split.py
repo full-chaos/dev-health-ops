@@ -25,6 +25,27 @@ def _async_counting(counter: dict[str, Any], key: str, value: Any):
     return _inner
 
 
+async def _fake_fetch_github_repo_info(connector, owner, repo_name, usage_sink=None):
+    """Mirror ``_fetch_github_repo_info_async``'s field mapping so tests keep
+    exercising ``_FakeGitHubConnector.github.get_repo`` without a real
+    ``GitHubCodeClient`` (these fixtures pin PyGithub-shaped attribute names).
+    """
+    gh_repo = connector.github.get_repo(f"{owner}/{repo_name}")
+    return github.Repository(
+        id=gh_repo.id,
+        name=gh_repo.name,
+        full_name=gh_repo.full_name,
+        default_branch=gh_repo.default_branch,
+        description=gh_repo.description,
+        url=gh_repo.html_url,
+        created_at=gh_repo.created_at,
+        updated_at=gh_repo.updated_at,
+        language=gh_repo.language,
+        stars=gh_repo.stargazers_count,
+        forks=gh_repo.forks_count,
+    )
+
+
 class _SimpleRepository:
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
@@ -121,6 +142,9 @@ def test_github_commits_run_does_not_fetch_stats_files_or_blame(monkeypatch):
     monkeypatch.setattr(github, "Repository", _SimpleRepository)
     monkeypatch.setattr(github, "IngestionSink", _FakeSink)
     monkeypatch.setattr(
+        github, "_fetch_github_repo_info_async", _fake_fetch_github_repo_info
+    )
+    monkeypatch.setattr(
         github,
         "_fetch_github_commits_async",
         _async_counting(calls, "commits", (["raw-sha"], ["commit-row"], False)),
@@ -164,6 +188,9 @@ def test_github_granular_stats_files_blame_and_legacy_bundle(monkeypatch):
     monkeypatch.setattr(github, "GitHubConnector", _FakeGitHubConnector)
     monkeypatch.setattr(github, "Repository", _SimpleRepository)
     monkeypatch.setattr(github, "IngestionSink", _FakeSink)
+    monkeypatch.setattr(
+        github, "_fetch_github_repo_info_async", _fake_fetch_github_repo_info
+    )
     monkeypatch.setattr(
         github,
         "_fetch_github_commits_async",

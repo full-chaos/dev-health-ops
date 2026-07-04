@@ -28,13 +28,14 @@ For each `(org_id, repo_id, day)` row, four signals are combined:
 Window: trailing 30 days. The complexity delta uses the first-half-versus-second-half
 average so a recent rise in complexity is captured even when absolute values are small.
 
-Each input resolves to the most recent non-null value for the same
-`(org_id, repo_id)` within the trailing 30-day metric window. This lets sparse
-inputs, especially review latency on days with no reviewed PRs, carry forward
-from the last known value without crossing org or repo boundaries.
+Inputs come from the current `(org_id, repo_id, day)` compute row. If any
+required input is missing on that row, the persisted score is `NULL` and the
+severity is `unknown`. **Missing data is not zero risk.**
 
-If any required input has no non-null value anywhere in the window, the score is
-`NULL` and the severity is `unknown`. **Missing data is not zero risk.**
+Read surfaces resolve to the most recent complete (fully-scored) day within the
+window: partial or in-progress current days whose latest Compounding Risk score
+is unavailable are skipped. If no scored day exists in the window, the score is
+unavailable rather than carried forward or recomputed.
 
 ---
 
@@ -138,9 +139,8 @@ recomputed from persisted inputs with `dev-hops metrics compounding-risk`:
 
 1. `compute_daily_metrics` writes `repo_metrics_daily` for the day.
 2. `build_compounding_risk_rows_for_day` reads the just-written
-   `repo_metrics_daily` rows, carries forward non-null inputs within the
-   trailing metric window, and queries `repo_complexity_daily` for the
-   complexity delta.
+   `repo_metrics_daily` rows and queries `repo_complexity_daily` for the
+   current row's complexity delta.
 3. The resulting rows are written via `sink.write_compounding_risk_daily(...)`.
 
 No new connector or processor work is required; the pipeline already

@@ -478,13 +478,34 @@ async def backfill_file_records(
         file_paths: List of repository-relative file paths.
         repo_full_name: Human-readable name used in log messages.
         contents_by_path: Optional file text fetched upstream (e.g. via the
-            provider API); paths absent from the mapping persist with NULL
-            contents.
+            provider API); paths absent from the mapping keep any
+            previously-stored contents, or persist with NULL contents when
+            none exist.
     """
     if not file_paths:
         return
 
     contents_by_path = contents_by_path or {}
+
+    # CHAOS-2857: git_files is ReplacingMergeTree(last_synced), so a
+    # paths-only rewrite (incremental sync, degraded content fetch) would
+    # shadow previously-fetched contents with NULL rows and starve the
+    # complexity job. Merge existing contents UNDER freshly fetched ones so
+    # re-backfills never strip good data.
+    getter = getattr(ingestion_sink, "get_git_file_contents_by_path", None)
+    if getter is not None:
+        try:
+            existing_contents = await getter(repo_id)
+        except Exception as e:
+            logger.warning(
+                "Could not load existing git_files contents for %s "
+                "(proceeding without preservation): %s",
+                repo_full_name,
+                e,
+            )
+            existing_contents = {}
+        if existing_contents:
+            contents_by_path = {**existing_contents, **contents_by_path}
     async with AsyncBatchCollector(ingestion_sink.insert_git_file_data) as collector:
         for path in file_paths:
             collector.add(

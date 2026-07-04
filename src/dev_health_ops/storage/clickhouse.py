@@ -494,6 +494,40 @@ class ClickHouseStore:
             )
         return bool(getattr(result, "result_rows", None))
 
+    async def get_git_file_contents_by_path(self, repo_id) -> dict[str, str]:
+        """Latest non-empty ``contents`` per path for a repo (newest wins).
+
+        ``git_files`` is ReplacingMergeTree(last_synced): a paths-only
+        rewrite would otherwise shadow previously-fetched contents with NULL
+        rows (CHAOS-2857). ``backfill_file_records`` merges this map under
+        freshly fetched contents so re-syncs never strip good data. Scoped by
+        ``self.org_id`` when set because ``git_files`` is org-partitioned and
+        ``repo_id`` can be reused across tenants (same rationale as
+        ``get_blamed_paths``).
+        """
+        assert self.client is not None
+        org_id = getattr(self, "org_id", None) or ""
+        query = (
+            "SELECT path, argMax(contents, last_synced) AS contents "
+            "FROM git_files WHERE repo_id = {repo_id:UUID} "
+            "AND contents IS NOT NULL AND contents != ''"
+        )
+        params: dict[str, Any] = {"repo_id": str(self._normalize_uuid(repo_id))}
+        if org_id:
+            query += " AND org_id = {org_id:String}"
+            params["org_id"] = org_id
+        query += " GROUP BY path"
+        async with self._lock:
+            result = await asyncio.to_thread(
+                self.client.query, query, parameters=params
+            )
+        rows = getattr(result, "result_rows", None) or []
+        return {
+            str(row[0]): str(row[1])
+            for row in rows
+            if row and row[0] is not None and row[1]
+        }
+
     async def has_any_git_commit_stats(self, repo_id) -> bool:
         return await self._has_any("git_commit_stats", self._normalize_uuid(repo_id))
 

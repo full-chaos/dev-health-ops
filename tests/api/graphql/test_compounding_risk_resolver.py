@@ -33,6 +33,7 @@ from dev_health_ops.api.graphql.types.compounding_risk import (
 ORG_ID = "org-test"
 NOW = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)
 DAY = date(2026, 5, 20)
+PARTIAL_DAY = date(2026, 5, 21)
 
 
 def _ctx() -> GraphQLContext:
@@ -82,6 +83,63 @@ async def test_empty_state_when_no_data_for_org() -> None:
     assert result.org_id == ORG_ID
     assert result.rows == []
     assert result.trend == []
+
+
+@pytest.mark.asyncio
+async def test_empty_state_when_no_scored_day_for_org() -> None:
+    ctx = _ctx()
+    _setup_client(ctx.client, [_qresult(["day"], [[None]])])
+
+    result = await resolve_compounding_risk(ctx, ORG_ID)
+
+    latest_query: str = ctx.client.query.call_args_list[0].args[0]
+    assert "missing_scores = 0" in latest_query
+    assert result.org_id == ORG_ID
+    assert result.rows == []
+    assert result.trend == []
+
+
+@pytest.mark.asyncio
+async def test_latest_day_skips_partial_null_day_and_returns_complete_score() -> None:
+    ctx = _ctx()
+    columns = [
+        "scope_id",
+        "score",
+        "severity",
+        "w_churn",
+        "w_complexity",
+        "w_ownership",
+        "w_review",
+        "threshold_elevated",
+        "threshold_high",
+        "latest_computed_at",
+    ]
+    _setup_client(
+        ctx.client,
+        [
+            _qresult(["day"], [[DAY]]),
+            _qresult(
+                columns,
+                [["repo-1", 0.4996, "elevated", 0.3, 0.3, 0.2, 0.2, 0.4, 0.65, NOW]],
+            ),
+            _qresult(["repo_id", "full_name"], [["repo-1", "acme/backend"]]),
+            _qresult(["day", "avg_score"], [[DAY, 0.4996], [PARTIAL_DAY, None]]),
+        ],
+    )
+
+    result = await resolve_compounding_risk(ctx, ORG_ID)
+
+    latest_query: str = ctx.client.query.call_args_list[0].args[0]
+    latest_params: dict[str, Any] = ctx.client.query.call_args_list[0].kwargs[
+        "parameters"
+    ]
+    assert "maxOrNull(day) AS day" in latest_query
+    assert "argMax(compounding_risk, computed_at) AS score" in latest_query
+    assert "countIf(score IS NULL) AS missing_scores" in latest_query
+    assert "missing_scores = 0" in latest_query
+    assert latest_params == {"org_id": ORG_ID, "scope": "repo"}
+    assert result.rows[0].day == DAY
+    assert result.rows[0].score == pytest.approx(0.4996)
 
 
 @pytest.mark.asyncio
@@ -268,6 +326,67 @@ async def test_repo_ids_filter_resolves_slugs_or_uuids_in_latest_and_trend_queri
     trend_query: str = ctx.client.query.call_args_list[1].args[0]
     _assert_scope_id_slug_or_uuid_predicate(latest_query)
     _assert_scope_id_slug_or_uuid_predicate(trend_query)
+
+
+@pytest.mark.asyncio
+async def test_latest_day_selection_is_repo_scope_and_filter_isolated() -> None:
+    ctx = _ctx()
+    slug = "full-chaos/dev-health-ops"
+    _setup_client(
+        ctx.client,
+        [
+            _qresult(["day"], [[DAY]]),
+            _qresult([], []),
+            _qresult([], []),
+        ],
+    )
+
+    await resolve_compounding_risk(
+        ctx, ORG_ID, CompoundingRiskFilterInput(repo_ids=[slug])
+    )
+
+    latest_query: str = ctx.client.query.call_args_list[0].args[0]
+    latest_params: dict[str, Any] = ctx.client.query.call_args_list[0].kwargs[
+        "parameters"
+    ]
+    assert "AND scope = {scope:String}" in latest_query
+    _assert_scope_id_slug_or_uuid_predicate(latest_query)
+    assert latest_params == {"org_id": ORG_ID, "scope": "repo", "repo_ids": [slug]}
+
+
+@pytest.mark.asyncio
+async def test_latest_day_selection_is_team_scope_and_filter_isolated() -> None:
+    ctx = _ctx()
+    _setup_client(
+        ctx.client,
+        [
+            _qresult(["day"], [[DAY]]),
+            _qresult([], []),
+            _qresult([], []),
+            _qresult([], []),
+            _qresult([], []),
+        ],
+    )
+
+    await resolve_compounding_risk(
+        ctx,
+        ORG_ID,
+        CompoundingRiskFilterInput(
+            breakout=CompoundingRiskScope.TEAM, team_ids=["team-A"]
+        ),
+    )
+
+    latest_query: str = ctx.client.query.call_args_list[0].args[0]
+    latest_params: dict[str, Any] = ctx.client.query.call_args_list[0].kwargs[
+        "parameters"
+    ]
+    assert "AND scope = {scope:String}" in latest_query
+    assert "AND scope_id IN {scope_ids:Array(String)}" in latest_query
+    assert latest_params == {
+        "org_id": ORG_ID,
+        "scope": "team",
+        "scope_ids": ["team-A"],
+    }
 
 
 @pytest.mark.asyncio

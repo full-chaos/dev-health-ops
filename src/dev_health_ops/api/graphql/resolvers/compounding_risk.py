@@ -64,16 +64,52 @@ def _severity_from_str(value: Any) -> CompoundingRiskSeverity:
 # at runtime against the live sink and is replaced with the canonical helper.
 
 
-async def _latest_day_for_org(client: Any, org_id: str) -> date | None:
-    rows = await query_dicts(
-        client,
-        """
-        SELECT max(day) AS day
-        FROM compounding_risk_daily
-        WHERE org_id = {org_id:String}
-        """,
-        {"org_id": org_id},
-    )
+async def _latest_day_for_org(
+    client: Any,
+    org_id: str,
+    *,
+    scope: str,
+    scope_ids: list[str] | None,
+) -> date | None:
+    query = """
+        SELECT maxOrNull(day) AS day
+        FROM (
+            SELECT
+                day,
+                count() AS row_count,
+                countIf(score IS NULL) AS missing_scores
+            FROM (
+                SELECT
+                    day,
+                    scope_id,
+                    argMax(compounding_risk, computed_at) AS score
+                FROM compounding_risk_daily
+                WHERE org_id = {org_id:String}
+                  AND scope = {scope:String}
+    """
+    params: dict[str, Any] = {"org_id": org_id, "scope": scope}
+    if scope_ids:
+        bounded = list(scope_ids)[:MAX_ROWS]
+        if scope == "repo":
+            query += """
+                  AND scope_id IN (
+                      SELECT toString(id) FROM repos
+                      WHERE org_id = {org_id:String}
+                        AND (repo IN {repo_ids:Array(String)} OR toString(id) IN {repo_ids:Array(String)})
+                  )
+            """
+            params["repo_ids"] = bounded
+        else:
+            query += "\n                  AND scope_id IN {scope_ids:Array(String)}"
+            params["scope_ids"] = bounded
+    query += """
+                GROUP BY day, scope_id
+            )
+            GROUP BY day
+        )
+        WHERE row_count > 0 AND missing_scores = 0
+    """
+    rows = await query_dicts(client, query, params)
     if not rows:
         return None
     value = rows[0].get("day")
@@ -427,7 +463,30 @@ async def resolve_compounding_risk(
     breakout = filt.breakout
     trend_days = max(1, min(filt.trend_days, MAX_TREND_DAYS))
 
-    day = filt.day or await _latest_day_for_org(client, authorized_org_id)
+    day: date | None
+    if filt.day is not None:
+        day = filt.day
+    elif breakout == CompoundingRiskScope.TEAM:
+        day = await _latest_day_for_org(
+            client,
+            authorized_org_id,
+            scope="team",
+            scope_ids=filt.team_ids,
+        )
+        if day is None:
+            day = await _latest_day_for_org(
+                client,
+                authorized_org_id,
+                scope="repo",
+                scope_ids=filt.repo_ids,
+            )
+    else:
+        day = await _latest_day_for_org(
+            client,
+            authorized_org_id,
+            scope="repo",
+            scope_ids=filt.repo_ids,
+        )
     if day is None:
         return CompoundingRiskResult(
             org_id=authorized_org_id,

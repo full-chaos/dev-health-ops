@@ -57,7 +57,12 @@ async def _fixture_compounding_risk(sink: CapturingSink) -> None:
         _load_team_assignments,
     )
 
-    await _latest_day_for_org(sink, SAMPLE_ORG_ID)
+    await _latest_day_for_org(
+        sink, SAMPLE_ORG_ID, scope="repo", scope_ids=[SAMPLE_REPO_ID]
+    )
+    await _latest_day_for_org(
+        sink, SAMPLE_ORG_ID, scope="team", scope_ids=[SAMPLE_TEAM_ID]
+    )
 
     # Both scope=repo and scope=team paths plus with/without scope_ids filter
     # — bug #2 (max(computed_at) AS computed_at) lives in this query.

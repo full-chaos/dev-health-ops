@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from dev_health_ops.api.admin.routers.sync import PROVIDER_SYNC_TARGETS
+from dev_health_ops.api.admin.routers.sync import (
+    PROVIDER_SYNC_TARGETS,
+    _planner_dataset_keys,
+)
 from dev_health_ops.processors.sync import (
     _sync_flags_for_target,
     processor_sync_targets,
@@ -102,6 +105,19 @@ def test_git_target_does_not_enable_unrelated_processor_flags() -> None:
         "sync_tests": False,
         "blame_only": False,
     }
+
+
+def test_code_host_git_default_seeds_blame_dataset() -> None:
+    for provider in ("github", "gitlab"):
+        dataset_keys = _planner_dataset_keys(provider, ["git"])
+
+        assert dataset_keys == [
+            "repo-metadata",
+            "commits",
+            "commit-stats",
+            "files",
+            "blame",
+        ]
 
 
 def test_each_processor_target_has_explicit_flag_values() -> None:

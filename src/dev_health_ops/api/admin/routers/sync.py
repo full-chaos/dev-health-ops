@@ -54,7 +54,11 @@ from dev_health_ops.models.settings import (
     ScheduledJob,
     SyncConfiguration,
 )
-from dev_health_ops.sync.datasets import supported_datasets, supported_legacy_targets
+from dev_health_ops.sync.datasets import (
+    DatasetKey,
+    supported_datasets,
+    supported_legacy_targets,
+)
 from dev_health_ops.sync.error_sanitize import sanitize_error_text
 from dev_health_ops.sync.execution_trigger import (
     create_sync_execution_trigger,
@@ -682,6 +686,8 @@ async def _upsert_scheduled_job(
 
 def _planner_dataset_keys(provider: str, sync_targets: list[str]) -> list[str]:
     targets = {str(target) for target in sync_targets if target is not None}
+    if provider.lower() in {"github", "gitlab"} and "git" in targets:
+        targets.add(DatasetKey.BLAME.value)
     return [
         spec.dataset_key
         for spec in supported_datasets(provider)

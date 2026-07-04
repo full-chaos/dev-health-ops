@@ -68,7 +68,7 @@ def _load_repos(
     return repos
 
 
-def _git_file_counts(client: Any, repo_id: uuid.UUID) -> tuple[int, int]:
+def _git_file_counts(client: Any, repo_id: uuid.UUID, org_id: str) -> tuple[int, int]:
     rows = _query_rows(
         client,
         """
@@ -77,8 +77,9 @@ def _git_file_counts(client: Any, repo_id: uuid.UUID) -> tuple[int, int]:
           countIf(contents IS NOT NULL AND contents != '') AS non_empty
         FROM git_files
         WHERE repo_id = {repo_id:UUID}
+          AND org_id = {org_id:String}
         """,
-        {"repo_id": str(repo_id)},
+        {"repo_id": str(repo_id), "org_id": org_id},
     )
     if not rows:
         return 0, 0
@@ -87,17 +88,18 @@ def _git_file_counts(client: Any, repo_id: uuid.UUID) -> tuple[int, int]:
 
 
 def _load_git_files(
-    client: Any, repo_id: uuid.UUID, limit: int | None
+    client: Any, repo_id: uuid.UUID, org_id: str, limit: int | None
 ) -> list[tuple[str, str]]:
     query = """
         SELECT path, contents
         FROM git_files
         WHERE repo_id = {repo_id:UUID}
+          AND org_id = {org_id:String}
           AND contents IS NOT NULL
           AND contents != ''
         ORDER BY path
     """
-    params: dict = {"repo_id": str(repo_id)}
+    params: dict = {"repo_id": str(repo_id), "org_id": org_id}
     if limit is not None:
         query = f"{query} LIMIT {{limit:UInt64}}"
         params["limit"] = int(limit)
@@ -106,16 +108,17 @@ def _load_git_files(
 
 
 def _load_missing_paths(
-    client: Any, repo_id: uuid.UUID, limit: int | None
+    client: Any, repo_id: uuid.UUID, org_id: str, limit: int | None
 ) -> list[str]:
     query = """
         SELECT path
         FROM git_files
         WHERE repo_id = {repo_id:UUID}
+          AND org_id = {org_id:String}
           AND (contents IS NULL OR contents = '')
         ORDER BY path
     """
-    params: dict = {"repo_id": str(repo_id)}
+    params: dict = {"repo_id": str(repo_id), "org_id": org_id}
     if limit is not None:
         query = f"{query} LIMIT {{limit:UInt64}}"
         params["limit"] = int(limit)
@@ -126,6 +129,7 @@ def _load_missing_paths(
 def _load_blame_contents(
     client: Any,
     repo_id: uuid.UUID,
+    org_id: str,
     paths: Sequence[str] | None,
     limit: int | None,
 ) -> list[tuple[str, str]]:
@@ -141,8 +145,9 @@ def _load_blame_contents(
           ) AS contents
         FROM git_blame
         WHERE repo_id = {repo_id:UUID}
+          AND org_id = {org_id:String}
     """
-    params: dict = {"repo_id": str(repo_id)}
+    params: dict = {"repo_id": str(repo_id), "org_id": org_id}
     if paths:
         query += " AND path IN {paths:Array(String)}"
         params["paths"] = list(paths)
@@ -154,20 +159,27 @@ def _load_blame_contents(
     return [(row[0], row[1]) for row in rows]
 
 
-def _max_last_synced(client: Any, table: str, repo_id: uuid.UUID) -> datetime | None:
+def _max_last_synced(
+    client: Any, table: str, repo_id: uuid.UUID, org_id: str
+) -> datetime | None:
     rows = _query_rows(
         client,
-        f"SELECT maxOrNull(last_synced) FROM {table} WHERE repo_id = {{repo_id:UUID}}",
-        {"repo_id": str(repo_id)},
+        f"""
+        SELECT maxOrNull(last_synced)
+        FROM {table}
+        WHERE repo_id = {{repo_id:UUID}}
+          AND org_id = {{org_id:String}}
+        """,
+        {"repo_id": str(repo_id), "org_id": org_id},
     )
     if not rows:
         return None
     return rows[0][0]
 
 
-def _build_ref(client: Any, repo_id: uuid.UUID) -> str:
-    last_synced = _max_last_synced(client, "git_files", repo_id)
-    blame_synced = _max_last_synced(client, "git_blame", repo_id)
+def _build_ref(client: Any, repo_id: uuid.UUID, org_id: str) -> str:
+    last_synced = _max_last_synced(client, "git_files", repo_id, org_id)
+    blame_synced = _max_last_synced(client, "git_blame", repo_id, org_id)
     candidates = [dt for dt in [last_synced, blame_synced] if dt]
     if not candidates:
         return "db_last_synced:unknown"
@@ -209,8 +221,14 @@ def run_complexity_db_job(
     """
     Compute complexity metrics from ClickHouse git_files/git_blame contents.
 
-    Note: For backfill_days > 1, this job reuses the current file snapshot
-    across the requested days because historical file snapshots are not stored.
+    Note: complexity has no historical snapshot storage. Regardless of
+    ``backfill_days``, this job always writes exactly ONE row -- for
+    ``date`` -- computed from the CURRENT git_files/git_blame contents.
+    Reusing that single snapshot across a multi-day backfill window would
+    fabricate duplicate flat ``cyclomatic_per_kloc`` rows and flatline
+    ``complexity_delta``'s trailing 30-day trend (CHAOS-2850). A genuine
+    trend only comes from the daily ``dispatch_complexity_job`` cadence
+    running on distinct real days as the code actually changes.
     """
     resolved_db_url = db_url or os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
     if not resolved_db_url:
@@ -239,21 +257,29 @@ def run_complexity_db_job(
             return 0
 
         if backfill_days > 1:
-            logger.info(
-                "Backfill requested; reusing current file snapshot for each day."
+            logger.warning(
+                "complexity backfill_days=%d requested, but historical file "
+                "snapshots are not stored -- complexity can only be computed "
+                "from the CURRENT git_files/git_blame contents. Writing a "
+                "single row for %s only, not %d duplicate flat rows, to avoid "
+                "fabricating a misleading flat complexity_delta trend "
+                "(CHAOS-2850).",
+                backfill_days,
+                date.isoformat(),
+                backfill_days,
             )
 
-        days = _date_range(date, max(1, int(backfill_days)))
+        days = _date_range(date, 1)
         repos_with_data = 0
         for repo_uuid, repo_name in repos:
             repo_label = repo_name or str(repo_uuid)
-            total_files, non_empty = _git_file_counts(sink.client, repo_uuid)
+            total_files, non_empty = _git_file_counts(sink.client, repo_uuid, org_id)
 
             files: list[tuple[str, str]] = []
             remaining = max_files
 
             if non_empty > 0:
-                git_files = _load_git_files(sink.client, repo_uuid, remaining)
+                git_files = _load_git_files(sink.client, repo_uuid, org_id, remaining)
                 files.extend(git_files)
                 if remaining is not None:
                     remaining = max(remaining - len(git_files), 0)
@@ -267,7 +293,7 @@ def run_complexity_db_job(
                         total_files,
                     )
                     missing_paths = _load_missing_paths(
-                        sink.client, repo_uuid, remaining
+                        sink.client, repo_uuid, org_id, remaining
                     )
                     missing_paths = [
                         path for path in missing_paths if scanner.should_process(path)
@@ -276,6 +302,7 @@ def run_complexity_db_job(
                         blame_files = _load_blame_contents(
                             sink.client,
                             repo_uuid,
+                            org_id,
                             missing_paths,
                             remaining,
                         )
@@ -286,14 +313,16 @@ def run_complexity_db_job(
                         "Repo %s has no git_files contents; falling back to git_blame.",
                         repo_label,
                     )
-                files = _load_blame_contents(sink.client, repo_uuid, None, remaining)
+                files = _load_blame_contents(
+                    sink.client, repo_uuid, org_id, None, remaining
+                )
 
             files = _filter_files(scanner, files, max_files)
             if not files:
                 logger.warning("No scannable contents found for repo %s.", repo_label)
                 continue
 
-            ref_value = _build_ref(sink.client, repo_uuid)
+            ref_value = _build_ref(sink.client, repo_uuid, org_id)
             file_results = scanner.scan_file_contents(files)
             if not file_results:
                 logger.warning("No complexity data found for repo %s.", repo_label)

@@ -338,7 +338,9 @@ class TestBestEffortSuppression:
         assert alerts[0].source == "gitlab_vulnerability"
 
     @pytest.mark.asyncio
-    async def test_both_endpoints_forbidden_yields_empty_list_no_raise(self) -> None:
+    async def test_both_endpoints_forbidden_yields_empty_list_no_raise(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         transport, _ = _router_transport(
             {
                 _PROJECT_PATH: _json_response(200, _PROJECT_RESPONSE),
@@ -348,7 +350,21 @@ class TestBestEffortSuppression:
         )
         client = _client(transport)
 
-        assert await client.get_security_alerts(42) == []
+        with caplog.at_level("WARNING"):
+            assert await client.get_security_alerts(42) == []
+        messages = [record.message for record in caplog.records]
+        assert any(
+            "provider=gitlab" in message
+            and "project_id=42" in message
+            and "endpoint=vulnerability_findings" in message
+            for message in messages
+        )
+        assert any(
+            "provider=gitlab" in message
+            and "project_id=42" in message
+            and "endpoint=dependencies" in message
+            for message in messages
+        )
 
 
 # ---------------------------------------------------------------------------

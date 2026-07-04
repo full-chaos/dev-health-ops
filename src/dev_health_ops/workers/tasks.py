@@ -1,4 +1,6 @@
 from dev_health_ops.workers.metrics_tasks import (
+    dispatch_complexity_job,
+    dispatch_daily_metrics_for_all_orgs,
     dispatch_daily_metrics_partitioned,
     dispatch_release_impact,
     dispatch_scheduled_metrics,
@@ -58,6 +60,8 @@ __all__ = [
     "_inject_provider_token",
     "_invalidate_metrics_cache",
     "_resolve_env_credentials",
+    "dispatch_complexity_job",
+    "dispatch_daily_metrics_for_all_orgs",
     "dispatch_daily_metrics_partitioned",
     "dispatch_investment_materialize_partitioned",
     "dispatch_release_impact",

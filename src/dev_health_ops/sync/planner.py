@@ -58,6 +58,7 @@ from dev_health_ops.models import (
     SyncRunUnitStatus,
 )
 from dev_health_ops.sync.datasets import (
+    DatasetKey,
     DatasetSpec,
     WatermarkBehavior,
     get_dataset_spec,
@@ -145,7 +146,10 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
         session, integration
     )
     sources = _load_enabled_sources(session, integration, request.source_ids)
-    datasets = _load_enabled_datasets(session, integration, request.dataset_keys)
+    dataset_keys = _ensure_security_dataset_for_scheduled_code_host_sync(
+        session, integration, request
+    )
+    datasets = _load_enabled_datasets(session, integration, dataset_keys)
     now = datetime.now(timezone.utc)
 
     planned_units = _build_planned_units(
@@ -316,6 +320,56 @@ def _load_enabled_sources(
             return []
         query = query.filter(IntegrationSource.id.in_(source_uuids))
     return list(query.order_by(IntegrationSource.full_name, IntegrationSource.id).all())
+
+
+_CODE_HOST_SECURITY_PROVIDERS = frozenset({"github", "gitlab"})
+_SCHEDULED_SECURITY_TRIGGER = "schedule"
+
+
+def _ensure_security_dataset_for_scheduled_code_host_sync(
+    session: Session,
+    integration: Integration,
+    request: SyncPlanRequest,
+) -> tuple[str, ...] | None:
+    """Ensure normal scheduled code-host syncs also plan security ingestion.
+
+    Historical sync configs only ran the security dataset when users explicitly
+    selected the legacy ``security`` target. Normal scheduled GitHub/GitLab syncs
+    should refresh repository security alerts alongside the rest of the code-host
+    crawl, without overriding an operator-disabled security dataset row.
+    """
+
+    provider = str(integration.provider).lower()
+    requested = request.dataset_keys
+    if provider not in _CODE_HOST_SECURITY_PROVIDERS:
+        return requested
+    if request.triggered_by != _SCHEDULED_SECURITY_TRIGGER:
+        return requested
+
+    if requested is not None and DatasetKey.SECURITY.value not in requested:
+        requested = (*requested, DatasetKey.SECURITY.value)
+
+    security_dataset = (
+        session.query(IntegrationDataset)
+        .filter(
+            IntegrationDataset.org_id == integration.org_id,
+            IntegrationDataset.integration_id == integration.id,
+            IntegrationDataset.dataset_key == DatasetKey.SECURITY.value,
+        )
+        .one_or_none()
+    )
+    if security_dataset is None:
+        session.add(
+            IntegrationDataset(
+                org_id=integration.org_id,
+                integration_id=integration.id,
+                dataset_key=DatasetKey.SECURITY.value,
+                is_enabled=True,
+                options={"auto_enabled_by": "scheduled_code_host_sync"},
+            )
+        )
+        session.flush()
+    return requested
 
 
 def _load_enabled_datasets(

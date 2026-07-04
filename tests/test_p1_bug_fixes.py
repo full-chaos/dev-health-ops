@@ -82,10 +82,12 @@ class TestBeatScheduleMetrics:
 
         assert "run-daily-metrics" in beat_schedule
         entry = beat_schedule["run-daily-metrics"]
-        # gh-422: beat schedule now dispatches partitioned metrics
+        # CHAOS-2849: the beat entry now points at the per-org fan-out
+        # dispatcher, not the blank-org-defaulting partitioned task directly
+        # (gh-422 only wired the partitioned task, not org scoping).
         assert (
             entry["task"]
-            == "dev_health_ops.workers.tasks.dispatch_daily_metrics_partitioned"
+            == "dev_health_ops.workers.tasks.dispatch_daily_metrics_for_all_orgs"
         )
         assert entry["options"]["queue"] == "default"
 

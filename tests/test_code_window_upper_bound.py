@@ -18,7 +18,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from dev_health_ops.processors.github import (
-    _fetch_github_commits_sync,
     _filter_after,
     _sync_github_test_reports,
 )
@@ -33,24 +32,6 @@ from dev_health_ops.processors.gitlab import (
 
 SINCE = datetime(2026, 1, 10, tzinfo=timezone.utc)
 UNTIL = datetime(2026, 1, 12, tzinfo=timezone.utc)
-
-
-def test_github_commits_fetch_passes_until_to_get_commits() -> None:
-    gh_repo = MagicMock()
-    gh_repo.get_commits.return_value = []
-
-    _fetch_github_commits_sync(gh_repo, None, "repo-1", since=SINCE, until=UNTIL)
-
-    gh_repo.get_commits.assert_called_once_with(since=SINCE, until=UNTIL)
-
-
-def test_github_commits_fetch_omits_until_when_none() -> None:
-    gh_repo = MagicMock()
-    gh_repo.get_commits.return_value = []
-
-    _fetch_github_commits_sync(gh_repo, None, "repo-1", since=SINCE)
-
-    gh_repo.get_commits.assert_called_once_with(since=SINCE)
 
 
 def test_gitlab_commits_fetch_passes_window_to_code_client() -> None:

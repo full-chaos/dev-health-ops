@@ -216,14 +216,24 @@ class TestDegradeToEmpty:
         await client.close()
 
     @pytest.mark.asyncio
-    async def test_404_degrades_to_empty(self) -> None:
+    async def test_404_degrades_to_empty_with_log(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         client = _client(
             httpx.MockTransport(
                 lambda r: httpx.Response(404, json={"message": "Not Found"})
             )
         )
-        alerts = await client.get_security_advisories("acme", "widgets")
+        with caplog.at_level("WARNING"):
+            alerts = await client.get_security_advisories("acme", "widgets")
         assert alerts == []
+        assert any(
+            "provider=github" in r.message
+            and "repo=widgets" in r.message
+            and "endpoint=security-advisories" in r.message
+            and "status=404" in r.message
+            for r in caplog.records
+        )
         await client.close()
 
     @pytest.mark.asyncio

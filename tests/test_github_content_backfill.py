@@ -257,10 +257,25 @@ class TestPathsOnlyUpgrade:
 
 
 class TestCommitStatsBackfill:
+    @staticmethod
+    def _stat(commit_hash: str, repo_id: object):
+        from dev_health_ops.models.git import GitCommitStat
+
+        return GitCommitStat(
+            repo_id=repo_id,
+            commit_hash=commit_hash,
+            file_path=f"{commit_hash}.py",
+            additions=1,
+            deletions=0,
+            old_file_mode="unknown",
+            new_file_mode="unknown",
+        )
+
     @pytest.mark.asyncio
     async def test_backfill_commit_stats_uses_window_and_persists_when_cap_not_hit(
         self, monkeypatch
     ):
+        from dev_health_ops.processors import github
         from dev_health_ops.processors.github import _backfill_github_missing_data
 
         monkeypatch.setenv("COMMIT_STATS_MAX_COMMITS", "2")
@@ -282,22 +297,41 @@ class TestCommitStatsBackfill:
         sink.insert_git_commit_stats = AsyncMock(side_effect=insert)
 
         commits = [SimpleNamespace(sha=f"sha-{idx}") for idx in range(2)]
-        details_by_sha = {
-            commit.sha: SimpleNamespace(
-                files=[
-                    SimpleNamespace(
-                        filename=f"{commit.sha}.py",
-                        additions=1,
-                        deletions=0,
-                    )
-                ]
-            )
-            for commit in commits
-        }
+        fetch_args = []
+        stats_args = []
+
+        async def fake_fetch(
+            connector_arg,
+            owner,
+            repo_name,
+            repo_id,
+            max_commits,
+            since_arg,
+            until_arg,
+            usage_sink,
+        ):
+            fetch_args.append((owner, repo_name, max_commits, since_arg, until_arg))
+            return commits, [], False
+
+        async def fake_stats(
+            connector_arg,
+            owner,
+            repo_name,
+            raw_commits,
+            repo_id,
+            max_stats,
+            since_arg,
+            usage_sink,
+        ):
+            stats_args.append((owner, repo_name, max_stats, since_arg))
+            return [
+                self._stat(commit.sha, repo_id) for commit in raw_commits[:max_stats]
+            ]
+
+        monkeypatch.setattr(github, "_fetch_github_commits_async", fake_fetch)
+        monkeypatch.setattr(github, "_fetch_github_commit_stats_async", fake_stats)
 
         gh_repo = Mock()
-        gh_repo.get_commits.return_value = commits
-        gh_repo.get_commit.side_effect = lambda sha: details_by_sha[sha]
 
         connector = Mock()
         connector.github.get_repo.return_value = gh_repo
@@ -319,15 +353,13 @@ class TestCommitStatsBackfill:
             until=until,
         )
 
-        gh_repo.get_commits.assert_called_once_with(since=since, until=until)
-        assert [call.args[0] for call in gh_repo.get_commit.call_args_list] == [
-            "sha-0",
-            "sha-1",
-        ]
+        assert fetch_args == [("octo", "repo", None, since, until)]
+        assert stats_args == [("octo", "repo", 2, since)]
         assert [row.commit_hash for row in written] == ["sha-0", "sha-1"]
 
     @pytest.mark.asyncio
     async def test_backfill_commit_stats_over_cap_writes_nothing(self, monkeypatch):
+        from dev_health_ops.processors import github
         from dev_health_ops.processors.github import _backfill_github_missing_data
 
         monkeypatch.setenv("COMMIT_STATS_MAX_COMMITS", "2")
@@ -344,22 +376,19 @@ class TestCommitStatsBackfill:
         sink.insert_git_commit_stats = AsyncMock()
 
         commits = [SimpleNamespace(sha=f"sha-{idx}") for idx in range(3)]
-        details_by_sha = {
-            commit.sha: SimpleNamespace(
-                files=[
-                    SimpleNamespace(
-                        filename=f"{commit.sha}.py",
-                        additions=1,
-                        deletions=0,
-                    )
-                ]
-            )
-            for commit in commits
-        }
+        stats_calls = []
+
+        async def fake_fetch(*args, **kwargs):
+            return commits, [], False
+
+        async def fake_stats(*args, **kwargs):
+            stats_calls.append((args, kwargs))
+            return []
+
+        monkeypatch.setattr(github, "_fetch_github_commits_async", fake_fetch)
+        monkeypatch.setattr(github, "_fetch_github_commit_stats_async", fake_stats)
 
         gh_repo = Mock()
-        gh_repo.get_commits.return_value = commits
-        gh_repo.get_commit.side_effect = lambda sha: details_by_sha[sha]
 
         connector = Mock()
         connector.github.get_repo.return_value = gh_repo
@@ -381,14 +410,14 @@ class TestCommitStatsBackfill:
             until=until,
         )
 
-        gh_repo.get_commits.assert_called_once_with(since=since, until=until)
-        gh_repo.get_commit.assert_not_called()
+        assert stats_calls == []
         sink.insert_git_commit_stats.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_backfill_commit_stats_rate_limit_propagates_without_partial_write(
         self, monkeypatch
     ):
+        from dev_health_ops.processors import github
         from dev_health_ops.processors.github import _backfill_github_missing_data
 
         monkeypatch.setenv("COMMIT_STATS_MAX_COMMITS", "3")
@@ -405,20 +434,17 @@ class TestCommitStatsBackfill:
         sink.insert_git_commit_stats = AsyncMock()
 
         commits = [SimpleNamespace(sha="sha-0"), SimpleNamespace(sha="sha-1")]
+
+        async def fake_fetch(*args, **kwargs):
+            return commits, [], False
+
+        async def fake_stats(*args, **kwargs):
+            raise RateLimitException("limited", retry_after_seconds=42.0)
+
+        monkeypatch.setattr(github, "_fetch_github_commits_async", fake_fetch)
+        monkeypatch.setattr(github, "_fetch_github_commit_stats_async", fake_stats)
+
         gh_repo = Mock()
-        gh_repo.get_commits.return_value = commits
-        gh_repo.get_commit.side_effect = [
-            SimpleNamespace(
-                files=[
-                    SimpleNamespace(
-                        filename="sha-0.py",
-                        additions=1,
-                        deletions=0,
-                    )
-                ]
-            ),
-            RateLimitException("limited", retry_after_seconds=42.0),
-        ]
 
         connector = Mock()
         connector.github.get_repo.return_value = gh_repo
@@ -447,6 +473,7 @@ class TestCommitStatsBackfill:
     @pytest.mark.asyncio
     async def test_backfill_commit_stats_over_cap_still_runs_blame(self, monkeypatch):
         from dev_health_ops.connectors.models import BlameRange, FileBlame
+        from dev_health_ops.processors import github
         from dev_health_ops.processors.github import _backfill_github_missing_data
 
         monkeypatch.setenv("COMMIT_STATS_MAX_COMMITS", "2")
@@ -470,24 +497,21 @@ class TestCommitStatsBackfill:
         sink.insert_blame_data = AsyncMock(side_effect=insert_blame)
 
         commits = [SimpleNamespace(sha=f"sha-{idx}") for idx in range(3)]
-        details_by_sha = {
-            commit.sha: SimpleNamespace(
-                files=[
-                    SimpleNamespace(
-                        filename=f"{commit.sha}.py",
-                        additions=1,
-                        deletions=0,
-                    )
-                ]
-            )
-            for commit in commits
-        }
+        stats_calls = []
+
+        async def fake_fetch(*args, **kwargs):
+            return commits, [], False
+
+        async def fake_stats(*args, **kwargs):
+            stats_calls.append((args, kwargs))
+            return []
+
+        monkeypatch.setattr(github, "_fetch_github_commits_async", fake_fetch)
+        monkeypatch.setattr(github, "_fetch_github_commit_stats_async", fake_stats)
 
         gh_repo = Mock()
         gh_repo.get_branch.return_value = Mock(commit=Mock(sha="tree-sha"))
         gh_repo.get_git_tree.return_value = Mock(tree=[_FakeTreeEntry("src/app.py")])
-        gh_repo.get_commits.return_value = commits
-        gh_repo.get_commit.side_effect = lambda sha: details_by_sha[sha]
 
         connector = Mock()
         connector.github.get_repo.return_value = gh_repo
@@ -523,7 +547,7 @@ class TestCommitStatsBackfill:
         )
 
         sink.insert_git_commit_stats.assert_not_called()
-        gh_repo.get_commit.assert_not_called()
+        assert stats_calls == []
         connector.get_file_blame.assert_called_once_with(
             owner="octo",
             repo="repo",
@@ -536,6 +560,7 @@ class TestCommitStatsBackfill:
     async def test_backfill_commit_stats_full_history_writes_capped_sample(
         self, monkeypatch
     ):
+        from dev_health_ops.processors import github
         from dev_health_ops.processors.github import _backfill_github_missing_data
 
         monkeypatch.setenv("COMMIT_STATS_MAX_COMMITS", "2")
@@ -555,22 +580,30 @@ class TestCommitStatsBackfill:
         sink.insert_git_commit_stats = AsyncMock(side_effect=insert)
 
         commits = [SimpleNamespace(sha=f"sha-{idx}") for idx in range(3)]
-        details_by_sha = {
-            commit.sha: SimpleNamespace(
-                files=[
-                    SimpleNamespace(
-                        filename=f"{commit.sha}.py",
-                        additions=1,
-                        deletions=0,
-                    )
-                ]
-            )
-            for commit in commits
-        }
+        stats_args = []
+
+        async def fake_fetch(*args, **kwargs):
+            return commits, [], False
+
+        async def fake_stats(
+            connector_arg,
+            owner,
+            repo_name,
+            raw_commits,
+            repo_id,
+            max_stats,
+            since_arg,
+            usage_sink,
+        ):
+            stats_args.append(max_stats)
+            return [
+                self._stat(commit.sha, repo_id) for commit in raw_commits[:max_stats]
+            ]
+
+        monkeypatch.setattr(github, "_fetch_github_commits_async", fake_fetch)
+        monkeypatch.setattr(github, "_fetch_github_commit_stats_async", fake_stats)
 
         gh_repo = Mock()
-        gh_repo.get_commits.return_value = commits
-        gh_repo.get_commit.side_effect = lambda sha: details_by_sha[sha]
 
         connector = Mock()
         connector.github.get_repo.return_value = gh_repo
@@ -590,9 +623,5 @@ class TestCommitStatsBackfill:
             include_blame=False,
         )
 
-        gh_repo.get_commits.assert_called_once_with()
-        assert [call.args[0] for call in gh_repo.get_commit.call_args_list] == [
-            "sha-0",
-            "sha-1",
-        ]
+        assert stats_args == [2]
         assert [row.commit_hash for row in written] == ["sha-0", "sha-1"]

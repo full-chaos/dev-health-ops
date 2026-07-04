@@ -1,10 +1,7 @@
 """GitHub instrumented httpx code client (CHAOS-2773 CS3 pathfinder).
 
-Ports the "security" code-dataset family -- Dependabot alerts, code-scanning
-alerts, security advisories -- off the frozen ``connectors/github.py`` REST
-methods (``get_dependabot_alerts`` / ``get_code_scanning_alerts`` /
-``get_security_advisories`` and their shared ``_get_security_alert_page``
-pager) onto ``providers/_http.py::InstrumentedRESTCore``.
+Ports GitHub code-dataset families off the frozen ``connectors/github.py`` REST
+methods onto ``providers/_http.py::InstrumentedRESTCore``.
 
 This is the epic's PATHFINDER client: the shape here (one owned
 ``InstrumentedRESTCore`` configured with GitHub's diagnostic headers and 403
@@ -23,6 +20,7 @@ Behavior parity with the connector is pinned by
 from __future__ import annotations
 
 import logging
+import urllib.parse
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -59,6 +57,8 @@ logger = logging.getLogger(__name__)
 SECURITY_ROUTE_FAMILY = "security"
 DEPLOYMENTS_ROUTE_FAMILY = "deployments"
 CICD_ROUTE_FAMILY = "cicd"
+GIT_ROUTE_FAMILY = "git"
+COMMIT_STATS_ROUTE_FAMILY = "commit_stats"
 _GITHUB_DEPLOYMENTS_PER_PAGE = 100
 
 
@@ -88,6 +88,29 @@ class GitHubWorkflowRunData:
     started_at: datetime | None
     finished_at: datetime | None
     retry_count: int
+
+
+@dataclass(frozen=True)
+class GitHubCommitData:
+    sha: str
+    message: str
+    author_name: str
+    author_email: str | None
+    author_when: datetime | None
+    committer_name: str
+    committer_email: str | None
+    committer_when: datetime | None
+    parent_count: int
+
+
+@dataclass(frozen=True)
+class GitHubCommitFileStatData:
+    commit_hash: str
+    file_path: str
+    additions: int
+    deletions: int
+    old_file_mode: str = "unknown"
+    new_file_mode: str = "unknown"
 
 
 def _lowered_github_headers(response: httpx.Response) -> dict[str, str]:
@@ -305,6 +328,56 @@ def _workflow_run_from_item(item: Mapping[str, Any]) -> GitHubWorkflowRunData:
     )
 
 
+def _commit_author_name(user: object, commit_person: Mapping[str, Any] | None) -> str:
+    login = user.get("login") if isinstance(user, Mapping) else None
+    name = commit_person.get("name") if isinstance(commit_person, Mapping) else None
+    return str(login or name or "Unknown")
+
+
+def _commit_author_email(
+    user: object, commit_person: Mapping[str, Any] | None
+) -> str | None:
+    email = commit_person.get("email") if isinstance(commit_person, Mapping) else None
+    if email:
+        return str(email)
+    user_email = user.get("email") if isinstance(user, Mapping) else None
+    return str(user_email) if user_email else None
+
+
+def _commit_from_item(item: Mapping[str, Any]) -> GitHubCommitData:
+    raw_commit = item.get("commit")
+    commit: Mapping[str, Any] = raw_commit if isinstance(raw_commit, Mapping) else {}
+    raw_author = commit.get("author")
+    author = raw_author if isinstance(raw_author, Mapping) else None
+    raw_committer = commit.get("committer")
+    committer = raw_committer if isinstance(raw_committer, Mapping) else None
+    parents = item.get("parents")
+    return GitHubCommitData(
+        sha=str(item.get("sha") or ""),
+        message=str(commit.get("message") or ""),
+        author_name=_commit_author_name(item.get("author"), author),
+        author_email=_commit_author_email(item.get("author"), author),
+        author_when=_parse_alert_datetime(author.get("date") if author else None),
+        committer_name=_commit_author_name(item.get("committer"), committer),
+        committer_email=_commit_author_email(item.get("committer"), committer),
+        committer_when=_parse_alert_datetime(
+            committer.get("date") if committer else None
+        ),
+        parent_count=len(parents) if isinstance(parents, list) else 0,
+    )
+
+
+def _commit_stat_from_file(
+    commit_sha: str, file_item: Mapping[str, Any]
+) -> GitHubCommitFileStatData:
+    return GitHubCommitFileStatData(
+        commit_hash=commit_sha,
+        file_path=str(file_item.get("filename") or ""),
+        additions=int(file_item.get("additions") or 0),
+        deletions=int(file_item.get("deletions") or 0),
+    )
+
+
 def _pull_request_merged_at(item: Mapping[str, Any]) -> datetime | None:
     return _parse_alert_datetime(item.get("merged_at"))
 
@@ -342,7 +415,7 @@ def _page_cap_for_limit(
 
 class GitHubCodeClient:
     """Instrumented httpx client for GitHub code-dataset families
-    (CHAOS-2773 CS3+). CS3 exposes the ``security`` family only.
+    (CHAOS-2773 CS3+).
 
     :param auth: Token + optional GHE base URL. Mirrors
         ``providers/github/client.py::GitHubAuth`` -- callers that already
@@ -482,6 +555,69 @@ class GitHubCodeClient:
             if isinstance(item, Mapping)
         ]
 
+    async def get_commits(
+        self,
+        owner: str,
+        repo: str,
+        *,
+        max_commits: int | None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> tuple[list[GitHubCommitData], bool]:
+        params: dict[str, Any] = {"per_page": _GITHUB_DEPLOYMENTS_PER_PAGE}
+        if since is not None:
+            params["since"] = since.isoformat()
+        if until is not None:
+            params["until"] = until.isoformat()
+        fetch_limit = max_commits + 1 if max_commits is not None else None
+        max_pages = None if fetch_limit is None else _page_cap_for_limit(fetch_limit)
+        operation = f"{GIT_ROUTE_FAMILY}:GET /repos/{owner}/{repo}/commits"
+        encoded_owner = urllib.parse.quote(str(owner), safe="")
+        encoded_repo = urllib.parse.quote(str(repo), safe="")
+        items = await self._core.paginate_link_header(
+            f"/repos/{encoded_owner}/{encoded_repo}/commits",
+            operation=operation,
+            params=params,
+            max_pages=max_pages,
+        )
+        window_truncated = False
+        if fetch_limit is not None and len(items) >= fetch_limit:
+            window_truncated = True
+            items = items[:max_commits]
+        commits = [
+            _commit_from_item(item)
+            for item in items
+            if isinstance(item, Mapping) and item.get("sha")
+        ]
+        return commits, window_truncated
+
+    async def get_commit_file_stats(
+        self,
+        owner: str,
+        repo: str,
+        sha: str,
+    ) -> list[GitHubCommitFileStatData]:
+        operation = (
+            f"{COMMIT_STATS_ROUTE_FAMILY}:GET /repos/{owner}/{repo}/commits/{{sha}}"
+        )
+        encoded_owner = urllib.parse.quote(str(owner), safe="")
+        encoded_repo = urllib.parse.quote(str(repo), safe="")
+        encoded_sha = urllib.parse.quote(str(sha), safe="")
+        response = await self._core.request(
+            "GET",
+            f"/repos/{encoded_owner}/{encoded_repo}/commits/{encoded_sha}",
+            operation=operation,
+        )
+        payload = response.json()
+        files = payload.get("files") if isinstance(payload, Mapping) else None
+        if not isinstance(files, list):
+            return []
+        return [
+            _commit_stat_from_file(sha, file_item)
+            for file_item in files
+            if isinstance(file_item, Mapping) and file_item.get("filename")
+        ]
+
     async def get_deployments(
         self,
         owner: str,
@@ -565,7 +701,25 @@ class GitHubCodeClient:
                 operation=operation,
                 params=params,
             )
-        except (AuthenticationException, NotFoundException):
+        except AuthenticationException as exc:
+            logger.warning(
+                "GitHub security endpoint unavailable provider=github owner=%s "
+                "repo=%s endpoint=%s status=auth error=%s",
+                owner,
+                repo,
+                endpoint,
+                exc,
+            )
+            return []
+        except NotFoundException as exc:
+            logger.warning(
+                "GitHub security endpoint unavailable provider=github owner=%s "
+                "repo=%s endpoint=%s status=404 error=%s",
+                owner,
+                repo,
+                endpoint,
+                exc,
+            )
             return []
         alerts = [build(item) for item in items]
         if max_alerts is not None:
@@ -586,9 +740,13 @@ class GitHubCodeClient:
 
 
 __all__ = [
+    "COMMIT_STATS_ROUTE_FAMILY",
     "CICD_ROUTE_FAMILY",
     "DEPLOYMENTS_ROUTE_FAMILY",
+    "GIT_ROUTE_FAMILY",
     "GitHubCodeClient",
+    "GitHubCommitData",
+    "GitHubCommitFileStatData",
     "GitHubDeploymentData",
     "GitHubWorkflowRunData",
     "GitHubReleaseData",

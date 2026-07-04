@@ -199,6 +199,35 @@ def test_github_files_blame_prefixed_labels_resolve_to_contents_blob(
     )
 
 
+GITHUB_CS8_PREFIXED_LABELS: tuple[tuple[str, str, tuple[str, BudgetDimension]], ...] = (
+    (
+        "rest",
+        "prs:GET /repos/acme/widgets/pulls",
+        ("prs", BudgetDimension.REST_CORE),
+    ),
+    (
+        "rest",
+        "prs:GET /repos/acme/widgets/pulls/{number}/commits",
+        ("prs", BudgetDimension.REST_CORE),
+    ),
+    (
+        "rest",
+        "incidents:GET /repos/acme/widgets/issues",
+        ("incidents", BudgetDimension.REST_CORE),
+    ),
+)
+
+
+@pytest.mark.parametrize("transport,operation,expected", GITHUB_CS8_PREFIXED_LABELS)
+def test_github_prs_incidents_prefixed_labels_resolve_to_rest_core(
+    transport: str, operation: str, expected: tuple[str, BudgetDimension]
+) -> None:
+    assert (
+        GITHUB_USAGE_RESOLVER.resolve(transport=transport, operation=operation)
+        == expected
+    )
+
+
 # ---------------------------------------------------------------------------
 # 2. Representative prefixed labels per registered family short-circuit.
 # ---------------------------------------------------------------------------

@@ -875,12 +875,10 @@ proof-of-pipe that the plumbing actually reaches a `budget_comparison` row:
   `tests/providers/test_github_pr_social_batch.py` (N physical GraphQL
   requests → one aggregated `pr_social`/`graphql_cost` observation with
   `request_count == N`; a mid-pagination failure leaves the prior successful
-  request(s) drained). The REST `prs` listing itself (raw PyGithub
-  `get_pulls`) stays on the frozen connector, unlabeled, until CHAOS-2773 CS8
-  — `providers/github/budget.py`'s `prs` marker is therefore left empty
-  (never flip a marker before its traffic exists, per the migration
-  strategy above), while `pr_social`'s GRAPHQL_COST marker is flipped to
-  document it as now-instrumented.
+  request(s) drained). CS8 moves the REST `prs` listing and PR-commit fetches
+  onto `GitHubCodeClient`, labels them with the `prs:` prefix, and flips the
+  `providers/github/budget.py` `prs` REST-core marker; `pr_social` remains the
+  separate GRAPHQL_COST family for review/social enrichment.
 - **GitLab.** `process_gitlab_project` accepts the same `usage_sink`
   parameter for a uniform cross-provider adapter contract. Migrated
   GitLabCodeClient-backed families drain into it on both success and failure:
@@ -924,8 +922,8 @@ proof-of-pipe that the plumbing actually reaches a `budget_comparison` row:
   primary (`graphql_cost`) traffic IS now measured as of
   [CHAOS-2803](https://linear.app/fullchaos/issue/CHAOS-2803) (CS2, see
   [Usage drain wiring](#usage-drain-wiring-first-re-bucketing-chaos-2773-cs2)
-  above) for the PR review-batch enrichment; the REST `prs` listing itself
-  remains on the frozen connector, unmeasured, pending CHAOS-2773 CS8. See
+  above) for the PR review-batch enrichment; REST `prs` listing/PR commits and
+  incident-label issue fetches are measured as of CHAOS-2809 (CS8). See
   [Known gaps](#known-gaps).
 - **Actuals instrumentation (CHAOS-2807).** Commit listing (`git`) and
   per-commit file stats (`commit_stats`) now fetch through
@@ -945,6 +943,13 @@ proof-of-pipe that the plumbing actually reaches a `budget_comparison` row:
   `rest_core` reservation stays estimate-only -- it belongs to the
   repository tree listing that discovers candidate paths, which remains on
   the frozen PyGithub connector (out of CS7 scope).
+- **Actuals instrumentation (CHAOS-2809).** Pull-request listing and PR commits
+  (`prs`) now fetch through `GitHubCodeClient` REST pagers and resolve through
+  explicit `prs:` operation prefixes. Incident-label issue fetches also use
+  `GitHubCodeClient` and emit an `incidents:` prefix; `incidents` is a
+  resolver/actuals-only family so the estimator vocabulary stays frozen while
+  real incident issue traffic still appears in calibration output as an
+  unbudgeted actual when present.
 
 #### Route families
 <!-- route-families:github -->
@@ -956,7 +961,8 @@ proof-of-pipe that the plumbing actually reaches a `budget_comparison` row:
 | `commit_stats` | `rest_core`, `contents_blob` | Per-commit file/stat expansion (`GitHubCodeClient` REST core, CHAOS-2773 CS6; contents/blob still estimate-only) | low |
 | `files` | `rest_core`, `contents_blob` | Repository tree listing (`rest_core`, frozen/estimate-only) + blob-text reads (`contents_blob`, `GitHubCodeClient` GraphQL, CHAOS-2773 CS7) | low |
 | `blame` | `rest_core`, `contents_blob` | Blame expansion (file-count dependent; `contents_blob` via `GitHubCodeClient` GraphQL, CHAOS-2773 CS7) | low |
-| `prs` | `rest_core` | Pull requests / reviews / comments core | medium |
+| `prs` | `rest_core` | Pull-request listing + PR commits (`GitHubCodeClient`, CHAOS-2773 CS8) | medium |
+| `incidents` | `rest_core` | Incident-label issue fetches (`GitHubCodeClient`, resolver-only actuals family, CHAOS-2773 CS8) | low |
 | `pr_social` | `graphql_cost`, `secondary_abuse_risk` | PR timeline/social expansion | medium |
 | `cicd` | `rest_core`, `contents_blob` | CI/CD workflow runs + artifact expansion | low |
 | `tests` | `rest_core`, `contents_blob` | Test report ingestion | low |
@@ -1177,18 +1183,18 @@ paper over:
   (CS2) — see
   [Usage drain wiring](#usage-drain-wiring-first-re-bucketing-chaos-2773-cs2)
   above. GitHub `git` and `commit_stats` REST-core traffic is instrumented as of
-  CHAOS-2807, and `files`/`blame` `contents_blob` traffic (GraphQL) as of
-  CHAOS-2808; GitLab merge-request and MR-note REST-core traffic is
-  instrumented as of CHAOS-2816 (CS15). The REST `prs` listing, the
-  `files`/`blame` `rest_core` tree listing, and remaining GitHub/GitLab
-  code-dataset families stay
-  uninstrumented pending their own CHAOS-2773 changesets (see
+  CHAOS-2807, `files`/`blame` `contents_blob` traffic (GraphQL) as of
+  CHAOS-2808, and REST `prs` listing / PR commits / incident-label issue
+  fetches as of CHAOS-2809; GitLab merge-request and MR-note REST-core traffic
+  is instrumented as of CHAOS-2816 (CS15). The `files`/`blame` `rest_core` tree
+  listing and remaining GitHub/GitLab code-dataset families stay uninstrumented
+  pending their own CHAOS-2773 changesets (see
   "Frozen `connectors/` path" below). There is also no cross-run
   aggregation/dashboard yet — calibration today is visible per-unit (result +
   structured log), not rolled up over time.
-- **Frozen `connectors/` path.** GitHub's `prs` and repo metadata/batch
-  orchestration, plus the remaining equivalent GitLab code-dataset paths,
-  remain under the frozen `connectors/` tree
+- **Frozen `connectors/` path.** GitHub's repo metadata/batch orchestration,
+  the frozen-but-retained connector PR-commit method pending CS16 retirement,
+  plus the remaining equivalent GitLab code-dataset paths, remain under the frozen `connectors/` tree
   (`connectors/github.py`'s PyGithub-based `GitHubConnector`, `connectors/
   gitlab.py`'s python-gitlab-based `GitLabConnector`). No new code may be added
   there (see [`AGENTS.md`](../../AGENTS.md)); rate-limit/actuals
@@ -1208,7 +1214,10 @@ paper over:
   `files`/`blame` ([CHAOS-2808](https://linear.app/fullchaos/issue/CHAOS-2808),
   CS7 -- the file-contents/blame GraphQL fetch relocated onto
   `providers/github/graphql.py`) moved to
-  `providers/github/code_client.py::GitHubCodeClient`; GitLab's `security`
+  `providers/github/code_client.py::GitHubCodeClient`; GitHub `prs` REST
+  listing, PR commits, and incident-label issue fetches
+  ([CHAOS-2809](https://linear.app/fullchaos/issue/CHAOS-2809), CS8) also moved
+  onto `GitHubCodeClient`. GitLab's `security`
   ([CHAOS-2811](https://linear.app/fullchaos/issue/CHAOS-2811), CS10),
   `pipelines`+`deployments`
   ([CHAOS-2812](https://linear.app/fullchaos/issue/CHAOS-2812), CS11), and

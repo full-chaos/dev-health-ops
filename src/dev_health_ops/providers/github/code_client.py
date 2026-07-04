@@ -31,6 +31,7 @@ import httpx
 
 from dev_health_ops.connectors.models import FileBlame, SecurityAlertData
 from dev_health_ops.exceptions import (
+    APIException,
     AuthenticationException,
     NotFoundException,
     RateLimitException,
@@ -71,6 +72,8 @@ GIT_ROUTE_FAMILY = "git"
 COMMIT_STATS_ROUTE_FAMILY = "commit_stats"
 FILES_ROUTE_FAMILY = "files"
 BLAME_ROUTE_FAMILY = "blame"
+PRS_ROUTE_FAMILY = "prs"
+INCIDENTS_ROUTE_FAMILY = "incidents"
 _GITHUB_DEPLOYMENTS_PER_PAGE = 100
 
 
@@ -123,6 +126,35 @@ class GitHubCommitFileStatData:
     deletions: int
     old_file_mode: str = "unknown"
     new_file_mode: str = "unknown"
+
+
+@dataclass(frozen=True)
+class GitHubPullData:
+    pull_id: str
+    number: int
+    title: str | None
+    body: str | None
+    state: str | None
+    author_login: str | None
+    created_at: datetime | None
+    updated_at: datetime | None
+    merged_at: datetime | None
+    closed_at: datetime | None
+    head_ref: str | None
+    base_ref: str | None
+    additions: int
+    deletions: int
+    changed_files: int
+    comments_count: int
+
+
+@dataclass(frozen=True)
+class GitHubIssueData:
+    issue_id: str
+    number: int
+    state: str | None
+    created_at: datetime | None
+    closed_at: datetime | None
 
 
 def _lowered_github_headers(response: httpx.Response) -> dict[str, str]:
@@ -236,6 +268,28 @@ def _parse_alert_datetime(value: object) -> datetime | None:
     except ValueError:
         logger.debug("Failed to parse GitHub datetime: %s", value)
         return None
+
+
+def _int_or_zero(value: object) -> int:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    if isinstance(value, float):
+        return int(value)
+    return 0
+
+
+def _repo_path(owner: str, repo: str, *segments: object) -> str:
+    encoded = [
+        urllib.parse.quote(str(owner), safe=""),
+        urllib.parse.quote(str(repo), safe=""),
+    ]
+    encoded.extend(urllib.parse.quote(str(segment), safe="") for segment in segments)
+    return "/repos/" + "/".join(encoded)
 
 
 def _dependabot_alert_from_item(item: dict[str, Any]) -> SecurityAlertData:
@@ -387,6 +441,46 @@ def _commit_stat_from_file(
         file_path=str(file_item.get("filename") or ""),
         additions=int(file_item.get("additions") or 0),
         deletions=int(file_item.get("deletions") or 0),
+    )
+
+
+def _pull_from_item(item: Mapping[str, Any]) -> GitHubPullData:
+    user = item.get("user")
+    head = item.get("head")
+    base = item.get("base")
+    return GitHubPullData(
+        pull_id=str(item.get("id") or ""),
+        number=_int_or_zero(item.get("number")),
+        title=str(item["title"]) if item.get("title") is not None else None,
+        body=str(item["body"]) if item.get("body") is not None else None,
+        state=str(item["state"]) if item.get("state") is not None else None,
+        author_login=str(user["login"])
+        if isinstance(user, Mapping) and user.get("login") is not None
+        else None,
+        created_at=_parse_alert_datetime(item.get("created_at")),
+        updated_at=_parse_alert_datetime(item.get("updated_at")),
+        merged_at=_parse_alert_datetime(item.get("merged_at")),
+        closed_at=_parse_alert_datetime(item.get("closed_at")),
+        head_ref=str(head["ref"])
+        if isinstance(head, Mapping) and head.get("ref") is not None
+        else None,
+        base_ref=str(base["ref"])
+        if isinstance(base, Mapping) and base.get("ref") is not None
+        else None,
+        additions=_int_or_zero(item.get("additions")),
+        deletions=_int_or_zero(item.get("deletions")),
+        changed_files=_int_or_zero(item.get("changed_files")),
+        comments_count=_int_or_zero(item.get("comments")),
+    )
+
+
+def _issue_from_item(item: Mapping[str, Any]) -> GitHubIssueData:
+    return GitHubIssueData(
+        issue_id=str(item.get("id") or ""),
+        number=_int_or_zero(item.get("number")),
+        state=str(item["state"]) if item.get("state") is not None else None,
+        created_at=_parse_alert_datetime(item.get("created_at")),
+        closed_at=_parse_alert_datetime(item.get("closed_at")),
     )
 
 
@@ -603,6 +697,149 @@ class GitHubCodeClient:
             if isinstance(item, Mapping) and item.get("sha")
         ]
         return commits, window_truncated
+
+    async def iter_pulls(
+        self,
+        owner: str,
+        repo: str,
+        *,
+        state: str = "all",
+        sort: str = "updated",
+        direction: str = "desc",
+        max_pulls: int | None = None,
+        since: datetime | None = None,
+    ) -> list[GitHubPullData]:
+        params: dict[str, Any] = {
+            "state": state,
+            "sort": sort,
+            "direction": direction,
+            "per_page": _GITHUB_DEPLOYMENTS_PER_PAGE,
+        }
+        max_pages = None if max_pulls is None else _page_cap_for_limit(max_pulls)
+        operation = f"{PRS_ROUTE_FAMILY}:GET /repos/{owner}/{repo}/pulls"
+        pulls: list[GitHubPullData] = []
+        next_url: str | None = _repo_path(owner, repo, "pulls")
+        next_params: dict[str, Any] | None = params
+        pages = 0
+        while next_url is not None:
+            if max_pages is not None and pages >= max_pages:
+                logger.warning(
+                    "%s pagination hit the %d-page cap for %s",
+                    "github",
+                    max_pages,
+                    operation,
+                )
+                break
+            response = await self._core.request(
+                "GET",
+                next_url,
+                operation=operation,
+                params=next_params,
+            )
+            pages += 1
+            payload = response.json()
+            if not isinstance(payload, list):
+                raise APIException(
+                    f"Unexpected paginated response for {operation}: {type(payload)!r}"
+                )
+
+            crossed_since_boundary = False
+            for item in payload:
+                if not isinstance(item, Mapping):
+                    continue
+                pull = _pull_from_item(item)
+                if (
+                    since is not None
+                    and pull.updated_at is not None
+                    and pull.updated_at < since
+                ):
+                    crossed_since_boundary = True
+                    break
+                pulls.append(pull)
+                if max_pulls is not None and len(pulls) >= max_pulls:
+                    return pulls
+            if crossed_since_boundary:
+                break
+            next_url = response.links.get("next", {}).get("url")
+            next_params = None
+        return pulls
+
+    async def get_pull_detail(
+        self,
+        owner: str,
+        repo: str,
+        number: int,
+    ) -> GitHubPullData:
+        operation = f"{PRS_ROUTE_FAMILY}:GET /repos/{owner}/{repo}/pulls/{{number}}"
+        response = await self._core.request(
+            "GET",
+            _repo_path(owner, repo, "pulls", number),
+            operation=operation,
+        )
+        payload = response.json()
+        if not isinstance(payload, Mapping):
+            raise APIException(
+                f"Unexpected pull detail response for {operation}: {type(payload)!r}"
+            )
+        return _pull_from_item(payload)
+
+    async def iter_pull_commits(
+        self,
+        owner: str,
+        repo: str,
+        number: int,
+        *,
+        max_commits: int | None = None,
+    ) -> list[GitHubCommitData]:
+        params: dict[str, Any] = {"per_page": _GITHUB_DEPLOYMENTS_PER_PAGE}
+        max_pages = None if max_commits is None else _page_cap_for_limit(max_commits)
+        operation = (
+            f"{PRS_ROUTE_FAMILY}:GET /repos/{owner}/{repo}/pulls/{{number}}/commits"
+        )
+        items = await self._core.paginate_link_header(
+            _repo_path(owner, repo, "pulls", number, "commits"),
+            operation=operation,
+            params=params,
+            max_pages=max_pages,
+        )
+        if max_commits is not None:
+            items = items[:max_commits]
+        return [
+            _commit_from_item(item)
+            for item in items
+            if isinstance(item, Mapping) and item.get("sha") is not None
+        ]
+
+    async def iter_issues(
+        self,
+        owner: str,
+        repo: str,
+        *,
+        state: str = "all",
+        labels: list[str] | None = None,
+        max_issues: int | None = None,
+    ) -> list[GitHubIssueData]:
+        params: dict[str, Any] = {
+            "state": state,
+            "per_page": _GITHUB_DEPLOYMENTS_PER_PAGE,
+        }
+        if labels:
+            params["labels"] = ",".join(labels)
+        max_pages = None if max_issues is None else _page_cap_for_limit(max_issues)
+        operation = f"{INCIDENTS_ROUTE_FAMILY}:GET /repos/{owner}/{repo}/issues"
+        items = await self._core.paginate_link_header(
+            f"{_repo_path(owner, repo)}/issues",
+            operation=operation,
+            params=params,
+            max_pages=max_pages,
+        )
+        if max_issues is not None:
+            items = items[:max_issues]
+        return [
+            _issue_from_item(item)
+            for item in items
+            if isinstance(item, Mapping) and item.get("pull_request") is None
+        ]
 
     async def get_commit_file_stats(
         self,
@@ -854,11 +1091,15 @@ __all__ = [
     "DEPLOYMENTS_ROUTE_FAMILY",
     "FILES_ROUTE_FAMILY",
     "GIT_ROUTE_FAMILY",
+    "INCIDENTS_ROUTE_FAMILY",
     "GitHubCodeClient",
     "GitHubCommitData",
     "GitHubCommitFileStatData",
     "GitHubDeploymentData",
+    "GitHubIssueData",
+    "GitHubPullData",
     "GitHubWorkflowRunData",
     "GitHubReleaseData",
+    "PRS_ROUTE_FAMILY",
     "SECURITY_ROUTE_FAMILY",
 ]

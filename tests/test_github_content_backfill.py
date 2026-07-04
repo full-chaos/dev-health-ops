@@ -35,12 +35,14 @@ class _FakeCodeClient:
     tests double the CLIENT, never ``connector.get_file_contents``/
     ``connector.get_file_blame`` (which the processor no longer calls)."""
 
-    def __init__(self, *, contents=None, blame=None, side_effect=None):
+    def __init__(self, *, contents=None, blame=None, issues=None, side_effect=None):
         self.contents = contents if contents is not None else {}
         self.blame = blame
+        self.issues = issues if issues is not None else []
         self.side_effect = side_effect
         self.file_content_calls: list[tuple[str, str, list[str], str]] = []
         self.file_blame_calls: list[tuple[str, str, str, str]] = []
+        self.issue_calls: list[tuple[str, str, str, list[str], int | None]] = []
         self.drain_usage_observations = Mock(return_value=[])
         self.close = AsyncMock()
 
@@ -71,6 +73,20 @@ class _FakeCodeClient:
         if self.side_effect is not None:
             raise self.side_effect
         return self.blame
+
+    async def iter_issues(
+        self,
+        owner: str,
+        repo: str,
+        *,
+        state: str = "all",
+        labels: list[str] | None = None,
+        max_issues: int | None = None,
+    ):
+        self.issue_calls.append((owner, repo, state, labels or [], max_issues))
+        if self.side_effect is not None:
+            raise self.side_effect
+        return self.issues[:max_issues]
 
 
 class TestFetchScannableContents:
@@ -136,6 +152,52 @@ class TestFetchScannableContents:
             )
 
         assert exc_info.value.retry_after_seconds == 7.0
+
+
+class TestGithubIncidentsClientSeam:
+    @pytest.mark.asyncio
+    async def test_incidents_fetch_uses_code_client_and_not_legacy_repo(
+        self, monkeypatch
+    ):
+        from dev_health_ops.processors import github
+        from dev_health_ops.processors.github import _fetch_github_incidents_async
+
+        since = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        issue = SimpleNamespace(
+            issue_id="issue-1",
+            state="closed",
+            created_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            closed_at=datetime(2026, 1, 3, tzinfo=timezone.utc),
+        )
+        code_client = _FakeCodeClient(issues=[issue])
+        monkeypatch.setattr(github, "resolve_incident_labels", lambda: ["incident"])
+        monkeypatch.setattr(
+            github, "_github_code_client_from_connector", lambda _connector: code_client
+        )
+
+        connector = Mock()
+        connector.github.get_repo.side_effect = AssertionError(
+            "legacy PyGithub repo path must not be called"
+        )
+        repo_id = uuid.uuid4()
+        usage_sink: list[dict[str, object]] = []
+
+        incidents = await _fetch_github_incidents_async(
+            connector,
+            "octo",
+            "repo",
+            repo_id,
+            10,
+            since,
+            usage_sink=usage_sink,
+        )
+
+        assert [(row.incident_id, row.status, row.started_at) for row in incidents] == [
+            ("issue-1", "closed", datetime(2026, 1, 2, tzinfo=timezone.utc))
+        ]
+        assert code_client.issue_calls == [("octo", "repo", "all", ["incident"], 10)]
+        code_client.close.assert_awaited_once()
+        connector.github.get_repo.assert_not_called()
 
 
 class TestBackfillFileRecordsContents:

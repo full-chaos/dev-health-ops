@@ -87,16 +87,21 @@ class _FakePR:
         self.title = f"PR {number}"
         self.body = None
         self.state = "closed"
+        self.author_login = "octo"
         self.user = _FakePRUser()
         self.created_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        self.updated_at = datetime(2020, 1, 2, tzinfo=timezone.utc)
         self.merged_at = None
         self.closed_at = None
+        self.head_ref = "feature"
+        self.base_ref = "main"
         self.head = _FakePRRef("feature")
         self.base = _FakePRRef("main")
         self.additions = 0
         self.deletions = 0
         self.changed_files = 0
         self.comments = 0
+        self.comments_count = 0
 
 
 class _FakeRepo:
@@ -104,7 +109,36 @@ class _FakeRepo:
         self._pull_items = pull_items
 
     def get_pulls(self, state="all", sort=None, direction=None):
-        return _PRIter(self._pull_items)
+        raise AssertionError("legacy PyGithub get_pulls must not be called")
+
+
+class _ListingCodeClient:
+    def __init__(self, pulls):
+        self._pulls = list(pulls)
+
+    async def iter_pulls(self, owner, repo, *, state, sort, direction, since=None):
+        assert (owner, repo, state, sort, direction) == (
+            "o",
+            "r",
+            "all",
+            "updated",
+            "desc",
+        )
+        self.since = since
+        return list(self._pulls)
+
+    async def get_pull_detail(self, owner, repo, number):
+        assert (owner, repo) == ("o", "r")
+        for pull in self._pulls:
+            if pull.number == number:
+                return pull
+        raise AssertionError(f"unexpected pull detail request for {number}")
+
+    def drain_usage_observations(self):
+        return []
+
+    async def close(self):
+        return None
 
 
 class _FakeReview:
@@ -165,9 +199,15 @@ async def test_github_pr_sync_writes_changes_requested_count_from_reviews():
             for pr in prs:
                 yield pr.number, tuple(reviews_by_pr.get(pr.number, []))
 
-    with patch(
-        "dev_health_ops.processors.github.GitHubWorkClient",
-        _BatchReviewClient,
+    with (
+        patch(
+            "dev_health_ops.processors.github.GitHubWorkClient",
+            _BatchReviewClient,
+        ),
+        patch(
+            "dev_health_ops.processors.github._github_code_client_from_connector",
+            lambda _connector: _ListingCodeClient(fake_repo._pull_items),
+        ),
     ):
         total = await loop.run_in_executor(
             None,

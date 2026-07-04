@@ -100,6 +100,16 @@ def test_github_files_and_blame_contents_blob_actuals_markers_are_live() -> None
     assert markers[("blame", BudgetDimension.REST_CORE)] == ()
 
 
+def test_github_prs_and_incidents_rest_core_actuals_markers_are_live() -> None:
+    markers = {
+        (family.route_family, family.dimension): family.operation_markers
+        for family in GITHUB_USAGE_ROUTE_FAMILIES
+    }
+
+    assert markers[("prs", BudgetDimension.REST_CORE)] == ("prs:",)
+    assert markers[("incidents", BudgetDimension.REST_CORE)] == ("incidents:",)
+
+
 def test_github_budget_estimator_splits_pr_social_pressure() -> None:
     estimates = GitHubBudgetEstimator().estimate(_context(dataset_key="pr-comments"))
 

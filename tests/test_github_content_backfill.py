@@ -624,6 +624,7 @@ class TestCommitStatsBackfill:
         code_client.close.assert_awaited_once()
         connector.get_file_blame.assert_not_called()
         assert [row.path for row in blame_rows] == ["src/app.py"]
+        assert [row.line for row in blame_rows] == [None]
 
     @pytest.mark.asyncio
     async def test_backfill_commit_stats_full_history_writes_capped_sample(

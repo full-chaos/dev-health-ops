@@ -298,13 +298,19 @@ class _FakeSink:
     def __init__(
         self,
         complexity_by_repo: dict[str, dict[str, float | None] | None],
+        latest_inputs_by_scope: dict[tuple[str, str], dict[str, float | None]]
+        | None = None,
     ):
         self._data = complexity_by_repo
+        self._latest_inputs = latest_inputs_by_scope or {}
         self.calls: list[dict] = []
 
     def query_dicts(self, query: str, parameters: dict) -> list[dict]:
         self.calls.append(parameters)
         repo = parameters["repo_id"]
+        if "mid" not in parameters:
+            result = self._latest_inputs.get((parameters["org_id"], repo))
+            return [result] if result is not None else []
         result = self._data.get(repo)
         return [result] if result is not None else []
 
@@ -426,6 +432,104 @@ def test_orchestrator_emits_unknown_severity_when_inputs_missing() -> None:
     assert len(out) == 1
     assert out[0].compounding_risk is None
     assert out[0].severity == "unknown"
+
+
+def test_orchestrator_carries_forward_recent_non_null_review_latency() -> None:
+    repo = uuid.uuid4()
+    sink = _FakeSink(
+        {str(repo): {"first_half": 100.0, "second_half": 110.0}},
+        {
+            ("acme", str(repo)): {
+                "rework_churn": 0.10,
+                "single_owner_ratio": 0.50,
+                "ownership_gini": 0.40,
+                "bus_factor": 2.0,
+                "review_latency_p90h": 24.0,
+            }
+        },
+    )
+    repo_rows = [
+        _FakeRepoMetrics(
+            repo_id=repo,
+            rework_churn_ratio_30d=0.10,
+            single_owner_file_ratio_30d=0.50,
+            code_ownership_gini=0.40,
+            pr_first_review_p90_hours=None,
+        ),
+    ]
+
+    out = build_compounding_risk_rows_for_day(
+        sink=sink,
+        day=DAY,
+        org_id="acme",
+        repo_metrics_rows=repo_rows,
+        computed_at=NOW,
+    )
+
+    assert len(out) == 1
+    assert out[0].review_latency_p90h == 24.0
+    assert out[0].compounding_risk is not None
+    assert out[0].severity != "unknown"
+
+
+def test_orchestrator_keeps_missing_review_latency_when_window_has_no_value() -> None:
+    repo = uuid.uuid4()
+    sink = _FakeSink({str(repo): {"first_half": 100.0, "second_half": 110.0}})
+    repo_rows = [
+        _FakeRepoMetrics(
+            repo_id=repo,
+            rework_churn_ratio_30d=0.10,
+            single_owner_file_ratio_30d=0.50,
+            code_ownership_gini=0.40,
+            pr_first_review_p90_hours=None,
+        ),
+    ]
+
+    out = build_compounding_risk_rows_for_day(
+        sink=sink,
+        day=DAY,
+        org_id="acme",
+        repo_metrics_rows=repo_rows,
+        computed_at=NOW,
+    )
+
+    assert len(out) == 1
+    assert out[0].review_latency_p90h is None
+    assert out[0].compounding_risk is None
+    assert out[0].severity == "unknown"
+
+
+def test_orchestrator_carry_forward_is_org_and_repo_isolated() -> None:
+    repo = uuid.uuid4()
+    other_repo = uuid.uuid4()
+    sink = _FakeSink(
+        {str(repo): {"first_half": 100.0, "second_half": 110.0}},
+        {
+            ("other-org", str(repo)): {"review_latency_p90h": 24.0},
+            ("acme", str(other_repo)): {"review_latency_p90h": 12.0},
+        },
+    )
+    repo_rows = [
+        _FakeRepoMetrics(
+            repo_id=repo,
+            rework_churn_ratio_30d=0.10,
+            single_owner_file_ratio_30d=0.50,
+            code_ownership_gini=0.40,
+            pr_first_review_p90_hours=None,
+        ),
+    ]
+
+    out = build_compounding_risk_rows_for_day(
+        sink=sink,
+        day=DAY,
+        org_id="acme",
+        repo_metrics_rows=repo_rows,
+        computed_at=NOW,
+    )
+
+    assert len(out) == 1
+    assert out[0].review_latency_p90h is None
+    assert out[0].compounding_risk is None
 
 
 # ---------------------------------------------------------------------------

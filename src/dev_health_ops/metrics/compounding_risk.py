@@ -307,6 +307,7 @@ def compute_compounding_risk(
 
 #: Window for the complexity delta computation in days.
 COMPLEXITY_WINDOW_DAYS: Final[int] = 30
+METRIC_INPUT_WINDOW_DAYS: Final[int] = COMPLEXITY_WINDOW_DAYS
 
 
 def load_repo_complexity_delta_30d(
@@ -364,6 +365,83 @@ def load_repo_complexity_delta_30d(
     return (second_f - first_f) / max(first_f, 1.0)
 
 
+def _coalesce_non_null(current: float | None, carried: float | None) -> float | None:
+    return current if current is not None else carried
+
+
+def _load_latest_repo_metric_inputs(
+    sink: Any,
+    *,
+    repo_id: str,
+    day: date,
+    org_id: str,
+    window_days: int = METRIC_INPUT_WINDOW_DAYS,
+) -> dict[str, float | None]:
+    if window_days < 1:
+        raise ValueError("window_days must be >= 1")
+
+    window_start = day - timedelta(days=window_days - 1)
+    query = """
+        SELECT
+            rework_churn_ratio_30d AS rework_churn,
+            single_owner_file_ratio_30d AS single_owner_ratio,
+            code_ownership_gini AS ownership_gini,
+            bus_factor AS bus_factor,
+            pr_first_review_p90_hours AS review_latency_p90h
+        FROM repo_metrics_daily
+        WHERE repo_id = {repo_id:UUID}
+          AND org_id = {org_id:String}
+          AND day >= {start:Date} AND day <= {end:Date}
+        ORDER BY day DESC, computed_at DESC
+    """
+    rows = sink.query_dicts(
+        query,
+        {"repo_id": repo_id, "org_id": org_id, "start": window_start, "end": day},
+    )
+    if not rows:
+        return {}
+    resolved: dict[str, float | None] = {
+        "rework_churn": None,
+        "single_owner_ratio": None,
+        "ownership_gini": None,
+        "bus_factor": None,
+        "review_latency_p90h": None,
+    }
+    for row in rows:
+        for key, value in row.items():
+            if key not in resolved or resolved[key] is not None:
+                continue
+            resolved[key] = _nullable_float(value)
+    return {
+        "rework_churn": resolved["rework_churn"],
+        "single_owner_ratio": resolved["single_owner_ratio"],
+        "ownership_gini": resolved["ownership_gini"],
+        "bus_factor": resolved["bus_factor"],
+        "review_latency_p90h": resolved["review_latency_p90h"],
+    }
+
+
+def _load_latest_repo_complexity_delta(
+    sink: Any,
+    *,
+    repo_id: str,
+    day: date,
+    org_id: str,
+    window_days: int = METRIC_INPUT_WINDOW_DAYS,
+) -> float | None:
+    if window_days < 1:
+        raise ValueError("window_days must be >= 1")
+
+    for days_back in range(window_days):
+        candidate_day = day - timedelta(days=days_back)
+        delta = load_repo_complexity_delta_30d(
+            sink, repo_id=repo_id, day=candidate_day, org_id=org_id
+        )
+        if delta is not None:
+            return delta
+    return None
+
+
 def build_compounding_risk_rows_for_day(
     *,
     sink: Any,
@@ -398,22 +476,41 @@ def build_compounding_risk_rows_for_day(
         repo_id = getattr(row, "repo_id", None)
         if repo_id is None:
             continue
+        repo_id_str = str(repo_id)
         complexity_delta = load_repo_complexity_delta_30d(
-            sink, repo_id=str(repo_id), day=day, org_id=org_id
+            sink, repo_id=repo_id_str, day=day, org_id=org_id
+        )
+        if complexity_delta is None:
+            complexity_delta = _load_latest_repo_complexity_delta(
+                sink, repo_id=repo_id_str, day=day, org_id=org_id
+            )
+        carried_inputs = _load_latest_repo_metric_inputs(
+            sink, repo_id=repo_id_str, day=day, org_id=org_id
         )
         inputs = CompoundingInputs(
-            rework_churn=_nullable_float(getattr(row, "rework_churn_ratio_30d", None)),
+            rework_churn=_coalesce_non_null(
+                _nullable_float(getattr(row, "rework_churn_ratio_30d", None)),
+                carried_inputs.get("rework_churn"),
+            ),
             complexity_delta=complexity_delta,
-            review_latency_p90h=_nullable_float(
-                getattr(row, "pr_first_review_p90_hours", None)
+            review_latency_p90h=_coalesce_non_null(
+                _nullable_float(getattr(row, "pr_first_review_p90_hours", None)),
+                carried_inputs.get("review_latency_p90h"),
             ),
-            single_owner_ratio=_nullable_float(
-                getattr(row, "single_owner_file_ratio_30d", None)
+            single_owner_ratio=_coalesce_non_null(
+                _nullable_float(getattr(row, "single_owner_file_ratio_30d", None)),
+                carried_inputs.get("single_owner_ratio"),
             ),
-            ownership_gini=_nullable_float(getattr(row, "code_ownership_gini", None)),
-            bus_factor=_nullable_float(getattr(row, "bus_factor", None)),
+            ownership_gini=_coalesce_non_null(
+                _nullable_float(getattr(row, "code_ownership_gini", None)),
+                carried_inputs.get("ownership_gini"),
+            ),
+            bus_factor=_coalesce_non_null(
+                _nullable_float(getattr(row, "bus_factor", None)),
+                carried_inputs.get("bus_factor"),
+            ),
         )
-        repo_inputs_for_team[str(repo_id)] = inputs
+        repo_inputs_for_team[repo_id_str] = inputs
         repo_rows.append(
             compute_compounding_risk(
                 day=day,

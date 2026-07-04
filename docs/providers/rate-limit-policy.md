@@ -100,7 +100,7 @@ cooperating layers:
    | GitHub REST connector | 3 (`retry_with_backoff(max_retries=3)`) | `connectors/github.py` |
    | GitHub GraphQL client | 5 (`max_retries=5`) | `connectors/utils/graphql.py` |
 | GitHub code client (canonical: repo metadata/listing, git/commit_stats/security/deployments REST, files/blame GraphQL) | 5 (`InstrumentedRESTCore` default) | `providers/github/code_client.py` + `providers/github/graphql.py` |
-| GitLab REST connector | 3 (`retry_with_backoff(max_retries=3)`) | `connectors/gitlab.py` |
+| GitLab legacy connector shell | n/a (code-dataset fetch methods retired) | `connectors/gitlab.py` |
 | GitLab code client (canonical: security/pipelines/deployments/tests/commits/files/blame/merge_requests/notes) | 5 (`InstrumentedRESTCore` default) | `providers/gitlab/code_client.py` |
 | GitLab feature-flags (canonical) | 5 (`max_retries=5`) | `providers/gitlab/feature_flags.py` |
    | Jira client (JQL + enrichment) | 4 (`max_retries_429=3` → `+1` initial) | `providers/jira/client.py` |
@@ -1006,9 +1006,9 @@ proof-of-pipe that the plumbing actually reaches a `budget_comparison` row:
   non-retryable, 429 stays a retryable `RateLimitException` with signal;
   pinned by `tests/test_gitlab_feature_flags_client.py`), now wired to the
   shared CHAOS-2754 recorder. `connectors/gitlab.py` is left in place, unused
-  by the feature-flags sync path; its other (code-dataset) methods are
-  untouched and remain frozen pending the larger CHAOS-2773 CS17 migration
-  below.
+  by the feature-flags sync path; its other (code-dataset) methods were
+  retired as dead code in CS17 / CHAOS-2819 (see below), leaving only the
+  credential shell needed by processor bridges.
 - **Actuals instrumentation (CHAOS-2785).** The feature-flags fetch
   (`get_feature_flags`, `get_project_name`) records real per-request counts
   through the shared CHAOS-2754 recorder, resolving under the existing
@@ -1206,14 +1206,16 @@ above. GitHub `git` and `commit_stats` REST-core traffic is instrumented as of
   orchestration now use `GitHubCodeClient` and emit `repo:` usage actuals, and
   GitLab repo metadata, project discovery, and batch orchestration now use
   `GitLabCodeClient` and emit `project:` usage actuals. The frozen-but-retained
-  GitHub connector PR-commit method (pending CS16 retirement) and the GitLab
-  connector (pending CS17 retirement) remain under the frozen `connectors/` tree
-  (`connectors/github.py`'s PyGithub-based `GitHubConnector`, `connectors/
-  gitlab.py`'s python-gitlab-based `GitLabConnector`). No new code may be added
-  there (see [`AGENTS.md`](../../AGENTS.md)); rate-limit/actuals
-  instrumentation for those datasets lands as the fetch moves to
-  `providers/github/` / `providers/gitlab/` — tracked as its own
-  canonical-provider-migration effort in
+  GitHub connector PR-commit method (pending CS16 retirement) remains under the
+  frozen `connectors/` tree (`connectors/github.py`'s PyGithub-based
+  `GitHubConnector`). GitLab's python-gitlab-based connector code-dataset fetch
+  methods were retired in CS17 / CHAOS-2819; `connectors/gitlab.py` now retains
+  only the credential shell needed by processor bridges, while
+  `connectors/utils/rest.py` is intentionally retained in the tree for a future
+  consumer. No new code may be added under `connectors/` (see
+  [`AGENTS.md`](../../AGENTS.md)); rate-limit/actuals instrumentation for those
+  datasets lands as the fetch moves to `providers/github/` / `providers/gitlab/`
+  — tracked as its own canonical-provider-migration effort in
   [CHAOS-2773](https://linear.app/fullchaos/issue/CHAOS-2773), since it is a
   much larger migration (~1400 lines per connector, off PyGithub/python-gitlab
   entirely) than a follow-up-ticket-sized change. LaunchDarkly's equivalent
@@ -1249,7 +1251,8 @@ above. GitHub `git` and `commit_stats` REST-core traffic is instrumented as of
   code-dataset families plus repo metadata/project discovery/batch orchestration
   ([CHAOS-2817](https://linear.app/fullchaos/issue/CHAOS-2817), CS15b) are
   migrated onto the canonical, instrumented
-  `providers/gitlab/code_client.py::GitLabCodeClient`.
+  `providers/gitlab/code_client.py::GitLabCodeClient`; the legacy connector
+  methods for those families were removed in CS17 / CHAOS-2819.
 
 
 ## References

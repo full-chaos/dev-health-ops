@@ -13,6 +13,8 @@ from dev_health_ops.processors.gitlab import (
     _fetch_gitlab_incidents_sync,
     _fetch_gitlab_mrs_sync,
     _fetch_gitlab_pipelines_sync,
+    _fetch_gitlab_project_info_sync,
+    _fetch_gitlab_repository_tree,
     _fetch_gitlab_test_reports_sync,
     process_gitlab_project,
 )
@@ -21,6 +23,7 @@ from dev_health_ops.providers.gitlab.code_client import (
     GitLabCommitStatsData,
     GitLabDeploymentData,
     GitLabPipelineData,
+    GitLabProjectData,
 )
 
 
@@ -40,6 +43,8 @@ class _FakeGitLabCodeClient:
         test_reports=None,
         jobs=None,
         artifacts=None,
+        project=None,
+        tree_items=None,
     ):
         self.pipelines = pipelines or []
         self.deployments = deployments or []
@@ -55,6 +60,8 @@ class _FakeGitLabCodeClient:
         self.test_reports = test_reports or {}
         self.jobs = jobs or {}
         self.artifacts = artifacts or {}
+        self.project = project
+        self.tree_items = tree_items if tree_items is not None else []
         self.iter_merge_requests_calls: list[tuple[Any, str, int, int | None]] = []
         self.get_merge_requests_page_calls: list[tuple[Any, int, str, int]] = []
 
@@ -117,6 +124,14 @@ class _FakeGitLabCodeClient:
 
     async def download_job_artifact(self, project_id, job_id, *, max_bytes=None):
         return self.artifacts.get(job_id, b"")
+
+    async def get_project(self, project_id):
+        return self.project
+
+    async def list_repository_tree(
+        self, project_id, *, ref, per_page=100, max_items=1_000_000
+    ):
+        return self.tree_items
 
     def drain_usage_observations(self):
         observations = list(self.observations)
@@ -471,6 +486,72 @@ def test_fetch_gitlab_commits_sync(monkeypatch):
     assert commit_objects[0].message == "ship it"
     assert commit_objects[0].parents == 1
     assert commit_objects[0].committer_when == committed_at
+    assert usage_sink == [{"route_family": "project"}]
+
+
+def test_fetch_gitlab_project_info_sync_uses_code_client(monkeypatch):
+    usage_sink: list[dict[str, Any]] = []
+    project = GitLabProjectData(
+        id=42,
+        name="proj",
+        path_with_namespace="group/proj",
+        web_url="https://gitlab.com/group/proj",
+        default_branch="main",
+    )
+    fake_client = _FakeGitLabCodeClient(
+        project=project, observations=[{"route_family": "project"}]
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        lambda connector: fake_client,
+    )
+
+    result = _fetch_gitlab_project_info_sync(Mock(), 42, usage_sink=usage_sink)
+
+    assert result is project
+    assert result.name == "proj"
+    assert usage_sink == [{"route_family": "project"}]
+
+
+@pytest.mark.asyncio
+async def test_fetch_gitlab_repository_tree_uses_code_client(monkeypatch):
+    usage_sink: list[dict[str, Any]] = []
+    tree_items = [{"type": "blob", "path": "src/a.py"}]
+    fake_client = _FakeGitLabCodeClient(
+        tree_items=tree_items, observations=[{"route_family": "project"}]
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        lambda connector: fake_client,
+    )
+
+    items = await _fetch_gitlab_repository_tree(
+        Mock(), "group/proj", "main", usage_sink
+    )
+
+    assert items == tree_items
+    assert usage_sink == [{"route_family": "project"}]
+
+
+@pytest.mark.asyncio
+async def test_fetch_gitlab_repository_tree_reraises_rate_limit(monkeypatch):
+    usage_sink: list[dict[str, Any]] = []
+
+    class _RateLimitedClient(_FakeGitLabCodeClient):
+        async def list_repository_tree(
+            self, project_id, *, ref, per_page=100, max_items=1_000_000
+        ):
+            raise RateLimitException("limited")
+
+    fake_client = _RateLimitedClient(observations=[{"route_family": "project"}])
+    monkeypatch.setattr(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        lambda connector: fake_client,
+    )
+
+    with pytest.raises(RateLimitException):
+        await _fetch_gitlab_repository_tree(Mock(), "group/proj", "main", usage_sink)
+
     assert usage_sink == [{"route_family": "project"}]
 
 

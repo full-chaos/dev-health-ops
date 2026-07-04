@@ -35,6 +35,7 @@ from dev_health_ops.sync.budget_types import BudgetDimension
 _PROJECT_PATH = "/api/v4/projects/42"
 _FINDINGS_PATH = "/api/v4/projects/42/vulnerability_findings"
 _DEPENDENCIES_PATH = "/api/v4/projects/42/dependencies"
+_PROJECTS_PATH = "/api/v4/projects"
 
 _PROJECT_RESPONSE = {"id": 42, "path_with_namespace": "group/project"}
 
@@ -145,6 +146,112 @@ class TestAuthAndProjectResolution:
 
         with pytest.raises(AuthenticationException):
             await client.get_security_alerts(42)
+
+
+class TestProjectMetadataAndDiscovery:
+    @pytest.mark.asyncio
+    async def test_get_project_maps_metadata_and_records_project_usage(self) -> None:
+        project_path = "/api/v4/projects/group/project"
+        transport, _ = _router_transport(
+            {
+                project_path: _json_response(
+                    200,
+                    {
+                        "id": "42",
+                        "name": "project",
+                        "path_with_namespace": "group/project",
+                        "web_url": "https://gitlab.example.com/group/project",
+                        "default_branch": "trunk",
+                    },
+                )
+            }
+        )
+        client = _client(transport, base_url="https://gitlab.example.com/")
+
+        project = await client.get_project("group/project")
+
+        assert project.id == 42
+        assert project.name == "project"
+        assert project.path_with_namespace == "group/project"
+        assert project.web_url == "https://gitlab.example.com/group/project"
+        assert project.default_branch == "trunk"
+        assert (
+            b"/api/v4/projects/group%2Fproject"
+            in transport.captured_raw_paths[  # type: ignore[attr-defined]
+                project_path
+            ]
+        )
+        observations = client.drain_usage_observations()
+        assert len(observations) == 1
+        assert observations[0]["route_family"] == "project"
+        assert observations[0]["request_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_list_projects_paginates_membership_and_records_per_page_usage(
+        self,
+    ) -> None:
+        transport, calls = _router_transport(
+            {
+                _PROJECTS_PATH: [
+                    _json_response(
+                        200,
+                        [
+                            {
+                                "id": 1,
+                                "name": "alpha",
+                                "path_with_namespace": "group/alpha",
+                                "default_branch": "main",
+                                "web_url": "https://gitlab.example.com/group/alpha",
+                            },
+                            {
+                                "id": "2",
+                                "name": "beta",
+                                "path_with_namespace": "group/beta",
+                                "default_branch": "develop",
+                                "web_url": "https://gitlab.example.com/group/beta",
+                            },
+                        ],
+                        headers={"X-Next-Page": "2"},
+                    ),
+                    _json_response(
+                        200,
+                        [
+                            {
+                                "id": 3,
+                                "name": "gamma",
+                                "path_with_namespace": "group/gamma",
+                                "default_branch": None,
+                                "web_url": "https://gitlab.example.com/group/gamma",
+                            }
+                        ],
+                    ),
+                ]
+            }
+        )
+        client = _client(transport)
+
+        repos = await client.list_projects(
+            membership=True,
+            pattern="group/*a*",
+            max_projects=3,
+            per_page=2,
+        )
+
+        assert [repo.full_name for repo in repos] == [
+            "group/alpha",
+            "group/beta",
+            "group/gamma",
+        ]
+        assert repos[1].id == 2
+        assert repos[2].default_branch == "main"
+        assert calls[_PROJECTS_PATH] == 2
+        first_url = transport.captured_urls[_PROJECTS_PATH]  # type: ignore[attr-defined]
+        assert first_url.params["membership"] == "true"
+        assert first_url.params["per_page"] == "2"
+        observations = client.drain_usage_observations()
+        assert len(observations) == 1
+        assert observations[0]["route_family"] == "project"
+        assert observations[0]["request_count"] == 2
 
 
 # ---------------------------------------------------------------------------

@@ -1194,17 +1194,20 @@ above. GitHub `git` and `commit_stats` REST-core traffic is instrumented as of
   CHAOS-2808, REST `prs` listing / PR commits / incident-label issue
   fetches as of CHAOS-2809, and `repo` metadata/discovery traffic as of
   CHAOS-2810 (CS9); GitLab merge-request and MR-note REST-core traffic
-  is instrumented as of CHAOS-2816 (CS15). The `files`/`blame` `rest_core` tree
-  listing and remaining GitHub/GitLab code-dataset families stay uninstrumented
-  pending their own CHAOS-2773 changesets (see
+  is instrumented as of CHAOS-2816 (CS15), and GitLab repo metadata, project
+  discovery, and batch orchestration as of CHAOS-2817 (CS15b). The
+  `files`/`blame` `rest_core` tree listing and remaining GitHub/GitLab
+  code-dataset families stay uninstrumented pending their own CHAOS-2773
+  changesets (see
   "Frozen `connectors/` path" below). There is also no cross-run
   aggregation/dashboard yet — calibration today is visible per-unit (result +
   structured log), not rolled up over time.
 - **Frozen `connectors/` path.** GitHub repo metadata/listing and batch
-  orchestration now use `GitHubCodeClient` and emit `repo:` usage actuals. The
-  frozen-but-retained GitHub connector PR-commit method (pending CS16
-  retirement), plus the remaining equivalent GitLab code-dataset paths
-  (repo-metadata/batch orchestration among them), remain under the frozen `connectors/` tree
+  orchestration now use `GitHubCodeClient` and emit `repo:` usage actuals, and
+  GitLab repo metadata, project discovery, and batch orchestration now use
+  `GitLabCodeClient` and emit `project:` usage actuals. The frozen-but-retained
+  GitHub connector PR-commit method (pending CS16 retirement) and the GitLab
+  connector (pending CS17 retirement) remain under the frozen `connectors/` tree
   (`connectors/github.py`'s PyGithub-based `GitHubConnector`, `connectors/
   gitlab.py`'s python-gitlab-based `GitLabConnector`). No new code may be added
   there (see [`AGENTS.md`](../../AGENTS.md)); rate-limit/actuals
@@ -1243,10 +1246,10 @@ above. GitHub `git` and `commit_stats` REST-core traffic is instrumented as of
   `merge_requests`/`notes` (`iter_merge_requests`, MR commits, MR approvals,
   MR notes;
   [CHAOS-2816](https://linear.app/fullchaos/issue/CHAOS-2816), CS15)
-  code-dataset families are migrated onto the canonical, instrumented
-  `providers/gitlab/code_client.py::GitLabCodeClient`. GitLab's remaining
-  frozen code-dataset methods (repo-metadata/batch orchestration) stay
-  unmigrated pending their own CHAOS-2773 changesets through CS17.
+  code-dataset families plus repo metadata/project discovery/batch orchestration
+  ([CHAOS-2817](https://linear.app/fullchaos/issue/CHAOS-2817), CS15b) are
+  migrated onto the canonical, instrumented
+  `providers/gitlab/code_client.py::GitLabCodeClient`.
 
 
 ## References

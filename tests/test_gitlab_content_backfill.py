@@ -15,7 +15,6 @@ from datetime import datetime, timezone
 from typing import Any, cast
 from unittest.mock import AsyncMock, Mock, patch
 
-import httpx
 import pytest
 
 # Initialize the connectors package before processors.gitlab to avoid the
@@ -32,7 +31,6 @@ from dev_health_ops.processors.gitlab import (
 )
 from dev_health_ops.providers.gitlab.code_client import (
     GitLabBlameRange,
-    GitLabCodeClient,
     GitLabCommitData,
     GitLabCommitStatsData,
     GitLabFileBlame,
@@ -222,12 +220,14 @@ class _FakeGitLabCodeClientForFiles:
         contents_error=None,
         blame_by_path=None,
         blame_error_paths=None,
+        tree_items=None,
         observations=None,
     ):
         self.contents = contents or {}
         self.contents_error = contents_error
         self.blame_by_path = blame_by_path or {}
         self.blame_error_paths = blame_error_paths or {}
+        self.tree_items = tree_items if tree_items is not None else []
         self.observations = observations or []
         self.get_file_contents_calls: list[Any] = []
         self.get_file_blame_calls: list[Any] = []
@@ -251,6 +251,11 @@ class _FakeGitLabCodeClientForFiles:
         if file_path in self.blame_error_paths:
             raise self.blame_error_paths[file_path]
         return self.blame_by_path.get(file_path, GitLabFileBlame(file_path=file_path))
+
+    async def list_repository_tree(
+        self, project_id, *, ref, per_page=100, max_items=1_000_000
+    ):
+        return self.tree_items
 
     def drain_usage_observations(self):
         observations = list(self.observations)
@@ -342,7 +347,14 @@ class TestGitLabBackfillContents:
         connector = Mock()
         connector.gitlab.projects.get.return_value = project
 
-        fake_client = _FakeGitLabCodeClientForFiles(contents={"src/app.py": "x = 1\n"})
+        tree_items = [
+            {"type": "blob", "path": "src/app.py"},
+            {"type": "blob", "path": "README.md"},
+            {"type": "tree", "path": "src"},
+        ]
+        fake_client = _FakeGitLabCodeClientForFiles(
+            contents={"src/app.py": "x = 1\n"}, tree_items=tree_items
+        )
         monkeypatch.setattr(
             "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
             lambda connector: fake_client,
@@ -351,26 +363,17 @@ class TestGitLabBackfillContents:
         db_repo = Mock()
         db_repo.id = uuid.uuid4()
 
-        tree_items = [
-            {"type": "blob", "path": "src/app.py"},
-            {"type": "blob", "path": "README.md"},
-            {"type": "tree", "path": "src"},
-        ]
-        with patch(
-            "dev_health_ops.processors.gitlab._iter_gitlab_repo_tree",
-            return_value=tree_items,
-        ):
-            await _backfill_gitlab_missing_data(
-                store=store,
-                ingestion_sink=sink,
-                connector=connector,
-                db_repo=db_repo,
-                project_full_name="group/proj",
-                default_branch="main",
-                max_commits=None,
-                include_blame=False,
-                include_commit_stats=False,
-            )
+        await _backfill_gitlab_missing_data(
+            store=store,
+            ingestion_sink=sink,
+            connector=connector,
+            db_repo=db_repo,
+            project_full_name="group/proj",
+            default_branch="main",
+            max_commits=None,
+            include_blame=False,
+            include_commit_stats=False,
+        )
 
         by_path = {f.path: f.contents for f in written}
         assert by_path == {"src/app.py": "x = 1\n", "README.md": None}
@@ -603,46 +606,40 @@ class TestGitLabBackfillBlame:
             )
         )
 
-        blame_payloads = {
-            "/api/v4/projects/42/repository/files/src/a.py/blame": [
-                {
-                    "commit": {
-                        "id": "sha1",
-                        "author_name": "Ada",
-                        "author_email": "ada@example.com",
-                    },
-                    "lines": ["a = 1", "a = 2"],
-                },
-                {
-                    "commit": {
-                        "id": "sha3",
-                        "author_name": "Linus",
-                        "author_email": "linus@example.com",
-                    },
-                    "lines": ["a = 3"],
-                },
-            ],
-            "/api/v4/projects/42/repository/files/src/b.py/blame": [
-                {
-                    "commit": {
-                        "id": "sha2",
-                        "author_name": "Grace",
-                        "author_email": "grace@example.com",
-                    },
-                    "lines": ["b = 1"],
-                }
-            ],
-        }
-        blame_calls: dict[str, int] = {}
-
-        def blame_handler(request: httpx.Request) -> httpx.Response:
-            path = request.url.path
-            blame_calls[path] = blame_calls.get(path, 0) + 1
-            return httpx.Response(200, json=blame_payloads[path])
-
-        fake_client = GitLabCodeClient(
-            private_token="tok",
-            transport=httpx.MockTransport(blame_handler),
+        tree_items = [
+            {"type": "blob", "path": "src/a.py"},
+            {"type": "blob", "path": "src/b.py"},
+        ]
+        fake_client = _FakeGitLabCodeClientForFiles(
+            blame_by_path={
+                "src/a.py": GitLabFileBlame(
+                    file_path="src/a.py",
+                    ranges=(
+                        GitLabBlameRange(
+                            1,
+                            2,
+                            "sha1",
+                            "Ada",
+                            "ada@example.com",
+                            0,
+                            ("a = 1", "a = 2"),
+                        ),
+                        GitLabBlameRange(
+                            3, 3, "sha3", "Linus", "linus@example.com", 0, ("a = 3",)
+                        ),
+                    ),
+                ),
+                "src/b.py": GitLabFileBlame(
+                    file_path="src/b.py",
+                    ranges=(
+                        GitLabBlameRange(
+                            1, 1, "sha2", "Grace", "grace@example.com", 0, ("b = 1",)
+                        ),
+                    ),
+                ),
+            },
+            tree_items=tree_items,
+            observations=[{"route_family": "project"}],
         )
         monkeypatch.setattr(
             "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
@@ -653,31 +650,19 @@ class TestGitLabBackfillBlame:
         db_repo.id = uuid.uuid4()
         usage_sink: list[dict[str, Any]] = []
 
-        tree_items = [
-            {"type": "blob", "path": "src/a.py"},
-            {"type": "blob", "path": "src/b.py"},
-        ]
-        with patch(
-            "dev_health_ops.processors.gitlab._iter_gitlab_repo_tree",
-            return_value=tree_items,
-        ):
-            await _backfill_gitlab_missing_data(
-                store=store,
-                ingestion_sink=sink,
-                connector=connector,
-                db_repo=db_repo,
-                project_full_name="group/proj",
-                default_branch="main",
-                max_commits=None,
-                include_files=False,
-                include_commit_stats=False,
-                usage_sink=usage_sink,
-            )
+        await _backfill_gitlab_missing_data(
+            store=store,
+            ingestion_sink=sink,
+            connector=connector,
+            db_repo=db_repo,
+            project_full_name="group/proj",
+            default_branch="main",
+            max_commits=None,
+            include_files=False,
+            include_commit_stats=False,
+            usage_sink=usage_sink,
+        )
 
-        assert blame_calls == {
-            "/api/v4/projects/42/repository/files/src/a.py/blame": 1,
-            "/api/v4/projects/42/repository/files/src/b.py/blame": 1,
-        }
         assert connector.rest_client.get_file_blame.call_count == 0
         assert [
             (row.path, row.line_no, row.line, row.commit_hash, row.author_name)
@@ -709,6 +694,10 @@ class TestGitLabBackfillBlame:
         connector = Mock()
         connector.gitlab.projects.get.return_value = project
 
+        tree_items = [
+            {"type": "blob", "path": "src/a.py"},
+            {"type": "blob", "path": "src/b.py"},
+        ]
         fake_client = _FakeGitLabCodeClientForFiles(
             blame_by_path={
                 "src/b.py": GitLabFileBlame(
@@ -719,6 +708,7 @@ class TestGitLabBackfillBlame:
                 ),
             },
             blame_error_paths={"src/a.py": RuntimeError("boom")},
+            tree_items=tree_items,
         )
         monkeypatch.setattr(
             "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
@@ -728,25 +718,17 @@ class TestGitLabBackfillBlame:
         db_repo = Mock()
         db_repo.id = uuid.uuid4()
 
-        tree_items = [
-            {"type": "blob", "path": "src/a.py"},
-            {"type": "blob", "path": "src/b.py"},
-        ]
-        with patch(
-            "dev_health_ops.processors.gitlab._iter_gitlab_repo_tree",
-            return_value=tree_items,
-        ):
-            await _backfill_gitlab_missing_data(
-                store=store,
-                ingestion_sink=sink,
-                connector=connector,
-                db_repo=db_repo,
-                project_full_name="group/proj",
-                default_branch="main",
-                max_commits=None,
-                include_files=False,
-                include_commit_stats=False,
-            )
+        await _backfill_gitlab_missing_data(
+            store=store,
+            ingestion_sink=sink,
+            connector=connector,
+            db_repo=db_repo,
+            project_full_name="group/proj",
+            default_branch="main",
+            max_commits=None,
+            include_files=False,
+            include_commit_stats=False,
+        )
 
         assert {row.path for row in written} == {"src/b.py"}
 
@@ -760,8 +742,10 @@ class TestGitLabBackfillBlame:
         project.id = 42
         connector = Mock()
         connector.gitlab.projects.get.return_value = project
+        tree_items = [{"type": "blob", "path": path} for path in sorted(paths)]
         fake_client = _FakeGitLabCodeClientForFiles(
             blame_error_paths={path: RuntimeError("boom") for path in paths},
+            tree_items=tree_items,
         )
         monkeypatch.setattr(
             "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
@@ -769,24 +753,19 @@ class TestGitLabBackfillBlame:
         )
         db_repo = Mock()
         db_repo.id = uuid.uuid4()
-        tree_items = [{"type": "blob", "path": path} for path in sorted(paths)]
 
-        with patch(
-            "dev_health_ops.processors.gitlab._iter_gitlab_repo_tree",
-            return_value=tree_items,
-        ):
-            with caplog.at_level(logging.WARNING):
-                await _backfill_gitlab_missing_data(
-                    store=store,
-                    ingestion_sink=sink,
-                    connector=connector,
-                    db_repo=db_repo,
-                    project_full_name="group/proj",
-                    default_branch="main",
-                    max_commits=None,
-                    include_files=False,
-                    include_commit_stats=False,
-                )
+        with caplog.at_level(logging.WARNING):
+            await _backfill_gitlab_missing_data(
+                store=store,
+                ingestion_sink=sink,
+                connector=connector,
+                db_repo=db_repo,
+                project_full_name="group/proj",
+                default_branch="main",
+                max_commits=None,
+                include_files=False,
+                include_commit_stats=False,
+            )
 
         messages = [record.getMessage() for record in caplog.records]
         assert sum("Failed GitLab blame fetch" in message for message in messages) == 5
@@ -812,8 +791,13 @@ class TestGitLabBackfillBlame:
         connector = Mock()
         connector.gitlab.projects.get.return_value = project
 
+        tree_items = [
+            {"type": "blob", "path": "src/a.py"},
+            {"type": "blob", "path": "src/b.py"},
+        ]
         fake_client = _FakeGitLabCodeClientForFiles(
             blame_error_paths={"src/a.py": RateLimitException("rate limited")},
+            tree_items=tree_items,
             observations=[{"route_family": "project"}],
         )
         monkeypatch.setattr(
@@ -825,27 +809,19 @@ class TestGitLabBackfillBlame:
         db_repo.id = uuid.uuid4()
         usage_sink: list[dict[str, Any]] = []
 
-        tree_items = [
-            {"type": "blob", "path": "src/a.py"},
-            {"type": "blob", "path": "src/b.py"},
-        ]
-        with patch(
-            "dev_health_ops.processors.gitlab._iter_gitlab_repo_tree",
-            return_value=tree_items,
-        ):
-            with pytest.raises(RateLimitException):
-                await _backfill_gitlab_missing_data(
-                    store=store,
-                    ingestion_sink=sink,
-                    connector=connector,
-                    db_repo=db_repo,
-                    project_full_name="group/proj",
-                    default_branch="main",
-                    max_commits=None,
-                    include_files=False,
-                    include_commit_stats=False,
-                    usage_sink=usage_sink,
-                )
+        with pytest.raises(RateLimitException):
+            await _backfill_gitlab_missing_data(
+                store=store,
+                ingestion_sink=sink,
+                connector=connector,
+                db_repo=db_repo,
+                project_full_name="group/proj",
+                default_branch="main",
+                max_commits=None,
+                include_files=False,
+                include_commit_stats=False,
+                usage_sink=usage_sink,
+            )
 
         # Partial observations gathered before the raise still reach the sink
         # (CHAOS-2754/2803 partial-observations-on-exception contract).

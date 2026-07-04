@@ -1864,6 +1864,23 @@ def _gitlab_project(project_id: int, name: str, full_name: str):
     )
 
 
+class _FakeGitLabCodeClient:
+    """Async context manager stub for GitLabCodeClient (CHAOS-2817/CS15b).
+
+    Batch-create name resolution now discovers group projects through the
+    canonical httpx code client instead of ``GitLabConnector.list_repositories``.
+    """
+
+    def __init__(self, projects):
+        self.list_projects = AsyncMock(return_value=projects)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return None
+
+
 @pytest.mark.asyncio
 async def test_batch_create_github_creates_planner_config_without_children(
     client, session_maker
@@ -2078,12 +2095,13 @@ async def test_batch_create_gitlab_children_get_project_id_and_group(
     mock_creds_svc.get_decrypted_credentials_by_id = AsyncMock(
         return_value=({"token": "glpat-test"}, MagicMock(config={}))
     )
-    mock_connector = MagicMock()
-    mock_connector.list_repositories.return_value = [
-        _gitlab_project(101, "alpha", "acme-group/alpha"),
-        _gitlab_project(202, "beta", "acme-group/sub/beta"),
-    ]
-    mock_connector_cls = MagicMock(return_value=mock_connector)
+    fake_client = _FakeGitLabCodeClient(
+        [
+            _gitlab_project(101, "alpha", "acme-group/alpha"),
+            _gitlab_project(202, "beta", "acme-group/sub/beta"),
+        ]
+    )
+    mock_client_cls = MagicMock(return_value=fake_client)
 
     with (
         patch.object(
@@ -2092,8 +2110,8 @@ async def test_batch_create_gitlab_children_get_project_id_and_group(
             return_value=mock_creds_svc,
         ),
         patch(
-            "dev_health_ops.connectors.gitlab.GitLabConnector",
-            mock_connector_cls,
+            "dev_health_ops.providers.gitlab.code_client.GitLabCodeClient",
+            mock_client_cls,
         ),
     ):
         resp = await ac.post(
@@ -2117,10 +2135,10 @@ async def test_batch_create_gitlab_children_get_project_id_and_group(
     assert data["total_created"] == 0
     assert data["children"] == []
 
-    mock_connector_cls.assert_called_once_with(
-        url="https://gitlab.example.com", private_token="glpat-test"
+    mock_client_cls.assert_called_once_with(
+        private_token="glpat-test", base_url="https://gitlab.example.com"
     )
-    mock_connector.list_repositories.assert_called_once_with(org_name="acme-group")
+    fake_client.list_projects.assert_called_once_with(group_name="acme-group")
 
     async with session_maker() as session:
         sources = (await session.execute(select(IntegrationSource))).scalars().all()
@@ -2161,10 +2179,11 @@ async def test_batch_create_gitlab_unknown_project_name_returns_400(client):
     mock_creds_svc.get_decrypted_credentials_by_id = AsyncMock(
         return_value=({"token": "glpat-test"}, MagicMock(config={}))
     )
-    mock_connector = MagicMock()
-    mock_connector.list_repositories.return_value = [
-        _gitlab_project(101, "alpha", "acme-group/alpha"),
-    ]
+    fake_client = _FakeGitLabCodeClient(
+        [
+            _gitlab_project(101, "alpha", "acme-group/alpha"),
+        ]
+    )
 
     with (
         patch.object(
@@ -2173,8 +2192,8 @@ async def test_batch_create_gitlab_unknown_project_name_returns_400(client):
             return_value=mock_creds_svc,
         ),
         patch(
-            "dev_health_ops.connectors.gitlab.GitLabConnector",
-            MagicMock(return_value=mock_connector),
+            "dev_health_ops.providers.gitlab.code_client.GitLabCodeClient",
+            MagicMock(return_value=fake_client),
         ),
     ):
         resp = await ac.post(
@@ -2232,11 +2251,12 @@ async def test_batch_create_gitlab_credential_url_persisted_into_children(
             MagicMock(config={}),
         )
     )
-    mock_connector = MagicMock()
-    mock_connector.list_repositories.return_value = [
-        _gitlab_project(101, "alpha", "acme-group/alpha"),
-    ]
-    mock_connector_cls = MagicMock(return_value=mock_connector)
+    fake_client = _FakeGitLabCodeClient(
+        [
+            _gitlab_project(101, "alpha", "acme-group/alpha"),
+        ]
+    )
+    mock_client_cls = MagicMock(return_value=fake_client)
 
     with (
         patch.object(
@@ -2245,8 +2265,8 @@ async def test_batch_create_gitlab_credential_url_persisted_into_children(
             return_value=mock_creds_svc,
         ),
         patch(
-            "dev_health_ops.connectors.gitlab.GitLabConnector",
-            mock_connector_cls,
+            "dev_health_ops.providers.gitlab.code_client.GitLabCodeClient",
+            mock_client_cls,
         ),
     ):
         resp = await ac.post(
@@ -2265,8 +2285,8 @@ async def test_batch_create_gitlab_credential_url_persisted_into_children(
     data = resp.json()
 
     # Resolution used the credential's self-hosted URL...
-    mock_connector_cls.assert_called_once_with(
-        url="https://gitlab.internal.example.com", private_token="glpat-test"
+    mock_client_cls.assert_called_once_with(
+        private_token="glpat-test", base_url="https://gitlab.internal.example.com"
     )
     # ...and that URL is persisted into both parent and child options.
     assert (
@@ -2292,11 +2312,12 @@ async def test_batch_create_gitlab_numeric_entry_matching_name_resolves_as_name(
     mock_creds_svc.get_decrypted_credentials_by_id = AsyncMock(
         return_value=({"token": "glpat-test"}, MagicMock(config={}))
     )
-    mock_connector = MagicMock()
-    mock_connector.list_repositories.return_value = [
-        _gitlab_project(7007, "007", "acme-group/007"),
-        _gitlab_project(101, "alpha", "acme-group/alpha"),
-    ]
+    fake_client = _FakeGitLabCodeClient(
+        [
+            _gitlab_project(7007, "007", "acme-group/007"),
+            _gitlab_project(101, "alpha", "acme-group/alpha"),
+        ]
+    )
 
     with (
         patch.object(
@@ -2305,8 +2326,8 @@ async def test_batch_create_gitlab_numeric_entry_matching_name_resolves_as_name(
             return_value=mock_creds_svc,
         ),
         patch(
-            "dev_health_ops.connectors.gitlab.GitLabConnector",
-            MagicMock(return_value=mock_connector),
+            "dev_health_ops.providers.gitlab.code_client.GitLabCodeClient",
+            MagicMock(return_value=fake_client),
         ),
     ):
         resp = await ac.post(
@@ -2323,7 +2344,7 @@ async def test_batch_create_gitlab_numeric_entry_matching_name_resolves_as_name(
 
     assert resp.status_code == 201, resp.text
     data = resp.json()
-    mock_connector.list_repositories.assert_called_once_with(org_name="acme-group")
+    fake_client.list_projects.assert_called_once_with(group_name="acme-group")
 
     assert data["children"] == []
     async with session_maker() as session:
@@ -2344,10 +2365,11 @@ async def test_batch_create_gitlab_numeric_entry_not_in_listing_used_as_id(
     mock_creds_svc.get_decrypted_credentials_by_id = AsyncMock(
         return_value=({"token": "glpat-test"}, MagicMock(config={}))
     )
-    mock_connector = MagicMock()
-    mock_connector.list_repositories.return_value = [
-        _gitlab_project(101, "alpha", "acme-group/alpha"),
-    ]
+    fake_client = _FakeGitLabCodeClient(
+        [
+            _gitlab_project(101, "alpha", "acme-group/alpha"),
+        ]
+    )
 
     with (
         patch.object(
@@ -2356,8 +2378,8 @@ async def test_batch_create_gitlab_numeric_entry_not_in_listing_used_as_id(
             return_value=mock_creds_svc,
         ),
         patch(
-            "dev_health_ops.connectors.gitlab.GitLabConnector",
-            MagicMock(return_value=mock_connector),
+            "dev_health_ops.providers.gitlab.code_client.GitLabCodeClient",
+            MagicMock(return_value=fake_client),
         ),
     ):
         resp = await ac.post(
@@ -2375,7 +2397,7 @@ async def test_batch_create_gitlab_numeric_entry_not_in_listing_used_as_id(
     assert resp.status_code == 201, resp.text
     data = resp.json()
     # The listing WAS consulted (credential + group present)...
-    mock_connector.list_repositories.assert_called_once_with(org_name="acme-group")
+    fake_client.list_projects.assert_called_once_with(group_name="acme-group")
 
     assert data["children"] == []
     async with session_maker() as session:

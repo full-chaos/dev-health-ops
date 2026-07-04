@@ -1133,6 +1133,23 @@ class _FakeBatchConnector:
         self.closed = True
 
 
+class _FakeBatchDiscoveryClient:
+    def __init__(self, projects):
+        self._projects = projects
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def list_projects(self, **_kwargs):
+        return list(self._projects)
+
+    def drain_usage_observations(self):
+        return []
+
+
 def _patch_batch(monkeypatch, projects, sync_behavior):
     """Wire process_gitlab_projects_batch to fakes.
 
@@ -1143,6 +1160,11 @@ def _patch_batch(monkeypatch, projects, sync_behavior):
         gitlab_processor,
         "GitLabConnector",
         lambda **kw: _FakeBatchConnector(projects, **kw),
+    )
+    monkeypatch.setattr(
+        gitlab_processor,
+        "_gitlab_code_client_from_connector",
+        lambda _connector: _FakeBatchDiscoveryClient(projects),
     )
     monkeypatch.setattr(gitlab_processor, "IngestionSink", _FakeBatchSink)
     monkeypatch.setattr(gitlab_processor, "CONNECTORS_AVAILABLE", True)

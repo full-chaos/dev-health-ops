@@ -166,6 +166,13 @@ def test_zero_contents_textless_blame_skips_fallback_and_logs_actionable_warning
     assert "CHAOS-2860" in combined
     assert "CHAOS-2862" in combined
     assert "GitHub" in combined
+    assert "either no blame rows were synced" in combined, (
+        "message must not assume blame rows exist -- a repo can have zero "
+        "git_blame rows and still hit this branch"
+    )
+    assert "git_blame exists" not in combined, (
+        "message must not assert git_blame rows exist when they may not"
+    )
 
 
 def test_zero_contents_real_blame_text_reconstruction_unchanged(monkeypatch):
@@ -224,6 +231,10 @@ def test_missing_paths_textless_blame_skips_fill_and_logs_actionable_warning(
     assert actionable, (
         f"expected an actionable no-usable-line-text warning, got: {warnings}"
     )
+    assert any("either no blame rows were synced" in msg for msg in actionable), (
+        "message must not assume blame rows exist for the missing paths"
+    )
+    assert not any("git_blame exists" in msg for msg in actionable)
 
 
 def test_missing_paths_real_blame_text_fill_unchanged(monkeypatch):

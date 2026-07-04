@@ -341,13 +341,14 @@ def run_complexity_db_job(
                         else:
                             blame_unusable = True
                             logger.warning(
-                                "Repo %s is missing %s/%s git_files contents and "
-                                "git_blame has no usable line text for those paths, "
-                                "so the blame fallback cannot recover them. "
-                                "Remedies: (1) file contents were never hydrated -- "
-                                "check the scanner include/exclude globs or run a "
-                                "content backfill (CHAOS-2859); (2) GitHub's Blame "
-                                "API does not return line text by design; (3) "
+                                "Repo %s is missing %s/%s git_files contents, and "
+                                "git_blame has no usable line text for those paths "
+                                "(either no blame rows were synced, or the provider "
+                                "returned no line text), so the blame fallback cannot "
+                                "recover them. Remedies: (1) file contents were never "
+                                "hydrated -- check the scanner include/exclude globs "
+                                "or run a content backfill (CHAOS-2859); (2) GitHub's "
+                                "Blame API does not return line text by design; (3) "
                                 "GitLab blame line text is pending CHAOS-2860; (4) "
                                 "consider enabling the BLAME dataset (CHAOS-2862).",
                                 repo_label,
@@ -365,10 +366,11 @@ def run_complexity_db_job(
                     else:
                         blame_unusable = True
                         logger.warning(
-                            "Repo %s has no git_files contents and git_blame has "
-                            "no usable line text either, so the blame fallback "
-                            "cannot recover them. Remedies: (1) file contents "
-                            "were never hydrated -- check the scanner "
+                            "Repo %s has no git_files contents, and git_blame has "
+                            "no usable line text either (either no blame rows were "
+                            "synced, or the provider returned no line text), so the "
+                            "blame fallback cannot recover them. Remedies: (1) file "
+                            "contents were never hydrated -- check the scanner "
                             "include/exclude globs or run a content backfill "
                             "(CHAOS-2859); (2) GitHub's Blame API does not "
                             "return line text by design; (3) GitLab blame line "
@@ -385,9 +387,10 @@ def run_complexity_db_job(
             if not files:
                 if blame_unusable:
                     logger.warning(
-                        "No scannable contents found for repo %s: git_blame "
-                        "exists but carries no usable line text (see prior "
-                        "warning for remedies).",
+                        "No scannable contents found for repo %s: git_blame has no "
+                        "usable line text (either no blame rows were synced, or the "
+                        "provider returned no line text) -- see prior warning for "
+                        "remedies.",
                         repo_label,
                     )
                 elif total_files == 0:

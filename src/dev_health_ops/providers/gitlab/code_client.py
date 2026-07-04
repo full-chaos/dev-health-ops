@@ -63,7 +63,7 @@ from typing import Any
 
 import httpx
 
-from dev_health_ops.connectors.models import BlameRange, FileBlame, SecurityAlertData
+from dev_health_ops.connectors.models import SecurityAlertData
 from dev_health_ops.exceptions import (
     APIException,
     NotFoundException,
@@ -138,6 +138,23 @@ class GitLabCommitStatsData:
     commit_id: str
     additions: int
     deletions: int
+
+
+@dataclass(frozen=True, slots=True)
+class GitLabBlameRange:
+    starting_line: int
+    ending_line: int
+    commit_sha: str
+    author: str
+    author_email: str
+    age_seconds: int
+    lines: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class GitLabFileBlame:
+    file_path: str
+    ranges: tuple[GitLabBlameRange, ...] = ()
 
 
 class _GitLabSecurityForbidden(APIException):
@@ -274,10 +291,10 @@ def _parse_gitlab_blame_datetime(value: object) -> datetime | None:
         return None
 
 
-def _map_file_blame(file_path: str, items: list[Any]) -> FileBlame:
+def _map_file_blame(file_path: str, items: list[Any]) -> GitLabFileBlame:
     now = datetime.now(timezone.utc)
     line_no = 1
-    ranges: list[BlameRange] = []
+    ranges: list[GitLabBlameRange] = []
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -292,17 +309,18 @@ def _map_file_blame(file_path: str, items: list[Any]) -> FileBlame:
         age_seconds = int((now - authored_at).total_seconds()) if authored_at else 0
         ending_line = line_no + len(lines) - 1
         ranges.append(
-            BlameRange(
+            GitLabBlameRange(
                 starting_line=line_no,
                 ending_line=ending_line,
                 commit_sha=str(commit.get("id") or ""),
                 author=str(commit.get("author_name") or "Unknown"),
                 author_email=str(commit.get("author_email") or ""),
                 age_seconds=age_seconds,
+                lines=tuple(lines),
             )
         )
         line_no = ending_line + 1
-    return FileBlame(file_path=file_path, ranges=ranges)
+    return GitLabFileBlame(file_path=file_path, ranges=tuple(ranges))
 
 
 def _parse_gitlab_datetime(value: object) -> datetime | None:
@@ -821,15 +839,18 @@ class GitLabCodeClient:
         file_path: str,
         *,
         ref: str = "HEAD",
-    ) -> FileBlame:
+    ) -> GitLabFileBlame:
         """Fetch normalized GitLab blame ranges for one file.
 
         Mirrors ``GitLabRESTClient.get_file_blame``
         (``connectors/utils/rest.py``, FROZEN): ``GET
         /projects/{id}/repository/files/{path}/blame`` returns GitLab's raw
         ``{"lines": [...], "commit": {...}}`` ranges, and this provider
-        normalizes them to the shared ``FileBlame`` DTO before the processor
-        sees them. GitLab's blame endpoint
+        normalizes them to a GitLab-owned DTO before the processor sees them.
+        The endpoint returns ranges in file order with a ``lines`` array per
+        range; because the documented response shape does not include explicit
+        line numbers, the provider assigns cumulative line numbers across the
+        returned ranges. GitLab's blame endpoint
         returns the full per-file breakdown in one response (no pagination
         concept), so this is a single request. Errors -- INCLUDING a 404
         (no blame for this ref/path) -- propagate; callers handle

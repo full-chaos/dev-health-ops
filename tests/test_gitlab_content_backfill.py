@@ -9,11 +9,13 @@ upgrade through ``_backfill_gitlab_missing_data``.
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any, cast
 from unittest.mock import AsyncMock, Mock, patch
 
+import httpx
 import pytest
 
 # Initialize the connectors package before processors.gitlab to avoid the
@@ -21,7 +23,6 @@ import pytest
 # is collected in isolation.
 import dev_health_ops.connectors  # noqa: F401
 from dev_health_ops.connectors import GitLabConnector
-from dev_health_ops.connectors.models import BlameRange, FileBlame
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.processors import gitlab as gitlab_processor
 from dev_health_ops.processors.gitlab import (
@@ -30,8 +31,11 @@ from dev_health_ops.processors.gitlab import (
     _sync_gitlab_mrs_to_store,
 )
 from dev_health_ops.providers.gitlab.code_client import (
+    GitLabBlameRange,
+    GitLabCodeClient,
     GitLabCommitData,
     GitLabCommitStatsData,
+    GitLabFileBlame,
 )
 
 
@@ -246,7 +250,7 @@ class _FakeGitLabCodeClientForFiles:
         self.get_file_blame_calls.append((project_id, file_path, ref))
         if file_path in self.blame_error_paths:
             raise self.blame_error_paths[file_path]
-        return self.blame_by_path.get(file_path, FileBlame(file_path=file_path))
+        return self.blame_by_path.get(file_path, GitLabFileBlame(file_path=file_path))
 
     def drain_usage_observations(self):
         observations = list(self.observations)
@@ -599,18 +603,46 @@ class TestGitLabBackfillBlame:
             )
         )
 
-        fake_client = _FakeGitLabCodeClientForFiles(
-            blame_by_path={
-                "src/a.py": FileBlame(
-                    file_path="src/a.py",
-                    ranges=[BlameRange(1, 2, "sha1", "Ada", "ada@example.com", 0)],
-                ),
-                "src/b.py": FileBlame(
-                    file_path="src/b.py",
-                    ranges=[BlameRange(1, 1, "sha2", "Grace", "grace@example.com", 0)],
-                ),
-            },
-            observations=[{"route_family": "project"}],
+        blame_payloads = {
+            "/api/v4/projects/42/repository/files/src/a.py/blame": [
+                {
+                    "commit": {
+                        "id": "sha1",
+                        "author_name": "Ada",
+                        "author_email": "ada@example.com",
+                    },
+                    "lines": ["a = 1", "a = 2"],
+                },
+                {
+                    "commit": {
+                        "id": "sha3",
+                        "author_name": "Linus",
+                        "author_email": "linus@example.com",
+                    },
+                    "lines": ["a = 3"],
+                },
+            ],
+            "/api/v4/projects/42/repository/files/src/b.py/blame": [
+                {
+                    "commit": {
+                        "id": "sha2",
+                        "author_name": "Grace",
+                        "author_email": "grace@example.com",
+                    },
+                    "lines": ["b = 1"],
+                }
+            ],
+        }
+        blame_calls: dict[str, int] = {}
+
+        def blame_handler(request: httpx.Request) -> httpx.Response:
+            path = request.url.path
+            blame_calls[path] = blame_calls.get(path, 0) + 1
+            return httpx.Response(200, json=blame_payloads[path])
+
+        fake_client = GitLabCodeClient(
+            private_token="tok",
+            transport=httpx.MockTransport(blame_handler),
         )
         monkeypatch.setattr(
             "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
@@ -642,16 +674,21 @@ class TestGitLabBackfillBlame:
                 usage_sink=usage_sink,
             )
 
-        assert {(pc[1]) for pc in fake_client.get_file_blame_calls} == {
-            "src/a.py",
-            "src/b.py",
+        assert blame_calls == {
+            "/api/v4/projects/42/repository/files/src/a.py/blame": 1,
+            "/api/v4/projects/42/repository/files/src/b.py/blame": 1,
         }
         assert connector.rest_client.get_file_blame.call_count == 0
-        by_path = {row.path: row for row in written}
-        assert by_path["src/a.py"].commit_hash == "sha1"
-        assert by_path["src/a.py"].author_name == "Ada"
-        assert by_path["src/b.py"].commit_hash == "sha2"
-        assert usage_sink == [{"route_family": "project"}]
+        assert [
+            (row.path, row.line_no, row.line, row.commit_hash, row.author_name)
+            for row in written
+        ] == [
+            ("src/a.py", 1, "a = 1", "sha1", "Ada"),
+            ("src/a.py", 2, "a = 2", "sha1", "Ada"),
+            ("src/a.py", 3, "a = 3", "sha3", "Linus"),
+            ("src/b.py", 1, "b = 1", "sha2", "Grace"),
+        ]
+        assert usage_sink[0]["route_family"] == "project"
 
     @pytest.mark.asyncio
     async def test_per_file_failure_is_skipped_but_crawl_continues(self, monkeypatch):
@@ -674,9 +711,11 @@ class TestGitLabBackfillBlame:
 
         fake_client = _FakeGitLabCodeClientForFiles(
             blame_by_path={
-                "src/b.py": FileBlame(
+                "src/b.py": GitLabFileBlame(
                     file_path="src/b.py",
-                    ranges=[BlameRange(1, 1, "sha2", "Grace", "", 0)],
+                    ranges=(
+                        GitLabBlameRange(1, 1, "sha2", "Grace", "", 0, ("b = 1",)),
+                    ),
                 ),
             },
             blame_error_paths={"src/a.py": RuntimeError("boom")},
@@ -710,6 +749,52 @@ class TestGitLabBackfillBlame:
             )
 
         assert {row.path for row in written} == {"src/b.py"}
+
+    @pytest.mark.asyncio
+    async def test_per_file_failure_warnings_are_bounded(self, monkeypatch, caplog):
+        paths = {f"src/{idx}.py" for idx in range(6)}
+        store = self._store(paths)
+        sink = Mock()
+        sink.insert_blame_data = AsyncMock()
+        project = Mock()
+        project.id = 42
+        connector = Mock()
+        connector.gitlab.projects.get.return_value = project
+        fake_client = _FakeGitLabCodeClientForFiles(
+            blame_error_paths={path: RuntimeError("boom") for path in paths},
+        )
+        monkeypatch.setattr(
+            "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+            lambda connector: fake_client,
+        )
+        db_repo = Mock()
+        db_repo.id = uuid.uuid4()
+        tree_items = [{"type": "blob", "path": path} for path in sorted(paths)]
+
+        with patch(
+            "dev_health_ops.processors.gitlab._iter_gitlab_repo_tree",
+            return_value=tree_items,
+        ):
+            with caplog.at_level(logging.WARNING):
+                await _backfill_gitlab_missing_data(
+                    store=store,
+                    ingestion_sink=sink,
+                    connector=connector,
+                    db_repo=db_repo,
+                    project_full_name="group/proj",
+                    default_branch="main",
+                    max_commits=None,
+                    include_files=False,
+                    include_commit_stats=False,
+                )
+
+        messages = [record.getMessage() for record in caplog.records]
+        assert sum("Failed GitLab blame fetch" in message for message in messages) == 5
+        assert any(
+            "Skipped GitLab blame for 6 file(s) in group/proj; logged first 5 failures"
+            in message
+            for message in messages
+        )
 
     @pytest.mark.asyncio
     async def test_rate_limit_exception_propagates_and_stops_crawl(self, monkeypatch):

@@ -1353,7 +1353,15 @@ class TestFileBlameParity:
                                 "author_email": "ada@example.com",
                             },
                             "lines": ["x = 1", "y = 2"],
-                        }
+                        },
+                        {
+                            "commit": {
+                                "id": "sha2",
+                                "author_name": "Grace",
+                                "author_email": "grace@example.com",
+                            },
+                            "lines": ["z = 3"],
+                        },
                     ],
                 )
             }
@@ -1366,8 +1374,9 @@ class TestFileBlameParity:
         assert [
             (rng.starting_line, rng.ending_line, rng.commit_sha, rng.author)
             for rng in blame.ranges
-        ] == [(1, 2, "sha1", "Ada")]
+        ] == [(1, 2, "sha1", "Ada"), (3, 3, "sha2", "Grace")]
         assert blame.ranges[0].author_email == "ada@example.com"
+        assert [rng.lines for rng in blame.ranges] == [("x = 1", "y = 2"), ("z = 3",)]
         assert calls[blame_path] == 1
         query = dict(transport.captured_urls[blame_path].params)  # type: ignore[attr-defined]
         assert query == {"ref": "main"}
@@ -1407,7 +1416,7 @@ class TestFileBlameParity:
         blame = await client.get_file_blame(42, raw_file_path, ref="HEAD")
 
         assert blame.file_path == raw_file_path
-        assert blame.ranges == []
+        assert blame.ranges == ()
         assert calls[decoded_path] == 1
         raw_path = transport.captured_raw_paths[decoded_path]  # type: ignore[attr-defined]
         expected_segment = quote(raw_file_path, safe="")

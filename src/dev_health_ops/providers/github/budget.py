@@ -327,13 +327,11 @@ def _fallback_credential_scope(
 # ---------------------------------------------------------------------------
 # Declares the full budget vocabulary the GitHub estimator emits so recorded
 # actuals key by the same (route_family, dimension) an estimate is keyed by.
-# Code-dataset families (git/commit_stats/files/blame/cicd/tests/deployments)
-# are budgeted but fetched through the frozen dataset path with no
-# instrumented client, so they carry no operation markers here (documented gap;
-# see docs/architecture/rate-limit-policy.md). Only the work-item families are
-# instrumented: every REST read in a work-item unit consumes the work_items
-# budget and every GraphQL POST consumes the work_item_prs budget, so resolution
-# is transport-based via the resolver defaults below.
+# Some code-dataset families are budgeted but still fetched through frozen
+# connector paths with no instrumented client, so they carry no operation
+# markers here (documented gap; see docs/providers/rate-limit-policy.md). Every
+# canonical code-client migration adds an explicit family prefix marker only when
+# the live fetch path has moved.
 #
 # `pr_social` (GRAPHQL_COST) is the first code-dataset family whose fetch path
 # IS instrumented (CHAOS-2803/CS2): the PR review-batch enrichment
@@ -351,16 +349,19 @@ def _fallback_credential_scope(
 # CHAOS-2773 CS8 -- so their markers stay empty per the plan's "never flip a
 # marker before its traffic" rule (§3).
 #
-# `security` (REST_CORE) and deployments REST_CORE now fetch through
+# `git` (REST_CORE), `commit_stats` (REST_CORE), `security` (REST_CORE), and
+# deployments REST_CORE now fetch through
 # `providers/github/code_client.py::GitHubCodeClient`, labeling operations
 # with explicit family prefixes so CS1's resolver short-circuit resolves them
-# directly. deployments CONTENTS_BLOB remains empty/deferred until artifact or
-# blob traffic is migrated; markers are populated only for live instrumented
-# traffic.
+# directly. `commit_stats` CONTENTS_BLOB and deployments CONTENTS_BLOB remain
+# empty/deferred until a distinct blob/content path is migrated; markers are
+# populated only for live instrumented traffic.
 GITHUB_USAGE_ROUTE_FAMILIES: tuple[UsageRouteFamily, ...] = (
     UsageRouteFamily("repo", BudgetDimension.REST_CORE),
-    UsageRouteFamily("git", BudgetDimension.REST_CORE),
-    UsageRouteFamily("commit_stats", BudgetDimension.REST_CORE),
+    UsageRouteFamily("git", BudgetDimension.REST_CORE, operation_markers=("git:",)),
+    UsageRouteFamily(
+        "commit_stats", BudgetDimension.REST_CORE, operation_markers=("commit_stats:",)
+    ),
     UsageRouteFamily("commit_stats", BudgetDimension.CONTENTS_BLOB),
     UsageRouteFamily("files", BudgetDimension.REST_CORE),
     UsageRouteFamily("files", BudgetDimension.CONTENTS_BLOB),

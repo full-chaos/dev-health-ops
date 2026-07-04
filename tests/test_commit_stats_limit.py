@@ -16,6 +16,7 @@ from typing import Any, cast
 # pre-existing providers._base <-> connectors circular import when this file
 # is collected in isolation.
 import dev_health_ops.connectors  # noqa: F401
+from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.models.git import Repo
 from dev_health_ops.processors import github
@@ -64,50 +65,6 @@ def test_windowed_truncation_predicate():
     assert trunc(50, False, 100, None) is False  # full-history is never truncated
 
 
-def test_fetch_commits_reports_window_truncation():
-    # The look-ahead: _fetch_github_commits_sync peeks ONE commit past max_commits
-    # so callers can distinguish a complete exact-size window (truncated=False)
-    # from a genuinely truncated one (truncated=True). Counting alone cannot.
-    def _fake_commit(sha: str):
-        person = SimpleNamespace(
-            name="Dev", email=None, date=datetime(2026, 5, 20, tzinfo=timezone.utc)
-        )
-        inner = SimpleNamespace(author=person, committer=person, message="msg")
-        return SimpleNamespace(
-            sha=sha, author=None, committer=None, commit=inner, parents=[]
-        )
-
-    class _FakeRepo:
-        def __init__(self, n: int) -> None:
-            self._commits = [_fake_commit(f"sha-{i}") for i in range(n)]
-
-        def get_commits(self, **kwargs):
-            return iter(self._commits)
-
-    fetch = github._fetch_github_commits_sync
-
-    # window 5, cap 3 -> truncated (a 4th commit existed past the cap, not kept)
-    raw, objs, truncated = fetch(_FakeRepo(5), 3, "repo-1")
-    assert [c.sha for c in raw] == ["sha-0", "sha-1", "sha-2"]
-    assert len(objs) == 3
-    assert truncated is True
-
-    # window EXACTLY 3, cap 3 -> complete (iterator ended at the cap)
-    raw, _objs, truncated = fetch(_FakeRepo(3), 3, "repo-1")
-    assert len(raw) == 3
-    assert truncated is False
-
-    # window 2, under cap 3 -> complete
-    raw, _objs, truncated = fetch(_FakeRepo(2), 3, "repo-1")
-    assert len(raw) == 2
-    assert truncated is False
-
-    # no cap -> never truncated
-    raw, _objs, truncated = fetch(_FakeRepo(10), None, "repo-1")
-    assert len(raw) == 10
-    assert truncated is False
-
-
 class _RecordingSink:
     def __init__(self) -> None:
         self.stats: list[Any] = []
@@ -120,21 +77,24 @@ def _run_sync_commit_stats(monkeypatch, *, raw_commits, since):
     """Drive ``_sync_github_commit_stats`` with a pre-fetched commit list."""
     fetch_calls: list[int] = []
 
-    def _fake_fetch(raw, repo_id, max_stats, window, gate):
+    async def _fake_fetch(
+        connector, owner, repo_name, raw, repo_id, max_stats, window, usage_sink
+    ):
         fetch_calls.append(max_stats)
         return [
             SimpleNamespace(commit_hash=getattr(c, "sha", c)) for c in raw[:max_stats]
         ]
 
-    monkeypatch.setattr(github, "_fetch_github_commit_stats_sync", _fake_fetch)
+    monkeypatch.setattr(github, "_fetch_github_commit_stats_async", _fake_fetch)
     sink = _RecordingSink()
 
     async def _drive():
         return await github._sync_github_commit_stats(
-            gh_repo=object(),
+            connector=object(),
+            owner="acme",
+            repo_name="widgets",
             db_repo=cast(Repo, SimpleNamespace(id="repo-1")),
             ingestion_sink=cast(IngestionSink, sink),
-            loop=asyncio.get_running_loop(),
             max_commits=None,
             since=since,
             raw_commits=list(raw_commits),
@@ -168,3 +128,92 @@ def test_full_history_capped_sample_still_writes_stats(monkeypatch):
     assert fetch_calls == [50]  # capped sample fetched
     assert written == 50
     assert len(stats) == 50
+
+
+def test_fetch_commit_stats_drains_usage_sink_on_rate_limit(monkeypatch):
+    usage_sink: list[dict[str, Any]] = []
+
+    class _FakeClient:
+        async def get_commit_file_stats(self, owner, repo_name, sha):
+            raise RateLimitException("limited", retry_after_seconds=42.0)
+
+        def drain_usage_observations(self):
+            return [{"route_family": "commit_stats", "request_count": 1}]
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(
+        github, "_github_code_client_from_connector", lambda connector: _FakeClient()
+    )
+
+    async def _drive():
+        return await github._fetch_github_commit_stats_async(
+            connector=object(),
+            owner="acme",
+            repo_name="widgets",
+            raw_commits=[SimpleNamespace(sha="sha-1")],
+            repo_id="repo-1",
+            max_stats=1,
+            since=None,
+            usage_sink=usage_sink,
+        )
+
+    try:
+        asyncio.run(_drive())
+    except RateLimitException as exc:
+        assert exc.retry_after_seconds == 42.0
+    else:
+        raise AssertionError("expected RateLimitException")
+
+    assert usage_sink == [{"route_family": "commit_stats", "request_count": 1}]
+
+
+def test_fetch_commit_stats_skips_non_rate_commit_failure(monkeypatch):
+    usage_sink: list[dict[str, Any]] = []
+
+    class _FakeClient:
+        async def get_commit_file_stats(self, owner, repo_name, sha):
+            if sha == "bad-sha":
+                raise RuntimeError("detail failed")
+            return [
+                SimpleNamespace(
+                    commit_hash=sha,
+                    file_path="src/app.py",
+                    additions=2,
+                    deletions=1,
+                    old_file_mode="unknown",
+                    new_file_mode="unknown",
+                )
+            ]
+
+        def drain_usage_observations(self):
+            return [{"route_family": "commit_stats", "request_count": 3}]
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(
+        github, "_github_code_client_from_connector", lambda connector: _FakeClient()
+    )
+
+    async def _drive():
+        return await github._fetch_github_commit_stats_async(
+            connector=object(),
+            owner="acme",
+            repo_name="widgets",
+            raw_commits=[
+                SimpleNamespace(sha="good-1"),
+                SimpleNamespace(sha="bad-sha"),
+                SimpleNamespace(sha="good-2"),
+            ],
+            repo_id="repo-1",
+            max_stats=3,
+            since=None,
+            usage_sink=usage_sink,
+        )
+
+    stats = asyncio.run(_drive())
+
+    assert [stat.commit_hash for stat in stats] == ["good-1", "good-2"]
+    assert usage_sink == [{"route_family": "commit_stats", "request_count": 3}]

@@ -42,6 +42,42 @@ def _enable_connector_stubs(monkeypatch) -> None:
     monkeypatch.setattr(processors.gitlab, "RateLimitGate", RateLimitGate)
 
 
+def _github_commits_async_from_sync(fake_fetch):
+    async def _wrapped(
+        connector,
+        owner,
+        repo_name,
+        repo_id,
+        max_commits,
+        since=None,
+        until=None,
+        usage_sink=None,
+    ):
+        result = fake_fetch(None, max_commits, repo_id, since)
+        if len(result) == 2:
+            raw_commits, commit_objects = result
+            return raw_commits, commit_objects, False
+        return result
+
+    return _wrapped
+
+
+def _github_commit_stats_async_from_sync(fake_fetch):
+    async def _wrapped(
+        connector,
+        owner,
+        repo_name,
+        raw_commits,
+        repo_id,
+        max_stats,
+        since=None,
+        usage_sink=None,
+    ):
+        return fake_fetch(raw_commits, repo_id, max_stats, since)
+
+    return _wrapped
+
+
 @pytest.mark.asyncio
 async def test_github_async_batch_callback_fires_as_completed(monkeypatch):
     """Fast repos should invoke callback before slow repos in same batch."""
@@ -338,11 +374,13 @@ async def test_process_github_repos_batch_upserts_during_async_processing(monkey
 
     monkeypatch.setattr(
         processors.github,
-        "_fetch_github_commits_sync",
-        lambda *args, **kwargs: ([], []),
+        "_fetch_github_commits_async",
+        _github_commits_async_from_sync(lambda *args, **kwargs: ([], [])),
     )
     monkeypatch.setattr(
-        processors.github, "_fetch_github_commit_stats_sync", lambda *args, **kwargs: []
+        processors.github,
+        "_fetch_github_commit_stats_async",
+        _github_commit_stats_async_from_sync(lambda *args, **kwargs: []),
     )
 
     # A store stub that records when insert_repo is called.
@@ -527,10 +565,14 @@ async def test_process_github_repos_batch_stores_commits_and_stats(monkeypatch):
 
     monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
     monkeypatch.setattr(
-        processors.github, "_fetch_github_commits_sync", fake_fetch_commits
+        processors.github,
+        "_fetch_github_commits_async",
+        _github_commits_async_from_sync(fake_fetch_commits),
     )
     monkeypatch.setattr(
-        processors.github, "_fetch_github_commit_stats_sync", fake_fetch_commit_stats
+        processors.github,
+        "_fetch_github_commit_stats_async",
+        _github_commit_stats_async_from_sync(fake_fetch_commit_stats),
     )
 
     store = DummyStore()
@@ -635,10 +677,14 @@ async def test_process_github_repos_batch_over_cap_window_skips_stats(monkeypatc
 
     monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
     monkeypatch.setattr(
-        processors.github, "_fetch_github_commits_sync", fake_fetch_commits
+        processors.github,
+        "_fetch_github_commits_async",
+        _github_commits_async_from_sync(fake_fetch_commits),
     )
     monkeypatch.setattr(
-        processors.github, "_fetch_github_commit_stats_sync", fake_fetch_commit_stats
+        processors.github,
+        "_fetch_github_commit_stats_async",
+        _github_commit_stats_async_from_sync(fake_fetch_commit_stats),
     )
 
     store = DummyStore()
@@ -748,10 +794,14 @@ async def test_process_github_repos_batch_truncated_window_skips_stats(monkeypat
 
     monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
     monkeypatch.setattr(
-        processors.github, "_fetch_github_commits_sync", fake_fetch_commits
+        processors.github,
+        "_fetch_github_commits_async",
+        _github_commits_async_from_sync(fake_fetch_commits),
     )
     monkeypatch.setattr(
-        processors.github, "_fetch_github_commit_stats_sync", fake_fetch_commit_stats
+        processors.github,
+        "_fetch_github_commit_stats_async",
+        _github_commit_stats_async_from_sync(fake_fetch_commit_stats),
     )
 
     await processors.github.process_github_repos_batch(
@@ -871,10 +921,14 @@ async def test_process_github_repos_batch_undersized_window_writes_stats(monkeyp
 
     monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
     monkeypatch.setattr(
-        processors.github, "_fetch_github_commits_sync", fake_fetch_commits
+        processors.github,
+        "_fetch_github_commits_async",
+        _github_commits_async_from_sync(fake_fetch_commits),
     )
     monkeypatch.setattr(
-        processors.github, "_fetch_github_commit_stats_sync", fake_fetch_commit_stats
+        processors.github,
+        "_fetch_github_commit_stats_async",
+        _github_commit_stats_async_from_sync(fake_fetch_commit_stats),
     )
 
     await processors.github.process_github_repos_batch(
@@ -1000,10 +1054,14 @@ async def test_process_github_repos_batch_exact_complete_window_writes_stats(
 
     monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
     monkeypatch.setattr(
-        processors.github, "_fetch_github_commits_sync", fake_fetch_commits
+        processors.github,
+        "_fetch_github_commits_async",
+        _github_commits_async_from_sync(fake_fetch_commits),
     )
     monkeypatch.setattr(
-        processors.github, "_fetch_github_commit_stats_sync", fake_fetch_commit_stats
+        processors.github,
+        "_fetch_github_commit_stats_async",
+        _github_commit_stats_async_from_sync(fake_fetch_commit_stats),
     )
 
     await processors.github.process_github_repos_batch(
@@ -1101,7 +1159,9 @@ async def test_process_github_repos_batch_commit_stats_rate_limit_propagates(
 
     monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
     monkeypatch.setattr(
-        processors.github, "_fetch_github_commits_sync", fake_fetch_commits
+        processors.github,
+        "_fetch_github_commits_async",
+        _github_commits_async_from_sync(fake_fetch_commits),
     )
 
     with pytest.raises(RateLimitException) as exc_info:
@@ -1201,7 +1261,9 @@ async def test_process_github_repos_batch_multi_repo_rate_limit_does_not_hang(
 
     monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
     monkeypatch.setattr(
-        processors.github, "_fetch_github_commits_sync", fake_fetch_commits
+        processors.github,
+        "_fetch_github_commits_async",
+        _github_commits_async_from_sync(fake_fetch_commits),
     )
 
     with pytest.raises(RateLimitException) as exc_info:
@@ -1309,7 +1371,18 @@ async def test_process_github_repos_batch_commit_detail_rate_limit_propagates(
 
     monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
     monkeypatch.setattr(
-        processors.github, "_fetch_github_commits_sync", fake_fetch_commits
+        processors.github,
+        "_fetch_github_commits_async",
+        _github_commits_async_from_sync(fake_fetch_commits),
+    )
+
+    async def fake_fetch_commit_stats(*args, **kwargs):
+        raise RateLimitException("limited", retry_after_seconds=43.0)
+
+    monkeypatch.setattr(
+        processors.github,
+        "_fetch_github_commit_stats_async",
+        fake_fetch_commit_stats,
     )
 
     with pytest.raises(RateLimitException) as exc_info:

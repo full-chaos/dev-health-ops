@@ -536,7 +536,7 @@ class InstrumentedRESTCore:
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         data_key: str | None = None,
-        max_pages: int = 100,
+        max_pages: int | None = 100,
     ) -> list[Any]:
         """Paginate a GitHub-style endpoint via the RFC 5988 ``Link`` header.
 
@@ -553,7 +553,7 @@ class InstrumentedRESTCore:
         next_params: dict[str, Any] | None = dict(params or {}) if params else None
         pages = 0
         while next_url is not None:
-            if pages >= max_pages:
+            if max_pages is not None and pages >= max_pages:
                 logger.warning(
                     "%s pagination hit the %d-page cap for %s",
                     self.provider,

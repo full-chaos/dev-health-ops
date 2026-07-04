@@ -17,6 +17,14 @@ def _counting(counter: dict[str, Any], key: str, value: Any):
     return _inner
 
 
+def _async_counting(counter: dict[str, Any], key: str, value: Any):
+    async def _inner(*args: Any, **kwargs: Any) -> Any:
+        counter[key] = counter.get(key, 0) + 1
+        return value
+
+    return _inner
+
+
 class _SimpleRepository:
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
@@ -114,13 +122,13 @@ def test_github_commits_run_does_not_fetch_stats_files_or_blame(monkeypatch):
     monkeypatch.setattr(github, "IngestionSink", _FakeSink)
     monkeypatch.setattr(
         github,
-        "_fetch_github_commits_sync",
-        _counting(calls, "commits", (["raw-sha"], ["commit-row"])),
+        "_fetch_github_commits_async",
+        _async_counting(calls, "commits", (["raw-sha"], ["commit-row"], False)),
     )
     monkeypatch.setattr(
         github,
-        "_fetch_github_commit_stats_sync",
-        _counting(calls, "stats", ["stat-row"]),
+        "_fetch_github_commit_stats_async",
+        _async_counting(calls, "stats", ["stat-row"]),
     )
 
     async def fake_backfill(**kwargs):
@@ -158,13 +166,13 @@ def test_github_granular_stats_files_blame_and_legacy_bundle(monkeypatch):
     monkeypatch.setattr(github, "IngestionSink", _FakeSink)
     monkeypatch.setattr(
         github,
-        "_fetch_github_commits_sync",
-        _counting(calls, "commits", (["raw-sha"], ["commit-row"])),
+        "_fetch_github_commits_async",
+        _async_counting(calls, "commits", (["raw-sha"], ["commit-row"], False)),
     )
     monkeypatch.setattr(
         github,
-        "_fetch_github_commit_stats_sync",
-        _counting(calls, "stats", ["stat-row"]),
+        "_fetch_github_commit_stats_async",
+        _async_counting(calls, "stats", ["stat-row"]),
     )
 
     async def fake_backfill(**kwargs):

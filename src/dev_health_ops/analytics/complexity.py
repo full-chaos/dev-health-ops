@@ -1,11 +1,13 @@
 import fnmatch
+import functools
 import importlib
 import logging
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
 
-import lizard
 from radon.complexity import cc_visit
 
 logger = logging.getLogger(__name__)
@@ -14,6 +16,25 @@ yaml = importlib.import_module("yaml")
 DEFAULT_COMPLEXITY_CONFIG_PATH = (
     Path(__file__).resolve().parents[1] / "config" / "complexity.yaml"
 )
+
+
+@functools.cache
+def _import_lizard() -> ModuleType:
+    """Import lizard without letting it poison ``sys.path`` (CHAOS-2863).
+
+    lizard's module body runs a script-mode convenience on import: it inserts
+    ``dirname(abspath(sys.argv[0]))`` at ``sys.path[0]``. Under ``python -m
+    dev_health_ops.cli ...`` that directory is the installed package itself,
+    so ``dev_health_ops.alembic`` shadows the real ``alembic`` for every
+    later import and ``dev-hops migrate`` crashes. Import lazily and restore
+    ``sys.path`` exactly as it was.
+    """
+    path_before = list(sys.path)
+    try:
+        return importlib.import_module("lizard")
+    finally:
+        sys.path[:] = path_before
+
 
 #: Extensions the scanner can analyze, mapped to the persisted ``language``
 #: value. Python goes through radon (kept for trend continuity with existing
@@ -206,6 +227,7 @@ class ComplexityScanner:
     def _analyze_with_lizard(
         self, code: str, file_path: str, language: str
     ) -> FileComplexity | None:
+        lizard = _import_lizard()
         try:
             analysis = lizard.analyze_file.analyze_source_code(file_path, code)
         except Exception:

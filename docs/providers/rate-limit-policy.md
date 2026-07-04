@@ -99,9 +99,10 @@ cooperating layers:
    | --- | --- | --- |
    | GitHub REST connector | 3 (`retry_with_backoff(max_retries=3)`) | `connectors/github.py` |
    | GitHub GraphQL client | 5 (`max_retries=5`) | `connectors/utils/graphql.py` |
-   | GitHub code client (canonical: git/commit_stats/security/deployments REST, files/blame GraphQL) | 5 (`InstrumentedRESTCore` default) | `providers/github/code_client.py` + `providers/github/graphql.py` |
-   | GitLab REST connector | 3 (`retry_with_backoff(max_retries=3)`) | `connectors/gitlab.py` |
-   | GitLab feature-flags (canonical) | 5 (`max_retries=5`) | `providers/gitlab/feature_flags.py` |
+| GitHub code client (canonical: git/commit_stats/security/deployments REST, files/blame GraphQL) | 5 (`InstrumentedRESTCore` default) | `providers/github/code_client.py` + `providers/github/graphql.py` |
+| GitLab REST connector | 3 (`retry_with_backoff(max_retries=3)`) | `connectors/gitlab.py` |
+| GitLab code client (canonical: security/pipelines/deployments/tests/commits/files/blame/merge_requests/notes) | 5 (`InstrumentedRESTCore` default) | `providers/gitlab/code_client.py` |
+| GitLab feature-flags (canonical) | 5 (`max_retries=5`) | `providers/gitlab/feature_flags.py` |
    | Jira client (JQL + enrichment) | 4 (`max_retries_429=3` → `+1` initial) | `providers/jira/client.py` |
    | Jira Atlassian REST compat | 5 (`RESTClient(max_retries=5)`) | `connectors/utils/rest.py` |
    | Linear | 5 (`DEFAULT_MAX_ATTEMPTS`) | `providers/linear/client.py` |
@@ -1012,8 +1013,8 @@ proof-of-pipe that the plumbing actually reaches a `budget_comparison` row:
 | Route family | Dimension(s) | Covers | Confidence |
 | --- | --- | --- | --- |
 | `project` | `rest_core` | Project metadata, commits, files/blame, feature-flags | high–low |
-| `merge_requests` | `rest_core` | Merge request iterators (pagination-heavy) | medium |
-| `notes` | `rest_core` | MR/issue note + discussion expansion | low |
+| `merge_requests` | `rest_core` | Merge request iterators, MR commits, approvals (`GitLabCodeClient`, CHAOS-2816/CS15) | medium |
+| `notes` | `rest_core` | MR note + discussion expansion (`GitLabCodeClient`, CHAOS-2816/CS15); issue notes still use work-item paths | low |
 | `pipelines` | `rest_core` | CI/CD pipeline listing + job expansion (`GitLabCodeClient.get_pipelines`) | low |
 | `deployments` | `rest_core` | Deployments, releases, deployment→MR resolution (`GitLabCodeClient`, CHAOS-2773 CS11) | low |
 | `security` | `rest_core` | Vulnerability findings + dependency-scan alerts (`GitLabCodeClient`, CHAOS-2773 CS10) | low |
@@ -1177,8 +1178,10 @@ paper over:
   [Usage drain wiring](#usage-drain-wiring-first-re-bucketing-chaos-2773-cs2)
   above. GitHub `git` and `commit_stats` REST-core traffic is instrumented as of
   CHAOS-2807, and `files`/`blame` `contents_blob` traffic (GraphQL) as of
-  CHAOS-2808; the REST `prs` listing, the `files`/`blame` `rest_core` tree
-  listing, and remaining GitHub/GitLab code-dataset families stay
+  CHAOS-2808; GitLab merge-request and MR-note REST-core traffic is
+  instrumented as of CHAOS-2816 (CS15). The REST `prs` listing, the
+  `files`/`blame` `rest_core` tree listing, and remaining GitHub/GitLab
+  code-dataset families stay
   uninstrumented pending their own CHAOS-2773 changesets (see
   "Frozen `connectors/` path" below). There is also no cross-run
   aggregation/dashboard yet — calibration today is visible per-unit (result +
@@ -1215,12 +1218,14 @@ paper over:
   ([CHAOS-2814](https://linear.app/fullchaos/issue/CHAOS-2814), CS13), and
   `files`/`blame` (`get_file_contents` batched GraphQL blob fetch +
   `get_file_blame` REST, both under the `project` family;
-  [CHAOS-2815](https://linear.app/fullchaos/issue/CHAOS-2815), CS14)
+  [CHAOS-2815](https://linear.app/fullchaos/issue/CHAOS-2815), CS14), and
+  `merge_requests`/`notes` (`iter_merge_requests`, MR commits, MR approvals,
+  MR notes;
+  [CHAOS-2816](https://linear.app/fullchaos/issue/CHAOS-2816), CS15)
   code-dataset families are migrated onto the canonical, instrumented
   `providers/gitlab/code_client.py::GitLabCodeClient`. GitLab's remaining
-  frozen code-dataset methods (`merge_requests` listing + repo-metadata/batch
-  orchestration) stay unmigrated pending their own CHAOS-2773 changesets
-  through CS17.
+  frozen code-dataset methods (repo-metadata/batch orchestration) stay
+  unmigrated pending their own CHAOS-2773 changesets through CS17.
 
 
 ## References

@@ -175,6 +175,71 @@ class TestBackfillFileRecordsContents:
 
         assert [f.contents for f in written] == [None]
 
+    @pytest.mark.asyncio
+    async def test_preserves_existing_contents_on_paths_only_rewrite(self):
+        """CHAOS-2857: a re-backfill that fetched nothing must not shadow stored contents."""
+        written = []
+
+        async def insert(batch):
+            written.extend(batch)
+
+        sink = Mock()
+        sink.insert_git_file_data = AsyncMock(side_effect=insert)
+        sink.get_git_file_contents_by_path = AsyncMock(
+            return_value={"src/app.py": "x = 1\n"}
+        )
+        repo_id = uuid.uuid4()
+
+        await backfill_file_records(
+            sink,
+            repo_id,
+            ["src/app.py", "README.md"],
+            "octo/repo",
+            contents_by_path=None,
+        )
+
+        sink.get_git_file_contents_by_path.assert_awaited_once_with(repo_id)
+        by_path = {f.path: f.contents for f in written}
+        assert by_path == {"src/app.py": "x = 1\n", "README.md": None}
+
+    @pytest.mark.asyncio
+    async def test_fresh_contents_override_preserved_contents(self):
+        written = []
+
+        async def insert(batch):
+            written.extend(batch)
+
+        sink = Mock()
+        sink.insert_git_file_data = AsyncMock(side_effect=insert)
+        sink.get_git_file_contents_by_path = AsyncMock(
+            return_value={"src/app.py": "old = 0\n"}
+        )
+
+        await backfill_file_records(
+            sink,
+            uuid.uuid4(),
+            ["src/app.py"],
+            "octo/repo",
+            contents_by_path={"src/app.py": "new = 1\n"},
+        )
+
+        assert [f.contents for f in written] == ["new = 1\n"]
+
+    @pytest.mark.asyncio
+    async def test_preservation_read_failure_degrades_to_paths_only(self):
+        written = []
+
+        async def insert(batch):
+            written.extend(batch)
+
+        sink = Mock()
+        sink.insert_git_file_data = AsyncMock(side_effect=insert)
+        sink.get_git_file_contents_by_path = AsyncMock(side_effect=RuntimeError("boom"))
+
+        await backfill_file_records(sink, uuid.uuid4(), ["a.py"], "octo/repo")
+
+        assert [f.contents for f in written] == [None]
+
 
 class _EmptyClickHouseClient:
     def query(self, query, parameters=None):

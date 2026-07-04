@@ -28,7 +28,6 @@ from dev_health_ops.processors.base_git import (
     backfill_file_records,
     blame_backfill_needed,
     build_ci_pipeline_run,
-    build_connector_pull_request,
     build_deployment,
     build_git_pull_request,
     check_backfill_needs,
@@ -212,22 +211,61 @@ def _fetch_gitlab_commit_stats_sync(
         )
 
 
-def _fetch_gitlab_mrs_sync(connector, project_id, repo_id, max_mrs):
+def _fetch_gitlab_mrs_sync(
+    connector,
+    project_id,
+    repo_id,
+    max_mrs,
+    usage_sink: list[dict[str, Any]] | None = None,
+):
     """Sync helper to fetch GitLab Merge Requests."""
     logging.info(
         "Fetching merge requests for project %d...",
         project_id,
     )
-    mrs = connector.get_merge_requests(
-        project_id=project_id, state="all", max_mrs=max_mrs
-    )
+    drained_observations: list[dict[str, Any]] = []
+
+    async def _run():
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                return await client.iter_merge_requests(
+                    project_id,
+                    state="all",
+                    per_page=int(getattr(connector, "per_page", 100) or 100),
+                    max_items=max_mrs,
+                )
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
+
+    try:
+        mrs = asyncio.run(_run())
+    finally:
+        _drain_gitlab_code_usage(
+            "_fetch_gitlab_mrs_sync", drained_observations, usage_sink
+        )
+
     pr_objects = []
     for mr in mrs:
-        git_pr = build_connector_pull_request(
-            mr,
+        merged_at = safe_parse_datetime(mr.get("merged_at"))
+        closed_at = safe_parse_datetime(mr.get("closed_at"))
+        author_data = mr.get("author")
+        git_pr = build_git_pull_request(
             repo_id=repo_id,
-            state=normalize_pr_state(mr.state, mr.merged_at),
+            number=int(mr.get("iid") or 0),
+            title=mr.get("title") or None,
+            body=mr.get("description"),
+            state=normalize_pr_state(mr.get("state"), merged_at),
+            author_name=(
+                author_data.get("username")
+                if isinstance(author_data, dict) and author_data.get("username")
+                else "Unknown"
+            ),
             author_email=None,
+            created_at=safe_parse_datetime(mr.get("created_at")),
+            merged_at=merged_at,
+            closed_at=closed_at,
+            head_branch=mr.get("source_branch"),
+            base_branch=mr.get("target_branch"),
         )
         pr_objects.append(git_pr)
     logging.info(
@@ -466,11 +504,22 @@ class _MrReviewFetch(NamedTuple):
     known: bool
 
 
+async def _fetch_all_mr_notes_async(
+    client: Any,
+    project_id: int,
+    iid: int,
+    *,
+    per_page: int,
+) -> list[dict[str, Any]]:
+    return await client.iter_mr_notes(project_id, iid, per_page=per_page)
+
+
 def _fetch_all_mr_notes(
     connector,
     project_id: int,
     iid: int,
     gate: Any = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch *every* page of an MR's notes, not just the first.
 
@@ -485,49 +534,38 @@ def _fetch_all_mr_notes(
     failed first page — both must avoid clobbering correct metrics).
     """
     per_page = int(getattr(connector, "per_page", 100) or 100)
-    all_notes: list[dict[str, Any]] = []
-    page = 1
-    while True:
-        if gate is not None:
-            gate.wait_sync()
-        try:
-            page_notes = connector.rest_client.get_merge_request_notes(
-                project_id,
-                iid,
-                page=page,
-                per_page=per_page,
-            )
-            if gate is not None:
-                gate.reset()
-        except Exception as exc:
-            retry_after = getattr(exc, "retry_after_seconds", None)
-            if retry_after is not None and gate is not None:
-                applied = gate.penalize(retry_after)
-                logging.info(
-                    "GitLab rate limited fetching notes for MR !%d; backoff %.1fs (%s)",
-                    iid,
-                    applied,
-                    exc,
+    drained_observations: list[dict[str, Any]] = []
+
+    async def _run() -> list[dict[str, Any]]:
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                return await _fetch_all_mr_notes_async(
+                    client, project_id, iid, per_page=per_page
                 )
-                continue
-            raise
-        if not page_notes:
-            break
-        all_notes.extend(page_notes)
-        # Final page when the server returns fewer than a full page.
-        if len(page_notes) < per_page:
-            break
-        page += 1
-    return all_notes
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
+
+    if gate is not None:
+        gate.wait_sync()
+    try:
+        notes = asyncio.run(_run())
+        if gate is not None:
+            gate.reset()
+        return notes
+    finally:
+        _drain_gitlab_code_usage(
+            "_fetch_all_mr_notes", drained_observations, usage_sink
+        )
 
 
-def _fetch_gitlab_mr_reviews(
-    connector,
+async def _fetch_gitlab_mr_reviews_async(
+    client: Any,
     project_id: int,
     mr: dict[str, Any],
     repo_id: Any,
     created_at: datetime | None,
-    gate: Any = None,
+    *,
+    per_page: int,
 ) -> _MrReviewFetch:
     """Best-effort fetch + map of one MR's reviews (approvals + notes).
 
@@ -549,15 +587,21 @@ def _fetch_gitlab_mr_reviews(
 
     approvals: dict[str, Any] | None = None
     try:
-        approvals = connector.rest_client.get_merge_request_approvals(project_id, iid)
+        approvals = await client.get_mr_approvals(project_id, iid)
     except Exception as exc:  # noqa: BLE001 - best-effort, some tiers lack approvals
+        if _is_rate_limit_exception(exc):
+            raise
         logging.debug("Failed to fetch approvals for MR !%d: %s", iid, exc)
 
     notes: list[dict[str, Any]] = []
     notes_known = True
     try:
-        notes = _fetch_all_mr_notes(connector, project_id, iid, gate=gate)
+        notes = await _fetch_all_mr_notes_async(
+            client, project_id, iid, per_page=per_page
+        )
     except Exception as exc:  # noqa: BLE001 - best-effort
+        if _is_rate_limit_exception(exc):
+            raise
         notes_known = False
         logging.warning(
             "Could not fetch notes for MR !%d (project %s); preserving existing "
@@ -589,6 +633,48 @@ def _fetch_gitlab_mr_reviews(
     return _MrReviewFetch(reviews, first_review_at, changes_requested_count, known=True)
 
 
+def _fetch_gitlab_mr_reviews(
+    connector,
+    project_id: int,
+    mr: dict[str, Any],
+    repo_id: Any,
+    created_at: datetime | None,
+    gate: Any = None,
+    usage_sink: list[dict[str, Any]] | None = None,
+) -> _MrReviewFetch:
+    iid = int(mr.get("iid") or 0)
+    if iid <= 0:
+        return _MrReviewFetch([], None, 0, known=True)
+
+    drained_observations: list[dict[str, Any]] = []
+
+    async def _run() -> _MrReviewFetch:
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                return await _fetch_gitlab_mr_reviews_async(
+                    client,
+                    project_id,
+                    mr,
+                    repo_id,
+                    created_at,
+                    per_page=int(getattr(connector, "per_page", 100) or 100),
+                )
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
+
+    if gate is not None:
+        gate.wait_sync()
+    try:
+        fetched = asyncio.run(_run())
+        if gate is not None:
+            gate.reset()
+        return fetched
+    finally:
+        _drain_gitlab_code_usage(
+            "_fetch_gitlab_mr_reviews", drained_observations, usage_sink
+        )
+
+
 def _sync_gitlab_mrs_to_store(
     connector,
     project_id: int,
@@ -600,6 +686,7 @@ def _sync_gitlab_mrs_to_store(
     gate: Any = None,
     since: datetime | None = None,
     until: datetime | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> int:
     """Fetch all MRs for a project and insert them in batches.
 
@@ -621,6 +708,16 @@ def _sync_gitlab_mrs_to_store(
 
     gate = BaseGitProcessor.ensure_gate(gate)
     assert gate is not None
+    per_page = int(getattr(connector, "per_page", 100) or 100)
+    drained_observations: list[dict[str, Any]] = []
+
+    def _flush_prs() -> None:
+        if batch:
+            BaseGitProcessor.persist_batch_threadsafe(
+                ingestion_sink.insert_git_pull_requests(list(batch)),
+                loop,
+            )
+            batch.clear()
 
     def _flush_reviews() -> None:
         if review_batch:
@@ -630,152 +727,160 @@ def _sync_gitlab_mrs_to_store(
             )
             review_batch.clear()
 
-    while True:
-        try:
-            gate.wait_sync()
-            logging.debug(
-                "GitLab MRs page %d (per_page=%d) for project %d",
-                page,
-                connector.per_page,
+    def _append_fetched_mr(mr: dict[str, Any], fetched: _MrReviewFetch) -> None:
+        nonlocal total
+
+        author_name = "Unknown"
+        author_email = None
+        author_data = mr.get("author")
+        if author_data:
+            author_name = author_data.get("username") or author_name
+
+        merged_at = safe_parse_datetime(mr.get("merged_at"))
+        closed_at = safe_parse_datetime(mr.get("closed_at"))
+        created_at = safe_parse_datetime(mr.get("created_at"))
+
+        comments_count = int(mr.get("user_notes_count") or 0)
+
+        if not fetched.known:
+            # Authoritative review source (MR notes) was unavailable for
+            # this MR. The PR row is ReplacingMergeTree-replaced on write,
+            # so persisting it now with zeroed review metrics would clobber
+            # previously-correct first_review_at / reviews_count /
+            # changes_requested_count. Skip this MR's row this cycle so the
+            # prior values are preserved, and record the iid so the run
+            # fails loud (no watermark advancement) and is retried — a
+            # silent skip would let the watermark move past this MR and
+            # strand it until a full resync (CHAOS-2378).
+            skipped_iid = int(mr.get("iid") or 0)
+            skipped_iids.append(skipped_iid)
+            logging.warning(
+                "Skipping PR row for MR !%d (project %d): review fetch "
+                "degraded; run will not advance watermark and will retry",
+                skipped_iid,
                 project_id,
             )
-            mrs = connector.rest_client.get_merge_requests(
-                project_id=project_id,
-                state=state,
-                page=page,
-                per_page=connector.per_page,
-                order_by="updated_at",
-                sort="desc",
-            )
-            gate.reset()
-        except Exception as e:
-            retry_after = getattr(e, "retry_after_seconds", None)
-            if retry_after is None:
-                raise
-            applied = gate.penalize(retry_after)
-            logging.info(
-                "GitLab rate limited while fetching MRs; backoff %.1fs (%s)",
-                applied,
-                e,
-            )
-            continue
-        if not mrs:
-            break
-        logging.debug(
-            "GitLab MRs page %d returned %d items (total: %d)",
-            page,
-            len(mrs),
-            total,
-        )
+            return
 
-        for mr in mrs:
-            author_name = "Unknown"
-            author_email = None
-            author_data = mr.get("author")
-            if author_data:
-                author_name = author_data.get("username") or author_name
+        review_batch.extend(fetched.reviews)
 
-            merged_at = safe_parse_datetime(mr.get("merged_at"))
-            closed_at = safe_parse_datetime(mr.get("closed_at"))
-            updated_at = safe_parse_datetime(mr.get("updated_at"))
-            created_at = safe_parse_datetime(mr.get("created_at"))
-
-            comments_count = int(mr.get("user_notes_count") or 0)
-
-            if (
-                until is not None
-                and isinstance(updated_at, datetime)
-                and updated_at.astimezone(timezone.utc) > until
-            ):
-                continue
-
-            if (
-                since is not None
-                and isinstance(updated_at, datetime)
-                and updated_at.astimezone(timezone.utc) < since
-            ):
-                mrs = []
-                break
-
-            # Reconstruct reviews (approvals + notes) so GitLab orgs populate
-            # git_pull_request_reviews like GitHub does (CHAOS-2378).
-            fetched = _fetch_gitlab_mr_reviews(
-                connector=connector,
-                project_id=project_id,
-                mr=mr,
+        batch.append(
+            build_git_pull_request(
                 repo_id=repo_id,
+                number=int(mr.get("iid") or 0),
+                title=mr.get("title") or None,
+                body=mr.get("description"),
+                state=normalize_pr_state(mr.get("state"), merged_at),
+                author_name=author_name,
+                author_email=author_email,
                 created_at=created_at,
-                gate=gate,
+                merged_at=merged_at,
+                closed_at=closed_at,
+                head_branch=mr.get("source_branch"),
+                base_branch=mr.get("target_branch"),
+                first_review_at=fetched.first_review_at,
+                changes_requested_count=fetched.changes_requested_count,
+                reviews_count=len(fetched.reviews),
+                comments_count=comments_count,
             )
-
-            if not fetched.known:
-                # Authoritative review source (MR notes) was unavailable for
-                # this MR. The PR row is ReplacingMergeTree-replaced on write,
-                # so persisting it now with zeroed review metrics would clobber
-                # previously-correct first_review_at / reviews_count /
-                # changes_requested_count. Skip this MR's row this cycle so the
-                # prior values are preserved, and record the iid so the run
-                # fails loud (no watermark advancement) and is retried — a
-                # silent skip would let the watermark move past this MR and
-                # strand it until a full resync (CHAOS-2378).
-                skipped_iid = int(mr.get("iid") or 0)
-                skipped_iids.append(skipped_iid)
-                logging.warning(
-                    "Skipping PR row for MR !%d (project %d): review fetch "
-                    "degraded; run will not advance watermark and will retry",
-                    skipped_iid,
-                    project_id,
-                )
-                continue
-
-            review_batch.extend(fetched.reviews)
-
-            batch.append(
-                build_git_pull_request(
-                    repo_id=repo_id,
-                    number=int(mr.get("iid") or 0),
-                    title=mr.get("title") or None,
-                    body=mr.get("description"),
-                    state=normalize_pr_state(mr.get("state"), merged_at),
-                    author_name=author_name,
-                    author_email=author_email,
-                    created_at=created_at,
-                    merged_at=merged_at,
-                    closed_at=closed_at,
-                    head_branch=mr.get("source_branch"),
-                    base_branch=mr.get("target_branch"),
-                    first_review_at=fetched.first_review_at,
-                    changes_requested_count=fetched.changes_requested_count,
-                    reviews_count=len(fetched.reviews),
-                    comments_count=comments_count,
-                )
-            )
-            total += 1
-
-            if len(batch) >= batch_size:
-                BaseGitProcessor.persist_batch_threadsafe(
-                    ingestion_sink.insert_git_pull_requests(batch),
-                    loop,
-                )
-                logging.debug(
-                    "Stored batch of %d MRs for project %d (total: %d)",
-                    len(batch),
-                    project_id,
-                    total,
-                )
-                batch.clear()
-                _flush_reviews()
-
-        page += 1
-        if not mrs:
-            break
-
-    if batch:
-        BaseGitProcessor.persist_batch_threadsafe(
-            ingestion_sink.insert_git_pull_requests(batch),
-            loop,
         )
-    _flush_reviews()
+        total += 1
+
+        if len(batch) >= batch_size:
+            _flush_prs()
+            logging.debug(
+                "Stored batch of %d MRs for project %d (total: %d)",
+                batch_size,
+                project_id,
+                total,
+            )
+            _flush_reviews()
+
+    async def _sync_pages() -> None:
+        nonlocal page
+
+        async def _fetch_page_with_retry(
+            client, current_page: int
+        ) -> list[dict[str, Any]]:
+            while True:
+                try:
+                    gate.wait_sync()
+                    page_items = await client.get_merge_requests_page(
+                        project_id=project_id,
+                        page=current_page,
+                        state=state,
+                        per_page=per_page,
+                    )
+                    gate.reset()
+                    return page_items
+                except Exception as exc:  # noqa: BLE001 - legacy retry-after seam
+                    if _is_rate_limit_exception(exc):
+                        raise
+                    retry_after = getattr(exc, "retry_after_seconds", None)
+                    if retry_after is None:
+                        raise
+                    applied = gate.penalize(retry_after)
+                    logging.info(
+                        "GitLab rate limited while fetching MRs; backoff %.1fs (%s)",
+                        applied,
+                        exc,
+                    )
+
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                while True:
+                    mrs = await _fetch_page_with_retry(client, page)
+                    logging.debug(
+                        "GitLab MRs page %d returned %d items for project %d (total: %d)",
+                        page,
+                        len(mrs),
+                        project_id,
+                        total,
+                    )
+                    if not mrs:
+                        return
+
+                    stop_pagination = False
+                    for mr in mrs:
+                        updated_at = safe_parse_datetime(mr.get("updated_at"))
+                        if (
+                            until is not None
+                            and isinstance(updated_at, datetime)
+                            and updated_at.astimezone(timezone.utc) > until
+                        ):
+                            continue
+                        if (
+                            since is not None
+                            and isinstance(updated_at, datetime)
+                            and updated_at.astimezone(timezone.utc) < since
+                        ):
+                            stop_pagination = True
+                            break
+                        created_at = safe_parse_datetime(mr.get("created_at"))
+                        fetched = await _fetch_gitlab_mr_reviews_async(
+                            client,
+                            project_id,
+                            mr,
+                            repo_id,
+                            created_at,
+                            per_page=per_page,
+                        )
+                        _append_fetched_mr(mr, fetched)
+
+                    if stop_pagination:
+                        return
+                    page += 1
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
+
+    try:
+        asyncio.run(_sync_pages())
+    finally:
+        _flush_prs()
+        _flush_reviews()
+        _drain_gitlab_code_usage(
+            "_sync_gitlab_mrs_to_store", drained_observations, usage_sink
+        )
 
     logging.info(
         "Fetched %d merge requests for project %d",
@@ -2125,6 +2230,7 @@ async def process_gitlab_project(
                 None,
                 since,
                 until,
+                usage_sink,
             )
             logging.info(f"Stored {mr_total} merge requests from GitLab")
 
@@ -2458,6 +2564,8 @@ async def process_gitlab_projects_batch(
                         "all",
                         mr_gate,
                         since,
+                        None,
+                        usage_sink,
                     )
             except PartialGitLabMrSyncError as e:
                 # Degraded review fetch skipped MR rows for this project. Keep
@@ -2477,6 +2585,8 @@ async def process_gitlab_projects_batch(
                 )
                 degraded_mr_errors.append(e)
             except Exception as e:
+                if _is_rate_limit_exception(e):
+                    raise
                 logging.warning(
                     "Failed to fetch/store MRs for GitLab project %s: %s",
                     project_info.full_name,
@@ -2754,6 +2864,8 @@ async def process_gitlab_projects_batch(
                     try:
                         await store_result(result)
                     except Exception as e:
+                        if _is_rate_limit_exception(e):
+                            raise
                         result = batch_result_cls(
                             repository=project_info,
                             stats=None,

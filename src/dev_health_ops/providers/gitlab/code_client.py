@@ -97,6 +97,8 @@ _PROJECT_FAMILY_PREFIX = "project"
 _PIPELINES_FAMILY_PREFIX = "pipelines"
 _DEPLOYMENTS_FAMILY_PREFIX = "deployments"
 _TESTS_FAMILY_PREFIX = "tests"
+_MERGE_REQUESTS_FAMILY_PREFIX = "merge_requests"
+_NOTES_FAMILY_PREFIX = "notes"
 
 
 @dataclass(frozen=True)
@@ -886,6 +888,163 @@ class GitLabCodeClient:
             paginate=False,
             max_items=100,
         )
+
+    async def iter_merge_requests(
+        self,
+        project_id: int | str,
+        *,
+        state: str = "all",
+        per_page: int = 100,
+        max_pages: int = 10_000,
+        max_items: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """List GitLab merge requests newest-updated first.
+
+        Mirrors the processor's legacy ``GitLabRESTClient.get_merge_requests``
+        loop: ``state=all``, ``order_by=updated_at``, ``sort=desc``, and
+        GitLab page/per_page pagination. ``max_items`` is reserved for callers
+        that intentionally cap the scan (the legacy ``connector.get_merge_requests``
+        helper); the full sync path exhausts ``X-Next-Page``.
+        """
+        encoded_project_id = _encode_project_id(project_id)
+        path = f"/projects/{encoded_project_id}/merge_requests"
+        operation = (
+            f"{_MERGE_REQUESTS_FAMILY_PREFIX}:GET /projects/{{id}}/merge_requests"
+        )
+        params = {"state": state, "order_by": "updated_at", "sort": "desc"}
+        if max_items is not None:
+            if max_items <= 0:
+                return []
+            effective_per_page = min(max_items, per_page)
+            return await self._get_gitlab_list(
+                path,
+                operation=operation,
+                params=params,
+                per_page=effective_per_page,
+                paginate=max_items > effective_per_page,
+                max_items=max_items,
+            )
+        payload = await self._core.paginate_page_param(
+            path,
+            operation=operation,
+            params=params,
+            per_page=per_page,
+            max_pages=max_pages,
+        )
+        return [item for item in payload if isinstance(item, dict)]
+
+    async def get_merge_requests_page(
+        self,
+        project_id: int | str,
+        *,
+        page: int,
+        state: str = "all",
+        per_page: int = 100,
+    ) -> list[dict[str, Any]]:
+        encoded_project_id = _encode_project_id(project_id)
+        response = await self._core.request(
+            "GET",
+            f"/projects/{encoded_project_id}/merge_requests",
+            operation=(
+                f"{_MERGE_REQUESTS_FAMILY_PREFIX}:GET /projects/{{id}}/merge_requests"
+            ),
+            params={
+                "state": state,
+                "order_by": "updated_at",
+                "sort": "desc",
+                "page": page,
+                "per_page": per_page,
+            },
+        )
+        payload = response.json()
+        if not isinstance(payload, list):
+            raise APIException(
+                f"Unexpected GitLab merge requests response: {type(payload)!r}"
+            )
+        return [item for item in payload if isinstance(item, dict)]
+
+    async def iter_mr_commits(
+        self,
+        project_id: int | str,
+        iid: int | str,
+        *,
+        per_page: int = 100,
+        max_pages: int = 10_000,
+    ) -> list[dict[str, Any]]:
+        """List raw commits attached to one merge request.
+
+        Added with the MR-family migration for parity with the frozen
+        ``GitLabConnector.get_merge_request_commits`` helper. No processor path
+        consumes it today, but keeping the canonical method ready prevents new
+        python-gitlab usage while the connector remains frozen until CS17.
+        """
+        encoded_project_id = _encode_project_id(project_id)
+        encoded_iid = urllib.parse.quote(str(iid), safe="")
+        payload = await self._core.paginate_page_param(
+            f"/projects/{encoded_project_id}/merge_requests/{encoded_iid}/commits",
+            operation=(
+                f"{_MERGE_REQUESTS_FAMILY_PREFIX}:GET "
+                "/projects/{id}/merge_requests/{iid}/commits"
+            ),
+            params={},
+            per_page=per_page,
+            max_pages=max_pages,
+        )
+        return [item for item in payload if isinstance(item, dict)]
+
+    async def iter_mr_notes(
+        self,
+        project_id: int | str,
+        iid: int | str,
+        *,
+        per_page: int = 100,
+        max_pages: int = 10_000,
+    ) -> list[dict[str, Any]]:
+        """Fetch every note page for one merge request.
+
+        The processor treats notes as the authoritative review-event source, so
+        this method exhausts pagination instead of preserving the frozen REST
+        client's one-page convenience helper.
+        """
+        encoded_project_id = _encode_project_id(project_id)
+        encoded_iid = urllib.parse.quote(str(iid), safe="")
+        payload = await self._core.paginate_page_param(
+            f"/projects/{encoded_project_id}/merge_requests/{encoded_iid}/notes",
+            operation=(
+                f"{_NOTES_FAMILY_PREFIX}:GET "
+                "/projects/{id}/merge_requests/{iid}/notes"
+            ),
+            params={"sort": "asc", "order_by": "created_at"},
+            per_page=per_page,
+            max_pages=max_pages,
+        )
+        return [item for item in payload if isinstance(item, dict)]
+
+    async def get_mr_approvals(
+        self, project_id: int | str, iid: int | str
+    ) -> dict[str, Any]:
+        """Fetch raw approvals for one merge request.
+
+        GitLab's approvals endpoint is a single object response, not a list.
+        Tier/permission errors propagate to the caller, which decides whether a
+        non-rate failure is best-effort for its dataset.
+        """
+        encoded_project_id = _encode_project_id(project_id)
+        encoded_iid = urllib.parse.quote(str(iid), safe="")
+        response = await self._core.request(
+            "GET",
+            f"/projects/{encoded_project_id}/merge_requests/{encoded_iid}/approvals",
+            operation=(
+                f"{_MERGE_REQUESTS_FAMILY_PREFIX}:GET "
+                "/projects/{id}/merge_requests/{iid}/approvals"
+            ),
+        )
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise APIException(
+                f"Unexpected GitLab MR approvals response: {type(payload)!r}"
+            )
+        return payload
 
     async def iter_pipelines_since(
         self,

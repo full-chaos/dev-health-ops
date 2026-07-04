@@ -385,8 +385,18 @@ GITLAB_USAGE_ROUTE_FAMILIES: tuple[UsageRouteFamily, ...] = (
         ),
     ),
     UsageRouteFamily("issues", BudgetDimension.REST_CORE),
-    UsageRouteFamily("merge_requests", BudgetDimension.REST_CORE),
-    UsageRouteFamily("notes", BudgetDimension.REST_CORE),
+    UsageRouteFamily(
+        "merge_requests",
+        BudgetDimension.REST_CORE,
+        transport="rest",
+        operation_markers=("merge_requests:",),
+    ),
+    UsageRouteFamily(
+        "notes",
+        BudgetDimension.REST_CORE,
+        transport="rest",
+        operation_markers=("notes:",),
+    ),
     UsageRouteFamily(
         "pipelines",
         BudgetDimension.REST_CORE,

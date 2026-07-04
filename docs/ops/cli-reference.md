@@ -240,6 +240,16 @@ dev-hops sync blame --provider local --repo-path /path/to/repo
 
 Accepts the same provider, auth, single-repo, batch-mode, and date-range options as [`sync git`](#sync-git). Providers: `local`, `github`, `gitlab`, `synthetic`.
 
+Planner-managed GitHub/GitLab integrations seed the heavy `blame` dataset when
+the legacy `git` target is selected. This keeps ownership and bus-factor metrics
+reachable from normal code-host onboarding while the per-sync GitHub blame crawl
+remains capped (`BLAME_BACKFILL_MAX_FILES=500`) and coverage-aware. Existing dev
+or support fixtures created before that seed can enable blame by adding an
+`integration_datasets` row for the integration with `dataset_key='blame'`,
+`is_enabled=true`, and options mirroring the integration's existing `git` dataset
+row (for example `{"legacy_targets":["git"]}`); after the row exists, the admin
+dataset endpoint can toggle it like any other dataset.
+
 ### `sync security`
 
 Sync security and dependency alerts (Dependabot, code-scanning, advisories, GitLab vulnerability/dependency findings). Uses `CLICKHOUSE_URI`.

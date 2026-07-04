@@ -244,6 +244,30 @@ def test_gitlab_pipelines_prefix_not_swallowed_by_broad_project_marker() -> None
     assert unprefixed_family == "project"
 
 
+@pytest.mark.parametrize(
+    ("operation", "expected_family"),
+    (
+        (
+            "merge_requests:GET /projects/:id/merge_requests",
+            "merge_requests",
+        ),
+        (
+            "notes:GET /projects/:id/merge_requests/:iid/notes",
+            "notes",
+        ),
+    ),
+)
+def test_gitlab_mr_notes_prefixes_not_swallowed_by_broad_project_marker(
+    operation: str, expected_family: str
+) -> None:
+    route_family, dimension = GITLAB_USAGE_RESOLVER.resolve(
+        transport="rest", operation=operation
+    )
+
+    assert route_family == expected_family
+    assert dimension is BudgetDimension.REST_CORE
+
+
 # ---------------------------------------------------------------------------
 # 3. False-trigger regression guard: no existing label accidentally
 #    prefix-matches a registered family.

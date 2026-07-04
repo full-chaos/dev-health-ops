@@ -11,6 +11,7 @@ from dev_health_ops.processors.gitlab import (
     _fetch_gitlab_commits_sync,
     _fetch_gitlab_deployments_sync,
     _fetch_gitlab_incidents_sync,
+    _fetch_gitlab_mrs_sync,
     _fetch_gitlab_pipelines_sync,
     _fetch_gitlab_test_reports_sync,
     process_gitlab_project,
@@ -54,6 +55,8 @@ class _FakeGitLabCodeClient:
         self.test_reports = test_reports or {}
         self.jobs = jobs or {}
         self.artifacts = artifacts or {}
+        self.iter_merge_requests_calls: list[tuple[Any, str, int, int | None]] = []
+        self.get_merge_requests_page_calls: list[tuple[Any, int, str, int]] = []
 
     async def __aenter__(self):
         return self
@@ -72,6 +75,26 @@ class _FakeGitLabCodeClient:
 
     async def get_deployment_merge_requests(self, project_id, sha):
         return self.merge_requests
+
+    async def iter_merge_requests(self, project_id, *, state, per_page, max_items=None):
+        self.iter_merge_requests_calls.append((project_id, state, per_page, max_items))
+        return (
+            self.merge_requests[:max_items]
+            if max_items is not None
+            else self.merge_requests
+        )
+
+    async def get_merge_requests_page(self, project_id, *, page, state, per_page):
+        self.get_merge_requests_page_calls.append((project_id, page, state, per_page))
+        if page > 1:
+            return []
+        return self.merge_requests
+
+    async def get_mr_approvals(self, project_id, iid):
+        return {"approved_by": []}
+
+    async def iter_mr_notes(self, project_id, iid, *, per_page):
+        return []
 
     async def get_commits(
         self, project_id, *, max_commits, since=None, until=None, per_page=100
@@ -509,6 +532,52 @@ def test_fetch_gitlab_commit_stats_sync_reraises_rate_limit(monkeypatch):
         )
 
     assert usage_sink == [{"route_family": "project"}]
+
+
+def test_fetch_gitlab_mrs_sync_uses_code_client(monkeypatch):
+    usage_sink: list[dict[str, Any]] = []
+    mr = {
+        "iid": "42",
+        "title": "Ship MR",
+        "description": "desc",
+        "state": "merged",
+        "author": {"username": "ada"},
+        "created_at": "2026-01-01T12:00:00Z",
+        "updated_at": "2026-01-02T12:00:00Z",
+        "merged_at": "2026-01-03T12:00:00Z",
+        "closed_at": None,
+        "source_branch": "feat",
+        "target_branch": "main",
+    }
+    fake_client = _FakeGitLabCodeClient(
+        merge_requests=[mr], observations=[{"route_family": "merge_requests"}]
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        lambda connector: fake_client,
+    )
+    connector = Mock()
+    connector.per_page = 50
+    connector.get_merge_requests.side_effect = AssertionError(
+        "legacy connector.get_merge_requests must not be called"
+    )
+
+    prs = _fetch_gitlab_mrs_sync(
+        connector,
+        project_id=99,
+        repo_id=None,
+        max_mrs=10,
+        usage_sink=usage_sink,
+    )
+
+    assert fake_client.iter_merge_requests_calls == [(99, "all", 50, 10)]
+    connector.get_merge_requests.assert_not_called()
+    assert len(prs) == 1
+    assert prs[0].number == 42
+    assert prs[0].author_name == "ada"
+    assert prs[0].created_at == datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+    assert prs[0].merged_at == datetime(2026, 1, 3, 12, tzinfo=timezone.utc)
+    assert usage_sink == [{"route_family": "merge_requests"}]
 
 
 def test_fetch_gitlab_deployments_sync(monkeypatch):

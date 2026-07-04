@@ -96,6 +96,8 @@ def test_gitlab_budget_has_code_client_family_prefix_markers() -> None:
 
     assert families["pipelines"].operation_markers == ("pipelines:",)
     assert families["deployments"].operation_markers == ("deployments:",)
+    assert families["merge_requests"].operation_markers == ("merge_requests:",)
+    assert families["notes"].operation_markers == ("notes:",)
     assert families["security"].operation_markers == ("security:",)
     assert families["tests"].operation_markers == ("tests:",)
     assert GITLAB_USAGE_RESOLVER.resolve(

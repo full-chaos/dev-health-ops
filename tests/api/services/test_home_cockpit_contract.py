@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -297,6 +297,8 @@ async def test_fetch_risk_signals_uses_latest_scored_day_query(
     signals = await _fetch_risk_signals(
         sink,
         filters=MetricFilter(),
+        start_day=date(2026, 5, 1),
+        end_day=date(2026, 5, 31),
         org_id="org-test",
         data_confidence=_risk_confidence(),
     )
@@ -305,10 +307,14 @@ async def test_fetch_risk_signals_uses_latest_scored_day_query(
     assert signals[0].current_value == "50.0 %"
     query, parameters = queries[0]
     assert "maxOrNull(day)" in query
-    assert "argMax(compounding_risk, computed_at) AS score" in query
-    assert "countIf(score IS NULL) AS missing_scores" in query
+    assert "argMax(tuple(compounding_risk), computed_at) AS latest_row" in query
+    assert "countIf(tupleElement(latest_row, 1) IS NULL) AS missing_scores" in query
     assert "missing_scores = 0" in query
-    assert parameters == {"org_id": "org-test"}
+    assert parameters == {
+        "org_id": "org-test",
+        "start_day": date(2026, 5, 1),
+        "end_day": date(2026, 5, 31),
+    }
 
 
 @pytest.mark.asyncio
@@ -331,6 +337,8 @@ async def test_fetch_risk_signals_applies_scope_filter_to_latest_day(
     signals = await _fetch_risk_signals(
         sink,
         filters=MetricFilter(scope=ScopeFilter(level="team", ids=["team-A"])),
+        start_day=date(2026, 5, 1),
+        end_day=date(2026, 5, 31),
         org_id="org-test",
         data_confidence=_risk_confidence(),
     )
@@ -341,6 +349,8 @@ async def test_fetch_risk_signals_applies_scope_filter_to_latest_day(
     assert query.count("AND scope_id IN {scope_ids:Array(String)}") == 2
     assert parameters == {
         "org_id": "org-test",
+        "start_day": date(2026, 5, 1),
+        "end_day": date(2026, 5, 31),
         "scope": "team",
         "scope_ids": ["team-A"],
     }

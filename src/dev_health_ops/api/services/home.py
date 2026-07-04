@@ -245,33 +245,40 @@ _COMPOUNDING_RISK_SQL = """
     SELECT
         scope,
         scope_id,
-        argMax(compounding_risk, computed_at) AS score,
-        argMax(severity,         computed_at) AS severity,
-        max(computed_at)                      AS latest_computed_at
-    FROM compounding_risk_daily
-    WHERE org_id = {org_id:String}
-      AND day = (
-          SELECT maxOrNull(day)
-          FROM (
-              SELECT
-                  day,
-                  count() AS row_count,
-                  countIf(score IS NULL) AS missing_scores
+        tupleElement(latest_row, 1) AS score,
+        tupleElement(latest_row, 2) AS severity,
+        tupleElement(latest_row, 3) AS latest_computed_at
+    FROM (
+        SELECT
+            scope,
+            scope_id,
+            argMax(tuple(compounding_risk, severity, computed_at), computed_at) AS latest_row
+        FROM compounding_risk_daily
+        WHERE org_id = {org_id:String}
+          AND day = (
+              SELECT maxOrNull(day)
               FROM (
                   SELECT
                       day,
-                      scope,
-                      scope_id,
-                      argMax(compounding_risk, computed_at) AS score
-                  FROM compounding_risk_daily
-                  WHERE org_id = {org_id:String}
-                  {latest_scope_filter}
-                  GROUP BY day, scope, scope_id
+                      count() AS row_count,
+                      countIf(tupleElement(latest_row, 1) IS NULL) AS missing_scores
+                  FROM (
+                      SELECT
+                          day,
+                          scope,
+                          scope_id,
+                          argMax(tuple(compounding_risk), computed_at) AS latest_row
+                      FROM compounding_risk_daily
+                      WHERE org_id = {org_id:String}
+                        AND day >= {start_day:Date}
+                        AND day <= {end_day:Date}
+                      {latest_scope_filter}
+                      GROUP BY day, scope, scope_id
+                  )
+                  GROUP BY day
               )
-              GROUP BY day
+              WHERE row_count > 0 AND missing_scores = 0
           )
-          WHERE row_count > 0 AND missing_scores = 0
-      )
 """
 
 
@@ -789,11 +796,17 @@ async def _fetch_risk_signals(
     sink: BaseMetricsSink,
     *,
     filters: MetricFilter,
+    start_day: date,
+    end_day: date,
     org_id: str,
     data_confidence: HomeDataConfidence,
 ) -> list[HomeSignal]:
     latest_scope_filter = ""
-    params: dict[str, Any] = {"org_id": org_id}
+    params: dict[str, Any] = {
+        "org_id": org_id,
+        "start_day": start_day,
+        "end_day": end_day,
+    }
     if filters.scope.level in {"team", "repo"} and filters.scope.ids:
         latest_scope_filter = """
                 AND scope = {scope:String}
@@ -808,7 +821,8 @@ async def _fetch_risk_signals(
         params["scope"] = filters.scope.level
         params["scope_ids"] = filters.scope.ids
     query += """
-    GROUP BY scope, scope_id
+        GROUP BY scope, scope_id
+    )
     ORDER BY score DESC NULLS LAST
     LIMIT 5
     """
@@ -1037,6 +1051,8 @@ async def build_home_response(
             _fetch_risk_signals(
                 sink,
                 filters=filters,
+                start_day=start_day,
+                end_day=end_day,
                 org_id=org_id,
                 data_confidence=data_confidence,
             ),

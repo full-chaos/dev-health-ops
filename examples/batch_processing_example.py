@@ -97,12 +97,6 @@ def main():
                 print(f"    Deletions: {result.stats.deletions}")
                 print(f"    Authors: {len(result.stats.authors)}")
 
-        # Check rate limit
-        print("\n=== Rate Limit Status ===")
-        rate_limit = connector.get_rate_limit()
-        print(f"  Remaining: {rate_limit['remaining']}/{rate_limit['limit']}")
-        print(f"  Reset at: {rate_limit['reset']}")
-
     except Exception as e:
         print(f"\nError: {e}")
         import traceback

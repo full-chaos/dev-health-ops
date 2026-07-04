@@ -105,13 +105,6 @@ def main():
             print(f"    Commit: {first_range.commit_sha[:8]}")
             print(f"    Author: {first_range.author}")
 
-        # Example 7: Check rate limit
-        print("\n=== Example 7: Check Rate Limit ===")
-        rate_limit = connector.get_rate_limit()
-        print(f"  Limit: {rate_limit['limit']}")
-        print(f"  Remaining: {rate_limit['remaining']}")
-        print(f"  Reset at: {rate_limit['reset']}")
-
     except Exception as e:
         print(f"\nError: {e}")
         import traceback

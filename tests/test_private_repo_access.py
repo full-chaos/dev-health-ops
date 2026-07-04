@@ -101,16 +101,6 @@ class TestGitHubPrivateRepoAccess:
                 )
                 print(f"  ✓ Successfully fetched {len(prs)} pull requests")
 
-                # Test 5: Check rate limit
-                print("\nTest 5: Checking rate limit status...")
-                rate_limit = connector.get_rate_limit()
-
-                assert rate_limit is not None, "Should return rate limit info"
-                assert rate_limit["limit"] > 0, "Should have a rate limit"
-                print(
-                    f"  ✓ Rate limit: {rate_limit['remaining']}/{rate_limit['limit']} remaining"
-                )
-
                 print(f"\n✅ All tests passed for private repository {private_repo}")
 
             except AuthenticationException as e:

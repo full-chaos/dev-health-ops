@@ -367,6 +367,7 @@ async def test_batch_creates_planner_parent_when_planner_flag_inactive(
     assert children == []
     assert integration is not None
     assert {dataset.dataset_key for dataset in datasets} == {
+        "blame",
         "commits",
         "commit-stats",
         "files",

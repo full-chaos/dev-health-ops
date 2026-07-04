@@ -15,7 +15,6 @@ from urllib.parse import urlparse
 import requests
 from github import Auth, Github, GithubException, RateLimitExceededException
 
-from dev_health_ops.connectors import models as connector_models
 from dev_health_ops.connectors.base import (
     GitConnector,
     RateLimitException,
@@ -36,8 +35,6 @@ from dev_health_ops.connectors.models import (
     FileBlame,
     Organization,
     PullRequest,
-    PullRequestCommit,
-    PullRequestReview,
     Repository,
     RepoStats,
 )
@@ -48,10 +45,7 @@ from dev_health_ops.connectors.utils import (
     safe_github_headers,
 )
 from dev_health_ops.connectors.utils.github_app import GitHubAppTokenProvider
-from dev_health_ops.metrics.prometheus import (
-    record_github_api_request,
-    record_github_rate_limit,
-)
+from dev_health_ops.metrics.prometheus import record_github_api_request
 from dev_health_ops.sync.budget_types import BudgetDimension
 from dev_health_ops.sync.rate_limit_signal import RateLimitSignal
 
@@ -619,146 +613,6 @@ class GitHubConnector(GitConnector):
         initial_delay=1.0,
         exceptions=(RateLimitException, APIException),
     )
-    def get_pull_request_reviews(
-        self,
-        owner: str,
-        repo: str,
-        number: int,
-    ) -> list[PullRequestReview]:
-        """
-        Get reviews for a specific pull request.
-
-        :param owner: Repository owner.
-        :param repo: Repository name.
-        :param number: Pull request number.
-        :return: List of PullRequestReview objects.
-        """
-        try:
-            query = """
-            query($owner: String!, $repo: String!, $number: Int!, $after: String) {
-              repository(owner: $owner, name: $repo) {
-                pullRequest(number: $number) {
-                  url
-                  reviews(first: 100, after: $after) {
-                    nodes {
-                      id
-                      databaseId
-                      fullDatabaseId
-                      state
-                      submittedAt
-                      body
-                      url
-                      author { login }
-                    }
-                    pageInfo { hasNextPage endCursor }
-                  }
-                }
-              }
-            }
-            """
-            reviews: list[PullRequestReview] = []
-            after: str | None = None
-            while True:
-                data = self.graphql.query(
-                    query,
-                    variables={
-                        "owner": owner,
-                        "repo": repo,
-                        "number": int(number),
-                        "after": after,
-                    },
-                )
-                pr = ((data or {}).get("repository") or {}).get("pullRequest") or {}
-                connection = pr.get("reviews") or {}
-                for r in connection.get("nodes") or []:
-                    if not isinstance(r, dict):
-                        continue
-                    author = (
-                        r.get("author") if isinstance(r.get("author"), dict) else {}
-                    )
-                    submitted_at = None
-                    if r.get("submittedAt"):
-                        submitted_at = datetime.fromisoformat(
-                            str(r["submittedAt"]).replace("Z", "+00:00")
-                        )
-                    raw_id = (
-                        r.get("databaseId") or r.get("fullDatabaseId") or r.get("id")
-                    )
-                    review_url = (
-                        r.get("url") or f"{pr.get('url')}#pullrequestreview-{raw_id}"
-                    )
-                    reviews.append(
-                        PullRequestReview(
-                            id=str(raw_id),
-                            reviewer=(author or {}).get("login") or "Unknown",
-                            state=str(r.get("state") or ""),
-                            submitted_at=submitted_at,
-                            body=r.get("body"),
-                            url=str(review_url) if review_url else None,
-                        )
-                    )
-                page_info = connection.get("pageInfo") or {}
-                if not page_info.get("hasNextPage"):
-                    break
-                cursor = page_info.get("endCursor")
-                if not isinstance(cursor, str) or not cursor:
-                    break
-                after = cursor
-            return reviews
-        except Exception as e:
-            self._handle_github_exception(e)
-            return []
-
-    @retry_with_backoff(
-        max_retries=3,
-        initial_delay=1.0,
-        exceptions=(RateLimitException, APIException),
-    )
-    def get_pull_request_commits(
-        self,
-        owner: str,
-        repo: str,
-        number: int,
-    ) -> list[PullRequestCommit]:
-        """
-        Get commits for a specific pull request.
-
-        :param owner: Repository owner.
-        :param repo: Repository name.
-        :param number: Pull request number.
-        :return: List of PullRequestCommit objects.
-        """
-        try:
-            gh_repo = self.github.get_repo(f"{owner}/{repo}")
-            gh_pr = gh_repo.get_pull(number)
-            commits = []
-            for c in gh_pr.get_commits():
-                authored_at = None
-                author_name = None
-                author_email = None
-                if c.commit and c.commit.author:
-                    authored_at = c.commit.author.date
-                    author_name = c.commit.author.name
-                    author_email = c.commit.author.email
-                commits.append(
-                    PullRequestCommit(
-                        sha=c.sha,
-                        authored_at=authored_at,
-                        message=c.commit.message if c.commit else None,
-                        author_name=author_name,
-                        author_email=author_email,
-                    )
-                )
-            return commits
-        except Exception as e:
-            self._handle_github_exception(e)
-            return []
-
-    @retry_with_backoff(
-        max_retries=3,
-        initial_delay=1.0,
-        exceptions=(RateLimitException, APIException),
-    )
     def get_file_blame(
         self,
         owner: str,
@@ -821,67 +675,12 @@ class GitHubConnector(GitConnector):
             self._handle_github_exception(e)
             raise
 
-    @retry_with_backoff(
-        max_retries=3,
-        initial_delay=1.0,
-        exceptions=(RateLimitException, APIException),
-    )
-    def get_file_contents(
-        self,
-        owner: str,
-        repo: str,
-        paths: list[str],
-        ref: str = "HEAD",
-        batch_size: int = 50,
-    ) -> dict[str, str]:
-        """
-        Fetch text contents for many files via batched GraphQL blob queries.
-
-        Binary, truncated, or missing blobs are omitted from the result so
-        callers can treat absence as "no usable text".
-
-        :param owner: Repository owner.
-        :param repo: Repository name.
-        :param paths: Repository-relative file paths.
-        :param ref: Git reference the paths are resolved against.
-        :param batch_size: Number of blobs to resolve per GraphQL request.
-        :return: Mapping of path -> file text for blobs with usable text.
-        """
-        contents: dict[str, str] = {}
-        try:
-            for start in range(0, len(paths), batch_size):
-                chunk = paths[start : start + batch_size]
-                batch = self.graphql.get_blob_texts(owner, repo, ref, chunk)
-                contents.update(
-                    {path: text for path, text in batch.items() if text is not None}
-                )
-            logger.info(
-                "Retrieved contents for %d/%d files in %s/%s",
-                len(contents),
-                len(paths),
-                owner,
-                repo,
-            )
-            return contents
-        except Exception as e:
-            self._handle_github_exception(e)
-            raise
-
     def _rest_base_url(self) -> str:
         requester = getattr(self.github, "_Github__requester", None)
         base_url = getattr(requester, "_Requester__base_url", None)
         if base_url and base_url.rstrip("/") != "https://api.github.com":
             return base_url.rstrip("/")
         return "https://api.github.com"
-
-    def _parse_github_datetime(self, value: str | None) -> datetime | None:
-        if not value:
-            return None
-        try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            logger.debug("Failed to parse GitHub datetime: %s", value)
-            return None
 
     def _is_github_rate_limit_403(self, response: requests.Response) -> bool:
         # Primary rate limit advertises x-ratelimit-remaining: 0; secondary/
@@ -961,83 +760,6 @@ class GitHubConnector(GitConnector):
             response.text,
         )
         return None
-
-    def _get_security_alert_page(
-        self,
-        owner: str,
-        repo: str,
-        endpoint: str,
-        params: dict[str, Any] | None,
-        max_items: int | None = None,
-    ) -> list[dict[str, Any]]:
-        base_url = (
-            f"{self._rest_base_url()}/repos/{owner}/{repo}/{endpoint.lstrip('/')}"
-        )
-        headers = {
-            "Authorization": f"token {self.token}",
-            "Accept": "application/vnd.github+json",
-        }
-        all_items: list[dict[str, Any]] = []
-        url: str | None = base_url
-
-        while url:
-            response = requests.get(url, headers=headers, params=params, timeout=30)
-            params = (
-                None  # only use params on first request; pagination URLs are absolute
-            )
-
-            if response.status_code == 403:
-                rate_limit = self._classify_github_403(
-                    response, "GET", f"/repos/{owner}/{repo}/{endpoint}"
-                )
-                if rate_limit is not None:
-                    raise rate_limit
-                # Permission/SSO 403 on an optional security endpoint: the
-                # feature is likely disabled or the token lacks the scope.
-                # Treat as "no data" (the diagnostic 403 was already logged).
-                return []
-
-            if response.status_code == 404:
-                logger.debug(
-                    "GitHub security endpoint not found for %s/%s (%s): 404",
-                    owner,
-                    repo,
-                    endpoint,
-                )
-                return []
-
-            if response.status_code == 429:
-                retry_after = response.headers.get("Retry-After")
-                raise RateLimitException(
-                    f"GitHub rate limit exceeded for {endpoint}: {response.text}",
-                    retry_after_seconds=float(retry_after) if retry_after else None,
-                )
-
-            if response.status_code >= 400:
-                raise APIException(
-                    f"GitHub security endpoint error for {endpoint}: "
-                    f"{response.status_code} {response.text}"
-                )
-
-            payload = response.json()
-            if not isinstance(payload, list):
-                logger.debug(
-                    "Unexpected GitHub security response for %s/%s (%s): %s",
-                    owner,
-                    repo,
-                    endpoint,
-                    type(payload).__name__,
-                )
-                return all_items
-
-            all_items.extend(payload)
-            if max_items is not None and len(all_items) >= max_items:
-                return all_items[:max_items]
-
-            # Follow Link: <url>; rel="next" header for pagination
-            url = self._parse_next_link(response.headers.get("Link"))
-
-        return all_items
 
     @staticmethod
     def _parse_next_link(link_header: str | None) -> str | None:
@@ -1193,199 +915,6 @@ class GitHubConnector(GitConnector):
                 )
                 return b""
         return bytes(buffer)
-
-    @retry_with_backoff(
-        max_retries=3,
-        initial_delay=1.0,
-        exceptions=(RateLimitException, APIException),
-    )
-    def get_dependabot_alerts(
-        self,
-        owner: str,
-        repo: str,
-        state: str = "open",
-        max_alerts: int | None = None,
-    ) -> list[Any]:
-        try:
-            security_alert_data_cls = getattr(connector_models, "SecurityAlertData")
-            items = self._get_security_alert_page(
-                owner,
-                repo,
-                "dependabot/alerts",
-                {"state": state, "per_page": 100},
-            )
-            alerts = []
-            for item in items:
-                alerts.append(
-                    security_alert_data_cls(
-                        alert_id=f"dependabot:{item['number']}",
-                        source="dependabot",
-                        severity=item.get("security_advisory", {}).get("severity"),
-                        state=item["state"],
-                        package_name=(
-                            item.get("dependency", {}).get("package", {}).get("name")
-                        ),
-                        cve_id=item.get("security_advisory", {}).get("cve_id"),
-                        url=item.get("html_url"),
-                        title=item.get("security_advisory", {}).get("summary"),
-                        description=item.get("security_advisory", {}).get(
-                            "description"
-                        ),
-                        created_at=self._parse_github_datetime(item.get("created_at")),
-                        fixed_at=self._parse_github_datetime(item.get("fixed_at")),
-                        dismissed_at=self._parse_github_datetime(
-                            item.get("dismissed_at")
-                        ),
-                    )
-                )
-                if max_alerts is not None and len(alerts) >= max_alerts:
-                    break
-            return alerts
-        except (RateLimitException, APIException):
-            raise
-        except Exception as e:
-            self._handle_github_exception(e)
-            return []
-
-    @retry_with_backoff(
-        max_retries=3,
-        initial_delay=1.0,
-        exceptions=(RateLimitException, APIException),
-    )
-    def get_code_scanning_alerts(
-        self,
-        owner: str,
-        repo: str,
-        state: str = "open",
-        max_alerts: int | None = None,
-    ) -> list[Any]:
-        try:
-            security_alert_data_cls = getattr(connector_models, "SecurityAlertData")
-            items = self._get_security_alert_page(
-                owner,
-                repo,
-                "code-scanning/alerts",
-                {"state": state, "per_page": 100},
-            )
-            alerts = []
-            for item in items:
-                alerts.append(
-                    security_alert_data_cls(
-                        alert_id=f"code_scanning:{item['number']}",
-                        source="code_scanning",
-                        severity=item.get("rule", {}).get("severity"),
-                        state=item["state"],
-                        package_name=None,
-                        cve_id=None,
-                        url=item.get("html_url"),
-                        title=item.get("rule", {}).get("description"),
-                        description=item.get("most_recent_instance", {})
-                        .get("message", {})
-                        .get("text"),
-                        created_at=self._parse_github_datetime(item.get("created_at")),
-                        fixed_at=None,
-                        dismissed_at=self._parse_github_datetime(
-                            item.get("dismissed_at")
-                        ),
-                    )
-                )
-                if max_alerts is not None and len(alerts) >= max_alerts:
-                    break
-            return alerts
-        except (RateLimitException, APIException):
-            raise
-        except Exception as e:
-            self._handle_github_exception(e)
-            return []
-
-    @retry_with_backoff(
-        max_retries=3,
-        initial_delay=1.0,
-        exceptions=(RateLimitException, APIException),
-    )
-    def get_security_advisories(
-        self,
-        owner: str,
-        repo: str,
-        state: str | None = None,
-        max_alerts: int | None = None,
-    ) -> list[Any]:
-        try:
-            security_alert_data_cls = getattr(connector_models, "SecurityAlertData")
-            params: dict[str, Any] = {"per_page": 100}
-            if state is not None:
-                params["state"] = state
-
-            items = self._get_security_alert_page(
-                owner,
-                repo,
-                "security-advisories",
-                params,
-            )
-            alerts = []
-            for item in items:
-                alerts.append(
-                    security_alert_data_cls(
-                        alert_id=f"advisory:{item['ghsa_id']}",
-                        source="advisory",
-                        severity=item.get("severity"),
-                        state=item.get("state"),
-                        package_name=None,
-                        cve_id=item.get("cve_id"),
-                        url=item.get("html_url"),
-                        title=item.get("summary"),
-                        description=item.get("description"),
-                        created_at=self._parse_github_datetime(item.get("created_at")),
-                        fixed_at=None,
-                        dismissed_at=None,
-                    )
-                )
-                if max_alerts is not None and len(alerts) >= max_alerts:
-                    break
-            return alerts
-        except (RateLimitException, APIException):
-            raise
-        except Exception as e:
-            self._handle_github_exception(e)
-            return []
-
-    def get_rate_limit(self) -> dict[str, Any]:
-        """
-        Get current rate limit status.
-
-        :return: Dictionary with rate limit information.
-        """
-        try:
-            # PyGithub's get_rate_limit().core is the core rate limit
-            # but sometimes it's nested differently depending on version
-            rl = self.github.get_rate_limit()
-            core = getattr(rl, "core", rl)
-            search = getattr(rl, "search", None)
-
-            core_remaining = getattr(core, "remaining", 0)
-            record_github_rate_limit("core", core_remaining)
-
-            res = {
-                "limit": getattr(core, "limit", 0),
-                "remaining": core_remaining,
-                "reset": getattr(core, "reset", datetime.now(timezone.utc)).isoformat(),
-            }
-
-            if search:
-                search_remaining = getattr(search, "remaining", 0)
-                record_github_rate_limit("search", search_remaining)
-                res["search"] = {
-                    "limit": getattr(search, "limit", 0),
-                    "remaining": search_remaining,
-                    "reset": getattr(
-                        search, "reset", datetime.now(timezone.utc)
-                    ).isoformat(),
-                }
-
-            return res
-        except Exception as e:
-            self._handle_github_exception(e)
-            return {}
 
     def _rate_limit_reset_delay_seconds(self) -> float:
         """Get delay in seconds until rate limit resets."""

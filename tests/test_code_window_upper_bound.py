@@ -34,26 +34,40 @@ SINCE = datetime(2026, 1, 10, tzinfo=timezone.utc)
 UNTIL = datetime(2026, 1, 12, tzinfo=timezone.utc)
 
 
-def test_gitlab_commits_fetch_passes_until_to_commits_list() -> None:
-    gl_project = MagicMock()
-    gl_project.commits.list.return_value = []
+def test_gitlab_commits_fetch_passes_window_to_code_client() -> None:
+    connector = MagicMock()
+    client = _async_cm(MagicMock())
+    client.get_commits = AsyncMock(return_value=[])
+    client.drain_usage_observations = MagicMock(return_value=[])
 
-    _fetch_gitlab_commits_sync(gl_project, None, "repo-1", since=SINCE, until=UNTIL)
+    with patch(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        return_value=client,
+    ):
+        _fetch_gitlab_commits_sync(
+            connector, 123, None, "repo-1", since=SINCE, until=UNTIL
+        )
 
-    assert gl_project.commits.list.call_count == 1
-    params = gl_project.commits.list.call_args.kwargs
-    assert params["until"] == UNTIL.isoformat().replace("+00:00", "Z")
-    assert params["since"] == SINCE.isoformat().replace("+00:00", "Z")
+    client.get_commits.assert_awaited_once_with(
+        123, max_commits=None, since=SINCE, until=UNTIL
+    )
 
 
 def test_gitlab_commits_fetch_omits_until_when_none() -> None:
-    gl_project = MagicMock()
-    gl_project.commits.list.return_value = []
+    connector = MagicMock()
+    client = _async_cm(MagicMock())
+    client.get_commits = AsyncMock(return_value=[])
+    client.drain_usage_observations = MagicMock(return_value=[])
 
-    _fetch_gitlab_commits_sync(gl_project, None, "repo-1", since=SINCE)
+    with patch(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        return_value=client,
+    ):
+        _fetch_gitlab_commits_sync(connector, 123, None, "repo-1", since=SINCE)
 
-    params = gl_project.commits.list.call_args.kwargs
-    assert "until" not in params
+    client.get_commits.assert_awaited_once_with(
+        123, max_commits=None, since=SINCE, until=None
+    )
 
 
 def _record(ts: datetime | None, field: str = "started_at") -> SimpleNamespace:

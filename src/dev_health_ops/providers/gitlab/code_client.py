@@ -12,8 +12,8 @@ python-gitlab and then rode the un-instrumented
 actuals instrumentation (CHAOS-2754) requires a client that owns a
 ``UsageRecorder`` -- so this module ports the fetch/error-handling/field-
 mapping logic and adds the recorder the frozen connector could never carry.
-Later GitLab-wave changesets (CS11 pipelines+deployments, CS12 tests, ...)
-copy this shape.
+Later GitLab-wave changesets (CS11 pipelines+deployments, CS12 tests, CS13
+commits+stats, ...) copy this shape.
 
 Behavior parity with ``GitLabConnector.get_security_alerts``
 (``connectors/gitlab.py`` ~1268-1379, riding ``connectors/utils/rest.py``'s
@@ -45,11 +45,12 @@ Behavior parity with ``GitLabConnector.get_security_alerts``
   scan API carries no per-vulnerability timestamp; that is the connector's
   own pre-existing choice, not something this migration invents.
 
-Every operation this client issues carries the explicit ``"security:"``
-family prefix (CHAOS-2773 CS1's ``OperationResolver`` prefix short-circuit,
+Every operation this client issues carries an explicit family prefix
+(CHAOS-2773 CS1's ``OperationResolver`` prefix short-circuit,
 ``providers/usage.py``) so usage resolution is deterministic by
 construction rather than by marker-substring tuning -- see
-``providers/gitlab/budget.py``'s ``security`` route family.
+``providers/gitlab/budget.py``'s ``security``, ``pipelines``,
+``deployments``, ``tests``, and ``project`` route families.
 """
 
 from __future__ import annotations
@@ -88,6 +89,7 @@ _RESET_HEADER_NAME = "RateLimit-Reset"
 # Explicit family prefix every operation this client issues is labeled with
 # (see the module docstring's "Every operation" paragraph).
 _SECURITY_FAMILY_PREFIX = "security"
+_PROJECT_FAMILY_PREFIX = "project"
 _PIPELINES_FAMILY_PREFIX = "pipelines"
 _DEPLOYMENTS_FAMILY_PREFIX = "deployments"
 _TESTS_FAMILY_PREFIX = "tests"
@@ -112,6 +114,24 @@ class GitLabDeploymentData:
     finished_at: datetime | None
     sha: str | None
     raw_payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class GitLabCommitData:
+    commit_id: str
+    message: str | None
+    author_name: str | None
+    authored_date: datetime | None
+    committer_name: str | None
+    committed_date: datetime | None
+    parent_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class GitLabCommitStatsData:
+    commit_id: str
+    additions: int
+    deletions: int
 
 
 class _GitLabSecurityForbidden(APIException):
@@ -277,11 +297,65 @@ def _map_deployment(item: dict[str, Any]) -> GitLabDeploymentData:
     )
 
 
+def _map_commit(item: dict[str, Any]) -> GitLabCommitData:
+    parent_ids = item.get("parent_ids")
+    return GitLabCommitData(
+        commit_id=str(item.get("id") or item.get("short_id") or ""),
+        message=item.get("message"),
+        author_name=item.get("author_name"),
+        authored_date=_parse_gitlab_datetime(item.get("authored_date")),
+        committer_name=item.get("committer_name"),
+        committed_date=_parse_gitlab_datetime(item.get("committed_date")),
+        parent_ids=tuple(str(parent) for parent in parent_ids or []),
+    )
+
+
+def _coerce_int(value: object) -> int:
+    if not isinstance(value, str | int | float):
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _map_commit_stats(commit_id: str, item: dict[str, Any]) -> GitLabCommitStatsData:
+    stats = item.get("stats")
+    if not isinstance(stats, dict):
+        stats = {}
+    return GitLabCommitStatsData(
+        commit_id=commit_id,
+        additions=_coerce_int(stats.get("additions")),
+        deletions=_coerce_int(stats.get("deletions")),
+    )
+
+
+def _format_gitlab_window_datetime(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _encode_project_id(project_id: int | str) -> str:
+    """Percent-encode a project id/path for use as ONE URL path segment.
+
+    Mirrors ``_resolve_project_id``'s own encoding below (and
+    ``feature_flags.py``'s ``encoded_project``): digits are unreserved per
+    RFC 3986 so a plain numeric id round-trips unchanged, while a
+    namespaced path (``group/project``) is escaped exactly as GitLab's own
+    docs require for the ``/projects/{id_or_path}`` family (GitLab decodes
+    the WHOLE path segment server-side). ``safe=""`` also forces '/' itself
+    to be escaped -- the caller-supplied ``project_id`` is not trusted to be
+    a bare numeric id, so a value smuggling extra path segments (``../``) or
+    query metacharacters (``?``) collapses to inert data in a single
+    segment instead of being interpreted as additional URL structure.
+    """
+    return urllib.parse.quote(str(project_id), safe="")
+
+
 class GitLabCodeClient:
     """Canonical GitLab code-dataset client (CHAOS-2773 CS10 pathfinder).
 
-    Currently covers the "security" dataset (vulnerability findings +
-    dependency-scan alerts). Built on the shared ``InstrumentedRESTCore`` so
+    Covers migrated GitLab code datasets (security, pipelines/deployments,
+    tests, commits + aggregate commit stats). Built on the shared ``InstrumentedRESTCore`` so
     every physical HTTP hop is recorded through ONE owned ``UsageRecorder``,
     mirroring ``GitLabWorkClient`` / ``GitLabFeatureFlagsClient``'s
     rate-limit conventions.
@@ -479,6 +553,65 @@ class GitLabCodeClient:
             max_items=max_deployments,
         )
         return [_map_deployment(item) for item in raw_items[:max_deployments]]
+
+    async def get_commits(
+        self,
+        project_id: int | str,
+        *,
+        max_commits: int | None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        per_page: int = 100,
+    ) -> list[GitLabCommitData]:
+        if max_commits is not None and max_commits <= 0:
+            return []
+        params: dict[str, Any] = {}
+        if since is not None:
+            params["since"] = _format_gitlab_window_datetime(since)
+        if until is not None:
+            params["until"] = _format_gitlab_window_datetime(until)
+
+        effective_per_page = min(max_commits, per_page) if max_commits else per_page
+        encoded_project_id = _encode_project_id(project_id)
+        path = f"/projects/{encoded_project_id}/repository/commits"
+        operation = f"{_PROJECT_FAMILY_PREFIX}:GET /projects/{{id}}/repository/commits"
+        if max_commits is None:
+            raw_items = await self._core.paginate_page_param(
+                path,
+                operation=operation,
+                params=params,
+                per_page=effective_per_page,
+                max_pages=10_000,
+            )
+            return [_map_commit(item) for item in raw_items if isinstance(item, dict)]
+
+        raw_items = await self._get_gitlab_list(
+            path,
+            operation=operation,
+            params=params,
+            per_page=effective_per_page,
+            paginate=max_commits > effective_per_page,
+            max_items=max_commits,
+        )
+        return [_map_commit(item) for item in raw_items[:max_commits]]
+
+    async def get_commit_stats(
+        self, project_id: int | str, commit_sha: str
+    ) -> GitLabCommitStatsData:
+        encoded_project_id = _encode_project_id(project_id)
+        encoded_sha = urllib.parse.quote(str(commit_sha), safe="")
+        response = await self._core.request(
+            "GET",
+            f"/projects/{encoded_project_id}/repository/commits/{encoded_sha}",
+            operation=(
+                f"{_PROJECT_FAMILY_PREFIX}:GET "
+                "/projects/{id}/repository/commits/{sha}"
+            ),
+        )
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise APIException(f"Unexpected GitLab commit response: {type(payload)!r}")
+        return _map_commit_stats(commit_sha, payload)
 
     async def get_deployment_merge_requests(
         self, project_id: int | str, sha: str
@@ -700,4 +833,10 @@ class GitLabCodeClient:
         await self.close()
 
 
-__all__ = ["GitLabCodeClient", "GitLabDeploymentData", "GitLabPipelineData"]
+__all__ = [
+    "GitLabCodeClient",
+    "GitLabCommitData",
+    "GitLabCommitStatsData",
+    "GitLabDeploymentData",
+    "GitLabPipelineData",
+]

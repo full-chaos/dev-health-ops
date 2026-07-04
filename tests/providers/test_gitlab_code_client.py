@@ -18,6 +18,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
 from typing import Any, cast
+from urllib.parse import quote
 
 import httpx
 import pytest
@@ -57,12 +58,19 @@ def _router_transport(
     calls: dict[str, int] = {}
     captured_headers: dict[str, httpx.Headers] = {}
     captured_urls: dict[str, httpx.URL] = {}
+    # Keyed by the same DECODED ``request.url.path`` the router matches on --
+    # ``.path`` itself decodes a percent-encoded '/' (%2F) back to a literal
+    # '/', so it cannot prove wire-level path-segment encoding happened;
+    # ``.raw_path`` retains the percent-encoding actually sent on the wire
+    # (see ``TestProjectIdPathEncoding``).
+    captured_raw_paths: dict[str, bytes] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
         calls[path] = calls.get(path, 0) + 1
         captured_headers[path] = request.headers
         captured_urls[path] = request.url
+        captured_raw_paths[path] = request.url.raw_path
         entry = routes[path]
         if isinstance(entry, list):
             idx = min(calls[path] - 1, len(entry) - 1)
@@ -73,6 +81,7 @@ def _router_transport(
     transport.calls = calls  # type: ignore[attr-defined]
     transport.captured_headers = captured_headers  # type: ignore[attr-defined]
     transport.captured_urls = captured_urls  # type: ignore[attr-defined]
+    transport.captured_raw_paths = captured_raw_paths  # type: ignore[attr-defined]
     return transport, calls
 
 
@@ -575,6 +584,8 @@ _PIPELINES_PATH = "/api/v4/projects/42/pipelines"
 _RELEASES_PATH = "/api/v4/projects/42/releases"
 _DEPLOYMENTS_PATH = "/api/v4/projects/42/deployments"
 _DEPLOYMENT_MRS_PATH = "/api/v4/projects/42/repository/commits/abc123/merge_requests"
+_COMMITS_PATH = "/api/v4/projects/42/repository/commits"
+_COMMIT_DETAIL_PATH = "/api/v4/projects/42/repository/commits/abc123"
 
 
 class TestPipelinesParity:
@@ -720,6 +731,262 @@ class TestDeploymentsParity:
 
         assert len(deployments) == 1
         assert calls[_DEPLOYMENTS_PATH] == 1
+
+
+class TestCommitsParity:
+    @pytest.mark.asyncio
+    async def test_commit_list_params_mapping_and_usage_family(self) -> None:
+        commit = {
+            "id": "abc123",
+            "message": "ship it",
+            "author_name": "Ada",
+            "authored_date": "2026-01-10T00:00:00Z",
+            "committer_name": "Grace",
+            "committed_date": "2026-01-10T00:01:00Z",
+            "parent_ids": ["parent1"],
+        }
+        transport, calls = _router_transport(
+            {_COMMITS_PATH: _json_response(200, [commit])}
+        )
+        client = _client(transport)
+        since = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        until = datetime(2026, 1, 31, tzinfo=timezone.utc)
+
+        commits = await client.get_commits(42, max_commits=10, since=since, until=until)
+
+        assert calls[_COMMITS_PATH] == 1
+        assert commits[0].commit_id == "abc123"
+        assert commits[0].message == "ship it"
+        assert commits[0].author_name == "Ada"
+        assert commits[0].committer_name == "Grace"
+        assert commits[0].parent_ids == ("parent1",)
+        query = dict(transport.captured_urls[_COMMITS_PATH].params)  # type: ignore[attr-defined]
+        assert query == {
+            "since": "2026-01-01T00:00:00Z",
+            "until": "2026-01-31T00:00:00Z",
+            "page": "1",
+            "per_page": "10",
+        }
+        observations = client.drain_usage_observations()
+        assert observations[0]["route_family"] == "project"
+        assert observations[0]["request_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_commit_list_paginates_until_cap(self) -> None:
+        page_one = [
+            {"id": f"sha-{i}", "committed_date": "2026-01-10T00:00:00Z"}
+            for i in range(100)
+        ]
+        page_two = [{"id": "sha-100", "committed_date": "2026-01-10T00:00:00Z"}]
+        transport, calls = _router_transport(
+            {
+                _COMMITS_PATH: [
+                    _json_response(200, page_one, headers={"X-Next-Page": "2"}),
+                    _json_response(200, page_two),
+                ]
+            }
+        )
+        client = _client(transport)
+
+        commits = await client.get_commits(42, max_commits=101)
+
+        assert len(commits) == 101
+        assert calls[_COMMITS_PATH] == 2
+
+    @pytest.mark.asyncio
+    async def test_commit_stats_maps_aggregate_stats_and_usage_family(self) -> None:
+        detail = {"id": "abc123", "stats": {"additions": 12, "deletions": 3}}
+        transport, calls = _router_transport(
+            {_COMMIT_DETAIL_PATH: _json_response(200, detail)}
+        )
+        client = _client(transport)
+
+        stats = await client.get_commit_stats(42, "abc123")
+
+        assert calls[_COMMIT_DETAIL_PATH] == 1
+        assert stats.commit_id == "abc123"
+        assert stats.additions == 12
+        assert stats.deletions == 3
+        observations = client.drain_usage_observations()
+        assert observations[0]["route_family"] == "project"
+        assert observations[0]["request_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Project-id path-segment encoding (CHAOS-2814 security review): get_commits
+# / get_commit_stats must percent-encode a caller-supplied project_id/path
+# into ONE opaque URL path segment -- never literal additional path
+# structure or query metacharacters. httpx's ``request.url.path`` decodes a
+# percent-encoded '/' (%2F) back to a literal '/' for display, so these
+# tests assert on ``request.url.raw_path`` (the actual wire bytes) via
+# ``transport.captured_raw_paths`` -- ``.path`` alone cannot prove encoding
+# occurred.
+# ---------------------------------------------------------------------------
+
+
+class TestProjectIdPathEncoding:
+    @pytest.mark.asyncio
+    async def test_commits_encodes_project_id_containing_slash(self) -> None:
+        commit = {"id": "abc123", "committed_date": "2026-01-10T00:00:00Z"}
+        raw_project_id = "group/project"
+        decoded_path = "/api/v4/projects/group/project/repository/commits"
+        transport, calls = _router_transport(
+            {decoded_path: _json_response(200, [commit])}
+        )
+        client = _client(transport)
+
+        commits = await client.get_commits(raw_project_id, max_commits=10)
+
+        assert calls[decoded_path] == 1
+        assert commits[0].commit_id == "abc123"
+        raw_path = transport.captured_raw_paths[decoded_path]  # type: ignore[attr-defined]
+        assert (
+            raw_path.split(b"?")[0]
+            == (
+                f"/api/v4/projects/{quote(raw_project_id, safe='')}/repository/commits"
+            ).encode()
+        )
+
+    @pytest.mark.asyncio
+    async def test_commits_encodes_project_id_containing_query_metacharacter(
+        self,
+    ) -> None:
+        commit = {"id": "abc123", "committed_date": "2026-01-10T00:00:00Z"}
+        raw_project_id = "42?evil=1"
+        decoded_path = "/api/v4/projects/42?evil=1/repository/commits"
+        transport, calls = _router_transport(
+            {decoded_path: _json_response(200, [commit])}
+        )
+        client = _client(transport)
+
+        commits = await client.get_commits(raw_project_id, max_commits=10)
+
+        assert calls[decoded_path] == 1
+        assert commits[0].commit_id == "abc123"
+        raw_path = transport.captured_raw_paths[decoded_path]  # type: ignore[attr-defined]
+        assert (
+            raw_path.split(b"?", 1)[0]
+            == (
+                f"/api/v4/projects/{quote(raw_project_id, safe='')}/repository/commits"
+            ).encode()
+        )
+        # The '?' must have been escaped INTO the project-id segment, not
+        # parsed as the start of the query string -- only the real per_page/
+        # page params the client adds should appear as query parameters.
+        assert dict(transport.captured_urls[decoded_path].params) == {  # type: ignore[attr-defined]
+            "page": "1",
+            "per_page": "10",
+        }
+
+    @pytest.mark.asyncio
+    async def test_commits_encodes_project_id_containing_path_traversal(self) -> None:
+        commit = {"id": "abc123", "committed_date": "2026-01-10T00:00:00Z"}
+        raw_project_id = "../../etc/passwd"
+        decoded_path = "/api/v4/projects/../../etc/passwd/repository/commits"
+        transport, calls = _router_transport(
+            {decoded_path: _json_response(200, [commit])}
+        )
+        client = _client(transport)
+
+        commits = await client.get_commits(raw_project_id, max_commits=10)
+
+        assert calls[decoded_path] == 1
+        assert commits[0].commit_id == "abc123"
+        raw_path = transport.captured_raw_paths[decoded_path]  # type: ignore[attr-defined]
+        expected_segment = quote(raw_project_id, safe="")
+        assert (
+            raw_path.split(b"?")[0]
+            == (f"/api/v4/projects/{expected_segment}/repository/commits").encode()
+        )
+        # Every literal '/' inside the traversal payload must be escaped --
+        # the wire path carries exactly the client's own two structural
+        # slashes ("/api/v4/projects/" .. "/repository/commits"), never the
+        # attacker-controlled ones.
+        assert b"..%2F" in raw_path
+        assert b"/../" not in raw_path
+
+    @pytest.mark.asyncio
+    async def test_commits_numeric_project_id_path_is_unencoded(self) -> None:
+        """Regression: a plain numeric project_id must still reach the wire
+        byte-for-byte unencoded (digits are unreserved per RFC 3986)."""
+        commit = {"id": "abc123", "committed_date": "2026-01-10T00:00:00Z"}
+        transport, calls = _router_transport(
+            {_COMMITS_PATH: _json_response(200, [commit])}
+        )
+        client = _client(transport)
+
+        await client.get_commits(42, max_commits=10)
+
+        assert calls[_COMMITS_PATH] == 1
+        raw_path = transport.captured_raw_paths[_COMMITS_PATH]  # type: ignore[attr-defined]
+        assert raw_path.split(b"?")[0] == _COMMITS_PATH.encode()
+
+    @pytest.mark.asyncio
+    async def test_commit_stats_encodes_project_id_containing_slash(self) -> None:
+        detail = {"id": "abc123", "stats": {"additions": 1, "deletions": 2}}
+        raw_project_id = "group/project"
+        decoded_path = "/api/v4/projects/group/project/repository/commits/abc123"
+        transport, calls = _router_transport(
+            {decoded_path: _json_response(200, detail)}
+        )
+        client = _client(transport)
+
+        stats = await client.get_commit_stats(raw_project_id, "abc123")
+
+        assert calls[decoded_path] == 1
+        assert stats.additions == 1
+        assert stats.deletions == 2
+        raw_path = transport.captured_raw_paths[decoded_path]  # type: ignore[attr-defined]
+        assert (
+            raw_path
+            == (
+                f"/api/v4/projects/{quote(raw_project_id, safe='')}"
+                "/repository/commits/abc123"
+            ).encode()
+        )
+
+    @pytest.mark.asyncio
+    async def test_commit_stats_encodes_project_id_containing_path_traversal(
+        self,
+    ) -> None:
+        detail = {"id": "abc123", "stats": {"additions": 1, "deletions": 2}}
+        raw_project_id = "../../etc/passwd"
+        decoded_path = "/api/v4/projects/../../etc/passwd/repository/commits/abc123"
+        transport, calls = _router_transport(
+            {decoded_path: _json_response(200, detail)}
+        )
+        client = _client(transport)
+
+        stats = await client.get_commit_stats(raw_project_id, "abc123")
+
+        assert calls[decoded_path] == 1
+        assert stats.additions == 1
+        raw_path = transport.captured_raw_paths[decoded_path]  # type: ignore[attr-defined]
+        expected_segment = quote(raw_project_id, safe="")
+        assert (
+            raw_path
+            == (
+                f"/api/v4/projects/{expected_segment}/repository/commits/abc123"
+            ).encode()
+        )
+        assert b"/../" not in raw_path
+
+    @pytest.mark.asyncio
+    async def test_commit_stats_numeric_project_id_path_is_unencoded(self) -> None:
+        """Regression: a plain numeric project_id must still reach the wire
+        byte-for-byte unencoded (digits are unreserved per RFC 3986)."""
+        detail = {"id": "abc123", "stats": {"additions": 12, "deletions": 3}}
+        transport, calls = _router_transport(
+            {_COMMIT_DETAIL_PATH: _json_response(200, detail)}
+        )
+        client = _client(transport)
+
+        stats = await client.get_commit_stats(42, "abc123")
+
+        assert calls[_COMMIT_DETAIL_PATH] == 1
+        assert stats.additions == 12
+        raw_path = transport.captured_raw_paths[_COMMIT_DETAIL_PATH]  # type: ignore[attr-defined]
+        assert raw_path == _COMMIT_DETAIL_PATH.encode()
 
 
 _TEST_REPORT_PATH = "/api/v4/projects/42/pipelines/11/test_report"

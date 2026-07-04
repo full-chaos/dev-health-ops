@@ -79,6 +79,12 @@ else:
     RateLimitGate = None
 
 
+def _is_rate_limit_exception(exc: Exception) -> bool:
+    from dev_health_ops.exceptions import RateLimitException
+
+    return isinstance(exc, RateLimitException)
+
+
 # --- GitLab Sync Helpers ---
 
 
@@ -91,135 +97,119 @@ def _fetch_gitlab_project_info_sync(connector, project_id):
 
 
 def _fetch_gitlab_commits_sync(
-    gl_project,
+    connector,
+    project_id,
     max_commits: int | None,
     repo_id,
     since: datetime | None = None,
     until: datetime | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ):
-    """Sync helper to fetch GitLab commits."""
-    list_params: dict[str, object] = {"per_page": 100, "get_all": False}
-    if since is not None:
-        since_iso = since.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-        list_params["since"] = since_iso
-    if until is not None:
-        until_iso = until.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-        list_params["until"] = until_iso
+    """Sync helper to fetch GitLab commits via the canonical code client."""
+    drained_observations: list[dict[str, Any]] = []
 
-    commit_objects = []
-    count = 0
-    commit_hashes = []
-    page = 1
-    per_page = min(max_commits, 100) if max_commits else 100
-    stop_due_to_since = False
+    async def _run():
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                return await client.get_commits(
+                    project_id,
+                    max_commits=max_commits,
+                    since=since,
+                    until=until,
+                )
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
 
-    while True:
-        if max_commits is not None and count >= max_commits:
-            break
-
-        page_params = dict(list_params)
-        page_params["page"] = page
-        page_params["per_page"] = per_page
-        commits_page = gl_project.commits.list(**page_params)
-        if not commits_page:
-            break
-        logging.debug(
-            "GitLab commits page %d returned %d items",
-            page,
-            len(commits_page),
+    try:
+        raw_commits = asyncio.run(_run())
+    finally:
+        _drain_gitlab_code_usage(
+            "_fetch_gitlab_commits_sync", drained_observations, usage_sink
         )
 
-        for commit in commits_page:
-            if max_commits is not None and count >= max_commits:
+    commit_objects = []
+    commit_hashes = []
+    for commit in raw_commits:
+        committed_when = commit.committed_date
+        if until is not None and isinstance(committed_when, datetime):
+            if committed_when.astimezone(timezone.utc) > until:
+                continue
+        if since is not None and isinstance(committed_when, datetime):
+            if committed_when.astimezone(timezone.utc) < since:
                 break
 
-            committed_when = None
-            if hasattr(commit, "committed_date") and commit.committed_date:
-                try:
-                    committed_when = safe_parse_datetime(commit.committed_date)
-                except Exception:
-                    committed_when = None
-
-            if until is not None and isinstance(committed_when, datetime):
-                if committed_when.astimezone(timezone.utc) > until:
-                    continue
-
-            if since is not None and isinstance(committed_when, datetime):
-                if committed_when.astimezone(timezone.utc) < since:
-                    stop_due_to_since = True
-                    break
-
-            git_commit = GitCommit(
+        commit_objects.append(
+            GitCommit(
                 repo_id=repo_id,
-                hash=commit.id,
+                hash=commit.commit_id,
                 message=commit.message,
-                author_name=(
-                    commit.author_name if hasattr(commit, "author_name") else "Unknown"
-                ),
+                author_name=commit.author_name or "Unknown",
                 author_email=None,
-                author_when=(
-                    safe_parse_datetime(commit.authored_date)
-                    if hasattr(commit, "authored_date")
-                    else datetime.now(timezone.utc)
-                ),
-                committer_name=(
-                    commit.committer_name
-                    if hasattr(commit, "committer_name")
-                    else "Unknown"
-                ),
+                author_when=commit.authored_date or datetime.now(timezone.utc),
+                committer_name=commit.committer_name or "Unknown",
                 committer_email=None,
-                committer_when=(
-                    safe_parse_datetime(commit.committed_date)
-                    if hasattr(commit, "committed_date")
-                    else datetime.now(timezone.utc)
-                ),
-                parents=len(commit.parent_ids) if hasattr(commit, "parent_ids") else 0,
+                committer_when=commit.committed_date or datetime.now(timezone.utc),
+                parents=len(commit.parent_ids),
             )
-            commit_objects.append(git_commit)
-            commit_hashes.append(commit.id)
-            count += 1
-
-        if stop_due_to_since or len(commits_page) < per_page:
-            break
-        page += 1
+        )
+        commit_hashes.append(commit.commit_id)
 
     return commit_hashes, commit_objects
 
 
 def _fetch_gitlab_commit_stats_sync(
-    gl_project, commit_hashes, repo_id, max_stats, gate=None
+    connector,
+    project_id,
+    commit_hashes,
+    repo_id,
+    max_stats,
+    gate=None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ):
-    """Sync helper to fetch detailed commit stats from GitLab.
-
-    Each commit detail is one REST call, so each iteration waits on the
-    rate-limit gate.
-    """
+    """Sync helper to fetch detailed commit stats from GitLab."""
     gate = BaseGitProcessor.ensure_gate(gate)
-    stats_objects = []
+    drained_observations: list[dict[str, Any]] = []
 
-    for commit_hash in commit_hashes[:max_stats]:
-        try:
-            if gate is not None:
-                gate.wait_sync()
-            detailed_commit = gl_project.commits.get(commit_hash)
-            if hasattr(detailed_commit, "stats"):
-                stat = GitCommitStat(
-                    repo_id=repo_id,
-                    commit_hash=commit_hash,
-                    file_path=AGGREGATE_STATS_MARKER,
-                    additions=detailed_commit.stats.get("additions", 0),
-                    deletions=detailed_commit.stats.get("deletions", 0),
-                    old_file_mode="unknown",
-                    new_file_mode="unknown",
-                )
-                stats_objects.append(stat)
-        except Exception as e:
-            logging.warning(
-                "Failed to get stats for commit %s: %s",
-                commit_hash,
-                e,
-            )
-    return stats_objects
+    async def _run():
+        stats_objects = []
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                for commit_hash in commit_hashes[:max_stats]:
+                    try:
+                        if gate is not None:
+                            gate.wait_sync()
+                        detailed_stats = await client.get_commit_stats(
+                            project_id, commit_hash
+                        )
+                        stats_objects.append(
+                            GitCommitStat(
+                                repo_id=repo_id,
+                                commit_hash=commit_hash,
+                                file_path=AGGREGATE_STATS_MARKER,
+                                additions=detailed_stats.additions,
+                                deletions=detailed_stats.deletions,
+                                old_file_mode="unknown",
+                                new_file_mode="unknown",
+                            )
+                        )
+                    except Exception as e:
+                        if _is_rate_limit_exception(e):
+                            raise
+                        logging.warning(
+                            "Failed to get stats for commit %s: %s",
+                            commit_hash,
+                            e,
+                        )
+                return stats_objects
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
+
+    try:
+        return asyncio.run(_run())
+    finally:
+        _drain_gitlab_code_usage(
+            "_fetch_gitlab_commit_stats_sync", drained_observations, usage_sink
+        )
 
 
 def _fetch_gitlab_mrs_sync(connector, project_id, repo_id, max_mrs):
@@ -1332,6 +1322,7 @@ async def _backfill_gitlab_missing_data(
     include_files: bool = True,
     include_blame: bool = True,
     include_commit_stats: bool = True,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> None:
     # check_backfill_needs's blame_only flag doubles as "skip commit stats".
     needs = await check_backfill_needs(
@@ -1409,47 +1400,41 @@ async def _backfill_gitlab_missing_data(
             )
 
     if needs_commit_stats:
-        try:
-            commits = project.commits.list(
-                ref_name=default_branch, per_page=100, get_all=True
-            )
-        except TypeError:
-            commits = project.commits.list(
-                ref_name=default_branch, per_page=100, all=True
-            )
-
-        async with AsyncBatchCollector(
-            ingestion_sink.insert_git_commit_stats
-        ) as stats_collector:
-            commit_count = 0
-            for commit in commits or []:
-                if max_commits and commit_count >= max_commits:
-                    break
-                commit_count += 1
-                sha = getattr(commit, "id", None) or getattr(commit, "sha", None)
-                if not sha:
-                    continue
-                try:
-                    stats = connector.get_commit_stats_by_project(
-                        sha=sha,
-                        project_name=project_full_name,
-                    )
-                    stats_collector.add(
-                        GitCommitStat(
-                            repo_id=db_repo.id,
-                            commit_hash=sha,
-                            file_path=AGGREGATE_STATS_MARKER,
-                            additions=getattr(stats, "additions", 0),
-                            deletions=getattr(stats, "deletions", 0),
-                            old_file_mode="unknown",
-                            new_file_mode="unknown",
-                        )
-                    )
-                    await stats_collector.maybe_flush()
-                except Exception as e:
-                    logging.debug(
-                        f"Failed commit stat fetch for {project_full_name}@{sha}: {e}"
-                    )
+        # CHAOS-2814/CS13: fetch commits + detailed stats via the canonical,
+        # instrumented GitLabCodeClient helpers (``_fetch_gitlab_commits_sync``
+        # / ``_fetch_gitlab_commit_stats_sync``) instead of the frozen
+        # python-gitlab ``project.commits.list()`` + the un-instrumented
+        # ``connector.get_commit_stats_by_project()``. Dispatched via
+        # ``loop.run_in_executor`` (mirrors every other GitLab sync helper,
+        # e.g. ``_sync_gitlab_commit_stats``) since the sync helpers bridge
+        # to the async client with their own ``asyncio.run()`` and cannot be
+        # awaited directly from this already-running event loop.
+        loop = asyncio.get_running_loop()
+        commit_hashes, _ = await loop.run_in_executor(
+            None,
+            _fetch_gitlab_commits_sync,
+            connector,
+            project_full_name,
+            max_commits,
+            db_repo.id,
+            None,
+            None,
+            usage_sink,
+        )
+        stats_limit = resolve_commit_stats_limit(len(commit_hashes), max_commits, None)
+        stats_objects = await loop.run_in_executor(
+            None,
+            _fetch_gitlab_commit_stats_sync,
+            connector,
+            project_full_name,
+            commit_hashes,
+            db_repo.id,
+            stats_limit,
+            None,
+            usage_sink,
+        )
+        if stats_objects:
+            await ingestion_sink.insert_git_commit_stats(stats_objects)
 
     if needs_blame and file_paths:
         # Bound the blame crawl: one REST call per file, so cap the number of
@@ -1513,13 +1498,15 @@ async def _backfill_gitlab_missing_data(
 
 async def _sync_gitlab_commits(
     *,
-    gl_project: Any,
+    connector: Any,
+    project_id: int,
     db_repo: Repo,
     ingestion_sink: IngestionSink,
     loop: asyncio.AbstractEventLoop,
     max_commits: int | None,
     since: datetime | None,
     until: datetime | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> tuple[list[str], int]:
     if max_commits is None:
         logging.info("Fetching all commits from GitLab...")
@@ -1528,11 +1515,13 @@ async def _sync_gitlab_commits(
     commit_hashes, commit_objects = await loop.run_in_executor(
         None,
         _fetch_gitlab_commits_sync,
-        gl_project,
+        connector,
+        project_id,
         max_commits,
         db_repo.id,
         since,
         until,
+        usage_sink,
     )
     if commit_objects:
         await ingestion_sink.insert_git_commit_data(commit_objects)
@@ -1542,7 +1531,8 @@ async def _sync_gitlab_commits(
 
 async def _sync_gitlab_commit_stats(
     *,
-    gl_project: Any,
+    connector: Any,
+    project_id: int,
     db_repo: Repo,
     ingestion_sink: IngestionSink,
     loop: asyncio.AbstractEventLoop,
@@ -1550,26 +1540,32 @@ async def _sync_gitlab_commit_stats(
     since: datetime | None,
     until: datetime | None = None,
     commit_hashes: list[str] | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> int:
     if commit_hashes is None:
         commit_hashes, _ = await loop.run_in_executor(
             None,
             _fetch_gitlab_commits_sync,
-            gl_project,
+            connector,
+            project_id,
             max_commits,
             db_repo.id,
             since,
             until,
+            usage_sink,
         )
     logging.info("Fetching commit stats from GitLab...")
     stats_limit = resolve_commit_stats_limit(len(commit_hashes), max_commits, since)
     stats_objects = await loop.run_in_executor(
         None,
         _fetch_gitlab_commit_stats_sync,
-        gl_project,
+        connector,
+        project_id,
         commit_hashes,
         db_repo.id,
         stats_limit,
+        None,
+        usage_sink,
     )
     if stats_objects:
         await ingestion_sink.insert_git_commit_stats(stats_objects)
@@ -1937,11 +1933,9 @@ async def process_gitlab_project(
     Process a GitLab project using the GitLab connector.
 
     ``usage_sink`` (CHAOS-2803/CS2) mirrors ``process_github_repo``'s
-    adapter-owned drain sink for symmetry with ``dataset_adapters.py``. No
-    instrumented client is constructed by this function yet -- GitLab
-    code-dataset fetch stays on the frozen connector until CHAOS-2773 Wave B
-    migrates it -- so it is currently unused and accepted only so the
-    caller-side contract is uniform across providers.
+    adapter-owned drain sink for symmetry with ``dataset_adapters.py``. GitLab
+    code-client helpers drain their per-request observations into this sink on
+    both success and failure; legacy connector-only paths leave it untouched.
     """
     if not CONNECTORS_AVAILABLE:
         raise RuntimeError(
@@ -2032,18 +2026,21 @@ async def process_gitlab_project(
         commit_hashes: list[str] | None = None
         if run_commits:
             commit_hashes, _ = await _sync_gitlab_commits(
-                gl_project=gl_project,
+                connector=connector,
+                project_id=project_id,
                 db_repo=db_repo,
                 ingestion_sink=ingestion_sink,
                 loop=loop,
                 max_commits=max_commits,
                 since=since,
                 until=until,
+                usage_sink=usage_sink,
             )
 
         if run_commit_stats:
             await _sync_gitlab_commit_stats(
-                gl_project=gl_project,
+                connector=connector,
+                project_id=project_id,
                 db_repo=db_repo,
                 ingestion_sink=ingestion_sink,
                 loop=loop,
@@ -2051,6 +2048,7 @@ async def process_gitlab_project(
                 since=since,
                 until=until,
                 commit_hashes=commit_hashes,
+                usage_sink=usage_sink,
             )
 
         if sync_prs:
@@ -2339,17 +2337,16 @@ async def process_gitlab_projects_batch(
             else:
                 commit_limit = max_commits_per_project or 100
             try:
-                if gl_project is None:
-                    gl_project = await loop.run_in_executor(
-                        None, connector.gitlab.projects.get, project_info.id
-                    )
                 commit_hashes, commit_objects = await loop.run_in_executor(
                     None,
                     _fetch_gitlab_commits_sync,
-                    gl_project,
+                    connector,
+                    project_info.id,
                     commit_limit,
                     db_repo.id,
                     since,
+                    None,
+                    usage_sink,
                 )
                 if commit_objects:
                     await ingestion_sink.insert_git_commit_data(commit_objects)
@@ -2357,14 +2354,22 @@ async def process_gitlab_projects_batch(
                 stats_objects = await loop.run_in_executor(
                     None,
                     _fetch_gitlab_commit_stats_sync,
-                    gl_project,
+                    connector,
+                    project_info.id,
                     commit_hashes,
                     db_repo.id,
                     50 if commit_limit is None else min(commit_limit, 50),
+                    None,
+                    usage_sink,
                 )
                 if stats_objects:
                     await ingestion_sink.insert_git_commit_stats(stats_objects)
             except Exception as e:
+                if _is_rate_limit_exception(e):
+                    # CHAOS-2814/CS13: an exhausted rate limit must propagate so
+                    # the batch/job is marked failed and retried, not swallowed
+                    # as a per-project warning.
+                    raise
                 logging.warning(
                     "Failed to fetch commits for GitLab project %s: %s",
                     project_info.full_name,
@@ -2635,7 +2640,23 @@ async def process_gitlab_projects_batch(
                     ),
                 )
 
-            await results_queue.join()
+            # Wait for the queue to drain, but bail out if the consumer dies
+            # first: store_result may propagate a RateLimitException (CHAOS-2814/
+            # CS13), leaving un-task_done()'d items so results_queue.join()
+            # would hang forever. FIRST_COMPLETED lets us detect that and
+            # re-raise instead -- mirrors process_github_repos_batch.
+            join_task = asyncio.create_task(results_queue.join())
+            done, _pending = await asyncio.wait(
+                {join_task, consumer_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if consumer_task in done:
+                join_task.cancel()
+                try:
+                    await join_task
+                except asyncio.CancelledError:
+                    # Expected: join_task was cancelled after consumer_task ended first.
+                    pass
+                await consumer_task  # re-raises the consumer's exception
             await results_queue.put(_queue_sentinel)
             await consumer_task
         else:

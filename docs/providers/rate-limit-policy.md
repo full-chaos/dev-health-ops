@@ -880,10 +880,12 @@ proof-of-pipe that the plumbing actually reaches a `budget_comparison` row:
   strategy above), while `pr_social`'s GRAPHQL_COST marker is flipped to
   document it as now-instrumented.
 - **GitLab.** `process_gitlab_project` accepts the same `usage_sink`
-  parameter for a uniform cross-provider adapter contract, but no GitLab code
-  client drains into it yet — GitLab code-dataset fetch stays entirely on the
-  frozen connector until CHAOS-2773 Wave B. The sink is inert (always empty)
-  for GitLab today; this is expected, not a bug.
+  parameter for a uniform cross-provider adapter contract. Migrated
+  GitLabCodeClient-backed families drain into it on both success and failure:
+  `security` (CS10), `pipelines`/`deployments` (CS11), `tests` (CS12), and
+  commits + aggregate commit stats under the existing `project` family (CS13).
+  Frozen connector-only paths still leave the sink untouched until their own
+  migration changeset lands.
 
 ## Per-provider policy
 
@@ -1190,10 +1192,12 @@ paper over:
   `pipelines`+`deployments`
   ([CHAOS-2812](https://linear.app/fullchaos/issue/CHAOS-2812), CS11), and
   `tests` (+CI adapter usage draining;
-  [CHAOS-2813](https://linear.app/fullchaos/issue/CHAOS-2813), CS12)
+  [CHAOS-2813](https://linear.app/fullchaos/issue/CHAOS-2813), CS12), and
+  commits + aggregate commit stats under the `project` family
+  ([CHAOS-2814](https://linear.app/fullchaos/issue/CHAOS-2814), CS13)
   code-dataset families are migrated onto the canonical, instrumented
   `providers/gitlab/code_client.py::GitLabCodeClient`. GitLab's remaining
-  frozen code-dataset methods (`git`/`commit_stats`/`files`/`blame`/
+  frozen code-dataset methods (`files`/`blame`/
   `merge_requests` listing + repo-metadata/batch orchestration) stay
   unmigrated pending their own CHAOS-2773 changesets through CS17.
 

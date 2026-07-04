@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 
 from dev_health_ops.providers.gitlab.budget import (
+    GITLAB_USAGE_RESOLVER,
     GITLAB_USAGE_ROUTE_FAMILIES,
     GitLabBudgetEstimator,
 )
@@ -95,6 +96,11 @@ def test_gitlab_budget_has_code_client_family_prefix_markers() -> None:
 
     assert families["pipelines"].operation_markers == ("pipelines:",)
     assert families["deployments"].operation_markers == ("deployments:",)
+    assert families["security"].operation_markers == ("security:",)
+    assert families["tests"].operation_markers == ("tests:",)
+    assert GITLAB_USAGE_RESOLVER.resolve(
+        transport="rest", operation="project:GET /projects/{id}/repository/commits"
+    ) == ("project", BudgetDimension.REST_CORE)
 
 
 def test_gitlab_budget_route_family_limits_override_dimension_defaults() -> None:

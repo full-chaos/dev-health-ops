@@ -28,11 +28,55 @@ from dev_health_ops.processors.github import (
 )
 
 
+class _FakeCodeClient:
+    """Stand-in for ``GitHubCodeClient`` (CHAOS-2773 CS7): the processor now
+    fetches files/blame through this client's async ``get_file_contents``/
+    ``get_file_blame`` instead of the frozen connector's sync methods, so
+    tests double the CLIENT, never ``connector.get_file_contents``/
+    ``connector.get_file_blame`` (which the processor no longer calls)."""
+
+    def __init__(self, *, contents=None, blame=None, side_effect=None):
+        self.contents = contents if contents is not None else {}
+        self.blame = blame
+        self.side_effect = side_effect
+        self.file_content_calls: list[tuple[str, str, list[str], str]] = []
+        self.file_blame_calls: list[tuple[str, str, str, str]] = []
+        self.drain_usage_observations = Mock(return_value=[])
+        self.close = AsyncMock()
+
+    async def get_file_contents(
+        self,
+        owner: str,
+        repo: str,
+        paths: list[str],
+        *,
+        ref: str = "HEAD",
+        batch_size: int = 50,
+    ) -> dict[str, str]:
+        del batch_size
+        self.file_content_calls.append((owner, repo, paths, ref))
+        if self.side_effect is not None:
+            raise self.side_effect
+        return self.contents
+
+    async def get_file_blame(
+        self,
+        owner: str,
+        repo: str,
+        path: str,
+        *,
+        ref: str = "HEAD",
+    ):
+        self.file_blame_calls.append((owner, repo, path, ref))
+        if self.side_effect is not None:
+            raise self.side_effect
+        return self.blame
+
+
 class TestFetchScannableContents:
     @pytest.mark.asyncio
     async def test_filters_by_scanner_globs_and_size(self):
-        connector = Mock()
-        connector.get_file_contents = Mock(return_value={"src/app.py": "x = 1\n"})
+        client = _FakeCodeClient(contents={"src/app.py": "x = 1\n"})
 
         file_paths = [
             "src/app.py",
@@ -50,36 +94,48 @@ class TestFetchScannableContents:
         }
 
         result = await _fetch_scannable_contents(
-            connector, "octo", "repo", "main", file_paths, blob_sizes, "octo/repo"
+            client, "octo", "repo", "main", file_paths, blob_sizes, "octo/repo"
         )
 
         assert result == {"src/app.py": "x = 1\n"}
-        connector.get_file_contents.assert_called_once_with(
-            "octo", "repo", ["src/app.py"], ref="main"
-        )
+        assert client.file_content_calls == [("octo", "repo", ["src/app.py"], "main")]
 
     @pytest.mark.asyncio
     async def test_no_scannable_paths_skips_api(self):
-        connector = Mock()
-        connector.get_file_contents = Mock()
+        client = _FakeCodeClient()
 
         result = await _fetch_scannable_contents(
-            connector, "octo", "repo", "main", ["README.md"], {}, "octo/repo"
+            client, "octo", "repo", "main", ["README.md"], {}, "octo/repo"
         )
 
         assert result == {}
-        connector.get_file_contents.assert_not_called()
+        assert client.file_content_calls == []
 
     @pytest.mark.asyncio
     async def test_api_error_degrades_to_empty(self):
-        connector = Mock()
-        connector.get_file_contents = Mock(side_effect=RuntimeError("boom"))
+        client = _FakeCodeClient(side_effect=RuntimeError("boom"))
 
         result = await _fetch_scannable_contents(
-            connector, "octo", "repo", "main", ["src/app.py"], {}, "octo/repo"
+            client, "octo", "repo", "main", ["src/app.py"], {}, "octo/repo"
         )
 
         assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_propagates_without_degrading(self):
+        """CHAOS-2773 CS7: unlike a generic fetch error, a rate limit must NOT
+        degrade to empty -- it propagates so the caller's deferral semantics
+        apply, exactly like the commit-stats fetch path."""
+        client = _FakeCodeClient(
+            side_effect=RateLimitException("limited", retry_after_seconds=7.0)
+        )
+
+        with pytest.raises(RateLimitException) as exc_info:
+            await _fetch_scannable_contents(
+                client, "octo", "repo", "main", ["src/app.py"], {}, "octo/repo"
+            )
+
+        assert exc_info.value.retry_after_seconds == 7.0
 
 
 class TestBackfillFileRecordsContents:
@@ -180,8 +236,9 @@ class _FakeTreeEntry:
 
 class TestPathsOnlyUpgrade:
     @pytest.mark.asyncio
-    async def test_backfill_refetches_contents_for_paths_only_repos(self):
+    async def test_backfill_refetches_contents_for_paths_only_repos(self, monkeypatch):
         """Repos with paths-only git_files rows (pre-content-sync) get upgraded."""
+        from dev_health_ops.processors import github
         from dev_health_ops.processors.github import _backfill_github_missing_data
 
         store = Mock()
@@ -205,7 +262,11 @@ class TestPathsOnlyUpgrade:
         )
         connector = Mock()
         connector.github.get_repo.return_value = gh_repo
-        connector.get_file_contents = Mock(return_value={"src/app.py": "x = 1\n"})
+
+        code_client = _FakeCodeClient(contents={"src/app.py": "x = 1\n"})
+        monkeypatch.setattr(
+            github, "_github_code_client_from_connector", lambda _connector: code_client
+        )
 
         db_repo = Mock()
         db_repo.id = uuid.uuid4()
@@ -224,6 +285,11 @@ class TestPathsOnlyUpgrade:
 
         by_path = {f.path: f.contents for f in written}
         assert by_path == {"src/app.py": "x = 1\n", "README.md": None}
+        assert code_client.file_content_calls == [
+            ("octo", "repo", ["src/app.py"], "main")
+        ]
+        code_client.close.assert_awaited_once()
+        connector.get_file_contents.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_backfill_skips_when_contents_already_present(self):
@@ -515,18 +581,24 @@ class TestCommitStatsBackfill:
 
         connector = Mock()
         connector.github.get_repo.return_value = gh_repo
-        connector.get_file_blame.return_value = FileBlame(
-            file_path="src/app.py",
-            ranges=[
-                BlameRange(
-                    starting_line=1,
-                    ending_line=1,
-                    commit_sha="sha-0",
-                    author="A",
-                    author_email="a@example.com",
-                    age_seconds=0,
-                )
-            ],
+
+        code_client = _FakeCodeClient(
+            blame=FileBlame(
+                file_path="src/app.py",
+                ranges=[
+                    BlameRange(
+                        starting_line=1,
+                        ending_line=1,
+                        commit_sha="sha-0",
+                        author="A",
+                        author_email="a@example.com",
+                        age_seconds=0,
+                    )
+                ],
+            )
+        )
+        monkeypatch.setattr(
+            github, "_github_code_client_from_connector", lambda _connector: code_client
         )
 
         db_repo = Mock()
@@ -548,12 +620,9 @@ class TestCommitStatsBackfill:
 
         sink.insert_git_commit_stats.assert_not_called()
         assert stats_calls == []
-        connector.get_file_blame.assert_called_once_with(
-            owner="octo",
-            repo="repo",
-            path="src/app.py",
-            ref="main",
-        )
+        assert code_client.file_blame_calls == [("octo", "repo", "src/app.py", "main")]
+        code_client.close.assert_awaited_once()
+        connector.get_file_blame.assert_not_called()
         assert [row.path for row in blame_rows] == ["src/app.py"]
 
     @pytest.mark.asyncio

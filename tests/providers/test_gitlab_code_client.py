@@ -24,6 +24,7 @@ import httpx
 import pytest
 
 from dev_health_ops.exceptions import (
+    APIException,
     AuthenticationException,
     NotFoundException,
     RateLimitException,
@@ -1174,3 +1175,243 @@ class TestLifecycle:
         )
         async with _client(transport) as client:
             await client.get_security_alerts(42)
+
+
+# ---------------------------------------------------------------------------
+# ``files`` dataset (CHAOS-2815/CS14): batched GraphQL blob-content fetch --
+# parity with the legacy ``GitLabConnector.get_file_contents`` /
+# ``_graphql_blobs`` (``connectors/gitlab.py``, FROZEN).
+# ---------------------------------------------------------------------------
+
+_GRAPHQL_PATH = "/api/graphql"
+
+
+def _graphql_response(data: dict) -> httpx.Response:
+    return httpx.Response(200, json={"data": data}, headers={})
+
+
+class TestFileContentsParity:
+    @pytest.mark.asyncio
+    async def test_size_pass_then_text_pass_filters_oversized(self) -> None:
+        responses = [
+            _graphql_response(
+                {
+                    "project": {
+                        "repository": {
+                            "blobs": {
+                                "nodes": [
+                                    {"path": "src/a.py", "rawSize": 7},
+                                    {"path": "big.py", "rawSize": 2_000_000},
+                                ]
+                            }
+                        }
+                    }
+                }
+            ),
+            _graphql_response(
+                {
+                    "project": {
+                        "repository": {
+                            "blobs": {
+                                "nodes": [
+                                    {"path": "src/a.py", "rawTextBlob": "x = 1\n"},
+                                ]
+                            }
+                        }
+                    }
+                }
+            ),
+        ]
+        transport, calls = _router_transport({_GRAPHQL_PATH: responses})
+        client = _client(transport, private_token="secret-tok")
+
+        result = await client.get_file_contents(
+            "group/project", ["src/a.py", "big.py"], ref="main"
+        )
+
+        assert result == {"src/a.py": "x = 1\n"}
+        assert calls[_GRAPHQL_PATH] == 2
+        assert (
+            transport.captured_headers[_GRAPHQL_PATH]["PRIVATE-TOKEN"]  # type: ignore[attr-defined]
+            == "secret-tok"
+        )
+        observations = client.drain_usage_observations()
+        assert observations[0]["route_family"] == "project"
+        assert observations[0]["request_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_no_size_pass_when_max_bytes_disabled(self) -> None:
+        transport, calls = _router_transport(
+            {
+                _GRAPHQL_PATH: _graphql_response(
+                    {
+                        "project": {
+                            "repository": {
+                                "blobs": {
+                                    "nodes": [{"path": "a.py", "rawTextBlob": "a"}]
+                                }
+                            }
+                        }
+                    }
+                )
+            }
+        )
+        client = _client(transport)
+
+        result = await client.get_file_contents(
+            "group/project", ["a.py"], ref="main", max_bytes=None
+        )
+
+        assert result == {"a.py": "a"}
+        assert calls[_GRAPHQL_PATH] == 1
+
+    @pytest.mark.asyncio
+    async def test_empty_paths_makes_no_request(self) -> None:
+        transport, calls = _router_transport({})
+        client = _client(transport)
+
+        result = await client.get_file_contents("group/project", [], ref="main")
+
+        assert result == {}
+        assert calls == {}
+
+    @pytest.mark.asyncio
+    async def test_graphql_errors_degrade_to_empty_for_that_chunk(self) -> None:
+        """A GraphQL ``errors`` payload on the text pass is per-chunk
+        resilience, not a hard failure -- mirrors the legacy connector's own
+        ``except Exception`` degrade-and-continue contract."""
+        transport, _ = _router_transport(
+            {
+                _GRAPHQL_PATH: httpx.Response(
+                    200, json={"errors": [{"message": "boom"}]}, headers={}
+                )
+            }
+        )
+        client = _client(transport, max_retries=1)
+
+        result = await client.get_file_contents(
+            "group/project", ["a.py"], ref="main", max_bytes=None
+        )
+
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_graphql_blobs_raises_api_exception_on_errors(self) -> None:
+        """The private ``_graphql_blobs`` helper itself DOES raise on a
+        GraphQL ``errors`` payload -- ``get_file_contents`` is the layer that
+        chooses to degrade per-chunk."""
+        transport, _ = _router_transport(
+            {
+                _GRAPHQL_PATH: httpx.Response(
+                    200, json={"errors": [{"message": "boom"}]}, headers={}
+                )
+            }
+        )
+        client = _client(transport, max_retries=1)
+
+        with pytest.raises(APIException):
+            await client._graphql_blobs(
+                "group/project", "main", ["a.py"], "path rawTextBlob"
+            )
+
+    @pytest.mark.asyncio
+    async def test_429_raises_rate_limit_exception(self) -> None:
+        transport, calls = _router_transport(
+            {_GRAPHQL_PATH: _empty_response(429, {"Retry-After": "0"})}
+        )
+        client = _client(transport, max_retries=2)
+
+        with pytest.raises(RateLimitException) as excinfo:
+            await client.get_file_contents(
+                "group/project", ["a.py"], ref="main", max_bytes=None
+            )
+
+        assert calls[_GRAPHQL_PATH] == 2
+        assert excinfo.value.signal is not None
+        assert excinfo.value.signal.dimension is BudgetDimension.REST_CORE
+
+
+# ---------------------------------------------------------------------------
+# ``blame`` dataset (CHAOS-2815/CS14): parity with the legacy
+# ``GitLabRESTClient.get_file_blame`` (``connectors/utils/rest.py``, FROZEN).
+# ---------------------------------------------------------------------------
+
+
+class TestFileBlameParity:
+    @pytest.mark.asyncio
+    async def test_returns_normalized_blame_ranges_and_usage_family(self) -> None:
+        blame_path = "/api/v4/projects/42/repository/files/app.py/blame"
+        transport, calls = _router_transport(
+            {
+                blame_path: _json_response(
+                    200,
+                    [
+                        {
+                            "commit": {
+                                "id": "sha1",
+                                "author_name": "Ada",
+                                "author_email": "ada@example.com",
+                            },
+                            "lines": ["x = 1", "y = 2"],
+                        }
+                    ],
+                )
+            }
+        )
+        client = _client(transport)
+
+        blame = await client.get_file_blame(42, "app.py", ref="main")
+
+        assert blame.file_path == "app.py"
+        assert [
+            (rng.starting_line, rng.ending_line, rng.commit_sha, rng.author)
+            for rng in blame.ranges
+        ] == [(1, 2, "sha1", "Ada")]
+        assert blame.ranges[0].author_email == "ada@example.com"
+        assert calls[blame_path] == 1
+        query = dict(transport.captured_urls[blame_path].params)  # type: ignore[attr-defined]
+        assert query == {"ref": "main"}
+        observations = client.drain_usage_observations()
+        assert observations[0]["route_family"] == "project"
+        assert observations[0]["request_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_404_propagates(self) -> None:
+        blame_path = "/api/v4/projects/42/repository/files/missing.py/blame"
+        transport, _ = _router_transport({blame_path: _empty_response(404)})
+        client = _client(transport)
+
+        with pytest.raises(NotFoundException):
+            await client.get_file_blame(42, "missing.py", ref="main")
+
+    @pytest.mark.asyncio
+    async def test_429_raises_rate_limit_exception(self) -> None:
+        blame_path = "/api/v4/projects/42/repository/files/app.py/blame"
+        transport, calls = _router_transport(
+            {blame_path: _empty_response(429, {"Retry-After": "0"})}
+        )
+        client = _client(transport, max_retries=2)
+
+        with pytest.raises(RateLimitException):
+            await client.get_file_blame(42, "app.py", ref="main")
+
+        assert calls[blame_path] == 2
+
+    @pytest.mark.asyncio
+    async def test_encodes_file_path_containing_slash(self) -> None:
+        raw_file_path = "src/nested/app.py"
+        decoded_path = "/api/v4/projects/42/repository/files/src/nested/app.py/blame"
+        transport, calls = _router_transport({decoded_path: _json_response(200, [])})
+        client = _client(transport)
+
+        blame = await client.get_file_blame(42, raw_file_path, ref="HEAD")
+
+        assert blame.file_path == raw_file_path
+        assert blame.ranges == []
+        assert calls[decoded_path] == 1
+        raw_path = transport.captured_raw_paths[decoded_path]  # type: ignore[attr-defined]
+        expected_segment = quote(raw_file_path, safe="")
+        assert (
+            raw_path.split(b"?")[0]
+            == f"/api/v4/projects/42/repository/files/{expected_segment}/blame".encode()
+        )

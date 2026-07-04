@@ -1267,13 +1267,24 @@ async def _fetch_scannable_contents(
     project_full_name: str,
     ref: str,
     file_paths: list[str],
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> dict[str, str]:
     """Fetch text for scanner-eligible files via batched GraphQL blob queries.
 
-    Only paths matching the complexity scanner's include/exclude globs are
-    fetched, keeping API volume proportional to what the metrics jobs can
-    actually use. Errors degrade to a paths-only backfill (contents stay
-    NULL) rather than failing the sync.
+    CHAOS-2815/CS14: fetches via the canonical, instrumented
+    ``providers.gitlab.code_client.GitLabCodeClient`` (built on the shared
+    ``InstrumentedRESTCore``) instead of the frozen
+    ``GitLabConnector.get_file_contents`` (``connectors/gitlab.py``, riding
+    un-instrumented ``requests`` GraphQL calls). Only paths matching the
+    complexity scanner's include/exclude globs are fetched, keeping API
+    volume proportional to what the metrics jobs can actually use.
+
+    ``usage_sink`` (CHAOS-2803/CS2) receives the client's drained
+    per-request usage observations in a ``finally:`` on both the success and
+    failure path, mirroring every other GitLabCodeClient helper in this
+    file. A ``RateLimitException`` propagates (an exhausted rate limit must
+    fail the sync, not silently truncate file coverage); any other fetch
+    failure degrades to a paths-only backfill (contents stay NULL).
     """
     scanner = ComplexityScanner(config_path=DEFAULT_COMPLEXITY_CONFIG_PATH)
     scannable: list[str] = []
@@ -1292,22 +1303,29 @@ async def _fetch_scannable_contents(
     if not scannable:
         return {}
 
-    loop = asyncio.get_running_loop()
+    drained_observations: list[dict[str, Any]] = []
     try:
-        return await loop.run_in_executor(
-            None,
-            lambda: connector.get_file_contents(
-                project_full_name,
-                scannable,
-                ref=ref,
-                max_bytes=CONTENT_FETCH_MAX_BYTES,
-            ),
-        )
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                return await client.get_file_contents(
+                    project_full_name,
+                    scannable,
+                    ref=ref,
+                    max_bytes=CONTENT_FETCH_MAX_BYTES,
+                )
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
     except Exception as e:
+        if _is_rate_limit_exception(e):
+            raise
         logging.warning(
             "Failed to fetch file contents for %s: %s", project_full_name, e
         )
         return {}
+    finally:
+        _drain_gitlab_code_usage(
+            "_fetch_scannable_contents", drained_observations, usage_sink
+        )
 
 
 async def _backfill_gitlab_missing_data(
@@ -1390,6 +1408,7 @@ async def _backfill_gitlab_missing_data(
                 project_full_name,
                 default_branch,
                 file_paths,
+                usage_sink=usage_sink,
             )
             await backfill_file_records(
                 ingestion_sink,
@@ -1458,42 +1477,60 @@ async def _backfill_gitlab_missing_data(
             project_full_name,
             BLAME_BACKFILL_MAX_FILES,
         )
-        async with AsyncBatchCollector(
-            ingestion_sink.insert_blame_data
-        ) as blame_collector:
-            for path in blame_paths:
+        # CHAOS-2815/CS14: fetch blame via the canonical, instrumented
+        # GitLabCodeClient (built on the shared InstrumentedRESTCore) instead
+        # of the frozen ``connector.rest_client.get_file_blame`` (un-
+        # instrumented ``connectors/utils/rest.py``). One client is built for
+        # the whole capped crawl and drained once, mirroring
+        # ``_fetch_gitlab_commit_stats_sync``'s per-commit-loop shape. A
+        # ``RateLimitException`` on any file propagates -- an exhausted rate
+        # limit must fail the sync, not silently strand the remaining files
+        # in this batch as per-file warnings -- while any other per-file
+        # failure is logged and the crawl continues (bounded, best-effort).
+        drained_observations: list[dict[str, Any]] = []
+        try:
+            async with _gitlab_code_client_from_connector(connector) as client:
                 try:
-                    blame_items = connector.rest_client.get_file_blame(
-                        project.id,
-                        path,
-                        default_branch,
-                    )
-                except Exception as e:
-                    logging.debug(
-                        f"Failed blame fetch for {project_full_name}:{path}: {e}"
-                    )
-                    continue
+                    async with AsyncBatchCollector(
+                        ingestion_sink.insert_blame_data
+                    ) as blame_collector:
+                        for path in blame_paths:
+                            try:
+                                blame_items = await client.get_file_blame(
+                                    project.id, path, ref=default_branch
+                                )
+                            except Exception as e:
+                                if _is_rate_limit_exception(e):
+                                    raise
+                                logging.debug(
+                                    f"Failed blame fetch for {project_full_name}:{path}: {e}"
+                                )
+                                continue
 
-                line_no = 1
-                for item in blame_items or []:
-                    commit = item.get("commit", {})
-                    for line in item.get("lines", []) or []:
-                        blame_collector.add(
-                            GitBlame(
-                                repo_id=db_repo.id,
-                                path=path,
-                                line_no=line_no,
-                                author_email=commit.get("author_email"),
-                                author_name=commit.get("author_name"),
-                                author_when=None,
-                                commit_hash=commit.get("id"),
-                                line=line.rstrip("\n")
-                                if isinstance(line, str)
-                                else None,
-                            )
-                        )
-                        line_no += 1
-                        await blame_collector.maybe_flush()
+                            for rng in blame_items.ranges:
+                                for line_no in range(
+                                    rng.starting_line,
+                                    rng.ending_line + 1,
+                                ):
+                                    blame_collector.add(
+                                        GitBlame(
+                                            repo_id=db_repo.id,
+                                            path=path,
+                                            line_no=line_no,
+                                            author_email=rng.author_email,
+                                            author_name=rng.author,
+                                            author_when=None,
+                                            commit_hash=rng.commit_sha,
+                                            line=None,
+                                        )
+                                    )
+                                    await blame_collector.maybe_flush()
+                finally:
+                    drained_observations.extend(client.drain_usage_observations())
+        finally:
+            _drain_gitlab_code_usage(
+                "_backfill_gitlab_missing_data blame", drained_observations, usage_sink
+            )
 
 
 async def _sync_gitlab_commits(
@@ -2019,6 +2056,7 @@ async def process_gitlab_project(
                 default_branch=db_repo.settings.get("default_branch", "main"),
                 max_commits=max_commits,
                 blame_only=True,
+                usage_sink=usage_sink,
             )
             logging.info("Completed blame-only sync for GitLab project: %s", project_id)
             return
@@ -2196,8 +2234,15 @@ async def process_gitlab_project(
                     include_files=run_files,
                     include_blame=run_blame,
                     include_commit_stats=False,
+                    usage_sink=usage_sink,
                 )
             except Exception as e:
+                if _is_rate_limit_exception(e):
+                    # CHAOS-2815/CS14: an exhausted rate limit must propagate
+                    # so the batch/job is marked failed and retried, not
+                    # swallowed as a per-project warning (mirrors CS13's
+                    # commit-stats precedent).
+                    raise
                 logging.warning(
                     "Backfill failed for GitLab project %s: %s", full_name, e
                 )
@@ -2557,6 +2602,7 @@ async def process_gitlab_projects_batch(
                     max_commits=max_commits_per_project,
                     include_blame=True,
                     include_commit_stats=False,
+                    usage_sink=usage_sink,
                 )
             except Exception as e:
                 logging.debug(

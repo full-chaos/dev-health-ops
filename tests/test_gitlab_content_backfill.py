@@ -20,6 +20,7 @@ import pytest
 # is collected in isolation.
 import dev_health_ops.connectors  # noqa: F401
 from dev_health_ops.connectors import GitLabConnector
+from dev_health_ops.connectors.models import BlameRange, FileBlame
 from dev_health_ops.processors.gitlab import (
     _backfill_gitlab_missing_data,
     _fetch_scannable_contents,
@@ -198,28 +199,93 @@ class TestGetFileContents:
         post.assert_not_called()
 
 
+class _FakeGitLabCodeClientForFiles:
+    """Minimal instrumented GitLabCodeClient stand-in for the file-content /
+    blame backfill branches (CHAOS-2815/CS14). The real backfill fetches
+    through ``GitLabCodeClient.get_file_contents`` /
+    ``GitLabCodeClient.get_file_blame``, never the frozen
+    ``connector.get_file_contents`` / ``connector.rest_client.get_file_blame``.
+    """
+
+    def __init__(
+        self,
+        *,
+        contents=None,
+        contents_error=None,
+        blame_by_path=None,
+        blame_error_paths=None,
+        observations=None,
+    ):
+        self.contents = contents or {}
+        self.contents_error = contents_error
+        self.blame_by_path = blame_by_path or {}
+        self.blame_error_paths = blame_error_paths or {}
+        self.observations = observations or []
+        self.get_file_contents_calls: list[Any] = []
+        self.get_file_blame_calls: list[Any] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def get_file_contents(self, project_full_path, paths, *, ref, max_bytes=None):
+        self.get_file_contents_calls.append(
+            (project_full_path, tuple(paths), ref, max_bytes)
+        )
+        if self.contents_error is not None:
+            raise self.contents_error
+        return self.contents
+
+    async def get_file_blame(self, project_id, file_path, *, ref):
+        self.get_file_blame_calls.append((project_id, file_path, ref))
+        if file_path in self.blame_error_paths:
+            raise self.blame_error_paths[file_path]
+        return self.blame_by_path.get(file_path, FileBlame(file_path=file_path))
+
+    def drain_usage_observations(self):
+        observations = list(self.observations)
+        self.observations.clear()
+        return observations
+
+
 class TestFetchScannableContents:
     @pytest.mark.asyncio
-    async def test_filters_by_scanner_globs(self):
+    async def test_filters_by_scanner_globs(self, monkeypatch):
+        fake_client = _FakeGitLabCodeClientForFiles(
+            contents={"src/app.py": "x = 1\n"},
+            observations=[{"route_family": "project"}],
+        )
+        monkeypatch.setattr(
+            "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+            lambda connector: fake_client,
+        )
         connector = Mock()
-        connector.get_file_contents = Mock(return_value={"src/app.py": "x = 1\n"})
+        usage_sink: list[dict[str, Any]] = []
 
         result = await _fetch_scannable_contents(
             connector,
             "group/proj",
             "main",
             ["src/app.py", "README.md", "pkg/__init__.py"],
+            usage_sink=usage_sink,
         )
 
         assert result == {"src/app.py": "x = 1\n"}
-        connector.get_file_contents.assert_called_once_with(
-            "group/proj", ["src/app.py"], ref="main", max_bytes=1_000_000
-        )
+        assert fake_client.get_file_contents_calls == [
+            ("group/proj", ("src/app.py",), "main", 1_000_000)
+        ]
+        assert usage_sink == [{"route_family": "project"}]
 
     @pytest.mark.asyncio
-    async def test_api_error_degrades_to_empty(self):
+    async def test_api_error_degrades_to_empty(self, monkeypatch):
+        fake_client = _FakeGitLabCodeClientForFiles(contents_error=RuntimeError("boom"))
+        monkeypatch.setattr(
+            "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+            lambda connector: fake_client,
+        )
         connector = Mock()
-        connector.get_file_contents = Mock(side_effect=RuntimeError("boom"))
 
         result = await _fetch_scannable_contents(
             connector, "group/proj", "main", ["src/app.py"]
@@ -227,10 +293,28 @@ class TestFetchScannableContents:
 
         assert result == {}
 
+    @pytest.mark.asyncio
+    async def test_rate_limit_exception_propagates(self, monkeypatch):
+        from dev_health_ops.exceptions import RateLimitException
+
+        fake_client = _FakeGitLabCodeClientForFiles(
+            contents_error=RateLimitException("rate limited")
+        )
+        monkeypatch.setattr(
+            "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+            lambda connector: fake_client,
+        )
+        connector = Mock()
+
+        with pytest.raises(RateLimitException):
+            await _fetch_scannable_contents(
+                connector, "group/proj", "main", ["src/app.py"]
+            )
+
 
 class TestGitLabBackfillContents:
     @pytest.mark.asyncio
-    async def test_backfill_writes_contents_for_paths_only_repos(self):
+    async def test_backfill_writes_contents_for_paths_only_repos(self, monkeypatch):
         """Projects with paths-only git_files rows get upgraded."""
         store = Mock()
         store.has_any_git_files = AsyncMock(return_value=True)
@@ -249,7 +333,12 @@ class TestGitLabBackfillContents:
         project = Mock()
         connector = Mock()
         connector.gitlab.projects.get.return_value = project
-        connector.get_file_contents = Mock(return_value={"src/app.py": "x = 1\n"})
+
+        fake_client = _FakeGitLabCodeClientForFiles(contents={"src/app.py": "x = 1\n"})
+        monkeypatch.setattr(
+            "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+            lambda connector: fake_client,
+        )
 
         db_repo = Mock()
         db_repo.id = uuid.uuid4()
@@ -463,3 +552,212 @@ class TestGitLabBackfillCommitStats:
 
         client_factory.assert_not_called()
         sink.insert_git_commit_stats.assert_not_called()
+
+
+class TestGitLabBackfillBlame:
+    """CHAOS-2815/CS14: the blame backfill branch must fetch through the
+    canonical, instrumented ``GitLabCodeClient.get_file_blame`` -- never the
+    frozen, un-instrumented ``connector.rest_client.get_file_blame``.
+    """
+
+    @staticmethod
+    def _store(all_paths: set[str]) -> Mock:
+        store = Mock()
+        store.has_any_git_files = AsyncMock(return_value=True)
+        store.has_any_git_file_contents = AsyncMock(return_value=True)
+        store.has_any_git_commit_stats = AsyncMock(return_value=True)
+        store.has_any_git_blame = AsyncMock(return_value=False)
+        store.get_blamed_paths = AsyncMock(return_value=set())
+        store.has_unblamed_files = AsyncMock(return_value=bool(all_paths))
+        return store
+
+    @pytest.mark.asyncio
+    async def test_backfill_writes_blame_via_gitlab_code_client(self, monkeypatch):
+        store = self._store({"src/a.py", "src/b.py"})
+
+        written: list[Any] = []
+
+        async def insert(batch):
+            written.extend(batch)
+
+        sink = Mock()
+        sink.insert_blame_data = AsyncMock(side_effect=insert)
+
+        project = Mock()
+        project.id = 42
+        connector = Mock()
+        connector.gitlab.projects.get.return_value = project
+        # The legacy, frozen REST helper must never be invoked by the fixed
+        # blame backfill path.
+        connector.rest_client.get_file_blame = Mock(
+            side_effect=AssertionError(
+                "legacy connector.rest_client.get_file_blame must not be called"
+            )
+        )
+
+        fake_client = _FakeGitLabCodeClientForFiles(
+            blame_by_path={
+                "src/a.py": FileBlame(
+                    file_path="src/a.py",
+                    ranges=[BlameRange(1, 2, "sha1", "Ada", "ada@example.com", 0)],
+                ),
+                "src/b.py": FileBlame(
+                    file_path="src/b.py",
+                    ranges=[BlameRange(1, 1, "sha2", "Grace", "grace@example.com", 0)],
+                ),
+            },
+            observations=[{"route_family": "project"}],
+        )
+        monkeypatch.setattr(
+            "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+            lambda connector: fake_client,
+        )
+
+        db_repo = Mock()
+        db_repo.id = uuid.uuid4()
+        usage_sink: list[dict[str, Any]] = []
+
+        tree_items = [
+            {"type": "blob", "path": "src/a.py"},
+            {"type": "blob", "path": "src/b.py"},
+        ]
+        with patch(
+            "dev_health_ops.processors.gitlab._iter_gitlab_repo_tree",
+            return_value=tree_items,
+        ):
+            await _backfill_gitlab_missing_data(
+                store=store,
+                ingestion_sink=sink,
+                connector=connector,
+                db_repo=db_repo,
+                project_full_name="group/proj",
+                default_branch="main",
+                max_commits=None,
+                include_files=False,
+                include_commit_stats=False,
+                usage_sink=usage_sink,
+            )
+
+        assert {(pc[1]) for pc in fake_client.get_file_blame_calls} == {
+            "src/a.py",
+            "src/b.py",
+        }
+        assert connector.rest_client.get_file_blame.call_count == 0
+        by_path = {row.path: row for row in written}
+        assert by_path["src/a.py"].commit_hash == "sha1"
+        assert by_path["src/a.py"].author_name == "Ada"
+        assert by_path["src/b.py"].commit_hash == "sha2"
+        assert usage_sink == [{"route_family": "project"}]
+
+    @pytest.mark.asyncio
+    async def test_per_file_failure_is_skipped_but_crawl_continues(self, monkeypatch):
+        """A single file's fetch failure logs and continues -- bounded
+        per-file resilience is preserved after the GitLabCodeClient rewire."""
+        store = self._store({"src/a.py", "src/b.py"})
+
+        written: list[Any] = []
+
+        async def insert(batch):
+            written.extend(batch)
+
+        sink = Mock()
+        sink.insert_blame_data = AsyncMock(side_effect=insert)
+
+        project = Mock()
+        project.id = 42
+        connector = Mock()
+        connector.gitlab.projects.get.return_value = project
+
+        fake_client = _FakeGitLabCodeClientForFiles(
+            blame_by_path={
+                "src/b.py": FileBlame(
+                    file_path="src/b.py",
+                    ranges=[BlameRange(1, 1, "sha2", "Grace", "", 0)],
+                ),
+            },
+            blame_error_paths={"src/a.py": RuntimeError("boom")},
+        )
+        monkeypatch.setattr(
+            "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+            lambda connector: fake_client,
+        )
+
+        db_repo = Mock()
+        db_repo.id = uuid.uuid4()
+
+        tree_items = [
+            {"type": "blob", "path": "src/a.py"},
+            {"type": "blob", "path": "src/b.py"},
+        ]
+        with patch(
+            "dev_health_ops.processors.gitlab._iter_gitlab_repo_tree",
+            return_value=tree_items,
+        ):
+            await _backfill_gitlab_missing_data(
+                store=store,
+                ingestion_sink=sink,
+                connector=connector,
+                db_repo=db_repo,
+                project_full_name="group/proj",
+                default_branch="main",
+                max_commits=None,
+                include_files=False,
+                include_commit_stats=False,
+            )
+
+        assert {row.path for row in written} == {"src/b.py"}
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_exception_propagates_and_stops_crawl(self, monkeypatch):
+        """An exhausted rate limit on one file must propagate -- never be
+        swallowed as a per-file warning like other errors."""
+        from dev_health_ops.exceptions import RateLimitException
+
+        store = self._store({"src/a.py", "src/b.py"})
+
+        sink = Mock()
+        sink.insert_blame_data = AsyncMock()
+
+        project = Mock()
+        project.id = 42
+        connector = Mock()
+        connector.gitlab.projects.get.return_value = project
+
+        fake_client = _FakeGitLabCodeClientForFiles(
+            blame_error_paths={"src/a.py": RateLimitException("rate limited")},
+            observations=[{"route_family": "project"}],
+        )
+        monkeypatch.setattr(
+            "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+            lambda connector: fake_client,
+        )
+
+        db_repo = Mock()
+        db_repo.id = uuid.uuid4()
+        usage_sink: list[dict[str, Any]] = []
+
+        tree_items = [
+            {"type": "blob", "path": "src/a.py"},
+            {"type": "blob", "path": "src/b.py"},
+        ]
+        with patch(
+            "dev_health_ops.processors.gitlab._iter_gitlab_repo_tree",
+            return_value=tree_items,
+        ):
+            with pytest.raises(RateLimitException):
+                await _backfill_gitlab_missing_data(
+                    store=store,
+                    ingestion_sink=sink,
+                    connector=connector,
+                    db_repo=db_repo,
+                    project_full_name="group/proj",
+                    default_branch="main",
+                    max_commits=None,
+                    include_files=False,
+                    include_commit_stats=False,
+                    usage_sink=usage_sink,
+                )
+
+        # Partial observations gathered before the raise still reach the sink
+        # (CHAOS-2754/2803 partial-observations-on-exception contract).
+        assert usage_sink == [{"route_family": "project"}]

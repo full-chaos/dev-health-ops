@@ -83,6 +83,23 @@ def test_github_git_and_commit_stats_actuals_markers_are_live() -> None:
     assert markers[("commit_stats", BudgetDimension.CONTENTS_BLOB)] == ()
 
 
+def test_github_files_and_blame_contents_blob_actuals_markers_are_live() -> None:
+    """CHAOS-2808/CS7: files/blame GraphQL content+blame fetch (`GitHubCodeClient`,
+    `providers/github/graphql.py`) is the instrumented dimension -- unlike
+    `commit_stats` (where REST_CORE is live), `files`/`blame` traffic is 100%
+    GraphQL, so `contents_blob` carries the marker and `rest_core` (the still-
+    frozen tree-listing REST call) stays empty."""
+    markers = {
+        (family.route_family, family.dimension): family.operation_markers
+        for family in GITHUB_USAGE_ROUTE_FAMILIES
+    }
+
+    assert markers[("files", BudgetDimension.CONTENTS_BLOB)] == ("files:",)
+    assert markers[("files", BudgetDimension.REST_CORE)] == ()
+    assert markers[("blame", BudgetDimension.CONTENTS_BLOB)] == ("blame:",)
+    assert markers[("blame", BudgetDimension.REST_CORE)] == ()
+
+
 def test_github_budget_estimator_splits_pr_social_pressure() -> None:
     estimates = GitHubBudgetEstimator().estimate(_context(dataset_key="pr-comments"))
 

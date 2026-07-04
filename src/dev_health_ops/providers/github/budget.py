@@ -356,6 +356,18 @@ def _fallback_credential_scope(
 # directly. `commit_stats` CONTENTS_BLOB and deployments CONTENTS_BLOB remain
 # empty/deferred until a distinct blob/content path is migrated; markers are
 # populated only for live instrumented traffic.
+#
+# `files`/`blame` CONTENTS_BLOB (CHAOS-2808/CS7) now fetch through the SAME
+# `GitHubCodeClient`, over its GraphQL support (`providers/github/graphql.py`),
+# labeled with explicit `files:`/`blame:` prefixes -- listed BEFORE their
+# sibling REST_CORE entry (unlike `commit_stats`, where REST_CORE is the
+# live dimension) because `files`/`blame`'s actual traffic is 100% GraphQL
+# blob/blame queries, never REST; the resolver's prefix short-circuit matches
+# route_family literally (not dimension), so the FIRST family sharing that
+# name wins -- ordering CONTENTS_BLOB first is what makes a `files:`/`blame:`
+# label resolve to the instrumented dimension instead of the still-frozen
+# REST_CORE one (the repository tree listing that discovers candidate paths
+# stays on the frozen PyGithub connector, uninstrumented, out of CS7 scope).
 GITHUB_USAGE_ROUTE_FAMILIES: tuple[UsageRouteFamily, ...] = (
     UsageRouteFamily("repo", BudgetDimension.REST_CORE),
     UsageRouteFamily("git", BudgetDimension.REST_CORE, operation_markers=("git:",)),
@@ -363,10 +375,14 @@ GITHUB_USAGE_ROUTE_FAMILIES: tuple[UsageRouteFamily, ...] = (
         "commit_stats", BudgetDimension.REST_CORE, operation_markers=("commit_stats:",)
     ),
     UsageRouteFamily("commit_stats", BudgetDimension.CONTENTS_BLOB),
+    UsageRouteFamily(
+        "files", BudgetDimension.CONTENTS_BLOB, operation_markers=("files:",)
+    ),
     UsageRouteFamily("files", BudgetDimension.REST_CORE),
-    UsageRouteFamily("files", BudgetDimension.CONTENTS_BLOB),
+    UsageRouteFamily(
+        "blame", BudgetDimension.CONTENTS_BLOB, operation_markers=("blame:",)
+    ),
     UsageRouteFamily("blame", BudgetDimension.REST_CORE),
-    UsageRouteFamily("blame", BudgetDimension.CONTENTS_BLOB),
     UsageRouteFamily("prs", BudgetDimension.REST_CORE),
     UsageRouteFamily(
         "pr_social", BudgetDimension.GRAPHQL_COST, operation_markers=("pr_social:",)

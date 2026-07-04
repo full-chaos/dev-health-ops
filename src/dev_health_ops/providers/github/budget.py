@@ -340,14 +340,10 @@ def _fallback_credential_scope(
 # `"pr_social:"` prefix (CS1's resolver short-circuit, `providers/usage.py`),
 # so this marker documents that the family is now live rather than driving
 # resolution itself -- the short-circuit matches on `route_family` alone,
-# irrespective of `operation_markers`. The REST `prs` listing (raw PyGithub
-# `get_pulls`, `_collect_github_pr_objects`) and the `pr_social`
-# SECONDARY_ABUSE_RISK dimension remain uninstrumented/estimate-only: no
-# client observes a distinct secondary-limit signal on success responses (an
-# abstract reservation, like `work_item_prs`' SECONDARY_ABUSE_RISK sibling),
-# and the REST prs traffic itself stays on the frozen connector pending
-# CHAOS-2773 CS8 -- so their markers stay empty per the plan's "never flip a
-# marker before its traffic" rule (§3).
+# irrespective of `operation_markers`. The `pr_social` SECONDARY_ABUSE_RISK
+# dimension remains uninstrumented/estimate-only: no client observes a distinct
+# secondary-limit signal on success responses (an abstract reservation, like
+# `work_item_prs`' SECONDARY_ABUSE_RISK sibling), so its marker stays empty.
 #
 # `git` (REST_CORE), `commit_stats` (REST_CORE), `security` (REST_CORE), and
 # deployments REST_CORE now fetch through
@@ -368,6 +364,11 @@ def _fallback_credential_scope(
 # label resolve to the instrumented dimension instead of the still-frozen
 # REST_CORE one (the repository tree listing that discovers candidate paths
 # stays on the frozen PyGithub connector, uninstrumented, out of CS7 scope).
+# `prs` REST_CORE and the processor's incident-label issue fetches (CHAOS-2809/
+# CS8) now share the same `GitHubCodeClient` REST core as git/commit_stats and
+# emit explicit `prs:`/`incidents:` labels. `incidents` is a resolver-only
+# actuals family: the estimator constants remain frozen, and incident issue
+# traffic is attached to observed actuals without adding a new planned estimate.
 GITHUB_USAGE_ROUTE_FAMILIES: tuple[UsageRouteFamily, ...] = (
     UsageRouteFamily("repo", BudgetDimension.REST_CORE),
     UsageRouteFamily("git", BudgetDimension.REST_CORE, operation_markers=("git:",)),
@@ -383,7 +384,10 @@ GITHUB_USAGE_ROUTE_FAMILIES: tuple[UsageRouteFamily, ...] = (
         "blame", BudgetDimension.CONTENTS_BLOB, operation_markers=("blame:",)
     ),
     UsageRouteFamily("blame", BudgetDimension.REST_CORE),
-    UsageRouteFamily("prs", BudgetDimension.REST_CORE),
+    UsageRouteFamily("prs", BudgetDimension.REST_CORE, operation_markers=("prs:",)),
+    UsageRouteFamily(
+        "incidents", BudgetDimension.REST_CORE, operation_markers=("incidents:",)
+    ),
     UsageRouteFamily(
         "pr_social", BudgetDimension.GRAPHQL_COST, operation_markers=("pr_social:",)
     ),

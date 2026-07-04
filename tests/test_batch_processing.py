@@ -79,6 +79,20 @@ def _github_commit_stats_async_from_sync(fake_fetch):
     return _wrapped
 
 
+class _EmptyGithubPrCodeClient:
+    async def iter_pulls(self, owner, repo, *, state, sort, direction, since=None):
+        return []
+
+    async def get_pull_detail(self, owner, repo, number):
+        raise AssertionError(f"unexpected pull detail request for {number}")
+
+    def drain_usage_observations(self):
+        return []
+
+    async def close(self):
+        return None
+
+
 @pytest.mark.asyncio
 async def test_github_async_batch_callback_fires_as_completed(monkeypatch):
     """Fast repos should invoke callback before slow repos in same batch."""
@@ -457,6 +471,11 @@ async def test_process_github_repos_batch_upserts_during_async_processing(monkey
             self.close()
 
     monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
+    monkeypatch.setattr(
+        processors.github,
+        "_github_code_client_from_connector",
+        lambda _connector: _EmptyGithubPrCodeClient(),
+    )
 
     await processors.github.process_github_repos_batch(
         store=store,
@@ -565,6 +584,11 @@ async def test_process_github_repos_batch_stores_commits_and_stats(monkeypatch):
             self.close()
 
     monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
+    monkeypatch.setattr(
+        processors.github,
+        "_github_code_client_from_connector",
+        lambda _connector: _EmptyGithubPrCodeClient(),
+    )
     monkeypatch.setattr(
         processors.github,
         "_fetch_github_commits_async",
@@ -1408,6 +1432,96 @@ async def test_process_github_repos_batch_commit_detail_rate_limit_propagates(
 
     assert exc_info.value.retry_after_seconds == 43.0
     assert recorded_stats == []
+
+
+@pytest.mark.asyncio
+async def test_process_github_repos_batch_incident_rate_limit_propagates(
+    monkeypatch,
+):
+    _enable_connector_stubs(monkeypatch)
+
+    class DummyStore:
+        async def insert_repo(self, repo):
+            return
+
+        async def insert_git_commit_data(self, commit_data):
+            return
+
+        async def insert_incidents(self, incidents):
+            raise AssertionError("incidents must not persist after a rate limit")
+
+    repo = Mock()
+    repo.id = 1003
+    repo.full_name = "org/incident-rate-limited"
+    repo.url = "https://example.com/org/incident-rate-limited"
+    repo.default_branch = "main"
+    repo.language = "Python"
+    result = BatchResult(repository=repo, stats=None, success=True)
+
+    class DummyGithub:
+        def get_repo(self, full_name: str):
+            raise AssertionError("legacy repo object must not be fetched")
+
+    class DummyConnector:
+        def __init__(self, token: str):
+            self.github = DummyGithub()
+
+        async def get_repos_with_stats_async(self, **kwargs):
+            on_repo_complete = kwargs.get("on_repo_complete")
+            if on_repo_complete:
+                on_repo_complete(result)
+            return [result]
+
+        def get_rate_limit(self):
+            return {"remaining": 0, "limit": 0}
+
+        def close(self):
+            return
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.close()
+
+    async def fake_fetch_incidents(*args, **kwargs):
+        raise RateLimitException("limited", retry_after_seconds=44.0)
+
+    async def fake_fetch_commits(*args, **kwargs):
+        return [], [], False
+
+    monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
+    monkeypatch.setattr(
+        processors.github,
+        "_fetch_github_commits_async",
+        fake_fetch_commits,
+    )
+    monkeypatch.setattr(
+        processors.github,
+        "_fetch_github_incidents_async",
+        fake_fetch_incidents,
+    )
+
+    with pytest.raises(RateLimitException) as exc_info:
+        await processors.github.process_github_repos_batch(
+            store=DummyStore(),
+            token="test_token",
+            org_name="org",
+            pattern="org/*",
+            batch_size=1,
+            max_concurrent=1,
+            rate_limit_delay=0,
+            use_async=True,
+            sync_prs=False,
+            sync_cicd=False,
+            sync_deployments=False,
+            sync_incidents=True,
+            sync_security=False,
+            sync_tests=False,
+            backfill_missing=False,
+        )
+
+    assert exc_info.value.retry_after_seconds == 44.0
 
 
 @pytest.mark.asyncio

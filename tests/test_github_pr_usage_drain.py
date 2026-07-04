@@ -86,21 +86,35 @@ class _FakePRRef:
 
 
 class _FakePR:
-    def __init__(self, number: int):
+    def __init__(
+        self,
+        number: int,
+        *,
+        additions: int = 0,
+        deletions: int = 0,
+        changed_files: int = 0,
+        comments_count: int = 0,
+    ):
+        self.pull_id = str(number)
         self.number = number
         self.title = f"PR {number}"
         self.body = None
         self.state = "closed"
+        self.author_login = "octo"
         self.user = _FakePRUser()
         self.created_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        self.updated_at = datetime(2020, 1, 2, tzinfo=timezone.utc)
         self.merged_at = None
         self.closed_at = None
+        self.head_ref = "feature"
+        self.base_ref = "main"
         self.head = _FakePRRef("feature")
         self.base = _FakePRRef("main")
-        self.additions = 0
-        self.deletions = 0
-        self.changed_files = 0
-        self.comments = 0
+        self.additions = additions
+        self.deletions = deletions
+        self.changed_files = changed_files
+        self.comments = comments_count
+        self.comments_count = comments_count
 
 
 class _FakeRepo:
@@ -108,7 +122,7 @@ class _FakeRepo:
         self._pull_items = pull_items
 
     def get_pulls(self, state="all", sort=None, direction=None):
-        return _PRIter(self._pull_items)
+        raise AssertionError("legacy PyGithub get_pulls must not be called")
 
 
 class _Connector:
@@ -120,6 +134,53 @@ class _Connector:
 
     def _rest_base_url(self):
         return "https://api.github.com"
+
+
+_PR_LISTING_RECORD = {
+    "transport": "rest",
+    "route_family": "prs",
+    "dimension": "rest_core",
+    "request_count": 1,
+    "example_operation": "prs:GET /repos/o/r/pulls",
+}
+
+
+class _ListingCodeClient:
+    instances: list["_ListingCodeClient"] = []
+
+    def __init__(self, pulls, details=None):
+        self._pulls = list(pulls)
+        self._details = list(details) if details is not None else list(pulls)
+        self.closed = False
+        self.drained = False
+        self.detail_numbers: list[int] = []
+        type(self).instances.append(self)
+
+    async def iter_pulls(self, owner, repo, *, state, sort, direction, since=None):
+        assert (owner, repo, state, sort, direction) == (
+            "o",
+            "r",
+            "all",
+            "updated",
+            "desc",
+        )
+        self.since = since
+        return list(self._pulls)
+
+    async def get_pull_detail(self, owner, repo, number):
+        assert (owner, repo) == ("o", "r")
+        self.detail_numbers.append(number)
+        for pull in self._details:
+            if pull.number == number:
+                return pull
+        raise AssertionError(f"unexpected pull detail request for {number}")
+
+    def drain_usage_observations(self) -> list[dict[str, Any]]:
+        self.drained = True
+        return [dict(_PR_LISTING_RECORD)]
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 class _DrainingBatchReviewClient:
@@ -156,8 +217,10 @@ class _DrainingBatchReviewClient:
 @pytest.fixture(autouse=True)
 def _reset_instances():
     _DrainingBatchReviewClient.instances = []
+    _ListingCodeClient.instances = []
     yield
     _DrainingBatchReviewClient.instances = []
+    _ListingCodeClient.instances = []
 
 
 @pytest.mark.asyncio
@@ -170,9 +233,15 @@ async def test_sync_prs_drains_review_client_into_adapter_owned_sink():
     fake_repo = _FakeRepo([_FakePR(1), _FakePR(2)])
     usage_sink: list[dict[str, Any]] = []
 
-    with patch(
-        "dev_health_ops.processors.github.GitHubWorkClient",
-        _DrainingBatchReviewClient,
+    with (
+        patch(
+            "dev_health_ops.processors.github.GitHubWorkClient",
+            _DrainingBatchReviewClient,
+        ),
+        patch(
+            "dev_health_ops.processors.github._github_code_client_from_connector",
+            lambda _connector: _ListingCodeClient(fake_repo._pull_items),
+        ),
     ):
         total = await loop.run_in_executor(
             None,
@@ -194,15 +263,70 @@ async def test_sync_prs_drains_review_client_into_adapter_owned_sink():
     assert total == 2
     assert len(_DrainingBatchReviewClient.instances) == 1
     assert _DrainingBatchReviewClient.instances[0].drained is True
+    assert _ListingCodeClient.instances[0].drained is True
+    assert _ListingCodeClient.instances[0].closed is True
     assert usage_sink == [
+        _PR_LISTING_RECORD,
         {
             "transport": "graphql",
             "route_family": "pr_social",
             "dimension": "graphql_cost",
             "request_count": 1,
             "example_operation": "pr_social:POST /graphql PR social data",
-        }
+        },
     ]
+
+
+@pytest.mark.asyncio
+async def test_sync_prs_hydrates_detail_stats_before_persisting_pr_rows():
+    loop = asyncio.get_running_loop()
+    repo_id = uuid.uuid4()
+    store = _FakeStore()
+    listed_pr = _FakePR(1)
+    detailed_pr = _FakePR(
+        1,
+        additions=123,
+        deletions=45,
+        changed_files=6,
+        comments_count=8,
+    )
+    fake_repo = _FakeRepo([listed_pr])
+    usage_sink: list[dict[str, Any]] = []
+
+    with (
+        patch(
+            "dev_health_ops.processors.github.GitHubWorkClient",
+            _DrainingBatchReviewClient,
+        ),
+        patch(
+            "dev_health_ops.processors.github._github_code_client_from_connector",
+            lambda _connector: _ListingCodeClient([listed_pr], [detailed_pr]),
+        ),
+    ):
+        total = await loop.run_in_executor(
+            None,
+            cast(Any, _sync_github_prs_to_store),
+            _Connector(fake_repo),
+            "o",
+            "r",
+            repo_id,
+            store,
+            loop,
+            50,
+            "all",
+            _NoSleepGate(),
+            None,
+            None,
+            usage_sink,
+        )
+
+    assert total == 1
+    assert _ListingCodeClient.instances[0].detail_numbers == [1]
+    persisted_pr = store.pr_batches[0][0]
+    assert persisted_pr.additions == 123
+    assert persisted_pr.deletions == 45
+    assert persisted_pr.changed_files == 6
+    assert persisted_pr.comments_count == 8
 
 
 @pytest.mark.asyncio
@@ -222,6 +346,10 @@ async def test_sync_prs_without_sink_drains_client_but_logs_only(caplog):
             "dev_health_ops.processors.github.GitHubWorkClient",
             _DrainingBatchReviewClient,
         ),
+        patch(
+            "dev_health_ops.processors.github._github_code_client_from_connector",
+            lambda _connector: _ListingCodeClient(fake_repo._pull_items),
+        ),
         caplog.at_level("DEBUG", logger="root"),
     ):
         # usage_sink omitted entirely -- exercises the default (None) path.
@@ -240,6 +368,8 @@ async def test_sync_prs_without_sink_drains_client_but_logs_only(caplog):
         )
 
     assert total == 1
+    assert _ListingCodeClient.instances[0].drained is True
+    assert _ListingCodeClient.instances[0].closed is True
     assert len(_DrainingBatchReviewClient.instances) == 1
     assert _DrainingBatchReviewClient.instances[0].drained is True
     assert any(
@@ -329,9 +459,15 @@ async def test_sync_prs_rate_limit_propagates_after_partial_drain():
     fake_repo = _FakeRepo([_FakePR(1), _FakePR(2)])
     usage_sink: list[dict[str, Any]] = []
 
-    with patch(
-        "dev_health_ops.processors.github.GitHubWorkClient",
-        _RateLimitedAfterOneRequestClient,
+    with (
+        patch(
+            "dev_health_ops.processors.github.GitHubWorkClient",
+            _RateLimitedAfterOneRequestClient,
+        ),
+        patch(
+            "dev_health_ops.processors.github._github_code_client_from_connector",
+            lambda _connector: _ListingCodeClient(fake_repo._pull_items),
+        ),
     ):
         with pytest.raises(RateLimitException) as exc_info:
             await loop.run_in_executor(
@@ -355,7 +491,7 @@ async def test_sync_prs_rate_limit_propagates_after_partial_drain():
     # The drain ran BEFORE the exception unwound past the processor.
     assert len(_RateLimitedAfterOneRequestClient.instances) == 1
     assert _RateLimitedAfterOneRequestClient.instances[0].drained is True
-    assert usage_sink == [_PARTIAL_PR_SOCIAL_RECORD]
+    assert usage_sink == [_PR_LISTING_RECORD, _PARTIAL_PR_SOCIAL_RECORD]
     # No success-path persistence happened: the unit defers, nothing stamped.
     assert store.pr_batches == []
     assert store.review_batches == []
@@ -373,9 +509,15 @@ async def test_sync_prs_non_rate_limit_error_still_degrades_gracefully():
     fake_repo = _FakeRepo([_FakePR(1), _FakePR(2)])
     usage_sink: list[dict[str, Any]] = []
 
-    with patch(
-        "dev_health_ops.processors.github.GitHubWorkClient",
-        _FailingBatchReviewClient,
+    with (
+        patch(
+            "dev_health_ops.processors.github.GitHubWorkClient",
+            _FailingBatchReviewClient,
+        ),
+        patch(
+            "dev_health_ops.processors.github._github_code_client_from_connector",
+            lambda _connector: _ListingCodeClient(fake_repo._pull_items),
+        ),
     ):
         total = await loop.run_in_executor(
             None,
@@ -397,7 +539,7 @@ async def test_sync_prs_non_rate_limit_error_still_degrades_gracefully():
     assert total == 2
     assert len(_FailingBatchReviewClient.instances) == 1
     assert _FailingBatchReviewClient.instances[0].drained is True
-    assert usage_sink == [_PARTIAL_PR_SOCIAL_RECORD]
+    assert usage_sink == [_PR_LISTING_RECORD, _PARTIAL_PR_SOCIAL_RECORD]
     # PRs persisted despite the failed (optional) review enrichment.
     persisted_prs = [pr for batch in store.pr_batches for pr in batch]
     assert len(persisted_prs) == 2

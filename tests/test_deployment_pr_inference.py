@@ -23,7 +23,7 @@ from dev_health_ops.connectors.utils.rest import GitLabRESTClient
 from dev_health_ops.processors.base_git import resolve_incident_labels
 from dev_health_ops.processors.github import (
     _fetch_github_deployments_async,
-    _fetch_github_incidents_sync,
+    _fetch_github_incidents_async,
 )
 from dev_health_ops.processors.gitlab import (
     _fetch_gitlab_incidents_sync,
@@ -32,6 +32,23 @@ from dev_health_ops.processors.gitlab import (
 
 REPO_ID = uuid.uuid4()
 NOW = datetime(2026, 6, 12, tzinfo=timezone.utc)
+
+
+class _IssueClient:
+    def __init__(self, issues_by_label):
+        self.issues_by_label = issues_by_label
+        self.calls = []
+        self.close_called = False
+
+    async def iter_issues(self, owner, repo, *, state, labels, max_issues):
+        self.calls.append((owner, repo, state, labels, max_issues))
+        return self.issues_by_label[labels[0]][:max_issues]
+
+    def drain_usage_observations(self):
+        return []
+
+    async def close(self):
+        self.close_called = True
 
 
 class _NoWaitGate:
@@ -140,34 +157,45 @@ class TestIncidentLabels:
         monkeypatch.setenv("INCIDENT_LABELS", " , ")
         assert resolve_incident_labels() == ["incident"]
 
-    def test_github_queries_each_label_and_dedupes(self, monkeypatch) -> None:
-        monkeypatch.setenv("INCIDENT_LABELS", "incident,outage")
-        shared = Mock(id=1, state="closed", created_at=NOW, closed_at=NOW)
-        shared.pull_request = None
-        outage_only = Mock(id=2, state="open", created_at=NOW, closed_at=None)
-        outage_only.pull_request = None
-        gh_repo = Mock()
-        gh_repo.get_issues.side_effect = [[shared], [shared, outage_only]]
+    @pytest.mark.asyncio
+    async def test_github_queries_each_label_and_dedupes(self, monkeypatch) -> None:
+        from dev_health_ops.processors import github
 
-        incidents = _fetch_github_incidents_sync(gh_repo, REPO_ID, 10, None)
+        monkeypatch.setenv("INCIDENT_LABELS", "incident,outage")
+        shared = Mock(issue_id="1", state="closed", created_at=NOW, closed_at=NOW)
+        outage_only = Mock(issue_id="2", state="open", created_at=NOW, closed_at=None)
+        client = _IssueClient({"incident": [shared], "outage": [shared, outage_only]})
+        monkeypatch.setattr(
+            github, "_github_code_client_from_connector", lambda _connector: client
+        )
+
+        incidents = await _fetch_github_incidents_async(
+            Mock(), "octo", "repo", REPO_ID, 10, None
+        )
 
         assert {i.incident_id for i in incidents} == {"1", "2"}
-        assert gh_repo.get_issues.call_count == 2
-        labels_queried = [
-            call.kwargs["labels"] for call in gh_repo.get_issues.call_args_list
+        assert client.calls == [
+            ("octo", "repo", "all", ["incident"], 10),
+            ("octo", "repo", "all", ["outage"], 10),
         ]
-        assert labels_queried == [["incident"], ["outage"]]
+        assert client.close_called is True
 
-    def test_github_filters_prs_carrying_incident_label(self, monkeypatch) -> None:
+    @pytest.mark.asyncio
+    async def test_github_filters_prs_carrying_incident_label(
+        self, monkeypatch
+    ) -> None:
+        from dev_health_ops.processors import github
+
         monkeypatch.delenv("INCIDENT_LABELS", raising=False)
-        real_issue = Mock(id=1, state="closed", created_at=NOW, closed_at=NOW)
-        real_issue.pull_request = None
-        labeled_pr = Mock(id=2, state="open", created_at=NOW, closed_at=None)
-        labeled_pr.pull_request = Mock()  # the issues API includes PRs
-        gh_repo = Mock()
-        gh_repo.get_issues.return_value = [real_issue, labeled_pr]
+        real_issue = Mock(issue_id="1", state="closed", created_at=NOW, closed_at=NOW)
+        client = _IssueClient({"incident": [real_issue]})
+        monkeypatch.setattr(
+            github, "_github_code_client_from_connector", lambda _connector: client
+        )
 
-        incidents = _fetch_github_incidents_sync(gh_repo, REPO_ID, 10, None)
+        incidents = await _fetch_github_incidents_async(
+            Mock(), "octo", "repo", REPO_ID, 10, None
+        )
 
         assert [i.incident_id for i in incidents] == ["1"]
 

@@ -740,7 +740,10 @@ async def test_gitlab_blame_backfill_is_capped(
 ) -> None:
     """Onboarding blame must stop at BLAME_BACKFILL_MAX_FILES files (GitLab)."""
     import dev_health_ops.processors.gitlab as gitlab_mod
-    from dev_health_ops.connectors.models import BlameRange, FileBlame
+    from dev_health_ops.providers.gitlab.code_client import (
+        GitLabBlameRange,
+        GitLabFileBlame,
+    )
 
     n_files = gitlab_mod.BLAME_BACKFILL_MAX_FILES + 9
 
@@ -773,11 +776,11 @@ async def test_gitlab_blame_backfill_is_capped(
 
     blame_calls: list[str] = []
 
-    def fake_blame(project_id: int, path: str, ref: str) -> FileBlame:
+    def fake_blame(project_id: int, path: str, ref: str) -> GitLabFileBlame:
         blame_calls.append(path)
-        return FileBlame(
+        return GitLabFileBlame(
             file_path=path,
-            ranges=[BlameRange(1, 1, "sha", "Ada", "a@ex.com", 0)],
+            ranges=(GitLabBlameRange(1, 1, "sha", "Ada", "a@ex.com", 0, ("x",)),),
         )
 
     monkeypatch.setattr(
@@ -1075,7 +1078,10 @@ async def test_gitlab_blame_backfill_resumes_on_second_sync(
 ) -> None:
     """A second GitLab sync blames the files the first sync left uncovered."""
     import dev_health_ops.processors.gitlab as gitlab_mod
-    from dev_health_ops.connectors.models import BlameRange, FileBlame
+    from dev_health_ops.providers.gitlab.code_client import (
+        GitLabBlameRange,
+        GitLabFileBlame,
+    )
 
     n_files = gitlab_mod.BLAME_BACKFILL_MAX_FILES + 11
     all_paths = {f"src/f{i}.py" for i in range(n_files)}
@@ -1091,10 +1097,10 @@ async def test_gitlab_blame_backfill_resumes_on_second_sync(
     connector = Mock()
     connector.gitlab.projects.get.return_value = project
 
-    def fake_blame(project_id: int, path: str, ref: str) -> FileBlame:
-        return FileBlame(
+    def fake_blame(project_id: int, path: str, ref: str) -> GitLabFileBlame:
+        return GitLabFileBlame(
             file_path=path,
-            ranges=[BlameRange(1, 1, "sha", "Ada", "a@ex.com", 0)],
+            ranges=(GitLabBlameRange(1, 1, "sha", "Ada", "a@ex.com", 0, ("x",)),),
         )
 
     monkeypatch.setattr(

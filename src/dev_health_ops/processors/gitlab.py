@@ -1260,6 +1260,7 @@ CONTENT_FETCH_MAX_FILES = 2_000
 # bounded one-time cost on first onboarding; full coverage remains available
 # via the dedicated blame sync target (CHAOS-2376).
 BLAME_BACKFILL_MAX_FILES = 500
+GITLAB_BLAME_FETCH_FAILURE_WARNING_LIMIT = 5
 
 
 async def _fetch_scannable_contents(
@@ -1491,6 +1492,7 @@ async def _backfill_gitlab_missing_data(
         try:
             async with _gitlab_code_client_from_connector(connector) as client:
                 try:
+                    blame_fetch_failure_count = 0
                     async with AsyncBatchCollector(
                         ingestion_sink.insert_blame_data
                     ) as blame_collector:
@@ -1502,15 +1504,23 @@ async def _backfill_gitlab_missing_data(
                             except Exception as e:
                                 if _is_rate_limit_exception(e):
                                     raise
-                                logging.debug(
-                                    f"Failed blame fetch for {project_full_name}:{path}: {e}"
-                                )
+                                blame_fetch_failure_count += 1
+                                if (
+                                    blame_fetch_failure_count
+                                    <= GITLAB_BLAME_FETCH_FAILURE_WARNING_LIMIT
+                                ):
+                                    logging.warning(
+                                        "Failed GitLab blame fetch for %s:%s: %s",
+                                        project_full_name,
+                                        path,
+                                        e,
+                                    )
                                 continue
 
                             for rng in blame_items.ranges:
-                                for line_no in range(
-                                    rng.starting_line,
-                                    rng.ending_line + 1,
+                                for line_no, line in enumerate(
+                                    rng.lines,
+                                    start=rng.starting_line,
                                 ):
                                     blame_collector.add(
                                         GitBlame(
@@ -1521,10 +1531,20 @@ async def _backfill_gitlab_missing_data(
                                             author_name=rng.author,
                                             author_when=None,
                                             commit_hash=rng.commit_sha,
-                                            line=None,
+                                            line=line,
                                         )
                                     )
                                     await blame_collector.maybe_flush()
+                    if blame_fetch_failure_count:
+                        logging.warning(
+                            "Skipped GitLab blame for %d file(s) in %s; logged first %d failures",
+                            blame_fetch_failure_count,
+                            project_full_name,
+                            min(
+                                blame_fetch_failure_count,
+                                GITLAB_BLAME_FETCH_FAILURE_WARNING_LIMIT,
+                            ),
+                        )
                 finally:
                     drained_observations.extend(client.drain_usage_observations())
         finally:

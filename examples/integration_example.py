@@ -1,7 +1,7 @@
 """
 Integration example showing how to use connectors with existing storage system.
 
-This example demonstrates how to retrieve data from GitHub/GitLab and
+This example demonstrates how to retrieve data from GitHub and
 store it in the existing database using the storage system.
 """
 
@@ -14,7 +14,7 @@ from typing import Any
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from dev_health_ops.connectors import GitHubConnector, GitLabConnector  # noqa: E402
+from dev_health_ops.connectors import GitHubConnector  # noqa: E402
 from dev_health_ops.models.git import GitCommit, GitCommitStat, Repo  # noqa: E402
 from dev_health_ops.storage import SQLAlchemyStore  # noqa: E402
 
@@ -139,112 +139,6 @@ async def github_to_storage_example():
             traceback.print_exc()
 
 
-async def gitlab_to_storage_example():
-    """Example: Retrieve GitLab data and store in database."""
-    token = os.getenv("GITLAB_TOKEN")
-    if not token:
-        print("GITLAB_TOKEN not set, skipping GitLab example")
-        return
-
-    # Database connection
-    db_conn = os.getenv("DATABASE_URI", "sqlite+aiosqlite:///./test_integration.db")
-
-    print("\n\n=== GitLab to Storage Integration ===\n")
-
-    # Initialize connector
-    with GitLabConnector(private_token=token) as connector:
-        try:
-            # Get a project
-            print("Fetching projects...")
-            projects = connector.list_projects(max_projects=1)
-
-            if not projects:
-                print("No projects found")
-                return
-
-            project = projects[0]
-            print(f"Using project: {project.full_name}\n")
-
-            # Store project in database
-            async with SQLAlchemyStore(db_conn) as store:
-                # Create Repo object for database
-                db_repo = Repo(
-                    repo_path=None,  # Not a local repo
-                    repo=project.full_name,
-                    settings={"source": "gitlab", "project_id": project.id},
-                    tags=["gitlab"],
-                )
-
-                print(f"Storing project: {db_repo.repo}")
-                await store.insert_repo(db_repo)
-                print(f"Project stored with ID: {db_repo.id}\n")
-
-                # Get and store commits
-                print("Fetching commits...")
-                gl_project = connector.gitlab.projects.get(project.id)
-                commits = gl_project.commits.list(per_page=5, get_all=False)
-
-                commit_objects = []
-                for commit in commits:
-                    git_commit = GitCommit(
-                        repo_id=db_repo.id,
-                        hash=commit.id,
-                        message=commit.message,
-                        author_name=(
-                            commit.author_name
-                            if hasattr(commit, "author_name")
-                            else "Unknown"
-                        ),
-                        author_email=(
-                            commit.author_email
-                            if hasattr(commit, "author_email")
-                            else ""
-                        ),
-                        author_when=(
-                            datetime.fromisoformat(
-                                commit.authored_date.replace("Z", "+00:00")
-                            )
-                            if hasattr(commit, "authored_date")
-                            else datetime.now(timezone.utc)
-                        ),
-                        committer_name=(
-                            commit.committer_name
-                            if hasattr(commit, "committer_name")
-                            else "Unknown"
-                        ),
-                        committer_email=(
-                            commit.committer_email
-                            if hasattr(commit, "committer_email")
-                            else ""
-                        ),
-                        committer_when=(
-                            datetime.fromisoformat(
-                                commit.committed_date.replace("Z", "+00:00")
-                            )
-                            if hasattr(commit, "committed_date")
-                            else datetime.now(timezone.utc)
-                        ),
-                        parents=(
-                            len(commit.parent_ids)
-                            if hasattr(commit, "parent_ids")
-                            else 0
-                        ),
-                    )
-                    commit_objects.append(git_commit)
-                    # Extract first line of commit message
-                    first_line = commit.message.split("\n")[0][:50]
-                    print(f"  - {commit.id[:8]}: {first_line}")
-
-                await store.insert_git_commit_data(commit_objects)
-                print(f"\nStored {len(commit_objects)} commits")
-
-        except Exception as e:
-            print(f"Error: {e}")
-            import traceback
-
-            traceback.print_exc()
-
-
 async def main():
     """Main function."""
     print("Integration Examples: Connectors + Storage\n")
@@ -253,14 +147,9 @@ async def main():
     # Run GitHub example
     await github_to_storage_example()
 
-    # Run GitLab example
-    await gitlab_to_storage_example()
-
     print("\n" + "=" * 60)
     print("Integration examples completed!")
-    print(
-        "\nNote: Set GITHUB_TOKEN and GITLAB_TOKEN environment variables to run examples."
-    )
+    print("\nNote: Set GITHUB_TOKEN environment variable to run examples.")
 
 
 if __name__ == "__main__":

@@ -159,6 +159,35 @@ def _load_blame_contents(
     return [(row[0], row[1]) for row in rows]
 
 
+def _has_blame_line_text(client: Any, repo_id: uuid.UUID, org_id: str) -> bool:
+    """Cheap existence probe: does this repo's git_blame carry any usable
+    (non-null, non-empty) line text?
+
+    GitHub's Blame API does not return line text at all, so ``git_blame.line``
+    is NULL for every GitHub-synced repo today (CHAOS-2861 root cause).
+    GitLab currently discards line text too (pending CHAOS-2860). Only
+    local-sync repos populate it today. Attempting reconstruction against
+    textless rows silently yields newline-only strings via
+    ``_load_blame_contents``'s ``ifNull(line, '')`` concat, so callers should
+    check this probe first and log an actionable message instead of the
+    dead-end fallback.
+    """
+    rows = _query_rows(
+        client,
+        """
+        SELECT 1
+        FROM git_blame
+        WHERE repo_id = {repo_id:UUID}
+          AND org_id = {org_id:String}
+          AND line IS NOT NULL
+          AND line != ''
+        LIMIT 1
+        """,
+        {"repo_id": str(repo_id), "org_id": org_id},
+    )
+    return bool(rows)
+
+
 def _max_last_synced(
     client: Any, table: str, repo_id: uuid.UUID, org_id: str
 ) -> datetime | None:
@@ -277,6 +306,7 @@ def run_complexity_db_job(
 
             files: list[tuple[str, str]] = []
             remaining = max_files
+            blame_unusable = False
 
             if non_empty > 0:
                 git_files = _load_git_files(sink.client, repo_uuid, org_id, remaining)
@@ -286,12 +316,6 @@ def run_complexity_db_job(
 
                 missing = max(total_files - non_empty, 0)
                 if missing > 0 and (remaining is None or remaining > 0):
-                    logger.info(
-                        "Repo %s missing %s/%s git_files contents; filling with blame.",
-                        repo_label,
-                        missing,
-                        total_files,
-                    )
                     missing_paths = _load_missing_paths(
                         sink.client, repo_uuid, org_id, remaining
                     )
@@ -299,27 +323,83 @@ def run_complexity_db_job(
                         path for path in missing_paths if scanner.should_process(path)
                     ]
                     if missing_paths:
-                        blame_files = _load_blame_contents(
-                            sink.client,
-                            repo_uuid,
-                            org_id,
-                            missing_paths,
-                            remaining,
-                        )
-                        files.extend(blame_files)
+                        if _has_blame_line_text(sink.client, repo_uuid, org_id):
+                            logger.info(
+                                "Repo %s missing %s/%s git_files contents; filling with blame.",
+                                repo_label,
+                                missing,
+                                total_files,
+                            )
+                            blame_files = _load_blame_contents(
+                                sink.client,
+                                repo_uuid,
+                                org_id,
+                                missing_paths,
+                                remaining,
+                            )
+                            files.extend(blame_files)
+                        else:
+                            blame_unusable = True
+                            logger.warning(
+                                "Repo %s is missing %s/%s git_files contents and "
+                                "git_blame has no usable line text for those paths, "
+                                "so the blame fallback cannot recover them. "
+                                "Remedies: (1) file contents were never hydrated -- "
+                                "check the scanner include/exclude globs or run a "
+                                "content backfill (CHAOS-2859); (2) GitHub's Blame "
+                                "API does not return line text by design; (3) "
+                                "GitLab blame line text is pending CHAOS-2860; (4) "
+                                "consider enabling the BLAME dataset (CHAOS-2862).",
+                                repo_label,
+                                missing,
+                                total_files,
+                            )
             else:
+                has_blame_text = _has_blame_line_text(sink.client, repo_uuid, org_id)
                 if total_files > 0:
-                    logger.warning(
-                        "Repo %s has no git_files contents; falling back to git_blame.",
-                        repo_label,
+                    if has_blame_text:
+                        logger.warning(
+                            "Repo %s has no git_files contents; falling back to git_blame.",
+                            repo_label,
+                        )
+                    else:
+                        blame_unusable = True
+                        logger.warning(
+                            "Repo %s has no git_files contents and git_blame has "
+                            "no usable line text either, so the blame fallback "
+                            "cannot recover them. Remedies: (1) file contents "
+                            "were never hydrated -- check the scanner "
+                            "include/exclude globs or run a content backfill "
+                            "(CHAOS-2859); (2) GitHub's Blame API does not "
+                            "return line text by design; (3) GitLab blame line "
+                            "text is pending CHAOS-2860; (4) consider enabling "
+                            "the BLAME dataset (CHAOS-2862).",
+                            repo_label,
+                        )
+                if has_blame_text:
+                    files = _load_blame_contents(
+                        sink.client, repo_uuid, org_id, None, remaining
                     )
-                files = _load_blame_contents(
-                    sink.client, repo_uuid, org_id, None, remaining
-                )
 
             files = _filter_files(scanner, files, max_files)
             if not files:
-                logger.warning("No scannable contents found for repo %s.", repo_label)
+                if blame_unusable:
+                    logger.warning(
+                        "No scannable contents found for repo %s: git_blame "
+                        "exists but carries no usable line text (see prior "
+                        "warning for remedies).",
+                        repo_label,
+                    )
+                elif total_files == 0:
+                    logger.warning(
+                        "No scannable contents found for repo %s: no git_files "
+                        "or git_blame rows exist for this repo.",
+                        repo_label,
+                    )
+                else:
+                    logger.warning(
+                        "No scannable contents found for repo %s.", repo_label
+                    )
                 continue
 
             ref_value = _build_ref(sink.client, repo_uuid, org_id)

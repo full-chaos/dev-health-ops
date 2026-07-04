@@ -22,14 +22,14 @@ from __future__ import annotations
 import logging
 import urllib.parse
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from math import ceil
 from typing import Any
 
 import httpx
 
-from dev_health_ops.connectors.models import SecurityAlertData
+from dev_health_ops.connectors.models import FileBlame, SecurityAlertData
 from dev_health_ops.exceptions import (
     AuthenticationException,
     NotFoundException,
@@ -42,10 +42,20 @@ from dev_health_ops.providers._http import (
     github_rest_base_url,
 )
 from dev_health_ops.providers.github.client import GitHubAuth
+from dev_health_ops.providers.github.graphql import (
+    BLAME_QUERY,
+    blame_variables,
+    build_blob_texts_query,
+    github_graphql_url,
+    parse_blame_response,
+    parse_blob_texts_response,
+    raise_for_graphql_errors,
+)
 from dev_health_ops.providers.github.ratelimit import (
     classify_github_403,
     github_retry_after_seconds,
 )
+from dev_health_ops.sync.budget_types import BudgetDimension
 from dev_health_ops.sync.rate_limit_signal import RateLimitSignal
 
 logger = logging.getLogger(__name__)
@@ -59,6 +69,8 @@ DEPLOYMENTS_ROUTE_FAMILY = "deployments"
 CICD_ROUTE_FAMILY = "cicd"
 GIT_ROUTE_FAMILY = "git"
 COMMIT_STATS_ROUTE_FAMILY = "commit_stats"
+FILES_ROUTE_FAMILY = "files"
+BLAME_ROUTE_FAMILY = "blame"
 _GITHUB_DEPLOYMENTS_PER_PAGE = 100
 
 
@@ -436,6 +448,7 @@ class GitHubCodeClient:
         if not auth.token:
             raise ValueError("GitHubCodeClient requires a resolved token")
         self.auth = auth
+        self._graphql_url = github_graphql_url(github_rest_base_url(auth.base_url))
 
         # Deferred import mirrors providers/github/client.py: budget.py is the
         # source of truth for the route-family vocabulary, imported lazily to
@@ -618,6 +631,101 @@ class GitHubCodeClient:
             if isinstance(file_item, Mapping) and file_item.get("filename")
         ]
 
+    async def get_file_contents(
+        self,
+        owner: str,
+        repo: str,
+        paths: list[str],
+        *,
+        ref: str = "HEAD",
+        batch_size: int = 50,
+    ) -> dict[str, str]:
+        """Fetch text contents for many files via batched GraphQL blob
+        queries (CHAOS-2773 CS7) -- ports ``connectors/github.py::
+        GitHubConnector.get_file_contents`` onto this client's owned
+        ``InstrumentedRESTCore``, using ``providers/github/graphql.py``'s
+        query builder/parser. Binary, truncated, or missing blobs are
+        omitted from the result so callers can treat absence as "no usable
+        text". A GraphQL-level error mid-batch (an APIException, not a rate
+        limit) discards only the unresolved chunks; batches already merged
+        into ``contents`` are lost with it since the caller treats this as
+        one atomic fetch, matching the connector's own all-or-raise contract.
+        """
+        contents: dict[str, str] = {}
+        for start in range(0, len(paths), batch_size):
+            chunk = paths[start : start + batch_size]
+            operation = (
+                f"{FILES_ROUTE_FAMILY}:POST /graphql (get_blob_texts x{len(chunk)})"
+            )
+            response = await self._request_graphql_contents_blob(
+                "POST",
+                self._graphql_url,
+                operation=operation,
+                json={
+                    "query": build_blob_texts_query(ref, chunk),
+                    "variables": {"owner": owner, "repo": repo},
+                },
+            )
+            envelope = response.json()
+            raise_for_graphql_errors(envelope, operation=operation)
+            batch = parse_blob_texts_response(envelope.get("data") or {}, chunk)
+            contents.update(
+                {path: text for path, text in batch.items() if text is not None}
+            )
+        return contents
+
+    async def get_file_blame(
+        self,
+        owner: str,
+        repo: str,
+        path: str,
+        *,
+        ref: str = "HEAD",
+    ) -> FileBlame:
+        """Get blame information for a file via the GitHub GraphQL API
+        (CHAOS-2773 CS7) -- ports ``connectors/github.py::GitHubConnector.
+        get_file_blame`` onto this client's owned ``InstrumentedRESTCore``.
+        """
+        operation = f"{BLAME_ROUTE_FAMILY}:POST /graphql (get_blame)"
+        response = await self._request_graphql_contents_blob(
+            "POST",
+            self._graphql_url,
+            operation=operation,
+            json={
+                "query": BLAME_QUERY,
+                "variables": blame_variables(owner, repo, path, ref),
+            },
+        )
+        envelope = response.json()
+        raise_for_graphql_errors(envelope, operation=operation)
+        return parse_blame_response(envelope.get("data") or {}, file_path=path)
+
+    async def _request_graphql_contents_blob(
+        self,
+        method: str,
+        url: str,
+        *,
+        operation: str,
+        json: Mapping[str, Any],
+    ) -> httpx.Response:
+        try:
+            return await self._core.request(
+                method,
+                url,
+                operation=operation,
+                headers={"Authorization": f"Bearer {self.auth.token}"},
+                json=json,
+            )
+        except RateLimitException as exc:
+            signal = exc.signal
+            if signal is None:
+                raise
+            raise RateLimitException(
+                str(exc),
+                retry_after_seconds=exc.retry_after_seconds,
+                signal=replace(signal, dimension=BudgetDimension.CONTENTS_BLOB),
+            ) from exc
+
     async def get_deployments(
         self,
         owner: str,
@@ -741,8 +849,10 @@ class GitHubCodeClient:
 
 __all__ = [
     "COMMIT_STATS_ROUTE_FAMILY",
+    "BLAME_ROUTE_FAMILY",
     "CICD_ROUTE_FAMILY",
     "DEPLOYMENTS_ROUTE_FAMILY",
+    "FILES_ROUTE_FAMILY",
     "GIT_ROUTE_FAMILY",
     "GitHubCodeClient",
     "GitHubCommitData",

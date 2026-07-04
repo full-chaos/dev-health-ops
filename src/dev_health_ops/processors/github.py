@@ -2,7 +2,7 @@ import asyncio
 import logging
 import zipfile
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from dev_health_ops.analytics.complexity import (
     DEFAULT_COMPLEXITY_CONFIG_PATH,
@@ -994,8 +994,20 @@ CONTENT_FETCH_MAX_FILES = 2_000
 BLAME_BACKFILL_MAX_FILES = 500
 
 
+class _GitHubFileContentClient(Protocol):
+    async def get_file_contents(
+        self,
+        owner: str,
+        repo: str,
+        paths: list[str],
+        *,
+        ref: str = "HEAD",
+        batch_size: int = 50,
+    ) -> dict[str, str]: ...
+
+
 async def _fetch_scannable_contents(
-    connector: GitHubConnector,
+    client: _GitHubFileContentClient,
     owner: str,
     repo_name: str,
     ref: str,
@@ -1007,8 +1019,12 @@ async def _fetch_scannable_contents(
 
     Only paths matching the complexity scanner's include/exclude globs are
     fetched, keeping API volume proportional to what the metrics jobs can
-    actually use. Errors degrade to a paths-only backfill (contents stay
-    NULL) rather than failing the sync.
+    actually use. A non-rate-limit fetch failure degrades to a paths-only
+    backfill (contents stay NULL) rather than failing the sync; a
+    ``RateLimitException``/``RateLimitExceededException`` propagates so the
+    caller's deferral semantics apply, mirroring the commit-stats fetch path
+    (CHAOS-2773 CS7 -- previously this degraded a rate limit to empty too,
+    silently masking it for the files dataset).
     """
     scanner = ComplexityScanner(config_path=DEFAULT_COMPLEXITY_CONFIG_PATH)
     scannable: list[str] = []
@@ -1030,12 +1046,10 @@ async def _fetch_scannable_contents(
     if not scannable:
         return {}
 
-    loop = asyncio.get_running_loop()
     try:
-        return await loop.run_in_executor(
-            None,
-            lambda: connector.get_file_contents(owner, repo_name, scannable, ref=ref),
-        )
+        return await client.get_file_contents(owner, repo_name, scannable, ref=ref)
+    except (RateLimitException, RateLimitExceededException):
+        raise
     except Exception as e:
         logging.warning("Failed to fetch file contents for %s: %s", repo_full_name, e)
         return {}
@@ -1100,150 +1114,179 @@ async def _backfill_github_missing_data(
 
     file_paths: list[str] = []
     blame_paths: list[str] = []
+    # Files and blame share ONE ``GitHubCodeClient`` (built once, drained and
+    # closed in the ``finally`` below) since both fetch over the same
+    # provider-owned GraphQL support (``providers/github/graphql.py``,
+    # CHAOS-2773 CS7) -- mirrors the commit/commit-stats helpers' one-client-
+    # per-fetch lifecycle, just shared across two call sites instead of one.
+    code_client: GitHubCodeClient | None = None
     if needs_files or needs_blame:
-        try:
-            branch = gh_repo.get_branch(default_branch)
-            tree = gh_repo.get_git_tree(branch.commit.sha, recursive=True)
-            blob_sizes: dict[str, int | None] = {}
-            for entry in getattr(tree, "tree", []) or []:
-                if getattr(entry, "type", None) != "blob":
-                    continue
-                path = getattr(entry, "path", None)
-                if not path:
-                    continue
-                file_paths.append(path)
-                blob_sizes[path] = getattr(entry, "size", None)
+        code_client = _github_code_client_from_connector(connector)
+    try:
+        if needs_files or needs_blame:
+            try:
+                branch = gh_repo.get_branch(default_branch)
+                tree = gh_repo.get_git_tree(branch.commit.sha, recursive=True)
+                blob_sizes: dict[str, int | None] = {}
+                for entry in getattr(tree, "tree", []) or []:
+                    if getattr(entry, "type", None) != "blob":
+                        continue
+                    path = getattr(entry, "path", None)
+                    if not path:
+                        continue
+                    file_paths.append(path)
+                    blob_sizes[path] = getattr(entry, "size", None)
 
-            if needs_files and file_paths:
-                contents_by_path = await _fetch_scannable_contents(
+                if needs_files and file_paths:
+                    assert code_client is not None
+                    contents_by_path = await _fetch_scannable_contents(
+                        code_client,
+                        owner,
+                        repo_name,
+                        default_branch,
+                        file_paths,
+                        blob_sizes,
+                        repo_full_name,
+                    )
+                    await backfill_file_records(
+                        ingestion_sink,
+                        db_repo.id,
+                        file_paths,
+                        repo_full_name,
+                        contents_by_path=contents_by_path,
+                    )
+            except (RateLimitException, RateLimitExceededException):
+                raise
+            except Exception as e:
+                logging.warning(
+                    f"Failed to backfill GitHub files for {repo_full_name}: {e}"
+                )
+
+        if needs_commit_stats:
+            try:
+                logging.info(
+                    "Backfilling commit stats for %s...",
+                    repo_full_name,
+                )
+                raw_commits, _, window_truncated = await _fetch_github_commits_async(
                     connector,
                     owner,
                     repo_name,
-                    default_branch,
-                    file_paths,
-                    blob_sizes,
-                    repo_full_name,
-                )
-                await backfill_file_records(
-                    ingestion_sink,
                     db_repo.id,
-                    file_paths,
-                    repo_full_name,
-                    contents_by_path=contents_by_path,
+                    max_commits,
+                    since,
+                    until,
+                    usage_sink,
                 )
-        except Exception as e:
-            logging.warning(
-                f"Failed to backfill GitHub files for {repo_full_name}: {e}"
-            )
+                stats_count = await _sync_github_commit_stats(
+                    connector=connector,
+                    owner=owner,
+                    repo_name=repo_name,
+                    db_repo=db_repo,
+                    ingestion_sink=ingestion_sink,
+                    max_commits=max_commits,
+                    since=since,
+                    until=until,
+                    raw_commits=raw_commits,
+                    window_truncated=window_truncated,
+                    usage_sink=usage_sink,
+                )
+                logging.info(
+                    "Backfilled %d commit-stat rows in %s",
+                    stats_count,
+                    repo_full_name,
+                )
+            except (RateLimitException, RateLimitExceededException):
+                raise
+            except Exception as e:
+                logging.warning(
+                    "Failed to backfill GitHub commit stats for %s: %s",
+                    repo_full_name,
+                    e,
+                )
 
-    if needs_commit_stats:
-        try:
-            logging.info(
-                "Backfilling commit stats for %s...",
-                repo_full_name,
+        if needs_blame and file_paths:
+            # Bound the blame crawl: one GraphQL call per file, so cap the number
+            # of files we blame on a single sync to avoid quota exhaustion /
+            # timeouts on large repos (CHAOS-2376). Select the *next* unblamed batch
+            # (diffing the live tree against already-blamed paths) so each rerun
+            # advances coverage instead of reblaming the same capped prefix; the
+            # capped prefix is used only as a fallback when the store lacks per-path
+            # coverage.
+            blame_paths = await select_unblamed_paths(
+                store, db_repo.id, file_paths, BLAME_BACKFILL_MAX_FILES
             )
-            raw_commits, _, window_truncated = await _fetch_github_commits_async(
-                connector,
-                owner,
-                repo_name,
-                db_repo.id,
-                max_commits,
-                since,
-                until,
-                usage_sink,
-            )
-            stats_count = await _sync_github_commit_stats(
-                connector=connector,
-                owner=owner,
-                repo_name=repo_name,
-                db_repo=db_repo,
-                ingestion_sink=ingestion_sink,
-                max_commits=max_commits,
-                since=since,
-                until=until,
-                raw_commits=raw_commits,
-                window_truncated=window_truncated,
-                usage_sink=usage_sink,
-            )
-            logging.info(
-                "Backfilled %d commit-stat rows in %s",
-                stats_count,
-                repo_full_name,
-            )
-        except (RateLimitException, RateLimitExceededException):
-            raise
-        except Exception as e:
-            logging.warning(
-                "Failed to backfill GitHub commit stats for %s: %s",
-                repo_full_name,
-                e,
-            )
-
-    if needs_blame and file_paths:
-        # Bound the blame crawl: one GraphQL call per file, so cap the number
-        # of files we blame on a single sync to avoid quota exhaustion /
-        # timeouts on large repos (CHAOS-2376). Select the *next* unblamed batch
-        # (diffing the live tree against already-blamed paths) so each rerun
-        # advances coverage instead of reblaming the same capped prefix; the
-        # capped prefix is used only as a fallback when the store lacks per-path
-        # coverage.
-        blame_paths = await select_unblamed_paths(
-            store, db_repo.id, file_paths, BLAME_BACKFILL_MAX_FILES
-        )
-    if needs_blame and blame_paths:
-        processed_files = 0
-        try:
-            logging.info(
-                "Backfilling blame for %d unblamed files in %s (cap %d)...",
-                len(blame_paths),
-                repo_full_name,
-                BLAME_BACKFILL_MAX_FILES,
-            )
-            async with AsyncBatchCollector(
-                ingestion_sink.insert_blame_data
-            ) as blame_collector:
-                for path in blame_paths:
-                    try:
-                        blame = connector.get_file_blame(
-                            owner=owner,
-                            repo=repo_name,
-                            path=path,
-                            ref=default_branch,
-                        )
-                        processed_files += 1
-                    except Exception as e:
-                        logging.debug(
-                            f"Failed blame fetch for {repo_full_name}:{path}: {e}"
-                        )
-                        continue
-
-                    for rng in blame.ranges:
-                        for line_no in range(
-                            rng.starting_line,
-                            rng.ending_line + 1,
-                        ):
-                            blame_collector.add(
-                                GitBlame(
-                                    repo_id=db_repo.id,
-                                    path=path,
-                                    line_no=line_no,
-                                    author_email=rng.author_email,
-                                    author_name=rng.author,
-                                    author_when=None,
-                                    commit_hash=rng.commit_sha,
-                                    line=None,
-                                )
+        if needs_blame and blame_paths:
+            assert code_client is not None
+            processed_files = 0
+            try:
+                logging.info(
+                    "Backfilling blame for %d unblamed files in %s (cap %d)...",
+                    len(blame_paths),
+                    repo_full_name,
+                    BLAME_BACKFILL_MAX_FILES,
+                )
+                async with AsyncBatchCollector(
+                    ingestion_sink.insert_blame_data
+                ) as blame_collector:
+                    for path in blame_paths:
+                        try:
+                            blame = await code_client.get_file_blame(
+                                owner=owner,
+                                repo=repo_name,
+                                path=path,
+                                ref=default_branch,
                             )
-                            await blame_collector.maybe_flush()
-            logging.info(
-                "Backfilled blame for %d files in %s",
-                processed_files,
-                repo_full_name,
-            )
-        except Exception as e:
-            logging.warning(
-                f"Failed to backfill GitHub blame for {repo_full_name}: {e}"
-            )
+                            processed_files += 1
+                        except (RateLimitException, RateLimitExceededException):
+                            raise
+                        except Exception as e:
+                            logging.debug(
+                                f"Failed blame fetch for {repo_full_name}:{path}: {e}"
+                            )
+                            continue
+
+                        for rng in blame.ranges:
+                            for line_no in range(
+                                rng.starting_line,
+                                rng.ending_line + 1,
+                            ):
+                                blame_collector.add(
+                                    GitBlame(
+                                        repo_id=db_repo.id,
+                                        path=path,
+                                        line_no=line_no,
+                                        author_email=rng.author_email,
+                                        author_name=rng.author,
+                                        author_when=None,
+                                        commit_hash=rng.commit_sha,
+                                        line=None,
+                                    )
+                                )
+                                await blame_collector.maybe_flush()
+                logging.info(
+                    "Backfilled blame for %d files in %s",
+                    processed_files,
+                    repo_full_name,
+                )
+            except (RateLimitException, RateLimitExceededException):
+                raise
+            except Exception as e:
+                logging.warning(
+                    f"Failed to backfill GitHub blame for {repo_full_name}: {e}"
+                )
+    finally:
+        if code_client is not None:
+            observations = code_client.drain_usage_observations()
+            await code_client.close()
+            if usage_sink is not None:
+                usage_sink.extend(observations)
+            elif observations:
+                logging.debug(
+                    "_backfill_github_missing_data: drained %d files/blame usage "
+                    "observations",
+                    len(observations),
+                )
 
 
 async def _sync_github_commits(

@@ -605,6 +605,24 @@ class _FakeTreeEntry:
         self.type = type_
 
 
+class _FakeGitHubCodeClient:
+    """Stand-in for ``GitHubCodeClient`` (CHAOS-2773 CS7): the processor now
+    fetches blame through this client's async ``get_file_blame`` instead of
+    the frozen connector's sync ``get_file_blame`` (no longer called)."""
+
+    def __init__(self, *, blame_fn: Any) -> None:
+        self._blame_fn = blame_fn
+        self.close = AsyncMock()
+
+    async def get_file_blame(
+        self, *, owner: str, repo: str, path: str, ref: str
+    ) -> Any:
+        return self._blame_fn(owner=owner, repo=repo, path=path, ref=ref)
+
+    def drain_usage_observations(self) -> list[Any]:
+        return []
+
+
 class _FakeGitLabCodeClientForBlame:
     """Minimal instrumented GitLabCodeClient stand-in for the blame backfill
     branch (CHAOS-2815/CS14): the real backfill now fetches blame via
@@ -628,7 +646,7 @@ class _FakeGitLabCodeClientForBlame:
 
 
 @pytest.mark.asyncio
-async def test_github_blame_backfill_is_capped() -> None:
+async def test_github_blame_backfill_is_capped(monkeypatch: pytest.MonkeyPatch) -> None:
     """Onboarding blame must stop at BLAME_BACKFILL_MAX_FILES files.
 
     Drives the real ``_backfill_github_missing_data`` blame branch with a tree
@@ -637,6 +655,7 @@ async def test_github_blame_backfill_is_capped() -> None:
     onboarding into an unbounded GraphQL crawl (CHAOS-2376 / Codex no-ship).
     """
     from dev_health_ops.connectors.models import BlameRange, FileBlame
+    from dev_health_ops.processors import github as github_module
     from dev_health_ops.processors.github import (
         BLAME_BACKFILL_MAX_FILES,
         _backfill_github_missing_data,
@@ -688,7 +707,11 @@ async def test_github_blame_backfill_is_capped() -> None:
 
     connector = Mock()
     connector.github.get_repo.return_value = gh_repo
-    connector.get_file_blame = Mock(side_effect=fake_blame)
+    monkeypatch.setattr(
+        github_module,
+        "_github_code_client_from_connector",
+        lambda _connector: _FakeGitHubCodeClient(blame_fn=fake_blame),
+    )
 
     db_repo = Mock()
     db_repo.id = uuid.uuid4()
@@ -950,7 +973,9 @@ def test_blame_backfill_needed_probe_failure_defers_not_aborts() -> None:
 
 
 @pytest.mark.asyncio
-async def test_github_blame_backfill_resumes_on_second_sync() -> None:
+async def test_github_blame_backfill_resumes_on_second_sync(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A second GitHub sync blames the files the first sync left uncovered.
 
     Proves the cap is not a permanent dead-end: across two runs every file in
@@ -958,6 +983,7 @@ async def test_github_blame_backfill_resumes_on_second_sync() -> None:
     round-3 / Codex no-ship).
     """
     from dev_health_ops.connectors.models import BlameRange, FileBlame
+    from dev_health_ops.processors import github as github_module
     from dev_health_ops.processors.github import (
         BLAME_BACKFILL_MAX_FILES,
         _backfill_github_missing_data,
@@ -1000,7 +1026,11 @@ async def test_github_blame_backfill_resumes_on_second_sync() -> None:
 
     connector = Mock()
     connector.github.get_repo.return_value = gh_repo
-    connector.get_file_blame = Mock(side_effect=fake_blame)
+    monkeypatch.setattr(
+        github_module,
+        "_github_code_client_from_connector",
+        lambda _connector: _FakeGitHubCodeClient(blame_fn=fake_blame),
+    )
 
     db_repo = Mock()
     db_repo.id = uuid.uuid4()
@@ -1113,13 +1143,16 @@ async def test_gitlab_blame_backfill_resumes_on_second_sync(
 
 
 @pytest.mark.asyncio
-async def test_github_blame_gate_alive_when_files_present_blame_partial() -> None:
+async def test_github_blame_gate_alive_when_files_present_blame_partial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """needs.blame=False but has_unblamed_files=True still triggers the crawl.
 
     Models a rerun where the any-row gate would say "blame exists, skip" but
     coverage is partial; the coverage gate must keep the blame branch alive.
     """
     from dev_health_ops.connectors.models import BlameRange, FileBlame
+    from dev_health_ops.processors import github as github_module
     from dev_health_ops.processors.github import _backfill_github_missing_data
 
     all_paths = {"src/a.py", "src/b.py", "src/c.py"}
@@ -1158,7 +1191,11 @@ async def test_github_blame_gate_alive_when_files_present_blame_partial() -> Non
 
     connector = Mock()
     connector.github.get_repo.return_value = gh_repo
-    connector.get_file_blame = Mock(side_effect=fake_blame)
+    monkeypatch.setattr(
+        github_module,
+        "_github_code_client_from_connector",
+        lambda _connector: _FakeGitHubCodeClient(blame_fn=fake_blame),
+    )
 
     db_repo = Mock()
     db_repo.id = uuid.uuid4()

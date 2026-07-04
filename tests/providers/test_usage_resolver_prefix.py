@@ -167,6 +167,39 @@ def test_github_review_batch_unprefixed_label_still_resolves_to_work_item_prs() 
 
 
 # ---------------------------------------------------------------------------
+# CHAOS-2808/CS7: files/blame GraphQL content+blame fetch is the SECOND
+# intentional re-bucketing. Both families carry TWO dimension entries
+# (contents_blob live, rest_core still frozen/empty); the prefix
+# short-circuit only matches on route_family, so ORDERING within
+# GITHUB_USAGE_ROUTE_FAMILIES (contents_blob listed first) is what resolves
+# a "files:"/"blame:" label to the live dimension instead of the frozen one.
+# ---------------------------------------------------------------------------
+
+GITHUB_CS7_PREFIXED_LABELS: tuple[tuple[str, str, tuple[str, BudgetDimension]], ...] = (
+    (
+        "rest",
+        "files:POST /graphql (get_blob_texts x3)",
+        ("files", BudgetDimension.CONTENTS_BLOB),
+    ),
+    (
+        "rest",
+        "blame:POST /graphql (get_blame)",
+        ("blame", BudgetDimension.CONTENTS_BLOB),
+    ),
+)
+
+
+@pytest.mark.parametrize("transport,operation,expected", GITHUB_CS7_PREFIXED_LABELS)
+def test_github_files_blame_prefixed_labels_resolve_to_contents_blob(
+    transport: str, operation: str, expected: tuple[str, BudgetDimension]
+) -> None:
+    assert (
+        GITHUB_USAGE_RESOLVER.resolve(transport=transport, operation=operation)
+        == expected
+    )
+
+
+# ---------------------------------------------------------------------------
 # 2. Representative prefixed labels per registered family short-circuit.
 # ---------------------------------------------------------------------------
 

@@ -537,6 +537,7 @@ async def resolve_compounding_risk(
     latest_end_day = datetime.now(timezone.utc).date()
     latest_start_day = latest_end_day - timedelta(days=max(0, trend_days - 1))
     fallback_repo_scope_ids: list[str] | None = filt.repo_ids
+    team_filtered_repo_scope_ids: list[str] | None = None
 
     day: date | None
     if filt.day is not None:
@@ -551,12 +552,13 @@ async def resolve_compounding_risk(
             end_day=latest_end_day,
         )
         if day is None:
-            fallback_repo_scope_ids = await _repo_scope_ids_for_team_fallback(
+            team_filtered_repo_scope_ids = await _repo_scope_ids_for_team_fallback(
                 client,
                 authorized_org_id,
                 repo_ids=filt.repo_ids,
                 team_ids=filt.team_ids,
             )
+            fallback_repo_scope_ids = team_filtered_repo_scope_ids
             day = await _latest_day_for_org(
                 client,
                 authorized_org_id,
@@ -611,6 +613,14 @@ async def resolve_compounding_risk(
             _, team_labels = await _load_team_assignments(client, authorized_org_id)
             points = [_point_from_team_row(r, day, team_labels) for r in team_rows]
         else:
+            if filt.team_ids and team_filtered_repo_scope_ids is None:
+                team_filtered_repo_scope_ids = await _repo_scope_ids_for_team_fallback(
+                    client,
+                    authorized_org_id,
+                    repo_ids=filt.repo_ids,
+                    team_ids=filt.team_ids,
+                )
+                fallback_repo_scope_ids = team_filtered_repo_scope_ids
             # Fallback path: aggregate from the repo rows.
             repo_rows = await _fetch_latest_rows(
                 client,
@@ -630,11 +640,19 @@ async def resolve_compounding_risk(
                 day=day,
             )
 
-    trend_repo_scope_ids = (
-        fallback_repo_scope_ids
-        if breakout == CompoundingRiskScope.TEAM
-        else filt.repo_ids
-    )
+    if breakout == CompoundingRiskScope.TEAM:
+        if filt.team_ids and team_filtered_repo_scope_ids is None:
+            team_filtered_repo_scope_ids = await _repo_scope_ids_for_team_fallback(
+                client,
+                authorized_org_id,
+                repo_ids=filt.repo_ids,
+                team_ids=filt.team_ids,
+            )
+        trend_repo_scope_ids = (
+            team_filtered_repo_scope_ids if filt.team_ids else fallback_repo_scope_ids
+        )
+    else:
+        trend_repo_scope_ids = filt.repo_ids
     trend_rows = await _fetch_repo_trend(
         client, authorized_org_id, day, trend_days, trend_repo_scope_ids
     )

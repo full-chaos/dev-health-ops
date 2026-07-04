@@ -854,14 +854,22 @@ async def test_team_breakout_uses_persisted_team_rows_when_available() -> None:
             _qresult(columns, persisted_team_rows),  # team-scope rows EXIST
             _qresult(  # teams query for label lookup
                 ["id", "name", "repo_patterns"],
-                [["team-X", "Platform", []]],
+                [["team-X", "Platform", ["repo-9"]]],
+            ),
+            _qresult(
+                ["id", "name", "repo_patterns"], [["team-X", "Platform", ["repo-9"]]]
             ),
             _qresult([], []),  # trend
         ],
     )
 
     result = await resolve_compounding_risk(
-        ctx, ORG_ID, CompoundingRiskFilterInput(breakout=CompoundingRiskScope.TEAM)
+        ctx,
+        ORG_ID,
+        CompoundingRiskFilterInput(
+            breakout=CompoundingRiskScope.TEAM,
+            team_ids=["team-X"],
+        ),
     )
 
     assert len(result.rows) == 1
@@ -876,6 +884,11 @@ async def test_team_breakout_uses_persisted_team_rows_when_available() -> None:
     # Components and audit-trail come from the persisted row.
     assert team_row.components.churn_norm == pytest.approx(0.70)
     assert team_row.weights.churn == pytest.approx(0.30)
+
+    trend_params: dict[str, Any] = ctx.client.query.call_args_list[-1].kwargs[
+        "parameters"
+    ]
+    assert trend_params["repo_ids"] == ["repo-9"]
 
 
 # ---------------------------------------------------------------------------

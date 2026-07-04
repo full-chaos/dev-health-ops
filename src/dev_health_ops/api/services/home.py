@@ -271,7 +271,7 @@ _COMPOUNDING_RISK_SQL = """
                       FROM compounding_risk_daily
                       WHERE org_id = {org_id:String}
                         AND day >= {start_day:Date}
-                        AND day <= {end_day:Date}
+                        AND day < {end_day:Date}
                       {latest_scope_filter}
                       GROUP BY day, scope, scope_id
                   )

@@ -310,6 +310,8 @@ async def test_fetch_risk_signals_uses_latest_scored_day_query(
     assert "argMax(tuple(compounding_risk), computed_at) AS latest_row" in query
     assert "countIf(tupleElement(latest_row, 1) IS NULL) AS missing_scores" in query
     assert "missing_scores = 0" in query
+    assert "AND day < {end_day:Date}" in query
+    assert "AND day <= {end_day:Date}" not in query
     assert parameters == {
         "org_id": "org-test",
         "start_day": date(2026, 5, 1),

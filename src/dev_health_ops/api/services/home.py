@@ -251,9 +251,26 @@ _COMPOUNDING_RISK_SQL = """
     FROM compounding_risk_daily
     WHERE org_id = {org_id:String}
       AND day = (
-          SELECT max(day)
-          FROM compounding_risk_daily
-          WHERE org_id = {org_id:String}
+          SELECT maxOrNull(day)
+          FROM (
+              SELECT
+                  day,
+                  count() AS row_count,
+                  countIf(score IS NULL) AS missing_scores
+              FROM (
+                  SELECT
+                      day,
+                      scope,
+                      scope_id,
+                      argMax(compounding_risk, computed_at) AS score
+                  FROM compounding_risk_daily
+                  WHERE org_id = {org_id:String}
+                  {latest_scope_filter}
+                  GROUP BY day, scope, scope_id
+              )
+              GROUP BY day
+          )
+          WHERE row_count > 0 AND missing_scores = 0
       )
 """
 
@@ -775,8 +792,14 @@ async def _fetch_risk_signals(
     org_id: str,
     data_confidence: HomeDataConfidence,
 ) -> list[HomeSignal]:
-    query = _COMPOUNDING_RISK_SQL
+    latest_scope_filter = ""
     params: dict[str, Any] = {"org_id": org_id}
+    if filters.scope.level in {"team", "repo"} and filters.scope.ids:
+        latest_scope_filter = """
+                AND scope = {scope:String}
+                AND scope_id IN {scope_ids:Array(String)}
+        """
+    query = _COMPOUNDING_RISK_SQL.replace("{latest_scope_filter}", latest_scope_filter)
     if filters.scope.level in {"team", "repo"} and filters.scope.ids:
         query += """
       AND scope = {scope:String}

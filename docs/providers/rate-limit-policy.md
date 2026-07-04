@@ -99,6 +99,7 @@ cooperating layers:
    | --- | --- | --- |
    | GitHub REST connector | 3 (`retry_with_backoff(max_retries=3)`) | `connectors/github.py` |
    | GitHub GraphQL client | 5 (`max_retries=5`) | `connectors/utils/graphql.py` |
+   | GitHub code client (canonical: git/commit_stats/security/deployments REST, files/blame GraphQL) | 5 (`InstrumentedRESTCore` default) | `providers/github/code_client.py` + `providers/github/graphql.py` |
    | GitLab REST connector | 3 (`retry_with_backoff(max_retries=3)`) | `connectors/gitlab.py` |
    | GitLab feature-flags (canonical) | 5 (`max_retries=5`) | `providers/gitlab/feature_flags.py` |
    | Jira client (JQL + enrichment) | 4 (`max_retries_429=3` → `+1` initial) | `providers/jira/client.py` |
@@ -931,6 +932,17 @@ proof-of-pipe that the plumbing actually reaches a `budget_comparison` row:
   `commit_stats:` operation prefixes. The `commit_stats` `contents_blob`
   reservation remains estimate-only because the migrated REST commit-detail call
   reports as `rest_core`.
+- **Actuals instrumentation (CHAOS-2808).** File contents (`files`) and blame
+  (`blame`) now fetch via GraphQL through the SAME
+  `providers/github/code_client.py::GitHubCodeClient`, over provider-owned
+  GraphQL support relocated from the frozen connector's GraphQL client onto
+  `providers/github/graphql.py`, and drain into the shared `usage_sink`,
+  resolving through explicit `files:` / `blame:` operation prefixes. Unlike
+  `commit_stats` (where `rest_core` is the live dimension), `files`/`blame`
+  traffic is 100% GraphQL, so `contents_blob` carries the marker; their
+  `rest_core` reservation stays estimate-only -- it belongs to the
+  repository tree listing that discovers candidate paths, which remains on
+  the frozen PyGithub connector (out of CS7 scope).
 
 #### Route families
 <!-- route-families:github -->
@@ -940,8 +952,8 @@ proof-of-pipe that the plumbing actually reaches a `budget_comparison` row:
 | `repo` | `rest_core` | Repository metadata | high |
 | `git` | `rest_core` | Commit listing (`GitHubCodeClient`, CHAOS-2773 CS6) | medium |
 | `commit_stats` | `rest_core`, `contents_blob` | Per-commit file/stat expansion (`GitHubCodeClient` REST core, CHAOS-2773 CS6; contents/blob still estimate-only) | low |
-| `files` | `rest_core`, `contents_blob` | Repository tree/blob reads | low |
-| `blame` | `rest_core`, `contents_blob` | Blame expansion (file-count dependent) | low |
+| `files` | `rest_core`, `contents_blob` | Repository tree listing (`rest_core`, frozen/estimate-only) + blob-text reads (`contents_blob`, `GitHubCodeClient` GraphQL, CHAOS-2773 CS7) | low |
+| `blame` | `rest_core`, `contents_blob` | Blame expansion (file-count dependent; `contents_blob` via `GitHubCodeClient` GraphQL, CHAOS-2773 CS7) | low |
 | `prs` | `rest_core` | Pull requests / reviews / comments core | medium |
 | `pr_social` | `graphql_cost`, `secondary_abuse_risk` | PR timeline/social expansion | medium |
 | `cicd` | `rest_core`, `contents_blob` | CI/CD workflow runs + artifact expansion | low |
@@ -1163,14 +1175,16 @@ paper over:
   (CS2) — see
   [Usage drain wiring](#usage-drain-wiring-first-re-bucketing-chaos-2773-cs2)
   above. GitHub `git` and `commit_stats` REST-core traffic is instrumented as of
-  CHAOS-2807; the REST `prs` listing and remaining GitHub/GitLab code-dataset
-  families stay uninstrumented pending their own CHAOS-2773 changesets (see
+  CHAOS-2807, and `files`/`blame` `contents_blob` traffic (GraphQL) as of
+  CHAOS-2808; the REST `prs` listing, the `files`/`blame` `rest_core` tree
+  listing, and remaining GitHub/GitLab code-dataset families stay
+  uninstrumented pending their own CHAOS-2773 changesets (see
   "Frozen `connectors/` path" below). There is also no cross-run
   aggregation/dashboard yet — calibration today is visible per-unit (result +
   structured log), not rolled up over time.
-- **Frozen `connectors/` path.** GitHub's `files`/`blame`/`prs` and repo
-  metadata/batch orchestration, plus the remaining equivalent GitLab
-  code-dataset paths, remain under the frozen `connectors/` tree
+- **Frozen `connectors/` path.** GitHub's `prs` and repo metadata/batch
+  orchestration, plus the remaining equivalent GitLab code-dataset paths,
+  remain under the frozen `connectors/` tree
   (`connectors/github.py`'s PyGithub-based `GitHubConnector`, `connectors/
   gitlab.py`'s python-gitlab-based `GitLabConnector`). No new code may be added
   there (see [`AGENTS.md`](../../AGENTS.md)); rate-limit/actuals
@@ -1186,7 +1200,10 @@ paper over:
   (`get_feature_flags` / `get_project_name`) is likewise closed as of
   [CHAOS-2785](https://linear.app/fullchaos/issue/CHAOS-2785) — see
   [GitLab](#gitlab) above. GitHub's `git`/`commit_stats`
-  ([CHAOS-2807](https://linear.app/fullchaos/issue/CHAOS-2807), CS6) moved to
+  ([CHAOS-2807](https://linear.app/fullchaos/issue/CHAOS-2807), CS6) and
+  `files`/`blame` ([CHAOS-2808](https://linear.app/fullchaos/issue/CHAOS-2808),
+  CS7 -- the file-contents/blame GraphQL fetch relocated onto
+  `providers/github/graphql.py`) moved to
   `providers/github/code_client.py::GitHubCodeClient`; GitLab's `security`
   ([CHAOS-2811](https://linear.app/fullchaos/issue/CHAOS-2811), CS10),
   `pipelines`+`deployments`

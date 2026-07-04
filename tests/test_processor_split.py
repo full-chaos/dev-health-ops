@@ -97,6 +97,20 @@ class _FakeGitLabConnector:
         return None
 
 
+class _FakeGitLabProjectInfoClient:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+    async def get_project(self, project_id):
+        return _fake_gitlab_project()
+
+    def drain_usage_observations(self):
+        return []
+
+
 def _fake_github_repo():
     return SimpleNamespace(
         id=1,
@@ -131,6 +145,14 @@ def _disable_non_git_flags() -> dict[str, Any]:
         sync_incidents=False,
         sync_security=False,
         sync_tests=False,
+    )
+
+
+def _patch_gitlab_project_info(monkeypatch) -> None:
+    monkeypatch.setattr(
+        gitlab,
+        "_gitlab_code_client_from_connector",
+        lambda _connector: _FakeGitLabProjectInfoClient(),
     )
 
 
@@ -285,6 +307,7 @@ def test_gitlab_commits_run_does_not_fetch_stats_files_or_blame(monkeypatch):
 
     monkeypatch.setattr(gitlab, "CONNECTORS_AVAILABLE", True)
     monkeypatch.setattr(gitlab, "GitLabConnector", _FakeGitLabConnector)
+    _patch_gitlab_project_info(monkeypatch)
     monkeypatch.setattr(gitlab, "IngestionSink", _FakeSink)
     monkeypatch.setattr(
         gitlab,
@@ -328,6 +351,7 @@ def test_gitlab_granular_stats_files_blame_and_legacy_bundle(monkeypatch):
 
     monkeypatch.setattr(gitlab, "CONNECTORS_AVAILABLE", True)
     monkeypatch.setattr(gitlab, "GitLabConnector", _FakeGitLabConnector)
+    _patch_gitlab_project_info(monkeypatch)
     monkeypatch.setattr(gitlab, "IngestionSink", _FakeSink)
     monkeypatch.setattr(
         gitlab,

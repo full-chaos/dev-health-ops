@@ -59,11 +59,12 @@ import logging
 import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from fnmatch import fnmatch
 from typing import Any
 
 import httpx
 
-from dev_health_ops.connectors.models import SecurityAlertData
+from dev_health_ops.connectors.models import Repository, SecurityAlertData
 from dev_health_ops.exceptions import (
     APIException,
     NotFoundException,
@@ -155,6 +156,20 @@ class GitLabBlameRange:
 class GitLabFileBlame:
     file_path: str
     ranges: tuple[GitLabBlameRange, ...] = ()
+
+
+@dataclass(frozen=True)
+class GitLabProjectData:
+    id: int
+    name: str
+    path_with_namespace: str
+    web_url: str | None
+    default_branch: str
+    description: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    stars: int = 0
+    forks: int = 0
 
 
 class _GitLabSecurityForbidden(APIException):
@@ -395,6 +410,40 @@ def _map_commit_stats(commit_id: str, item: dict[str, Any]) -> GitLabCommitStats
     )
 
 
+def _map_project(item: dict[str, Any]) -> GitLabProjectData:
+    project_id = _coerce_int(item.get("id"))
+    name = str(item.get("name") or project_id)
+    full_name = str(item.get("path_with_namespace") or item.get("path") or name)
+    return GitLabProjectData(
+        id=project_id,
+        name=name,
+        path_with_namespace=full_name,
+        web_url=item.get("web_url"),
+        default_branch=str(item.get("default_branch") or "main"),
+        description=item.get("description"),
+        created_at=_parse_gitlab_datetime(item.get("created_at")),
+        updated_at=_parse_gitlab_datetime(item.get("last_activity_at")),
+        stars=_coerce_int(item.get("star_count")),
+        forks=_coerce_int(item.get("forks_count")),
+    )
+
+
+def _project_to_repository(project: GitLabProjectData) -> Repository:
+    return Repository(
+        id=project.id,
+        name=project.name,
+        full_name=project.path_with_namespace,
+        default_branch=project.default_branch,
+        description=project.description,
+        url=project.web_url,
+        created_at=project.created_at,
+        updated_at=project.updated_at,
+        language=None,
+        stars=project.stars,
+        forks=project.forks,
+    )
+
+
 def _format_gitlab_window_datetime(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -462,6 +511,85 @@ class GitLabCodeClient:
             transport=transport,
         )
         self._graphql_url = f"{base_url.rstrip('/')}/api/graphql"
+
+    async def get_project(self, project_id: int | str) -> GitLabProjectData:
+        encoded = _encode_project_id(project_id)
+        response = await self._core.request(
+            "GET",
+            f"/projects/{encoded}",
+            operation=f"{_PROJECT_FAMILY_PREFIX}:GET /projects/{{id}}",
+        )
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise APIException(f"Unexpected GitLab project response: {type(payload)!r}")
+        return _map_project(payload)
+
+    async def list_projects(
+        self,
+        *,
+        group_name: str | int | None = None,
+        search: str | None = None,
+        pattern: str | None = None,
+        membership: bool = False,
+        max_projects: int | None = None,
+        per_page: int = 100,
+    ) -> list[Repository]:
+        params: dict[str, Any] = {}
+        if search:
+            params["search"] = search
+        if membership:
+            params["membership"] = True
+        if group_name is None:
+            path = "/projects"
+            operation = f"{_PROJECT_FAMILY_PREFIX}:GET /projects"
+        else:
+            encoded_group = _encode_project_id(group_name)
+            path = f"/groups/{encoded_group}/projects"
+            operation = f"{_PROJECT_FAMILY_PREFIX}:GET /groups/{{id}}/projects"
+
+        max_items = (
+            1_000_000
+            if pattern and max_projects is not None
+            else max_projects or 1_000_000
+        )
+        raw_projects = await self._get_gitlab_list(
+            path,
+            operation=operation,
+            params=params,
+            per_page=per_page,
+            paginate=True,
+            max_items=max_items,
+        )
+        repositories: list[Repository] = []
+        lowered_pattern = pattern.lower() if pattern else None
+        for raw_project in raw_projects:
+            project = _map_project(raw_project)
+            if lowered_pattern and not fnmatch(
+                project.path_with_namespace.lower(), lowered_pattern
+            ):
+                continue
+            repositories.append(_project_to_repository(project))
+            if max_projects is not None and len(repositories) >= max_projects:
+                break
+        return repositories
+
+    async def list_repository_tree(
+        self,
+        project_id: int | str,
+        *,
+        ref: str,
+        per_page: int = 100,
+        max_items: int = 1_000_000,
+    ) -> list[dict[str, Any]]:
+        encoded = _encode_project_id(project_id)
+        return await self._get_gitlab_list(
+            f"/projects/{encoded}/repository/tree",
+            operation=f"{_PROJECT_FAMILY_PREFIX}:GET /projects/{{id}}/repository/tree",
+            params={"ref": ref, "recursive": True},
+            per_page=per_page,
+            paginate=True,
+            max_items=max_items,
+        )
 
     async def _resolve_project_id(self, project_id_or_path: int | str) -> int:
         """Resolve a project id/path to its numeric id, mirroring the
@@ -1256,4 +1384,5 @@ __all__ = [
     "GitLabCommitStatsData",
     "GitLabDeploymentData",
     "GitLabPipelineData",
+    "GitLabProjectData",
 ]

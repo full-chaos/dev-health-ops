@@ -1188,6 +1188,15 @@ def _gitlab_group_from_options(sync_options: dict[str, Any]) -> str:
     return str(group).replace("\r", "").replace("\n", "").strip()
 
 
+async def _list_gitlab_group_projects(
+    *, gitlab_url: str, token: str, group: str
+) -> list[Any]:
+    from dev_health_ops.providers.gitlab.code_client import GitLabCodeClient
+
+    async with GitLabCodeClient(private_token=token, base_url=gitlab_url) as client:
+        return await client.list_projects(group_name=group)
+
+
 async def _resolve_gitlab_batch_projects(
     session: AsyncSession,
     org_id: str,
@@ -1264,11 +1273,10 @@ async def _resolve_gitlab_batch_projects(
     # opportunistically when numeric entries could shadow project names.
     should_list = bool(named) or (bool(numeric) and bool(token) and bool(group))
     if should_list:
-        from dev_health_ops.connectors.gitlab import GitLabConnector
-
-        connector = GitLabConnector(url=gitlab_url, private_token=str(token))
         try:
-            projects = connector.list_repositories(org_name=group)
+            projects = await _list_gitlab_group_projects(
+                gitlab_url=gitlab_url, token=str(token), group=group
+            )
         except Exception as exc:
             if named:
                 raise HTTPException(

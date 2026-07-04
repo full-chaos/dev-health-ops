@@ -170,17 +170,6 @@ async def list_credential_repos(
         except APIException as exc:
             raise HTTPException(status_code=502, detail=str(exc))
     elif provider == "gitlab":
-        from dev_health_ops.connectors.exceptions import (
-            AuthenticationException as GitLabAuthenticationException,
-        )
-        from dev_health_ops.connectors.exceptions import (
-            NotFoundException as GitLabNotFoundException,
-        )
-        from dev_health_ops.connectors.exceptions import (
-            RateLimitException as GitLabRateLimitException,
-        )
-        from dev_health_ops.connectors.gitlab import GitLabConnector
-
         token = decrypted.get("token")
         url = (
             _string_value(decrypted.get("url"))
@@ -196,27 +185,28 @@ async def list_credential_repos(
         is_valid, url_error = _validate_external_url(url)
         if not is_valid:
             raise HTTPException(status_code=400, detail=url_error)
-        gitlab_connector = GitLabConnector(url=url, private_token=token)
         effective_owner = owner or _string_value(config.get("group"))
         try:
-            if not effective_owner:
-                repos = _list_gitlab_membership_repos(
+            if effective_owner:
+                repos = await _list_gitlab_code_client_repos(
                     url=url,
-                    token=token,
+                    token=str(token),
+                    owner=effective_owner,
                     search=search,
                     max_repos=max_repos,
                 )
             else:
-                repos = gitlab_connector.list_repositories(
-                    org_name=effective_owner,
+                repos = await _list_gitlab_membership_repos(
+                    url=url,
+                    token=str(token),
                     search=search,
                     max_repos=max_repos,
                 )
-        except GitLabNotFoundException:
+        except NotFoundException:
             return DiscoveredReposResponse(provider=provider, repos=[], total=0)
-        except GitLabAuthenticationException as exc:
+        except AuthenticationException as exc:
             raise HTTPException(status_code=401, detail=str(exc))
-        except GitLabRateLimitException as exc:
+        except RateLimitException as exc:
             raise HTTPException(status_code=429, detail=str(exc))
     else:
         raise HTTPException(
@@ -486,76 +476,38 @@ async def _list_github_app_installation_repos(
         await client.close()
 
 
-def _list_gitlab_membership_repos(
+async def _list_gitlab_code_client_repos(
+    url: str,
+    token: str,
+    owner: str | None,
+    search: str | None,
+    max_repos: int,
+) -> list[Any]:
+    from dev_health_ops.providers.gitlab.code_client import GitLabCodeClient
+
+    async with GitLabCodeClient(private_token=token, base_url=url) as client:
+        return await client.list_projects(
+            group_name=owner,
+            search=search if owner else None,
+            pattern=f"*{search}*" if search and not owner else None,
+            membership=owner is None,
+            max_projects=max_repos,
+        )
+
+
+async def _list_gitlab_membership_repos(
     url: str,
     token: str,
     search: str | None,
     max_repos: int,
 ) -> list[Any]:
-    """Enumerate GitLab projects the token is a member of (membership=True).
-
-    Bypasses the frozen connector to call python-gitlab directly with
-    membership=True, ensuring only credential-accessible projects are returned.
-    Applies search as a client-side fnmatch filter to avoid a global search.
-    """
-    import fnmatch
-
-    import gitlab
-    from gitlab.exceptions import GitlabAuthenticationError, GitlabError
-
-    from dev_health_ops.connectors.exceptions import (
-        AuthenticationException,
-        RateLimitException,
+    return await _list_gitlab_code_client_repos(
+        url=url,
+        token=token,
+        owner=None,
+        search=search,
+        max_repos=max_repos,
     )
-    from dev_health_ops.connectors.models import Repository
-
-    gl = gitlab.Gitlab(url=url, private_token=token)
-    pattern = f"*{search}*" if search else None
-    repos: list[Any] = []
-    page = 1
-    per_page = 100
-
-    try:
-        while True:
-            gl_projects = gl.projects.list(
-                membership=True,
-                per_page=per_page,
-                page=page,
-            )
-            if not gl_projects:
-                break
-            for p in gl_projects:
-                full_name = str(
-                    getattr(p, "path_with_namespace", None)
-                    or getattr(p, "name", "")
-                    or ""
-                )
-                if pattern and not fnmatch.fnmatch(full_name.lower(), pattern.lower()):
-                    continue
-                repos.append(
-                    Repository(
-                        id=p.id,
-                        name=p.name,
-                        full_name=full_name,
-                        default_branch=getattr(p, "default_branch", None) or "main",
-                        description=getattr(p, "description", None),
-                        url=getattr(p, "web_url", "") or "",
-                    )
-                )
-                if len(repos) >= max_repos:
-                    return repos
-            if len(gl_projects) < per_page:
-                break
-            page += 1
-    except GitlabAuthenticationError as exc:
-        raise AuthenticationException(str(exc)) from exc
-    except GitlabError as exc:
-        msg = str(exc).lower()
-        if "rate" in msg or "429" in msg:
-            raise RateLimitException(str(exc)) from exc
-        raise
-
-    return repos
 
 
 async def _test_github_connection(creds: dict[str, Any]) -> tuple[bool, dict[str, Any]]:

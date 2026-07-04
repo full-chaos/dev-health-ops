@@ -1,15 +1,20 @@
 import asyncio
 import logging
 import zipfile
-from collections.abc import Iterable
 from datetime import datetime, timezone
+from functools import partial
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from dev_health_ops.analytics.complexity import (
     DEFAULT_COMPLEXITY_CONFIG_PATH,
     ComplexityScanner,
 )
-from dev_health_ops.connectors.models import SecurityAlertData
+from dev_health_ops.connectors.models import (
+    Author,
+    Repository,
+    RepoStats,
+    SecurityAlertData,
+)
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.models import git as git_models
 from dev_health_ops.models.git import (
@@ -87,12 +92,25 @@ def _is_rate_limit_exception(exc: Exception) -> bool:
 # --- GitLab Sync Helpers ---
 
 
-def _fetch_gitlab_project_info_sync(connector, project_id):
+def _fetch_gitlab_project_info_sync(
+    connector, project_id, usage_sink: list[dict[str, Any]] | None = None
+):
     """Sync helper to fetch GitLab project info."""
-    gl_project = connector.gitlab.projects.get(project_id)
-    # Access properties to force load if lazy
-    _ = gl_project.name
-    return gl_project
+    drained_observations: list[dict[str, Any]] = []
+
+    async def _run():
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                return await client.get_project(project_id)
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
+
+    try:
+        return asyncio.run(_run())
+    finally:
+        _drain_gitlab_code_usage(
+            "_fetch_gitlab_project_info_sync", drained_observations, usage_sink
+        )
 
 
 def _fetch_gitlab_commits_sync(
@@ -1157,6 +1175,31 @@ def _gitlab_code_client_from_connector(connector):
     )
 
 
+def _gitlab_effective_group(group_name: str | None, pattern: str | None) -> str | None:
+    if group_name or not pattern or "/" not in pattern:
+        return group_name
+    prefix = pattern.split("/", 1)[0]
+    if prefix and "*" not in prefix and "?" not in prefix:
+        logging.info("Extracted group '%s' from pattern '%s'", prefix, pattern)
+        return prefix
+    return None
+
+
+def _repo_stats_from_gitlab_commits(commits: list[Any], stats: list[Any]) -> RepoStats:
+    authors: dict[str, Author] = {}
+    for commit in commits:
+        author_name = str(getattr(commit, "author_name", None) or "Unknown")
+        if author_name not in authors:
+            authors[author_name] = Author(id=0, username=author_name, name=author_name)
+    return RepoStats(
+        total_commits=len(commits),
+        additions=sum(int(getattr(item, "additions", 0)) for item in stats),
+        deletions=sum(int(getattr(item, "deletions", 0)) for item in stats),
+        commits_per_week=0.0,
+        authors=list(authors.values()),
+    )
+
+
 def _fetch_gitlab_security_alerts_sync(
     connector, project_id, repo_id, max_alerts, since, usage_sink=None
 ):
@@ -1235,121 +1278,95 @@ def _fetch_gitlab_security_alerts_sync(
     return alerts
 
 
-def _iter_gitlab_repo_tree(
-    gl_project,
-    *,
-    ref: str,
-    per_page: int = 100,
-    limit: int | None = None,
-) -> Iterable[Any]:
-    page = 1
-    seen = 0
-    # Defensive page cap. GitLab paginates until it returns an empty page, but a
-    # transport/API glitch — or a test double whose ``repository_tree()`` is a
-    # truthy Mock that never yields a falsy page — would otherwise spin forever
-    # (an unbounded REST crawl that hangs the sync; this hung the unit suite to
-    # the CI job timeout). 10k pages at per_page=100 covers ~1M tree entries,
-    # far beyond any real repository.
-    max_pages = 10_000
+def _fetch_gitlab_blame_sync(
+    connector,
+    project_full_name: str,
+    default_branch: str,
+    repo_id,
+    limit: int = 50,
+    usage_sink: list[dict[str, Any]] | None = None,
+):
+    """Sync helper to fetch GitLab blame data via the canonical code client.
 
-    while page <= max_pages:
-        try:
-            page_items = gl_project.repository_tree(
-                ref=ref,
-                recursive=True,
-                per_page=per_page,
-                page=page,
-                get_all=False,
-            )
-        except TypeError:
-            page_items = gl_project.repository_tree(
-                ref=ref,
-                recursive=True,
-                per_page=per_page,
-                page=page,
-                all=False,
-            )
-        # An empty page marks the end. Check the length explicitly: a real
-        # GitLab response is a list (``[]`` is falsy), but a truthy-but-empty
-        # container — e.g. a test Mock with no configured return — is not caught
-        # by ``not page_items`` alone and would loop until ``max_pages``.
-        try:
-            page_len = len(page_items)
-        except TypeError:
-            page_len = 0
-        if not page_items or page_len == 0:
-            break
-        seen += page_len
-        logging.debug(
-            "GitLab repo tree page %d returned %d items (total: %d)",
-            page,
-            page_len,
-            seen,
-        )
-        yield from page_items
-        if limit is not None and seen >= limit:
-            return
-        page += 1
+    CHAOS-2817/CS15b: ``process_gitlab_project``'s optional ``fetch_blame``
+    step used to receive the python-gitlab project object and call its
+    ``.repository_tree()`` / the frozen ``connector.get_file_blame()``. Once
+    ``_fetch_gitlab_project_info_sync`` started returning the plain
+    ``GitLabProjectData`` dataclass (no ``.repository_tree()``), that shape
+    stopped matching -- rewired onto ``GitLabCodeClient.list_repository_tree``
+    / ``get_file_blame`` (project full name + default branch, not a
+    python-gitlab project object).
+    """
+    drained_observations: list[dict[str, Any]] = []
 
-
-def _fetch_gitlab_blame_sync(gl_project, connector, project_id, repo_id, limit=50):
-    """Sync helper to fetch GitLab blame data."""
-    blame_batch = []
-    try:
-        # Get files from repository tree (paged to avoid huge responses)
-        files_to_process = []
-        for item in _iter_gitlab_repo_tree(
-            gl_project,
-            ref=gl_project.default_branch,
-            per_page=100,
-            limit=None,
-        ):
-            if item["type"] == "blob" and not is_skippable(item["path"]):
-                files_to_process.append(item["path"])
-                if len(files_to_process) >= limit:
-                    break
-
-        # Limit files
-        files_to_process = files_to_process[:limit]
-        logging.debug(
-            "GitLab blame: processing %d files (limit %d)",
-            len(files_to_process),
-            limit,
-        )
-
-        for idx, file_path in enumerate(files_to_process, start=1):
+    async def _run() -> list[Any]:
+        async with _gitlab_code_client_from_connector(connector) as client:
             try:
+                try:
+                    tree_items = await client.list_repository_tree(
+                        project_full_name, ref=default_branch
+                    )
+                except Exception as e:
+                    if _is_rate_limit_exception(e):
+                        raise
+                    logging.error("Error fetching files for blame: %s", e)
+                    return []
+
+                files_to_process: list[str] = []
+                for item in tree_items:
+                    if item.get("type") == "blob" and not is_skippable(
+                        item.get("path", "")
+                    ):
+                        files_to_process.append(item["path"])
+                        if len(files_to_process) >= limit:
+                            break
+                files_to_process = files_to_process[:limit]
                 logging.debug(
-                    "GitLab blame fetch %d/%d: %s",
-                    idx,
+                    "GitLab blame: processing %d files (limit %d)",
                     len(files_to_process),
-                    file_path,
+                    limit,
                 )
-                blame = connector.get_file_blame(
-                    project_id=project_id,
-                    file_path=file_path,
-                    ref=gl_project.default_branch,
-                )
-                if blame and blame.ranges:
-                    for r in blame.ranges:
-                        blame_obj = GitBlame(
-                            repo_id=repo_id,
-                            path=file_path,
-                            line_no=r.starting_line,
-                            author_name=r.author,
-                            author_email=r.author_email,
-                            commit_hash=r.commit_sha,
-                            line="<remote>",
-                            author_when=datetime.now(timezone.utc),
+
+                blame_batch: list[Any] = []
+                for idx, file_path in enumerate(files_to_process, start=1):
+                    try:
+                        logging.debug(
+                            "GitLab blame fetch %d/%d: %s",
+                            idx,
+                            len(files_to_process),
+                            file_path,
                         )
-                        blame_batch.append(blame_obj)
-            except Exception as e:
-                logging.warning(f"Failed to get blame for {file_path}: {e}")
+                        blame = await client.get_file_blame(
+                            project_full_name, file_path, ref=default_branch
+                        )
+                        if blame and blame.ranges:
+                            for r in blame.ranges:
+                                blame_batch.append(
+                                    GitBlame(
+                                        repo_id=repo_id,
+                                        path=file_path,
+                                        line_no=r.starting_line,
+                                        author_name=r.author,
+                                        author_email=r.author_email,
+                                        commit_hash=r.commit_sha,
+                                        line="<remote>",
+                                        author_when=datetime.now(timezone.utc),
+                                    )
+                                )
+                    except Exception as e:
+                        if _is_rate_limit_exception(e):
+                            raise
+                        logging.warning("Failed to get blame for %s: %s", file_path, e)
+                return blame_batch
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
 
-    except Exception as e:
-        logging.error(f"Error fetching files for blame: {e}")
-
-    return blame_batch
+    try:
+        return asyncio.run(_run())
+    finally:
+        _drain_gitlab_code_usage(
+            "_fetch_gitlab_blame_sync", drained_observations, usage_sink
+        )
 
 
 # Bounds for API-based file-content backfill (parity with the GitHub
@@ -1434,6 +1451,30 @@ async def _fetch_scannable_contents(
         )
 
 
+async def _fetch_gitlab_repository_tree(
+    connector: Any,
+    project_full_name: str,
+    ref: str,
+    usage_sink: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    drained_observations: list[dict[str, Any]] = []
+    try:
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                return await client.list_repository_tree(project_full_name, ref=ref)
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
+    except Exception as e:
+        if _is_rate_limit_exception(e):
+            raise
+        logging.warning("Failed to list GitLab files for %s: %s", project_full_name, e)
+        return []
+    finally:
+        _drain_gitlab_code_usage(
+            "_fetch_gitlab_repository_tree", drained_observations, usage_sink
+        )
+
+
 async def _backfill_gitlab_missing_data(
     store: Any,
     ingestion_sink: IngestionSink,
@@ -1480,25 +1521,12 @@ async def _backfill_gitlab_missing_data(
     if not (needs_files or needs_blame or needs_commit_stats):
         return
 
-    try:
-        project = connector.gitlab.projects.get(project_full_name)
-    except Exception as e:
-        logging.warning(f"Failed to load GitLab project {project_full_name}: {e}")
-        return
-
     file_paths: list[str] = []
     blame_paths: list[str] = []
     if needs_files or needs_blame:
-        try:
-            items = _iter_gitlab_repo_tree(
-                project,
-                ref=default_branch,
-                per_page=100,
-                limit=None,
-            )
-        except Exception as e:
-            logging.warning(f"Failed to list GitLab files for {project_full_name}: {e}")
-            items = []
+        items = await _fetch_gitlab_repository_tree(
+            connector, project_full_name, default_branch, usage_sink
+        )
 
         for item in items or []:
             if item.get("type") != "blob":
@@ -1604,7 +1632,7 @@ async def _backfill_gitlab_missing_data(
                         for path in blame_paths:
                             try:
                                 blame_items = await client.get_file_blame(
-                                    project.id, path, ref=default_branch
+                                    project_full_name, path, ref=default_branch
                                 )
                             except Exception as e:
                                 if _is_rate_limit_exception(e):
@@ -2118,7 +2146,7 @@ async def process_gitlab_project(
         # 1. Fetch Project Info
         logging.info("Fetching project information...")
         gl_project = await loop.run_in_executor(
-            None, _fetch_gitlab_project_info_sync, connector, project_id
+            None, _fetch_gitlab_project_info_sync, connector, project_id, usage_sink
         )
 
         logging.info(f"Found project: {gl_project.name}")
@@ -2326,12 +2354,15 @@ async def process_gitlab_project(
             logging.info("Fetching blame data from GitLab (this may take a while)...")
             blame_batch = await loop.run_in_executor(
                 None,
-                _fetch_gitlab_blame_sync,
-                gl_project,
-                connector,
-                project_id,
-                db_repo.id,
-                50,
+                partial(
+                    _fetch_gitlab_blame_sync,
+                    connector,
+                    gl_project.path_with_namespace,
+                    gl_project.default_branch,
+                    db_repo.id,
+                    50,
+                    usage_sink,
+                ),
             )
 
             if blame_batch:
@@ -2407,6 +2438,7 @@ async def process_gitlab_projects_batch(
     blame_only: bool = False,
     backfill_missing: bool = True,
     since: datetime | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> None:
     """
     Process multiple GitLab projects using batch processing with pattern matching.
@@ -2500,7 +2532,7 @@ async def process_gitlab_projects_batch(
             return
 
         gl_project = None
-        usage_sink: list[dict[str, Any]] = []
+        project_usage_sink = usage_sink if usage_sink is not None else []
         if sync_git:
             # Fetch commits and stats to populate git_commits/git_commit_stats.
             if max_commits_per_project is None and since is None:
@@ -2517,7 +2549,7 @@ async def process_gitlab_projects_batch(
                     db_repo.id,
                     since,
                     None,
-                    usage_sink,
+                    project_usage_sink,
                 )
                 if commit_objects:
                     await ingestion_sink.insert_git_commit_data(commit_objects)
@@ -2531,7 +2563,7 @@ async def process_gitlab_projects_batch(
                     db_repo.id,
                     50 if commit_limit is None else min(commit_limit, 50),
                     None,
-                    usage_sink,
+                    project_usage_sink,
                 )
                 if stats_objects:
                     await ingestion_sink.insert_git_commit_stats(stats_objects)
@@ -2565,7 +2597,7 @@ async def process_gitlab_projects_batch(
                         mr_gate,
                         since,
                         None,
-                        usage_sink,
+                        project_usage_sink,
                     )
             except PartialGitLabMrSyncError as e:
                 # Degraded review fetch skipped MR rows for this project. Keep
@@ -2603,7 +2635,7 @@ async def process_gitlab_projects_batch(
                     db_repo.id,
                     BATCH_SIZE,
                     since,
-                    usage_sink,
+                    project_usage_sink,
                 )
                 if pipeline_runs:
                     await ingestion_sink.insert_ci_pipeline_runs(pipeline_runs)
@@ -2617,9 +2649,7 @@ async def process_gitlab_projects_batch(
         if sync_tests:
             try:
                 if gl_project is None:
-                    gl_project = await loop.run_in_executor(
-                        None, connector.gitlab.projects.get, project_info.id
-                    )
+                    gl_project = project_info
                 await _sync_gitlab_test_reports(
                     connector=connector,
                     gl_project=gl_project,
@@ -2630,7 +2660,7 @@ async def process_gitlab_projects_batch(
                     ingestion_sink=ingestion_sink,
                     loop=loop,
                     since=since,
-                    usage_sink=usage_sink,
+                    usage_sink=project_usage_sink,
                 )
             except Exception as e:
                 logging.warning(
@@ -2649,7 +2679,7 @@ async def process_gitlab_projects_batch(
                     db_repo.id,
                     BATCH_SIZE,
                     since,
-                    usage_sink,
+                    project_usage_sink,
                 )
                 if deployments:
                     await ingestion_sink.insert_deployments(deployments)
@@ -2690,6 +2720,7 @@ async def process_gitlab_projects_batch(
                     db_repo.id,
                     BATCH_SIZE,
                     since,
+                    project_usage_sink,
                 )
                 if security_alerts:
                     insert_security_alerts = getattr(
@@ -2732,7 +2763,7 @@ async def process_gitlab_projects_batch(
                     max_commits=max_commits_per_project,
                     include_blame=True,
                     include_commit_stats=False,
-                    usage_sink=usage_sink,
+                    usage_sink=project_usage_sink,
                 )
             except Exception as e:
                 logging.debug(
@@ -2773,7 +2804,79 @@ async def process_gitlab_projects_batch(
             else:
                 loop.call_soon_threadsafe(_enqueue)
 
+    async def _discover_projects() -> list[Repository]:
+        effective_group = _gitlab_effective_group(group_name, pattern)
+        drained_observations: list[dict[str, Any]] = []
+        try:
+            async with _gitlab_code_client_from_connector(connector) as client:
+                try:
+                    return await client.list_projects(
+                        group_name=effective_group,
+                        pattern=pattern,
+                        max_projects=max_projects,
+                    )
+                finally:
+                    drained_observations.extend(client.drain_usage_observations())
+        finally:
+            _drain_gitlab_code_usage(
+                "process_gitlab_projects_batch[discover]",
+                drained_observations,
+                usage_sink,
+            )
+
+    async def _process_project_stats(project: Repository) -> None:
+        semaphore = project_stats_semaphore
+        async with semaphore:
+            batch_result_cls = cast(Any, BatchResult)
+            try:
+                # Cap the stats-only commit fetch the same way the historical
+                # get_repo_stats_by_project page fetch was implicitly bounded
+                # (~100, GitLab's default page size): an unset
+                # max_commits_per_project must NOT fall through to
+                # GitLabCodeClient.get_commits(max_commits=None), which
+                # paginates up to 10k pages of full project history.
+                commit_limit = max_commits_per_project or 100
+                commits, _commit_objects = await loop.run_in_executor(
+                    None,
+                    _fetch_gitlab_commits_sync,
+                    connector,
+                    project.id,
+                    commit_limit,
+                    None,
+                    since,
+                    None,
+                    usage_sink,
+                )
+                stats_limit = resolve_commit_stats_limit(
+                    len(commits), max_commits_per_project, since
+                )
+                stat_objects = await loop.run_in_executor(
+                    None,
+                    _fetch_gitlab_commit_stats_sync,
+                    connector,
+                    project.id,
+                    commits,
+                    None,
+                    stats_limit,
+                    None,
+                    usage_sink,
+                )
+                result = batch_result_cls(
+                    repository=project,
+                    stats=_repo_stats_from_gitlab_commits(commits, stat_objects),
+                    success=True,
+                )
+            except Exception as e:
+                if _is_rate_limit_exception(e):
+                    raise
+                logging.warning("Failed to get stats for %s: %s", project.full_name, e)
+                result = batch_result_cls(
+                    repository=project, error=str(e), success=False
+                )
+            on_project_complete(result)
+
     try:
+        projects = await _discover_projects()
         if sync_git:
             results_queue = asyncio.Queue(maxsize=max(1, max_concurrent * 2))
 
@@ -2790,30 +2893,11 @@ async def process_gitlab_projects_batch(
 
             consumer_task = asyncio.create_task(_consume_results())
 
-            if use_async:
-                await connector.get_projects_with_stats_async(
-                    group_name=group_name,
-                    pattern=pattern,
-                    batch_size=batch_size,
-                    max_concurrent=max_concurrent,
-                    rate_limit_delay=rate_limit_delay,
-                    max_commits_per_repo=max_commits_per_project,
-                    max_repos=max_projects,
-                    on_project_complete=on_project_complete,
-                )
-            else:
-                await loop.run_in_executor(
-                    None,
-                    lambda: connector.get_projects_with_stats(
-                        group_name=group_name,
-                        pattern=pattern,
-                        batch_size=batch_size,
-                        max_concurrent=max_concurrent,
-                        rate_limit_delay=rate_limit_delay,
-                        max_commits_per_repo=max_commits_per_project,
-                        max_repos=max_projects,
-                        on_project_complete=on_project_complete,
-                    ),
+            project_stats_semaphore = asyncio.Semaphore(max(1, max_concurrent))
+            for batch_start in range(0, len(projects), max(1, batch_size)):
+                batch = projects[batch_start : batch_start + max(1, batch_size)]
+                await asyncio.gather(
+                    *(_process_project_stats(project) for project in batch)
                 )
 
             # Wait for the queue to drain, but bail out if the consumer dies
@@ -2841,14 +2925,6 @@ async def process_gitlab_projects_batch(
                 group_name,
                 pattern,
                 max_projects,
-            )
-            projects = await loop.run_in_executor(
-                None,
-                lambda: connector._get_projects_for_processing(
-                    group_name=group_name,
-                    pattern=pattern,
-                    max_repos=max_projects,
-                ),
             )
             logging.info("Discovered %d GitLab projects for PR sync", len(projects))
             semaphore = asyncio.Semaphore(max(1, max_concurrent))

@@ -187,8 +187,8 @@ _GH_REPO_CLIENT = (
 )
 _GL_CONNECTOR = "dev_health_ops.connectors.gitlab.GitLabConnector"
 _GH_APP_PROVIDER = "dev_health_ops.connectors.utils.github_app.GitHubAppTokenProvider"
-_GL_MEMBERSHIP_HELPER = (
-    "dev_health_ops.api.admin.routers.credentials._list_gitlab_membership_repos"
+_GL_CODE_CLIENT_REPOS = (
+    "dev_health_ops.api.admin.routers.credentials._list_gitlab_code_client_repos"
 )
 
 
@@ -475,7 +475,7 @@ async def test_no_owner_gitlab_enumerates_membership_scoped(client):
             ),
         ) as _,
         patch(_GL_CONNECTOR) as MockGLConnector,
-        patch(_GL_MEMBERSHIP_HELPER, return_value=gl_repos) as MockMembership,
+        patch(_GL_CODE_CLIENT_REPOS, return_value=gl_repos) as MockCodeClientRepos,
     ):
         resp = await ac.get(
             f"/api/v1/admin/credentials/{state['cred_id']}/repos",
@@ -487,8 +487,15 @@ async def test_no_owner_gitlab_enumerates_membership_scoped(client):
     assert body["provider"] == "gitlab"
     assert body["total"] == 1
     assert body["repos"][0]["name"] == "infra"
-    # Must use membership-scoped helper, NOT the connector's unscoped list
-    MockMembership.assert_called_once()
+    # Must use the membership-scoped code-client helper, NOT the connector's
+    # unscoped list
+    MockCodeClientRepos.assert_called_once_with(
+        url="https://gitlab.com",
+        token="glpat_fake",
+        owner=None,
+        search=None,
+        max_repos=100,
+    )
     MockGLConnector.return_value.list_repositories.assert_not_called()
 
 
@@ -605,7 +612,7 @@ async def test_no_owner_gitlab_search_uses_membership_scoped_with_pattern(client
             ),
         ) as _,
         patch(_GL_CONNECTOR) as MockGLConnector,
-        patch(_GL_MEMBERSHIP_HELPER, return_value=gl_repos) as MockMembership,
+        patch(_GL_CODE_CLIENT_REPOS, return_value=gl_repos) as MockCodeClientRepos,
     ):
         resp = await ac.get(
             f"/api/v1/admin/credentials/{state['cred_id']}/repos",
@@ -616,10 +623,12 @@ async def test_no_owner_gitlab_search_uses_membership_scoped_with_pattern(client
     body = resp.json()
     assert body["provider"] == "gitlab"
     assert body["repos"][0]["name"] == "infra-api"
-    # Must use membership-scoped helper with search forwarded for client-side filtering
-    MockMembership.assert_called_once_with(
+    # Must use the membership-scoped code-client helper with search forwarded
+    # for client-side filtering
+    MockCodeClientRepos.assert_called_once_with(
         url="https://gitlab.com",
         token="glpat_fake",
+        owner=None,
         search="api",
         max_repos=100,
     )
@@ -667,7 +676,7 @@ async def test_gitlab_base_url_key_used_for_self_hosted(client):
             ),
         ) as _,
         patch(_GL_CONNECTOR) as MockGLConnector,
-        patch(_GL_MEMBERSHIP_HELPER, return_value=gl_repos) as MockMembership,
+        patch(_GL_CODE_CLIENT_REPOS, return_value=gl_repos) as MockCodeClientRepos,
     ):
         resp = await ac.get(
             f"/api/v1/admin/credentials/{state['cred_id']}/repos",
@@ -677,10 +686,11 @@ async def test_gitlab_base_url_key_used_for_self_hosted(client):
     body = resp.json()
     assert body["total"] == 1
     assert body["repos"][0]["name"] == "self-hosted-repo"
-    # Membership helper must be called with the self-hosted URL, NOT gitlab.com
-    MockMembership.assert_called_once_with(
+    # Code-client helper must be called with the self-hosted URL, NOT gitlab.com
+    MockCodeClientRepos.assert_called_once_with(
         url="https://gitlab.example.com",
         token="glpat_selfhosted",
+        owner=None,
         search=None,
         max_repos=100,
     )
@@ -860,7 +870,7 @@ async def test_gitlab_internal_url_rejected_ssrf(client):
                 ),
             ) as _,
             patch(_GL_CONNECTOR) as MockGLConnector,
-            patch(_GL_MEMBERSHIP_HELPER) as MockMembership,
+            patch(_GL_CODE_CLIENT_REPOS) as MockCodeClientRepos,
         ):
             resp = await ac.get(
                 f"/api/v1/admin/credentials/{state['cred_id']}/repos",
@@ -869,9 +879,9 @@ async def test_gitlab_internal_url_rejected_ssrf(client):
         assert resp.status_code == 400, (
             f"Expected 400 for {internal_url}, got {resp.status_code}"
         )
-        # Connector and membership helper must NOT have been called
+        # Connector and code-client helper must NOT have been called
         MockGLConnector.assert_not_called()
-        MockMembership.assert_not_called()
+        MockCodeClientRepos.assert_not_called()
 
 
 @pytest.mark.asyncio

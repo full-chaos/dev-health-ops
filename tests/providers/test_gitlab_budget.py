@@ -103,6 +103,19 @@ def test_gitlab_budget_has_code_client_family_prefix_markers() -> None:
     assert GITLAB_USAGE_RESOLVER.resolve(
         transport="rest", operation="project:GET /projects/{id}/repository/commits"
     ) == ("project", BudgetDimension.REST_CORE)
+    # CHAOS-2817/CS15b: project metadata + discovery (get_project/list_projects/
+    # list_repository_tree) author the same "project:" prefix, so they resolve
+    # via the explicit-prefix short-circuit without needing new markers.
+    for operation in (
+        "project:GET /projects/{id}",
+        "project:GET /projects",
+        "project:GET /groups/{id}/projects",
+        "project:GET /projects/{id}/repository/tree",
+    ):
+        assert GITLAB_USAGE_RESOLVER.resolve(transport="rest", operation=operation) == (
+            "project",
+            BudgetDimension.REST_CORE,
+        )
 
 
 def test_gitlab_budget_route_family_limits_override_dimension_defaults() -> None:

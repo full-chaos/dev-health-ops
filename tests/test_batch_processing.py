@@ -43,6 +43,31 @@ def _enable_connector_stubs(monkeypatch) -> None:
     monkeypatch.setattr(processors.gitlab, "RateLimitGate", RateLimitGate)
 
 
+class _GitLabProjectDiscoveryClient:
+    def __init__(self, projects):
+        self._projects = projects
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def list_projects(self, **kwargs):
+        return self._projects
+
+    def drain_usage_observations(self):
+        return [{"route_family": "project"}]
+
+
+def _stub_gitlab_project_discovery(monkeypatch, projects) -> None:
+    monkeypatch.setattr(
+        processors.gitlab,
+        "_gitlab_code_client_from_connector",
+        lambda connector: _GitLabProjectDiscoveryClient(projects),
+    )
+
+
 def _github_commits_async_from_sync(fake_fetch):
     async def _wrapped(
         connector,
@@ -323,6 +348,7 @@ async def test_process_gitlab_projects_batch_upserts_during_sync_processing(
     project.default_branch = "main"
 
     result = BatchResult(repository=project, stats=None, success=True)
+    _stub_gitlab_project_discovery(monkeypatch, [project])
 
     class DummyConnector:
         def __init__(self, url: str, private_token: str):
@@ -411,6 +437,7 @@ async def test_process_gitlab_projects_batch_persists_instance_discriminator(
     project.default_branch = "main"
 
     result = BatchResult(repository=project, stats=None, success=True)
+    _stub_gitlab_project_discovery(monkeypatch, [project])
 
     class DummyConnector:
         def __init__(self, url: str, private_token: str):
@@ -1679,6 +1706,7 @@ async def test_process_gitlab_projects_batch_stores_commits_and_stats(monkeypatc
     project.default_branch = "main"
 
     result = BatchResult(repository=project, stats=None, success=True)
+    _stub_gitlab_project_discovery(monkeypatch, [project])
 
     def fake_fetch_commits(
         connector,
@@ -1784,6 +1812,114 @@ async def test_process_gitlab_projects_batch_stores_commits_and_stats(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_process_gitlab_projects_batch_since_prepass_persists_aggregate_stats(
+    monkeypatch,
+):
+    _enable_connector_stubs(monkeypatch)
+
+    since = datetime(2026, 5, 13, tzinfo=timezone.utc)
+    recorded_stats: list[GitCommitStat] = []
+
+    class DummyStore:
+        async def insert_repo(self, repo):
+            return
+
+        async def insert_git_commit_data(self, commit_data):
+            return
+
+        async def insert_git_commit_stats(self, commit_stats):
+            recorded_stats.extend(commit_stats)
+
+        async def insert_git_pull_requests(self, pr_data):
+            return
+
+    project = Mock()
+    project.id = 457
+    project.full_name = "group/windowed-stats"
+    project.url = "https://example.com/group/windowed-stats"
+    project.default_branch = "main"
+
+    class DummyConnector:
+        def __init__(self, url: str, private_token: str):
+            self.url = url
+            self.private_token = private_token
+
+        def close(self):
+            return
+
+    class DummyCodeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def list_projects(self, **kwargs):
+            return [project]
+
+        async def get_commit_stats(self, project_id, commit_hash):
+            assert project_id == project.id
+            assert commit_hash == "gitlab-windowed"
+            return SimpleNamespace(additions=7, deletions=2)
+
+        def drain_usage_observations(self):
+            return []
+
+    def fake_fetch_commits(
+        connector,
+        project_id,
+        max_commits,
+        repo_id,
+        since=None,
+        until=None,
+        usage_sink=None,
+    ):
+        assert project_id == project.id
+        assert since is not None
+        return ["gitlab-windowed"], []
+
+    monkeypatch.setattr(processors.gitlab, "GitLabConnector", DummyConnector)
+    monkeypatch.setattr(
+        processors.gitlab,
+        "_gitlab_code_client_from_connector",
+        lambda connector: DummyCodeClient(),
+    )
+    monkeypatch.setattr(
+        processors.gitlab, "_fetch_gitlab_commits_sync", fake_fetch_commits
+    )
+
+    await processors.gitlab.process_gitlab_projects_batch(
+        store=DummyStore(),
+        token="test_token",
+        gitlab_url="https://gitlab.com",
+        group_name="group",
+        pattern="group/*",
+        batch_size=1,
+        max_concurrent=1,
+        rate_limit_delay=0,
+        use_async=True,
+        sync_git=True,
+        sync_prs=False,
+        sync_cicd=False,
+        sync_deployments=False,
+        sync_incidents=False,
+        sync_security=False,
+        sync_tests=False,
+        backfill_missing=False,
+        since=since,
+    )
+
+    aggregate_stats = [
+        stat
+        for stat in recorded_stats
+        if stat.commit_hash == processors.gitlab.AGGREGATE_STATS_MARKER
+    ]
+    assert len(aggregate_stats) == 1
+    assert aggregate_stats[0].additions == 7
+    assert aggregate_stats[0].deletions == 2
+
+
+@pytest.mark.asyncio
 async def test_process_gitlab_projects_batch_commit_rate_limit_propagates(
     monkeypatch,
 ):
@@ -1818,6 +1954,7 @@ async def test_process_gitlab_projects_batch_commit_rate_limit_propagates(
     project.default_branch = "main"
 
     result = BatchResult(repository=project, stats=None, success=True)
+    _stub_gitlab_project_discovery(monkeypatch, [project])
 
     def fake_fetch_commits(*args, **kwargs):
         raise RateLimitException("limited", retry_after_seconds=42.0)
@@ -1899,6 +2036,9 @@ async def test_process_gitlab_projects_batch_multi_project_rate_limit_does_not_h
         return BatchResult(repository=project, stats=None, success=True)
 
     results = [make_result(index) for index in range(3)]
+    _stub_gitlab_project_discovery(
+        monkeypatch, [result.repository for result in results]
+    )
 
     def fake_fetch_commits(*args, **kwargs):
         raise RateLimitException("limited", retry_after_seconds=42.0)
@@ -1972,6 +2112,7 @@ async def test_process_gitlab_projects_batch_threads_code_usage_sink(monkeypatch
     project.url = "https://example.com/group/proj-usage"
     project.default_branch = "main"
     result = BatchResult(repository=project, stats=None, success=True)
+    _stub_gitlab_project_discovery(monkeypatch, [project])
 
     class DummyConnector:
         def __init__(self, url: str, private_token: str):

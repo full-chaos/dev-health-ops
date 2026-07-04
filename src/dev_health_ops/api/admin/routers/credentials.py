@@ -21,6 +21,14 @@ from dev_health_ops.api.admin.schemas import (
 )
 from dev_health_ops.api.services.configuration import IntegrationCredentialsService
 from dev_health_ops.credentials.resolver import github_credentials_from_mapping
+from dev_health_ops.exceptions import (
+    APIException,
+    AuthenticationException,
+    NotFoundException,
+    RateLimitException,
+)
+from dev_health_ops.providers.github.client import GitHubAuth
+from dev_health_ops.providers.github.code_client import GitHubCodeClient
 from dev_health_ops.sync.error_sanitize import sanitize_error_text
 
 from .common import get_session
@@ -118,15 +126,7 @@ async def list_credential_repos(
     provider = str(getattr(credential, "provider"))
     config: dict[str, Any] = getattr(credential, "config") or {}
 
-    from dev_health_ops.connectors.exceptions import (
-        AuthenticationException,
-        NotFoundException,
-        RateLimitException,
-    )
-
     if provider == "github":
-        from dev_health_ops.connectors.github import GitHubConnector
-
         github_credentials = _github_credentials_or_400(
             {
                 **decrypted,
@@ -140,44 +140,45 @@ async def list_credential_repos(
             or _string_value(decrypted.get("org"))
         )
         try:
-            github_connector = GitHubConnector(credentials=github_credentials)
-        except Exception as exc:
-            raise HTTPException(
-                status_code=401, detail="GitHub App authentication failed"
-            ) from exc
-        try:
             if not effective_owner and github_credentials.is_app_auth:
-                # GitHub App installation tokens have no user surface.
-                # Enumerate installation repos directly via the REST API,
-                # then apply search as a client-side name filter.
                 repos = await _list_github_app_installation_repos(
                     github_credentials=github_credentials,
                     base_url=github_credentials.base_url or "https://api.github.com",
                     search=search,
                     max_repos=max_repos,
                 )
-            elif not effective_owner and search:
-                # Blank owner + search: enumerate token-wide repos and filter
-                # client-side via pattern to avoid a global GitHub search.
-                repos = github_connector.list_repositories(
-                    org_name=None,
-                    search=None,
-                    pattern=f"*{search}*",
-                    max_repos=max_repos,
-                )
             else:
-                repos = github_connector.list_repositories(
-                    org_name=effective_owner or None,
-                    search=search,
-                    max_repos=max_repos,
-                )
+                client = await _github_repo_list_client(github_credentials)
+                try:
+                    repos = await client.list_repositories(
+                        org_name=effective_owner or None,
+                        search=search if effective_owner else None,
+                        pattern=f"*{search}*"
+                        if search and not effective_owner
+                        else None,
+                        max_repos=max_repos,
+                    )
+                finally:
+                    client.drain_usage_observations()
+                    await client.close()
         except NotFoundException:
             return DiscoveredReposResponse(provider=provider, repos=[], total=0)
         except AuthenticationException as exc:
             raise HTTPException(status_code=401, detail=str(exc))
         except RateLimitException as exc:
             raise HTTPException(status_code=429, detail=str(exc))
+        except APIException as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
     elif provider == "gitlab":
+        from dev_health_ops.connectors.exceptions import (
+            AuthenticationException as GitLabAuthenticationException,
+        )
+        from dev_health_ops.connectors.exceptions import (
+            NotFoundException as GitLabNotFoundException,
+        )
+        from dev_health_ops.connectors.exceptions import (
+            RateLimitException as GitLabRateLimitException,
+        )
         from dev_health_ops.connectors.gitlab import GitLabConnector
 
         token = decrypted.get("token")
@@ -199,10 +200,6 @@ async def list_credential_repos(
         effective_owner = owner or _string_value(config.get("group"))
         try:
             if not effective_owner:
-                # Blank owner: enumerate only membership-scoped projects to
-                # avoid returning globally-visible public projects the token
-                # is not a member of. Bypass the connector (frozen) and call
-                # python-gitlab directly with membership=True.
                 repos = _list_gitlab_membership_repos(
                     url=url,
                     token=token,
@@ -215,11 +212,11 @@ async def list_credential_repos(
                     search=search,
                     max_repos=max_repos,
                 )
-        except NotFoundException:
+        except GitLabNotFoundException:
             return DiscoveredReposResponse(provider=provider, repos=[], total=0)
-        except AuthenticationException as exc:
+        except GitLabAuthenticationException as exc:
             raise HTTPException(status_code=401, detail=str(exc))
-        except RateLimitException as exc:
+        except GitLabRateLimitException as exc:
             raise HTTPException(status_code=429, detail=str(exc))
     else:
         raise HTTPException(
@@ -435,6 +432,29 @@ def _build_safe_url(validated_base: str, path: str) -> str:
     return urlunparse((parsed.scheme, parsed.netloc, safe_path, "", "", ""))
 
 
+async def _github_repo_list_client(github_credentials: Any) -> GitHubCodeClient:
+    if github_credentials.is_app_auth:
+        from dev_health_ops.connectors.utils.github_app import GitHubAppTokenProvider
+
+        assert github_credentials.app_id is not None
+        assert github_credentials.private_key is not None
+        assert github_credentials.installation_id is not None
+        try:
+            token = GitHubAppTokenProvider(
+                app_id=github_credentials.app_id,
+                private_key=github_credentials.private_key,
+                installation_id=github_credentials.installation_id,
+                api_base_url=github_credentials.base_url or "https://api.github.com",
+            ).get_token()
+        except Exception as exc:
+            raise AuthenticationException("GitHub App authentication failed") from exc
+    else:
+        token = github_credentials.token
+    return GitHubCodeClient(
+        auth=GitHubAuth(token=token, base_url=github_credentials.base_url)
+    )
+
+
 async def _list_github_app_installation_repos(
     github_credentials: Any,
     base_url: str,
@@ -448,107 +468,22 @@ async def _list_github_app_installation_repos(
     Applies search as a client-side name filter (fnmatch) to avoid a global
     GitHub search.
     """
-    import fnmatch
-
-    import httpx
-
-    from dev_health_ops.connectors.models import Repository
-    from dev_health_ops.connectors.utils.github_app import GitHubAppTokenProvider
-
-    assert github_credentials.app_id is not None
-    assert github_credentials.private_key is not None
-    assert github_credentials.installation_id is not None
-
-    token = GitHubAppTokenProvider(
-        app_id=github_credentials.app_id,
-        private_key=github_credentials.private_key,
-        installation_id=github_credentials.installation_id,
-        api_base_url=base_url,
-    ).get_token()
-
-    pattern = f"*{search}*" if search else None
-    repos: list[Any] = []
-    page = 1
-    per_page = 100
-
-    async with httpx.AsyncClient() as client:
-        while True:
-            resp = await client.get(
-                _build_safe_url(base_url, "installation/repositories"),
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Accept": "application/vnd.github+json",
-                    "X-GitHub-Api-Version": "2022-11-28",
-                },
-                params={"per_page": per_page, "page": page},
-                timeout=10,
-            )
-            if resp.status_code == 401:
-                raise HTTPException(
-                    status_code=401,
-                    detail="GitHub App authentication failed",
-                )
-            if resp.status_code == 403:
-                body_lower = resp.text.lower()
-                remaining = resp.headers.get("x-ratelimit-remaining")
-                retry_after = resp.headers.get("retry-after")
-                is_rate_limit = (
-                    remaining == "0"
-                    or retry_after is not None
-                    or "rate limit" in body_lower
-                    or "abuse" in body_lower
-                    or "secondary" in body_lower
-                )
-                if is_rate_limit:
-                    raise HTTPException(
-                        status_code=429,
-                        detail="GitHub API rate limit exceeded",
-                    )
-                raise HTTPException(
-                    status_code=403,
-                    detail="GitHub App permission denied",
-                )
-            if resp.status_code == 429:
-                raise HTTPException(
-                    status_code=429,
-                    detail="GitHub API rate limit exceeded",
-                )
-            if resp.status_code >= 500:
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"GitHub API error: {resp.status_code}",
-                )
-            if resp.status_code != 200:
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"GitHub API error: {resp.status_code}",
-                )
-            data = resp.json()
-            page_repos = data.get("repositories", [])
-            if not page_repos:
-                break
-            for r in page_repos:
-                if pattern and not fnmatch.fnmatch(
-                    (r.get("full_name") or "").lower(), pattern.lower()
-                ):
-                    continue
-                repos.append(
-                    Repository(
-                        id=r["id"],
-                        name=r["name"],
-                        full_name=r["full_name"],
-                        default_branch=r.get("default_branch") or "main",
-                        description=r.get("description"),
-                        url=r.get("html_url") or "",
-                    )
-                )
-                if len(repos) >= max_repos:
-                    return repos
-            if len(page_repos) < per_page:
-                break
-            page += 1
-
-    return repos
+    _validated_github_base_url(base_url)
+    client = await _github_repo_list_client(github_credentials)
+    try:
+        return await client.list_installation_repositories(
+            search=search,
+            max_repos=max_repos,
+        )
+    except AuthenticationException as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except RateLimitException as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except APIException as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    finally:
+        client.drain_usage_observations()
+        await client.close()
 
 
 def _list_gitlab_membership_repos(

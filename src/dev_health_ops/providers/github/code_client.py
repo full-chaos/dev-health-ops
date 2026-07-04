@@ -24,6 +24,7 @@ import urllib.parse
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
+from fnmatch import fnmatchcase
 from math import ceil
 from typing import Any
 
@@ -74,6 +75,7 @@ FILES_ROUTE_FAMILY = "files"
 BLAME_ROUTE_FAMILY = "blame"
 PRS_ROUTE_FAMILY = "prs"
 INCIDENTS_ROUTE_FAMILY = "incidents"
+REPO_ROUTE_FAMILY = "repo"
 _GITHUB_DEPLOYMENTS_PER_PAGE = 100
 
 
@@ -155,6 +157,21 @@ class GitHubIssueData:
     state: str | None
     created_at: datetime | None
     closed_at: datetime | None
+
+
+@dataclass(frozen=True)
+class GitHubRepositoryData:
+    id: int
+    name: str
+    full_name: str
+    default_branch: str
+    description: str | None = None
+    url: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    language: str | None = None
+    stars: int = 0
+    forks: int = 0
 
 
 def _lowered_github_headers(response: httpx.Response) -> dict[str, str]:
@@ -484,6 +501,30 @@ def _issue_from_item(item: Mapping[str, Any]) -> GitHubIssueData:
     )
 
 
+def _repo_from_item(item: Mapping[str, Any]) -> GitHubRepositoryData:
+    return GitHubRepositoryData(
+        id=_int_or_zero(item.get("id")),
+        name=str(item.get("name") or ""),
+        full_name=str(item.get("full_name") or ""),
+        default_branch=str(item.get("default_branch") or "main"),
+        description=str(item["description"])
+        if item.get("description") is not None
+        else None,
+        url=str(item.get("html_url") or item.get("url") or ""),
+        created_at=_parse_alert_datetime(item.get("created_at")),
+        updated_at=_parse_alert_datetime(item.get("updated_at")),
+        language=str(item["language"]) if item.get("language") is not None else None,
+        stars=_int_or_zero(item.get("stargazers_count")),
+        forks=_int_or_zero(item.get("forks_count")),
+    )
+
+
+def _matches_repo_pattern(full_name: str, pattern: str | None) -> bool:
+    if pattern is None:
+        return True
+    return fnmatchcase(full_name.lower(), pattern.lower())
+
+
 def _pull_request_merged_at(item: Mapping[str, Any]) -> datetime | None:
     return _parse_alert_datetime(item.get("merged_at"))
 
@@ -563,6 +604,148 @@ class GitHubCodeClient:
             is_retryable_status=_github_is_retryable_status,
             transport=transport,
         )
+
+    async def get_repo(self, owner: str, repo: str) -> GitHubRepositoryData:
+        operation = f"{REPO_ROUTE_FAMILY}:GET /repos/{owner}/{repo}"
+        response = await self._core.request(
+            "GET",
+            _repo_path(owner, repo),
+            operation=operation,
+        )
+        payload = response.json()
+        if not isinstance(payload, Mapping):
+            raise APIException(
+                f"Unexpected repository response for {operation}: {type(payload)!r}"
+            )
+        return _repo_from_item(payload)
+
+    async def list_repositories(
+        self,
+        *,
+        org_name: str | None = None,
+        user_name: str | None = None,
+        search: str | None = None,
+        pattern: str | None = None,
+        max_repos: int | None = None,
+    ) -> list[GitHubRepositoryData]:
+        if search:
+            return await self._search_repositories(
+                org_name=org_name,
+                user_name=user_name,
+                search=search,
+                pattern=pattern,
+                max_repos=max_repos,
+            )
+
+        if org_name:
+            encoded_org = urllib.parse.quote(str(org_name), safe="")
+            path = f"/orgs/{encoded_org}/repos"
+            operation = f"{REPO_ROUTE_FAMILY}:GET /orgs/{org_name}/repos"
+        elif user_name:
+            encoded_user = urllib.parse.quote(str(user_name), safe="")
+            path = f"/users/{encoded_user}/repos"
+            operation = f"{REPO_ROUTE_FAMILY}:GET /users/{user_name}/repos"
+        else:
+            path = "/user/repos"
+            operation = f"{REPO_ROUTE_FAMILY}:GET /user/repos"
+
+        return await self._list_repo_page_payloads(
+            path=path,
+            operation=operation,
+            data_key=None,
+            pattern=pattern,
+            max_repos=max_repos,
+        )
+
+    async def list_installation_repositories(
+        self,
+        *,
+        search: str | None = None,
+        max_repos: int | None = None,
+    ) -> list[GitHubRepositoryData]:
+        pattern = f"*{search}*" if search else None
+        return await self._list_repo_page_payloads(
+            path="/installation/repositories",
+            operation=f"{REPO_ROUTE_FAMILY}:GET /installation/repositories",
+            data_key="repositories",
+            pattern=pattern,
+            max_repos=max_repos,
+        )
+
+    async def _search_repositories(
+        self,
+        *,
+        org_name: str | None,
+        user_name: str | None,
+        search: str,
+        pattern: str | None,
+        max_repos: int | None,
+    ) -> list[GitHubRepositoryData]:
+        query_parts = [search]
+        if org_name:
+            query_parts.append(f"org:{org_name}")
+        elif user_name:
+            query_parts.append(f"user:{user_name}")
+        return await self._list_repo_page_payloads(
+            path="/search/repositories",
+            operation=f"{REPO_ROUTE_FAMILY}:GET /search/repositories",
+            params={"q": " ".join(query_parts)},
+            data_key="items",
+            pattern=pattern,
+            max_repos=max_repos,
+        )
+
+    async def _list_repo_page_payloads(
+        self,
+        *,
+        path: str,
+        operation: str,
+        data_key: str | None,
+        pattern: str | None,
+        max_repos: int | None,
+        params: dict[str, Any] | None = None,
+    ) -> list[GitHubRepositoryData]:
+        request_params: dict[str, Any] = {"per_page": _GITHUB_DEPLOYMENTS_PER_PAGE}
+        if params:
+            request_params.update(params)
+        repos: list[GitHubRepositoryData] = []
+        next_url: str | None = path
+        next_params: dict[str, Any] | None = request_params
+        pages = 0
+        max_pages = 100
+        while next_url is not None:
+            if pages >= max_pages:
+                logger.warning(
+                    "%s pagination hit the %d-page cap for %s",
+                    "github",
+                    max_pages,
+                    operation,
+                )
+                break
+            response = await self._core.request(
+                "GET",
+                next_url,
+                operation=operation,
+                params=next_params,
+            )
+            pages += 1
+            payload = response.json()
+            page_items = payload.get(data_key, []) if data_key else payload
+            if not isinstance(page_items, list):
+                raise APIException(
+                    f"Unexpected paginated response for {operation}: {type(page_items)!r}"
+                )
+            for item in page_items:
+                if not isinstance(item, Mapping):
+                    continue
+                if not _matches_repo_pattern(str(item.get("full_name") or ""), pattern):
+                    continue
+                repos.append(_repo_from_item(item))
+                if max_repos is not None and len(repos) >= max_repos:
+                    return repos
+            next_url = response.links.get("next", {}).get("url")
+            next_params = None
+        return repos
 
     async def get_dependabot_alerts(
         self,
@@ -1092,12 +1275,14 @@ __all__ = [
     "FILES_ROUTE_FAMILY",
     "GIT_ROUTE_FAMILY",
     "INCIDENTS_ROUTE_FAMILY",
+    "REPO_ROUTE_FAMILY",
     "GitHubCodeClient",
     "GitHubCommitData",
     "GitHubCommitFileStatData",
     "GitHubDeploymentData",
     "GitHubIssueData",
     "GitHubPullData",
+    "GitHubRepositoryData",
     "GitHubWorkflowRunData",
     "GitHubReleaseData",
     "PRS_ROUTE_FAMILY",

@@ -117,6 +117,12 @@ def test_recorder_separates_transports_into_distinct_route_families() -> None:
     assert by_family["work_item_prs"]["dimension"] == "graphql_cost"
 
 
+def test_github_resolver_maps_repo_prefix_to_repo_family() -> None:
+    assert GITHUB_USAGE_RESOLVER.resolve(
+        transport="rest", operation="repo:GET /repos/acme/widgets"
+    ) == ("repo", BudgetDimension.REST_CORE)
+
+
 def test_recorder_skips_empty_observations() -> None:
     recorder = UsageRecorder(resolver=GITHUB_USAGE_RESOLVER)
     recorder.record(

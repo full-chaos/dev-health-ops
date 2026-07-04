@@ -40,9 +40,6 @@ async def _test_batch_deployments_threads_usage_sink(
         def __init__(self, token: str) -> None:
             self.token = token
 
-        def list_repositories(self, **kwargs: object) -> list[object]:
-            return [repo]
-
         def close(self) -> None:
             return None
 
@@ -66,8 +63,18 @@ async def _test_batch_deployments_threads_usage_sink(
             usage_sink.append({"route_family": "deployments", "request_count": 1})
         return []
 
+    async def fake_list_repos_for_batch(
+        connector: object, **kwargs: object
+    ) -> list[object]:
+        return [repo]
+
     monkeypatch.setattr(github_processor, "CONNECTORS_AVAILABLE", True)
     monkeypatch.setattr(github_processor, "GitHubConnector", DummyConnector)
+    monkeypatch.setattr(
+        github_processor,
+        "_list_github_repositories_for_batch",
+        fake_list_repos_for_batch,
+    )
     monkeypatch.setattr(
         github_processor, "_fetch_github_deployments_async", fake_fetch_deployments
     )

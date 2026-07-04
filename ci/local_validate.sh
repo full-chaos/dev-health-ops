@@ -229,13 +229,14 @@ ch_argmax_proof() {
   # resolver EXPLAIN, RMT-dedup-live) needs a SEEDED ClickHouse and is NOT part of this
   # gate (CI does not run it either). To run it by hand: create a scratch db, point
   # CLICKHOUSE_URI at it, `dev-hops fixtures generate`, then `pytest -m clickhouse`.
-  CLICKHOUSE_URI="${SCRATCH_URI}" DATABASE_URI="${SCRATCH_URI}" OTEL_ENABLED=false PYTHONPATH=src \
+  CLICKHOUSE_URI="${SCRATCH_URI}" DATABASE_URI="${SCRATCH_URI}" SCRATCH_DB="${SCRATCH_DB}" OTEL_ENABLED=false PYTHONPATH=src \
     "${PROXY_OFF[@]}" "${PYBIN}" - <<'PYEOF'
 import asyncio, os, sys
 from datetime import datetime, timezone
 
 uri = os.environ["CLICKHOUSE_URI"]
-assert "/ci_local_validate" in uri and "/default" not in uri, f"refusing non-scratch URI: {uri!r}"
+scratch_db = os.environ["SCRATCH_DB"]
+assert f"/{scratch_db}" in uri and "/default" not in uri, f"refusing non-scratch URI: {uri!r}"
 
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader

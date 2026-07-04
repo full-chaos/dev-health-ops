@@ -549,7 +549,7 @@ async def get_sync_run_units(
     run_id: str,
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
-    limit: int = 200,
+    limit: int | None = None,
 ) -> SyncRunUnitSummary:
     svc = SyncRunService(session, org_id)
     run = await svc.get_run(run_id)
@@ -586,5 +586,7 @@ async def get_sync_run_units(
         unit_count=total_units,
         next_retry_at=min(retry_times) if retry_times else None,
         retry_exhausted_unit_count=retry_exhausted_unit_count,
-        units=[_unit_to_response(u) for u in units[:limit]],
+        units=[
+            _unit_to_response(u) for u in (units if limit is None else units[:limit])
+        ],
     )

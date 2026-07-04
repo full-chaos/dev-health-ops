@@ -882,8 +882,9 @@ proof-of-pipe that the plumbing actually reaches a `budget_comparison` row:
 - **GitLab.** `process_gitlab_project` accepts the same `usage_sink`
   parameter for a uniform cross-provider adapter contract. Migrated
   GitLabCodeClient-backed families drain into it on both success and failure:
-  `security` (CS10), `pipelines`/`deployments` (CS11), `tests` (CS12), and
-  commits + aggregate commit stats under the existing `project` family (CS13).
+  `security` (CS10), `pipelines`/`deployments` (CS11), `tests` (CS12),
+  commits + aggregate commit stats (CS13), and `files`/`blame` (CS14) --
+  all under the existing `project` family.
   Frozen connector-only paths still leave the sink untouched until their own
   migration changeset lands.
 
@@ -1192,14 +1193,17 @@ paper over:
   `pipelines`+`deployments`
   ([CHAOS-2812](https://linear.app/fullchaos/issue/CHAOS-2812), CS11), and
   `tests` (+CI adapter usage draining;
-  [CHAOS-2813](https://linear.app/fullchaos/issue/CHAOS-2813), CS12), and
-  commits + aggregate commit stats under the `project` family
-  ([CHAOS-2814](https://linear.app/fullchaos/issue/CHAOS-2814), CS13)
+  [CHAOS-2813](https://linear.app/fullchaos/issue/CHAOS-2813), CS12),
+  commits + aggregate commit stats
+  ([CHAOS-2814](https://linear.app/fullchaos/issue/CHAOS-2814), CS13), and
+  `files`/`blame` (`get_file_contents` batched GraphQL blob fetch +
+  `get_file_blame` REST, both under the `project` family;
+  [CHAOS-2815](https://linear.app/fullchaos/issue/CHAOS-2815), CS14)
   code-dataset families are migrated onto the canonical, instrumented
   `providers/gitlab/code_client.py::GitLabCodeClient`. GitLab's remaining
-  frozen code-dataset methods (`files`/`blame`/
-  `merge_requests` listing + repo-metadata/batch orchestration) stay
-  unmigrated pending their own CHAOS-2773 changesets through CS17.
+  frozen code-dataset methods (`merge_requests` listing + repo-metadata/batch
+  orchestration) stay unmigrated pending their own CHAOS-2773 changesets
+  through CS17.
 
 
 ## References

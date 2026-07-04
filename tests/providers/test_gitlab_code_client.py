@@ -1415,3 +1415,218 @@ class TestFileBlameParity:
             raw_path.split(b"?")[0]
             == f"/api/v4/projects/42/repository/files/{expected_segment}/blame".encode()
         )
+
+
+# ---------------------------------------------------------------------------
+# ``merge_requests`` / ``notes`` datasets (CHAOS-2816/CS15): parity with the
+# legacy GitLab REST client MR list, MR commits, approvals, and notes helpers.
+# ---------------------------------------------------------------------------
+
+
+class TestMergeRequestsAndNotesParity:
+    @pytest.mark.asyncio
+    async def test_iter_merge_requests_uses_expected_query_and_usage_family(
+        self,
+    ) -> None:
+        mr_path = "/api/v4/projects/42/merge_requests"
+        mr = {
+            "id": "1001",
+            "iid": "7",
+            "title": "Ship it",
+            "updated_at": "2026-01-02T03:04:05Z",
+        }
+        transport, calls = _router_transport({mr_path: _json_response(200, [mr])})
+        client = _client(transport)
+
+        result = await client.iter_merge_requests(42, per_page=50)
+
+        assert result == [mr]
+        assert calls[mr_path] == 1
+        query = dict(cast(Any, transport).captured_urls[mr_path].params)
+        assert query == {
+            "state": "all",
+            "order_by": "updated_at",
+            "sort": "desc",
+            "page": "1",
+            "per_page": "50",
+        }
+        observations = client.drain_usage_observations()
+        assert observations[0]["route_family"] == "merge_requests"
+        assert observations[0]["request_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_get_merge_requests_page_uses_expected_page_query(self) -> None:
+        mr_path = "/api/v4/projects/42/merge_requests"
+        mr = {"iid": "7", "title": "Ship it"}
+        transport, calls = _router_transport({mr_path: _json_response(200, [mr])})
+        client = _client(transport)
+
+        result = await client.get_merge_requests_page(42, page=3, per_page=50)
+
+        assert result == [mr]
+        assert calls[mr_path] == 1
+        query = dict(cast(Any, transport).captured_urls[mr_path].params)
+        assert query == {
+            "state": "all",
+            "order_by": "updated_at",
+            "sort": "desc",
+            "page": "3",
+            "per_page": "50",
+        }
+        observations = client.drain_usage_observations()
+        assert observations[0]["route_family"] == "merge_requests"
+        assert observations[0]["request_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_iter_merge_requests_exhausts_empty_last_page(self) -> None:
+        mr_path = "/api/v4/projects/42/merge_requests"
+        transport, calls = _router_transport(
+            {
+                mr_path: [
+                    _json_response(200, [{"iid": 1}], {"X-Next-Page": "2"}),
+                    _json_response(200, []),
+                ]
+            }
+        )
+        client = _client(transport)
+
+        result = await client.iter_merge_requests(42, per_page=1)
+
+        assert result == [{"iid": 1}]
+        assert calls[mr_path] == 2
+        observations = client.drain_usage_observations()
+        assert observations[0]["request_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_iter_merge_requests_empty_first_page_records_one_request(
+        self,
+    ) -> None:
+        mr_path = "/api/v4/projects/42/merge_requests"
+        transport, calls = _router_transport({mr_path: _json_response(200, [])})
+        client = _client(transport)
+
+        result = await client.iter_merge_requests(42)
+
+        assert result == []
+        assert calls[mr_path] == 1
+        observations = client.drain_usage_observations()
+        assert observations[0]["request_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_iter_merge_requests_item_cap_uses_min_per_page(self) -> None:
+        mr_path = "/api/v4/projects/42/merge_requests"
+        transport, calls = _router_transport(
+            {mr_path: _json_response(200, [{"iid": 1}, {"iid": 2}])}
+        )
+        client = _client(transport)
+
+        result = await client.iter_merge_requests(42, max_items=2, per_page=100)
+
+        assert result == [{"iid": 1}, {"iid": 2}]
+        assert calls[mr_path] == 1
+        query = dict(cast(Any, transport).captured_urls[mr_path].params)
+        assert query["per_page"] == "2"
+
+    @pytest.mark.asyncio
+    async def test_iter_merge_requests_failure_preserves_partial_observations(
+        self,
+    ) -> None:
+        mr_path = "/api/v4/projects/42/merge_requests"
+        transport, calls = _router_transport(
+            {
+                mr_path: [
+                    _json_response(200, [{"iid": 1}], {"X-Next-Page": "2"}),
+                    _empty_response(500),
+                ]
+            }
+        )
+        client = _client(transport, max_retries=1)
+
+        with pytest.raises(APIException):
+            await client.iter_merge_requests(42, per_page=1)
+
+        assert calls[mr_path] == 2
+        observations = client.drain_usage_observations()
+        assert observations[0]["route_family"] == "merge_requests"
+        assert observations[0]["request_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_iter_merge_requests_encodes_project_path_segment(self) -> None:
+        project_id = "group/sub.project?x=1"
+        decoded_path = f"/api/v4/projects/{project_id}/merge_requests"
+        transport, calls = _router_transport({decoded_path: _json_response(200, [])})
+        client = _client(transport)
+
+        result = await client.iter_merge_requests(project_id)
+
+        assert result == []
+        assert calls[decoded_path] == 1
+        raw_path = cast(Any, transport).captured_raw_paths[decoded_path]
+        assert raw_path.split(b"?")[0] == (
+            f"/api/v4/projects/{quote(project_id, safe='')}/merge_requests".encode()
+        )
+
+    @pytest.mark.asyncio
+    async def test_iter_mr_commits_coerces_int_and_str_ids_in_path(self) -> None:
+        commits_path = "/api/v4/projects/42/merge_requests/7/commits"
+        commit = {"id": "abc123", "created_at": "2026-01-02T03:04:05Z"}
+        transport, calls = _router_transport(
+            {commits_path: _json_response(200, [commit])}
+        )
+        client = _client(transport)
+
+        result = await client.iter_mr_commits("42", 7)
+
+        assert result == [commit]
+        assert calls[commits_path] == 1
+        observations = client.drain_usage_observations()
+        assert observations[0]["route_family"] == "merge_requests"
+
+    @pytest.mark.asyncio
+    async def test_iter_mr_notes_exhausts_pages_and_records_notes_family(self) -> None:
+        notes_path = "/api/v4/projects/42/merge_requests/7/notes"
+        notes = [
+            {"id": 1, "created_at": "2026-01-02T03:04:05Z"},
+            {"id": 2, "created_at": "2026-01-02T03:05:05Z"},
+        ]
+        transport, calls = _router_transport(
+            {
+                notes_path: [
+                    _json_response(200, [notes[0]], {"X-Next-Page": "2"}),
+                    _json_response(200, [notes[1]]),
+                ]
+            }
+        )
+        client = _client(transport)
+
+        result = await client.iter_mr_notes(42, "7", per_page=2)
+
+        assert result == notes
+        assert calls[notes_path] == 2
+        query = dict(cast(Any, transport).captured_urls[notes_path].params)
+        assert query == {
+            "sort": "asc",
+            "order_by": "created_at",
+            "page": "2",
+            "per_page": "2",
+        }
+        observations = client.drain_usage_observations()
+        assert observations[0]["route_family"] == "notes"
+        assert observations[0]["request_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_get_mr_approvals_uses_single_request(self) -> None:
+        approvals_path = "/api/v4/projects/42/merge_requests/7/approvals"
+        approvals = {"approved_by": [{"user": {"id": "5", "username": "ada"}}]}
+        transport, calls = _router_transport(
+            {approvals_path: _json_response(200, approvals)}
+        )
+        client = _client(transport)
+
+        result = await client.get_mr_approvals(42, 7)
+
+        assert result == approvals
+        assert calls[approvals_path] == 1
+        observations = client.drain_usage_observations()
+        assert observations[0]["route_family"] == "merge_requests"
+        assert observations[0]["request_count"] == 1

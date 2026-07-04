@@ -8,6 +8,7 @@ import pytest
 # pre-existing providers._base <-> connectors circular import when this file
 # is collected in isolation (mirrors tests/test_deployment_pr_inference.py).
 import dev_health_ops.connectors  # noqa: F401
+import dev_health_ops.processors.gitlab as gitlab_processor
 from dev_health_ops.processors.github import _sync_github_prs_to_store
 from dev_health_ops.processors.gitlab import _sync_gitlab_mrs_to_store
 
@@ -144,36 +145,43 @@ async def test_github_pr_sync_retries_on_retry_after_and_persists():
 
 
 @pytest.mark.asyncio
-async def test_gitlab_mr_sync_retries_on_retry_after_and_persists():
+async def test_gitlab_mr_sync_retries_on_retry_after_and_persists(
+    monkeypatch: pytest.MonkeyPatch,
+):
     loop = asyncio.get_running_loop()
     repo_id = uuid.uuid4()
     store = _FakeStore()
 
-    class _RateLimit(Exception):
-        def __init__(self, retry_after_seconds):
-            super().__init__("rate limited")
-            self.retry_after_seconds = retry_after_seconds
+    class _RetryAfter(Exception):
+        def __init__(self):
+            super().__init__("retry later")
+            self.retry_after_seconds = 0
 
-    class _Rest:
+    class _CodeClient:
         def __init__(self):
             self.calls = 0
+            self.pages: list[int] = []
 
-        def get_merge_requests(
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get_merge_requests_page(
             self,
-            project_id=None,
-            state=None,
-            page=None,
-            per_page=None,
-            **_kwargs,
+            *,
+            project_id,
+            page,
+            state,
+            per_page,
         ):
             assert project_id is not None
-            assert page is not None
             assert per_page is not None
             assert state == "all"
+            self.pages.append(page)
             self.calls += 1
             if self.calls == 1:
-                raise _RateLimit(0)
-            if self.calls == 2:
                 return [
                     {
                         "iid": 7,
@@ -187,25 +195,30 @@ async def test_gitlab_mr_sync_retries_on_retry_after_and_persists():
                         "author": {"username": "alice"},
                     }
                 ]
+            if self.calls == 2:
+                raise _RetryAfter()
             return []
 
-        # MR-review reconstruction (CHAOS-2378) calls these per in-window MR.
-        # This test exercises rate-limit retry on get_merge_requests, not
-        # reviews, so they return empty (the legitimate "no reviews" path).
-        def get_merge_request_approvals(self, project_id, iid):
+        async def get_mr_approvals(self, project_id, iid):
             return {"approved_by": []}
 
-        def get_merge_request_notes(
-            self, project_id, iid, page=1, per_page=100, **_kwargs
-        ):
+        async def iter_mr_notes(self, project_id, iid, *, per_page):
+            return []
+
+        def drain_usage_observations(self):
             return []
 
     class _Connector:
         def __init__(self):
             self.per_page = 100
-            self.rest_client = _Rest()
 
+    client = _CodeClient()
     connector = _Connector()
+    monkeypatch.setattr(
+        gitlab_processor,
+        "_gitlab_code_client_from_connector",
+        lambda _connector: client,
+    )
     gate = _NoSleepGate()
 
     total = await loop.run_in_executor(
@@ -224,4 +237,5 @@ async def test_gitlab_mr_sync_retries_on_retry_after_and_persists():
     assert total == 1
     assert len(store.pr_batches) == 1
     assert store.pr_batches[0][0].number == 7
+    assert client.pages == [1, 2, 2]
     assert gate.penalties and gate.penalties[0] == 0.0

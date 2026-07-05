@@ -24,7 +24,8 @@ import types
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
 from unittest.mock import MagicMock, patch
@@ -674,6 +675,100 @@ async def test_backfill_paused_config_returns_409_without_dispatch(
 _T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
+@dataclass(frozen=True, slots=True)
+class _BackfillFreshnessTimes:
+    job_updated_at: datetime
+    unit_updated_at: datetime
+    unit_heartbeat_at: datetime | None
+
+
+async def _backfill_response_for_unit_activity(
+    session_maker,
+    seeded_state,
+    times: _BackfillFreshnessTimes,
+):
+    config_id = uuid.uuid4()
+    integration_id = uuid.uuid4()
+    source_id = uuid.uuid4()
+    sync_run_id = uuid.uuid4()
+
+    async with session_maker() as session:
+        config = SyncConfiguration(
+            name=f"bf-freshness-{config_id}",
+            provider="github",
+            org_id=seeded_state["org_id"],
+            integration_id=integration_id,
+        )
+        config.id = config_id
+        session.add_all(
+            [
+                config,
+                Integration(
+                    id=integration_id,
+                    org_id=seeded_state["org_id"],
+                    provider="github",
+                    name="github-integration",
+                    config={},
+                ),
+                IntegrationSource(
+                    id=source_id,
+                    org_id=seeded_state["org_id"],
+                    integration_id=integration_id,
+                    provider="github",
+                    source_type="repository",
+                    external_id="full-chaos/dev-health",
+                    name="dev-health",
+                    full_name="full-chaos/dev-health",
+                    is_enabled=True,
+                ),
+                SyncRun(
+                    id=sync_run_id,
+                    org_id=seeded_state["org_id"],
+                    integration_id=integration_id,
+                    triggered_by="backfill",
+                    mode="backfill",
+                    status=SyncRunStatus.RUNNING.value,
+                    total_units=2,
+                    completed_units=1,
+                    failed_units=0,
+                ),
+                SyncRunUnit(
+                    org_id=seeded_state["org_id"],
+                    sync_run_id=sync_run_id,
+                    integration_id=integration_id,
+                    source_id=source_id,
+                    provider="github",
+                    dataset_key="commits",
+                    cost_class="rest",
+                    mode="backfill",
+                    status="running",
+                    updated_at=times.unit_updated_at,
+                    last_heartbeat_at=times.unit_heartbeat_at,
+                ),
+                BackfillJob(
+                    id=uuid.uuid4(),
+                    org_id=seeded_state["org_id"],
+                    sync_config_id=config_id,
+                    celery_task_id=f"sync_run:{sync_run_id}",
+                    status="running",
+                    since_date=datetime(2025, 12, 1, tzinfo=timezone.utc).date(),
+                    before_date=datetime(2025, 12, 8, tzinfo=timezone.utc).date(),
+                    total_chunks=2,
+                    completed_chunks=0,
+                    failed_chunks=0,
+                    started_at=times.job_updated_at,
+                    created_at=times.job_updated_at,
+                    updated_at=times.job_updated_at,
+                ),
+            ]
+        )
+        await session.commit()
+
+        job = (await session.execute(select(BackfillJob))).scalar_one()
+        run_counts = await sync_router_module._backfill_job_run_counts(session, job)
+        return sync_router_module._backfill_job_response(job, run_counts)
+
+
 def _fake_unit(**overrides):
     base = dict(
         id=uuid.uuid4(),
@@ -730,6 +825,69 @@ def test_unit_to_response_projects_all_retry_result_keys():
     assert resp.linear_page_count == 12
     assert resp.linear_batch_count == 3
     assert resp.error_category == "soft_timeout"
+
+
+def test_backfill_job_response_includes_updated_at_freshness_timestamp():
+    """Given a persisted backfill job, the response exposes updated_at freshness."""
+    updated_at = datetime(2026, 1, 1, 0, 5, tzinfo=timezone.utc)
+    job = types.SimpleNamespace(
+        id=uuid.uuid4(),
+        sync_config_id=uuid.uuid4(),
+        status="running",
+        since_date=datetime(2025, 12, 1, tzinfo=timezone.utc).date(),
+        before_date=datetime(2025, 12, 8, tzinfo=timezone.utc).date(),
+        total_chunks=10,
+        completed_chunks=4,
+        failed_chunks=0,
+        error_message=None,
+        started_at=_T0,
+        completed_at=None,
+        created_at=_T0,
+        updated_at=updated_at,
+    )
+
+    response = sync_router_module._backfill_job_response(job)
+
+    assert response.updated_at == updated_at
+
+
+@pytest.mark.asyncio
+async def test_backfill_job_response_uses_linked_unit_activity_for_freshness(
+    session_maker, seeded_state
+):
+    stale_at = _T0 - timedelta(days=2)
+    recent_at = _T0 - timedelta(hours=1)
+    response = await _backfill_response_for_unit_activity(
+        session_maker,
+        seeded_state,
+        _BackfillFreshnessTimes(
+            job_updated_at=stale_at,
+            unit_updated_at=stale_at,
+            unit_heartbeat_at=recent_at,
+        ),
+    )
+
+    assert response.updated_at == recent_at
+    assert response.completed_chunks == 1
+
+
+@pytest.mark.asyncio
+async def test_backfill_job_response_remains_stale_when_linked_units_are_stale(
+    session_maker, seeded_state
+):
+    stale_at = _T0 - timedelta(days=2)
+    response = await _backfill_response_for_unit_activity(
+        session_maker,
+        seeded_state,
+        _BackfillFreshnessTimes(
+            job_updated_at=stale_at,
+            unit_updated_at=stale_at,
+            unit_heartbeat_at=None,
+        ),
+    )
+
+    assert response.updated_at == stale_at
+    assert response.completed_chunks == 1
 
 
 def test_unit_to_response_next_retry_at_derived_from_available_at_when_absent():

@@ -19,6 +19,7 @@ class BackfillJobResponse(BaseModel):
     started_at: datetime | None
     completed_at: datetime | None
     created_at: datetime
+    updated_at: datetime
 
 
 class BackfillJobListResponse(BaseModel):

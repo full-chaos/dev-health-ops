@@ -44,6 +44,22 @@ def _rate_limit_observation_retention_days() -> int:
     return max(0, days)
 
 
+_DEFAULT_BACKFILL_JOB_ORPHAN_TTL_SECONDS = 3600
+
+
+def _backfill_job_orphan_ttl_seconds() -> int:
+    try:
+        seconds = int(
+            os.getenv(
+                "SYNC_BACKFILL_JOB_ORPHAN_TTL_SECONDS",
+                str(_DEFAULT_BACKFILL_JOB_ORPHAN_TTL_SECONDS),
+            )
+        )
+    except ValueError:
+        return _DEFAULT_BACKFILL_JOB_ORPHAN_TTL_SECONDS
+    return max(0, seconds)
+
+
 @celery_app.task(
     queue="sync",
     name="dev_health_ops.workers.tasks.prune_rate_limit_observations",
@@ -271,6 +287,10 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
             sync_observers_for_terminal_sync_run(session, run)
             repaired_observers += 1
         session.flush()
+        orphaned_backfill_jobs = _terminalize_orphaned_backfill_jobs(
+            session, now, limit
+        )
+        session.flush()
         finalize_run_ids = _finalizable_run_ids(session, limit)
         for run_id in expired_run_ids:
             if _run_is_finalizable(session, run_id):
@@ -419,6 +439,7 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
         "relayed_post_sync": relayed_post_sync,
         "publish_failures": publish_failures,
         "observer_repairs": repaired_observers,
+        "orphaned_backfill_jobs": orphaned_backfill_jobs,
     }
 
 
@@ -628,6 +649,93 @@ def _backfill_job_sync_run_id(job: BackfillJob) -> str | None:
     if marker not in task_id:
         return None
     return task_id.rsplit(marker, 1)[-1] or None
+
+
+def _backfill_job_marker_sync_run_id(job: BackfillJob) -> uuid.UUID | None:
+    sync_run_id = _backfill_job_sync_run_id(job)
+    if sync_run_id is None:
+        return None
+    try:
+        return uuid.UUID(sync_run_id)
+    except ValueError:
+        return None
+
+
+def _backfill_job_is_orphaned(
+    sync_run_id: uuid.UUID | None, existing_run_ids: set[uuid.UUID]
+) -> bool:
+    # Mirrors the admin surface's fallback in api/admin/routers/sync.py
+    # (_backfill_job_sync_run_id / _backfill_job_run_counts): a job whose
+    # marker is missing/unparseable, or whose marker resolves to a SyncRun
+    # that no longer exists, has nothing left to terminalize it -- the
+    # merged-status endpoint falls back to the stored pending/running status
+    # forever (CHAOS-2868). A marker resolving to an EXISTING run (terminal
+    # or not) is owned by the observer-repair pass above or the live
+    # dispatch/finalize flow and must not be touched here.
+    return sync_run_id is None or sync_run_id not in existing_run_ids
+
+
+_BACKFILL_JOB_ORPHAN_SCAN_LIMIT_MULTIPLIER = 5
+
+
+def _terminalize_orphaned_backfill_jobs(session, now: datetime, limit: int) -> int:
+    """Terminalize orphaned pending/running BackfillJob rows past the TTL.
+
+    The repair budget (`limit`, jobs actually terminalized) is decoupled
+    from the scan budget (candidates examined): candidates are loaded
+    oldest-first up to `limit * _BACKFILL_JOB_ORPHAN_SCAN_LIMIT_MULTIPLIER`
+    rows in one query, bulk-checked against SyncRun in a single follow-up
+    query, then terminalized in order until `limit` is reached. Without
+    this separation, a run of non-orphan jobs at the head of the ordering
+    (markers resolving to existing SyncRuns) would consume the entire scan
+    window and permanently starve an orphan sitting behind them -- every
+    reconciler run would re-select the exact same non-orphan window. This
+    is a bounded BEST-EFFORT scan: an orphan sitting behind more than
+    ``limit * _BACKFILL_JOB_ORPHAN_SCAN_LIMIT_MULTIPLIER`` old non-orphan
+    jobs is not examined this sweep and waits until the leading jobs leave
+    pending/running (via dispatch/finalize or the observer repair above).
+    If production ever shows persistent head-of-line non-orphans, the
+    escalation path is keyset pagination over (created_at, id).
+    """
+    cutoff = now - timedelta(seconds=_backfill_job_orphan_ttl_seconds())
+    max_repairs = max(1, int(limit))
+    max_scanned = max_repairs * _BACKFILL_JOB_ORPHAN_SCAN_LIMIT_MULTIPLIER
+
+    candidates = (
+        session.query(BackfillJob)
+        .filter(
+            BackfillJob.status.in_({"pending", "running"}),
+            BackfillJob.created_at <= cutoff,
+        )
+        .order_by(BackfillJob.created_at.asc(), BackfillJob.id.asc())
+        .limit(max_scanned)
+        .all()
+    )
+    if not candidates:
+        return 0
+
+    marker_run_ids = {
+        job.id: _backfill_job_marker_sync_run_id(job) for job in candidates
+    }
+    candidate_run_ids = {
+        run_id for run_id in marker_run_ids.values() if run_id is not None
+    }
+    existing_run_ids: set[uuid.UUID] = set()
+    if candidate_run_ids:
+        rows = session.query(SyncRun.id).filter(SyncRun.id.in_(candidate_run_ids)).all()
+        existing_run_ids = {row_id for (row_id,) in rows}
+
+    terminalized = 0
+    for job in candidates:
+        if terminalized >= max_repairs:
+            break
+        if not _backfill_job_is_orphaned(marker_run_ids[job.id], existing_run_ids):
+            continue
+        job.status = "failed"
+        job.error_message = "backfill job orphaned: no linked sync run"
+        job.completed_at = now
+        terminalized += 1
+    return terminalized
 
 
 def _publish_claimed_outbox_row(

@@ -333,6 +333,11 @@ def _aware_datetime(value: datetime | None) -> datetime | None:
     return value
 
 
+def _latest_datetime(*values: datetime | None) -> datetime | None:
+    aware_values = [aware for value in values if (aware := _aware_datetime(value))]
+    return max(aware_values) if aware_values else None
+
+
 def _elapsed_seconds(
     started_at: datetime | None, completed_at: datetime | None
 ) -> int | None:
@@ -540,6 +545,11 @@ def _backfill_job_response(job: object, run_counts: dict[str, Any] | None = None
         run_counts.get("completed_chunks", getattr(job, "completed_chunks"))
     )
     progress_pct = (completed_chunks / total_chunks * 100) if total_chunks > 0 else 0.0
+    job_updated_at = getattr(job, "updated_at")
+    effective_updated_at = _latest_datetime(
+        job_updated_at,
+        run_counts.get("updated_at"),
+    )
     return BackfillJobResponse(
         id=str(getattr(job, "id")),
         sync_config_id=str(getattr(job, "sync_config_id")),
@@ -556,7 +566,9 @@ def _backfill_job_response(job: object, run_counts: dict[str, Any] | None = None
         started_at=getattr(job, "started_at"),
         completed_at=run_counts.get("completed_at", getattr(job, "completed_at")),
         created_at=getattr(job, "created_at"),
-        updated_at=getattr(job, "updated_at"),
+        # Response-level updated_at is effective liveness: the raw BackfillJob
+        # row-write timestamp OR the latest linked fanout unit activity.
+        updated_at=effective_updated_at or job_updated_at,
     )
 
 
@@ -586,6 +598,15 @@ async def _backfill_job_run_counts(
     run = result.scalar_one_or_none()
     if run is None:
         return None
+    activity_stmt = select(
+        func.max(SyncRunUnit.updated_at),
+        func.max(SyncRunUnit.last_heartbeat_at),
+    ).where(
+        SyncRunUnit.sync_run_id == run_uuid,
+        SyncRunUnit.org_id == str(getattr(job, "org_id")),
+    )
+    activity_result = await session.execute(activity_stmt)
+    latest_unit_updated_at, latest_unit_heartbeat_at = activity_result.one()
     return {
         "status": getattr(run, "status"),
         "total_chunks": int(getattr(run, "total_units")),
@@ -593,6 +614,10 @@ async def _backfill_job_run_counts(
         "failed_chunks": int(getattr(run, "failed_units")),
         "completed_at": getattr(run, "completed_at"),
         "error_message": getattr(run, "error"),
+        "updated_at": _latest_datetime(
+            latest_unit_updated_at,
+            latest_unit_heartbeat_at,
+        ),
     }
 
 

@@ -1421,7 +1421,7 @@ def test_terminalize_orphaned_backfill_jobs_unparseable_marker_is_orphaned(
     assert job.error_message == "backfill job orphaned: no linked sync run"
 
 
-def test_terminalize_orphaned_backfill_jobs_does_not_starve_orphan_behind_limit(
+def test_terminalize_orphaned_backfill_jobs_does_not_starve_orphan_behind_old_scan_window(
     db_session, monkeypatch
 ):
     from dev_health_ops.workers import sync_reconciler
@@ -1433,37 +1433,41 @@ def test_terminalize_orphaned_backfill_jobs_does_not_starve_orphan_behind_limit(
     running.lease_expires_at = fixed_now + timedelta(minutes=5)
     db_session.flush()
 
-    # Ordered FIRST (oldest created_at): a non-orphan whose marker resolves
-    # to a live, existing SyncRun -- owned by the dispatch/finalize flow,
-    # never terminalized here.
-    non_orphan = _seed_orphan_backfill_job(
-        db_session,
-        org_id=run.org_id,
-        celery_task_id=f"sync_run:{run.id}",
-        status="pending",
-        created_at=fixed_now - timedelta(hours=3),
+    repair_limit = 1
+    old_scan_window = (
+        repair_limit * sync_reconciler._BACKFILL_JOB_ORPHAN_SCAN_LIMIT_MULTIPLIER
     )
-    # Ordered SECOND (behind the non-orphan): a true orphan with no marker.
+    head_non_orphans = [
+        _seed_orphan_backfill_job(
+            db_session,
+            org_id=run.org_id,
+            celery_task_id=f"sync_run:{run.id}",
+            status="pending",
+            created_at=fixed_now - timedelta(hours=3) + timedelta(seconds=index),
+        )
+        for index in range(old_scan_window + 1)
+    ]
+
     orphan = _seed_orphan_backfill_job(
         db_session,
         celery_task_id=None,
         status="pending",
-        created_at=fixed_now - timedelta(hours=2),
+        created_at=fixed_now
+        - timedelta(hours=3)
+        + timedelta(seconds=old_scan_window + 1),
     )
 
-    # limit=1: the old single-limit query would have selected only
-    # `non_orphan` (the oldest row) and never examined `orphan` at all --
-    # every subsequent sweep would re-select the same non-orphan window,
-    # starving `orphan` forever. The scan budget must look past it.
     terminalized = sync_reconciler._terminalize_orphaned_backfill_jobs(
-        db_session, fixed_now, limit=1
+        db_session, fixed_now, limit=repair_limit
     )
     db_session.flush()
 
-    db_session.refresh(non_orphan)
+    for non_orphan in head_non_orphans:
+        db_session.refresh(non_orphan)
     db_session.refresh(orphan)
     assert terminalized == 1
-    assert non_orphan.status == "pending"
-    assert non_orphan.error_message is None
+    assert len(head_non_orphans) > old_scan_window
+    assert all(non_orphan.status == "pending" for non_orphan in head_non_orphans)
+    assert all(non_orphan.error_message is None for non_orphan in head_non_orphans)
     assert orphan.status == "failed"
     assert orphan.error_message == "backfill job orphaned: no linked sync run"

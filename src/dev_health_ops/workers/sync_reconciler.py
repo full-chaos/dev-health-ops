@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, or_, select, update
 
 from dev_health_ops.models import (
     BackfillJob,
@@ -676,65 +676,91 @@ def _backfill_job_is_orphaned(
 
 
 _BACKFILL_JOB_ORPHAN_SCAN_LIMIT_MULTIPLIER = 5
+_BACKFILL_JOB_ORPHAN_TOTAL_SCAN_LIMIT_MULTIPLIER = 50
 
 
 def _terminalize_orphaned_backfill_jobs(session, now: datetime, limit: int) -> int:
     """Terminalize orphaned pending/running BackfillJob rows past the TTL.
 
     The repair budget (`limit`, jobs actually terminalized) is decoupled
-    from the scan budget (candidates examined): candidates are loaded
-    oldest-first up to `limit * _BACKFILL_JOB_ORPHAN_SCAN_LIMIT_MULTIPLIER`
-    rows in one query, bulk-checked against SyncRun in a single follow-up
-    query, then terminalized in order until `limit` is reached. Without
-    this separation, a run of non-orphan jobs at the head of the ordering
-    (markers resolving to existing SyncRuns) would consume the entire scan
-    window and permanently starve an orphan sitting behind them -- every
-    reconciler run would re-select the exact same non-orphan window. This
-    is a bounded BEST-EFFORT scan: an orphan sitting behind more than
-    ``limit * _BACKFILL_JOB_ORPHAN_SCAN_LIMIT_MULTIPLIER`` old non-orphan
-    jobs is not examined this sweep and waits until the leading jobs leave
-    pending/running (via dispatch/finalize or the observer repair above).
-    If production ever shows persistent head-of-line non-orphans, the
-    escalation path is keyset pagination over (created_at, id).
+    from the page budget and the total scan budget (candidates examined):
+    candidates are loaded oldest-first in keyset pages over `(created_at, id)`.
+    Each page is capped at
+    `limit * _BACKFILL_JOB_ORPHAN_SCAN_LIMIT_MULTIPLIER`, bulk-checked against
+    SyncRun in one follow-up query, then terminalized in order until `limit` is
+    reached. The full sweep stops when `limit` jobs have been terminalized,
+    when candidates are exhausted, or after examining at most
+    `limit * _BACKFILL_JOB_ORPHAN_TOTAL_SCAN_LIMIT_MULTIPLIER` rows so a
+    pathological table cannot make the sweep unbounded. Without keyset paging,
+    a run of non-orphan jobs at the head of the ordering (markers resolving to
+    existing SyncRuns) would consume the entire scan window and permanently
+    starve an orphan sitting behind them -- every reconciler run would re-select
+    the exact same non-orphan window.
     """
     cutoff = now - timedelta(seconds=_backfill_job_orphan_ttl_seconds())
     max_repairs = max(1, int(limit))
-    max_scanned = max_repairs * _BACKFILL_JOB_ORPHAN_SCAN_LIMIT_MULTIPLIER
+    page_size = max_repairs * _BACKFILL_JOB_ORPHAN_SCAN_LIMIT_MULTIPLIER
+    max_scanned = max_repairs * _BACKFILL_JOB_ORPHAN_TOTAL_SCAN_LIMIT_MULTIPLIER
 
-    candidates = (
-        session.query(BackfillJob)
-        .filter(
+    scanned = 0
+    terminalized = 0
+    last_created_at: datetime | None = None
+    last_id: uuid.UUID | None = None
+    while terminalized < max_repairs and scanned < max_scanned:
+        remaining_scan = max_scanned - scanned
+        batch_limit = min(page_size, remaining_scan)
+        query = session.query(BackfillJob).filter(
             BackfillJob.status.in_({"pending", "running"}),
             BackfillJob.created_at <= cutoff,
         )
-        .order_by(BackfillJob.created_at.asc(), BackfillJob.id.asc())
-        .limit(max_scanned)
-        .all()
-    )
-    if not candidates:
-        return 0
-
-    marker_run_ids = {
-        job.id: _backfill_job_marker_sync_run_id(job) for job in candidates
-    }
-    candidate_run_ids = {
-        run_id for run_id in marker_run_ids.values() if run_id is not None
-    }
-    existing_run_ids: set[uuid.UUID] = set()
-    if candidate_run_ids:
-        rows = session.query(SyncRun.id).filter(SyncRun.id.in_(candidate_run_ids)).all()
-        existing_run_ids = {row_id for (row_id,) in rows}
-
-    terminalized = 0
-    for job in candidates:
-        if terminalized >= max_repairs:
+        if last_created_at is not None and last_id is not None:
+            query = query.filter(
+                or_(
+                    BackfillJob.created_at > last_created_at,
+                    (BackfillJob.created_at == last_created_at)
+                    & (BackfillJob.id > last_id),
+                )
+            )
+        candidates = (
+            query.order_by(BackfillJob.created_at.asc(), BackfillJob.id.asc())
+            .limit(batch_limit)
+            .all()
+        )
+        if not candidates:
             break
-        if not _backfill_job_is_orphaned(marker_run_ids[job.id], existing_run_ids):
-            continue
-        job.status = "failed"
-        job.error_message = "backfill job orphaned: no linked sync run"
-        job.completed_at = now
-        terminalized += 1
+
+        scanned += len(candidates)
+        last_job = candidates[-1]
+        last_created_at = last_job.created_at
+        last_id = last_job.id
+
+        marker_run_ids = {
+            job.id: _backfill_job_marker_sync_run_id(job) for job in candidates
+        }
+        candidate_run_ids = {
+            run_id for run_id in marker_run_ids.values() if run_id is not None
+        }
+        existing_run_ids: set[uuid.UUID] = set()
+        if candidate_run_ids:
+            rows = (
+                session.query(SyncRun.id)
+                .filter(SyncRun.id.in_(candidate_run_ids))
+                .all()
+            )
+            existing_run_ids = {row_id for (row_id,) in rows}
+
+        for job in candidates:
+            if terminalized >= max_repairs:
+                break
+            if not _backfill_job_is_orphaned(marker_run_ids[job.id], existing_run_ids):
+                continue
+            job.status = "failed"
+            job.error_message = "backfill job orphaned: no linked sync run"
+            job.completed_at = now
+            terminalized += 1
+
+        if len(candidates) < batch_limit:
+            break
     return terminalized
 
 

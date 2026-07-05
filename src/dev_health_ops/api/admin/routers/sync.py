@@ -556,6 +556,7 @@ def _backfill_job_response(job: object, run_counts: dict[str, Any] | None = None
         started_at=getattr(job, "started_at"),
         completed_at=run_counts.get("completed_at", getattr(job, "completed_at")),
         created_at=getattr(job, "created_at"),
+        updated_at=getattr(job, "updated_at"),
     )
 
 

@@ -732,6 +732,30 @@ def test_unit_to_response_projects_all_retry_result_keys():
     assert resp.error_category == "soft_timeout"
 
 
+def test_backfill_job_response_includes_updated_at_freshness_timestamp():
+    """Given a persisted backfill job, the response exposes updated_at freshness."""
+    updated_at = datetime(2026, 1, 1, 0, 5, tzinfo=timezone.utc)
+    job = types.SimpleNamespace(
+        id=uuid.uuid4(),
+        sync_config_id=uuid.uuid4(),
+        status="running",
+        since_date=datetime(2025, 12, 1, tzinfo=timezone.utc).date(),
+        before_date=datetime(2025, 12, 8, tzinfo=timezone.utc).date(),
+        total_chunks=10,
+        completed_chunks=4,
+        failed_chunks=0,
+        error_message=None,
+        started_at=_T0,
+        completed_at=None,
+        created_at=_T0,
+        updated_at=updated_at,
+    )
+
+    response = sync_router_module._backfill_job_response(job)
+
+    assert response.updated_at == updated_at
+
+
 def test_unit_to_response_next_retry_at_derived_from_available_at_when_absent():
     """With no result next_retry_at, a retrying unit derives it from available_at."""
     avail = datetime(2026, 1, 1, 0, 10, tzinfo=timezone.utc)

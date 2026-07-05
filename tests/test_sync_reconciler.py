@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from dev_health_ops.models import (
+    BackfillJob,
     Base,
     Integration,
     IntegrationSource,
@@ -1140,3 +1141,176 @@ def test_reconciler_two_passes_do_not_double_publish_post_sync(db_session, monke
     assert second["relayed_post_sync"] == 0
     assert len(post_sync_dispatches) == 1
     assert post_sync_row.status == OUTBOX_STATUS_DISPATCHED
+
+
+def _seed_orphan_backfill_job(
+    session,
+    *,
+    org_id=None,
+    celery_task_id=None,
+    status="pending",
+    created_at=None,
+):
+    job = BackfillJob(
+        org_id=org_id or str(uuid.uuid4()),
+        sync_config_id=uuid.uuid4(),
+        celery_task_id=celery_task_id,
+        status=status,
+        since_date=date(2026, 1, 1),
+        before_date=date(2026, 1, 8),
+        total_chunks=1,
+    )
+    if created_at is not None:
+        job.created_at = created_at
+    session.add(job)
+    session.flush()
+    return job
+
+
+def test_reconciler_terminalizes_orphaned_backfill_job_without_marker_past_ttl(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler
+
+    job = _seed_orphan_backfill_job(
+        db_session,
+        celery_task_id=None,
+        status="pending",
+        created_at=datetime.now(timezone.utc) - timedelta(hours=2),
+    )
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setenv("SYNC_BACKFILL_JOB_ORPHAN_TTL_SECONDS", "3600")
+
+    result = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    db_session.refresh(job)
+    assert result["orphaned_backfill_jobs"] == 1
+    assert job.status == "failed"
+    assert job.error_message == "backfill job orphaned: no linked sync run"
+    assert job.completed_at is not None
+
+
+def test_reconciler_terminalizes_orphaned_backfill_job_with_marker_to_deleted_run(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler
+
+    deleted_run_id = uuid.uuid4()
+    job = _seed_orphan_backfill_job(
+        db_session,
+        celery_task_id=f"worker|sync_run:{deleted_run_id}",
+        status="running",
+        created_at=datetime.now(timezone.utc) - timedelta(hours=2),
+    )
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setenv("SYNC_BACKFILL_JOB_ORPHAN_TTL_SECONDS", "3600")
+
+    result = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    db_session.refresh(job)
+    assert result["orphaned_backfill_jobs"] == 1
+    assert job.status == "failed"
+    assert job.error_message == "backfill job orphaned: no linked sync run"
+    assert job.completed_at is not None
+
+
+def test_reconciler_does_not_terminalize_young_orphaned_backfill_job(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler
+
+    job = _seed_orphan_backfill_job(
+        db_session,
+        celery_task_id=None,
+        status="pending",
+        created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+    )
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setenv("SYNC_BACKFILL_JOB_ORPHAN_TTL_SECONDS", "3600")
+
+    result = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    db_session.refresh(job)
+    assert result["orphaned_backfill_jobs"] == 0
+    assert job.status == "pending"
+    assert job.error_message is None
+    assert job.completed_at is None
+
+
+def test_reconciler_does_not_terminalize_backfill_job_with_live_nonterminal_run(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler, sync_units
+
+    run, running, _planned = _seed_run(db_session, planned_units=0)
+    running.lease_expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+    db_session.flush()
+    job = _seed_orphan_backfill_job(
+        db_session,
+        org_id=run.org_id,
+        celery_task_id=f"sync_run:{run.id}",
+        status="pending",
+        created_at=datetime.now(timezone.utc) - timedelta(hours=2),
+    )
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setenv("SYNC_BACKFILL_JOB_ORPHAN_TTL_SECONDS", "3600")
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: None,
+    )
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: None,
+    )
+
+    result = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    db_session.refresh(run)
+    db_session.refresh(job)
+    assert run.status == SyncRunStatus.DISPATCHING.value
+    assert result["orphaned_backfill_jobs"] == 0
+    assert job.status == "pending"
+    assert job.error_message is None
+    assert job.completed_at is None
+
+
+def test_reconciler_still_repairs_pending_backfill_job_with_terminal_run_via_observer(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler, sync_units
+
+    run, running, _planned = _seed_run(db_session, planned_units=0)
+    running.lease_expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+    run.status = SyncRunStatus.FAILED.value
+    run.completed_at = None
+    run.error = "provider auth failed"
+    run.failed_units = 1
+    job = _seed_orphan_backfill_job(
+        db_session,
+        org_id=run.org_id,
+        celery_task_id=f"sync_run:{run.id}",
+        status="pending",
+    )
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setenv("SYNC_BACKFILL_JOB_ORPHAN_TTL_SECONDS", "3600")
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: None,
+    )
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: None,
+    )
+
+    result = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    db_session.refresh(job)
+    assert result["observer_repairs"] == 1
+    assert result["orphaned_backfill_jobs"] == 0
+    assert job.status == "failed"
+    assert job.error_message == "provider auth failed"
+    assert job.completed_at is not None

@@ -44,6 +44,22 @@ def _rate_limit_observation_retention_days() -> int:
     return max(0, days)
 
 
+_DEFAULT_BACKFILL_JOB_ORPHAN_TTL_SECONDS = 3600
+
+
+def _backfill_job_orphan_ttl_seconds() -> int:
+    try:
+        seconds = int(
+            os.getenv(
+                "SYNC_BACKFILL_JOB_ORPHAN_TTL_SECONDS",
+                str(_DEFAULT_BACKFILL_JOB_ORPHAN_TTL_SECONDS),
+            )
+        )
+    except ValueError:
+        return _DEFAULT_BACKFILL_JOB_ORPHAN_TTL_SECONDS
+    return max(0, seconds)
+
+
 @celery_app.task(
     queue="sync",
     name="dev_health_ops.workers.tasks.prune_rate_limit_observations",
@@ -271,6 +287,10 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
             sync_observers_for_terminal_sync_run(session, run)
             repaired_observers += 1
         session.flush()
+        orphaned_backfill_jobs = _terminalize_orphaned_backfill_jobs(
+            session, now, limit
+        )
+        session.flush()
         finalize_run_ids = _finalizable_run_ids(session, limit)
         for run_id in expired_run_ids:
             if _run_is_finalizable(session, run_id):
@@ -419,6 +439,7 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
         "relayed_post_sync": relayed_post_sync,
         "publish_failures": publish_failures,
         "observer_repairs": repaired_observers,
+        "orphaned_backfill_jobs": orphaned_backfill_jobs,
     }
 
 
@@ -628,6 +649,50 @@ def _backfill_job_sync_run_id(job: BackfillJob) -> str | None:
     if marker not in task_id:
         return None
     return task_id.rsplit(marker, 1)[-1] or None
+
+
+def _backfill_job_is_orphaned(session, job: BackfillJob) -> bool:
+    # Mirrors the admin surface's fallback in api/admin/routers/sync.py
+    # (_backfill_job_sync_run_id / _backfill_job_run_counts): a job whose
+    # marker is missing/unparseable, or whose marker resolves to a SyncRun
+    # that no longer exists, has nothing left to terminalize it -- the
+    # merged-status endpoint falls back to the stored pending/running status
+    # forever (CHAOS-2868). A marker resolving to an EXISTING run (terminal
+    # or not) is owned by the observer-repair pass above or the live
+    # dispatch/finalize flow and must not be touched here.
+    sync_run_id = _backfill_job_sync_run_id(job)
+    if sync_run_id is None:
+        return True
+    try:
+        run_uuid = uuid.UUID(sync_run_id)
+    except ValueError:
+        return True
+    return session.get(SyncRun, run_uuid) is None
+
+
+def _terminalize_orphaned_backfill_jobs(session, now: datetime, limit: int) -> int:
+    cutoff = now - timedelta(seconds=_backfill_job_orphan_ttl_seconds())
+    max_repairs = max(1, int(limit))
+    terminalized = 0
+    candidates = (
+        session.query(BackfillJob)
+        .filter(BackfillJob.status.in_({"pending", "running"}))
+        .order_by(BackfillJob.created_at.asc(), BackfillJob.id.asc())
+        .all()
+    )
+    for job in candidates:
+        created_at = job.created_at
+        if created_at is None or _as_aware(created_at) > cutoff:
+            continue
+        if not _backfill_job_is_orphaned(session, job):
+            continue
+        job.status = "failed"
+        job.error_message = "backfill job orphaned: no linked sync run"
+        job.completed_at = now
+        terminalized += 1
+        if terminalized >= max_repairs:
+            break
+    return terminalized
 
 
 def _publish_claimed_outbox_row(

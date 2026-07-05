@@ -1314,3 +1314,108 @@ def test_reconciler_still_repairs_pending_backfill_job_with_terminal_run_via_obs
     assert job.status == "failed"
     assert job.error_message == "provider auth failed"
     assert job.completed_at is not None
+
+
+def test_backfill_job_marker_sync_run_id_parses_and_rejects_marker_variants():
+    from dev_health_ops.workers import sync_reconciler
+
+    resolvable = BackfillJob(celery_task_id=f"worker|sync_run:{uuid.uuid4()}")
+    missing_marker = BackfillJob(celery_task_id="worker-task-id")
+    no_task_id = BackfillJob(celery_task_id=None)
+    unparseable = BackfillJob(celery_task_id="worker|sync_run:not-a-uuid")
+
+    assert sync_reconciler._backfill_job_marker_sync_run_id(resolvable) is not None
+    assert sync_reconciler._backfill_job_marker_sync_run_id(missing_marker) is None
+    assert sync_reconciler._backfill_job_marker_sync_run_id(no_task_id) is None
+    assert sync_reconciler._backfill_job_marker_sync_run_id(unparseable) is None
+
+
+def test_backfill_job_is_orphaned_predicate_against_existing_run_id_set():
+    from dev_health_ops.workers import sync_reconciler
+
+    live_id = uuid.uuid4()
+    existing_run_ids = {live_id}
+    missing_id = uuid.uuid4()
+
+    assert sync_reconciler._backfill_job_is_orphaned(None, existing_run_ids) is True
+    assert (
+        sync_reconciler._backfill_job_is_orphaned(missing_id, existing_run_ids) is True
+    )
+    assert sync_reconciler._backfill_job_is_orphaned(live_id, existing_run_ids) is False
+
+
+def test_terminalize_orphaned_backfill_jobs_boundary_created_at_equals_cutoff(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler
+
+    monkeypatch.setenv("SYNC_BACKFILL_JOB_ORPHAN_TTL_SECONDS", "3600")
+    fixed_now = datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc)
+    cutoff = fixed_now - timedelta(seconds=3600)
+    job = _seed_orphan_backfill_job(
+        db_session,
+        celery_task_id=None,
+        status="pending",
+        created_at=cutoff,
+    )
+
+    terminalized = sync_reconciler._terminalize_orphaned_backfill_jobs(
+        db_session, fixed_now, limit=10
+    )
+    db_session.flush()
+
+    db_session.refresh(job)
+    assert terminalized == 1
+    assert job.status == "failed"
+    assert job.error_message == "backfill job orphaned: no linked sync run"
+
+
+def test_terminalize_orphaned_backfill_jobs_just_inside_ttl_is_untouched(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler
+
+    monkeypatch.setenv("SYNC_BACKFILL_JOB_ORPHAN_TTL_SECONDS", "3600")
+    fixed_now = datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc)
+    cutoff = fixed_now - timedelta(seconds=3600)
+    job = _seed_orphan_backfill_job(
+        db_session,
+        celery_task_id=None,
+        status="pending",
+        created_at=cutoff + timedelta(seconds=1),
+    )
+
+    terminalized = sync_reconciler._terminalize_orphaned_backfill_jobs(
+        db_session, fixed_now, limit=10
+    )
+    db_session.flush()
+
+    db_session.refresh(job)
+    assert terminalized == 0
+    assert job.status == "pending"
+    assert job.error_message is None
+
+
+def test_terminalize_orphaned_backfill_jobs_unparseable_marker_is_orphaned(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler
+
+    monkeypatch.setenv("SYNC_BACKFILL_JOB_ORPHAN_TTL_SECONDS", "3600")
+    fixed_now = datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc)
+    job = _seed_orphan_backfill_job(
+        db_session,
+        celery_task_id="worker|sync_run:not-a-uuid",
+        status="running",
+        created_at=fixed_now - timedelta(hours=2),
+    )
+
+    terminalized = sync_reconciler._terminalize_orphaned_backfill_jobs(
+        db_session, fixed_now, limit=10
+    )
+    db_session.flush()
+
+    db_session.refresh(job)
+    assert terminalized == 1
+    assert job.status == "failed"
+    assert job.error_message == "backfill job orphaned: no linked sync run"

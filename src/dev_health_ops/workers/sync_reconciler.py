@@ -651,7 +651,19 @@ def _backfill_job_sync_run_id(job: BackfillJob) -> str | None:
     return task_id.rsplit(marker, 1)[-1] or None
 
 
-def _backfill_job_is_orphaned(session, job: BackfillJob) -> bool:
+def _backfill_job_marker_sync_run_id(job: BackfillJob) -> uuid.UUID | None:
+    sync_run_id = _backfill_job_sync_run_id(job)
+    if sync_run_id is None:
+        return None
+    try:
+        return uuid.UUID(sync_run_id)
+    except ValueError:
+        return None
+
+
+def _backfill_job_is_orphaned(
+    sync_run_id: uuid.UUID | None, existing_run_ids: set[uuid.UUID]
+) -> bool:
     # Mirrors the admin surface's fallback in api/admin/routers/sync.py
     # (_backfill_job_sync_run_id / _backfill_job_run_counts): a job whose
     # marker is missing/unparseable, or whose marker resolves to a SyncRun
@@ -660,38 +672,44 @@ def _backfill_job_is_orphaned(session, job: BackfillJob) -> bool:
     # forever (CHAOS-2868). A marker resolving to an EXISTING run (terminal
     # or not) is owned by the observer-repair pass above or the live
     # dispatch/finalize flow and must not be touched here.
-    sync_run_id = _backfill_job_sync_run_id(job)
-    if sync_run_id is None:
-        return True
-    try:
-        run_uuid = uuid.UUID(sync_run_id)
-    except ValueError:
-        return True
-    return session.get(SyncRun, run_uuid) is None
+    return sync_run_id is None or sync_run_id not in existing_run_ids
 
 
 def _terminalize_orphaned_backfill_jobs(session, now: datetime, limit: int) -> int:
     cutoff = now - timedelta(seconds=_backfill_job_orphan_ttl_seconds())
     max_repairs = max(1, int(limit))
-    terminalized = 0
     candidates = (
         session.query(BackfillJob)
-        .filter(BackfillJob.status.in_({"pending", "running"}))
+        .filter(
+            BackfillJob.status.in_({"pending", "running"}),
+            BackfillJob.created_at <= cutoff,
+        )
         .order_by(BackfillJob.created_at.asc(), BackfillJob.id.asc())
+        .limit(max_repairs)
         .all()
     )
+    if not candidates:
+        return 0
+
+    marker_run_ids = {
+        job.id: _backfill_job_marker_sync_run_id(job) for job in candidates
+    }
+    candidate_run_ids = {
+        run_id for run_id in marker_run_ids.values() if run_id is not None
+    }
+    existing_run_ids: set[uuid.UUID] = set()
+    if candidate_run_ids:
+        rows = session.query(SyncRun.id).filter(SyncRun.id.in_(candidate_run_ids)).all()
+        existing_run_ids = {row_id for (row_id,) in rows}
+
+    terminalized = 0
     for job in candidates:
-        created_at = job.created_at
-        if created_at is None or _as_aware(created_at) > cutoff:
-            continue
-        if not _backfill_job_is_orphaned(session, job):
+        if not _backfill_job_is_orphaned(marker_run_ids[job.id], existing_run_ids):
             continue
         job.status = "failed"
         job.error_message = "backfill job orphaned: no linked sync run"
         job.completed_at = now
         terminalized += 1
-        if terminalized >= max_repairs:
-            break
     return terminalized
 
 

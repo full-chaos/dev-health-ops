@@ -501,22 +501,66 @@ def _backfill_job_sync_run_id(job: BackfillJob) -> str | None:
     return task_id.rsplit(marker, 1)[-1] or None
 
 
-async def _backfill_job_run_pairs(
+async def _backfill_job_run_pair_windows(
     session: AsyncSession, org_id: str, run_id: uuid.UUID
-) -> set[tuple[str, str]]:
-    """Return the distinct (source_id, dataset_key) pairs a SyncRun planned units for."""
-    stmt = (
-        select(SyncRunUnit.source_id, SyncRunUnit.dataset_key)
-        .where(
-            SyncRunUnit.org_id == org_id,
-            SyncRunUnit.sync_run_id == run_id,
-        )
-        .distinct()
+) -> dict[tuple[str, str], list[CoverageInterval]]:
+    """Return each (source_id, dataset_key) pair's merged unit-window union for a SyncRun.
+
+    An empty dict means the run has zero (valid) SyncRunUnit rows -- callers
+    MUST treat that as "this job requested nothing", not as "unresolvable"
+    (see ``_backfill_requested_ranges``): a run that legitimately planned zero
+    units must not be conflated with a marker we simply couldn't parse.
+    """
+    stmt = select(SyncRunUnit).where(
+        SyncRunUnit.org_id == org_id,
+        SyncRunUnit.sync_run_id == run_id,
+        SyncRunUnit.since_at.is_not(None),
+        SyncRunUnit.before_at.is_not(None),
     )
-    return {
-        (str(source_id), str(dataset_key))
-        for source_id, dataset_key in (await session.execute(stmt)).all()
-    }
+    raw_windows: dict[tuple[str, str], list[CoverageInterval]] = defaultdict(list)
+    for unit in (await session.execute(stmt)).scalars().all():
+        since_at = unit.since_at
+        before_at = unit.before_at
+        if since_at is None or before_at is None:
+            continue
+        pair = (str(unit.source_id), str(unit.dataset_key))
+        raw_windows[pair].append(
+            CoverageInterval(since=ensure_utc(since_at), before=ensure_utc(before_at))
+        )
+    return {pair: merge_intervals(intervals) for pair, intervals in raw_windows.items()}
+
+
+async def _resolve_backfill_job_pair_windows(
+    session: AsyncSession, org_id: str, job: BackfillJob
+) -> dict[tuple[str, str], list[CoverageInterval]] | None:
+    """Resolve a backfill job's linked-run pair windows, or ``None`` if unresolvable.
+
+    ``None`` means the ``sync_run:<uuid>`` marker is absent or unparseable --
+    callers should fall back to legacy all-pairs-in-scope behavior. A resolved
+    but empty dict means the run exists (or at least its id parsed) but has no
+    units -- callers must contribute nothing for that job, NOT fall back.
+    """
+    run_id_str = _backfill_job_sync_run_id(job)
+    if run_id_str is None:
+        return None
+    try:
+        run_uuid = uuid.UUID(run_id_str)
+    except ValueError:
+        return None
+    return await _backfill_job_run_pair_windows(session, org_id, run_uuid)
+
+
+def _clip_intervals(
+    intervals: Iterable[CoverageInterval], since: datetime, before: datetime
+) -> list[CoverageInterval]:
+    """Intersect each interval with ``[since, before)``, dropping empty results."""
+    clipped: list[CoverageInterval] = []
+    for interval in intervals:
+        start = max(interval.since, since)
+        end = min(interval.before, before)
+        if start < end:
+            clipped.append(CoverageInterval(since=start, before=end))
+    return clipped
 
 
 async def _backfill_requested_ranges(
@@ -530,19 +574,25 @@ async def _backfill_requested_ranges(
 
     Pair-aware: each job's linked SyncRun (resolved via the ``sync_run:<uuid>``
     suffix of ``celery_task_id``) tells us exactly which (source_id,
-    dataset_key) pairs the backfill actually planned units for, so the job's
-    date range is only counted as "requested" for those pairs. Without this,
-    a backfill that only plans units for a subset of the in-scope pairs
-    (unsupported datasets for a provider, sources added after the backfill
-    ran, work-item family composite keys) permanently "requests" coverage on
-    every other in-scope pair too -- a gap no future backfill on that pair
-    can ever clear (CHAOS-2869).
+    dataset_key) pairs the backfill actually planned units for, and the
+    ACTUAL unit windows for each pair (clipped to the job's own date range) --
+    not the job's full date range -- are what gets counted as "requested".
+    Without this, a backfill that only plans units for a subset of the range
+    or a subset of the in-scope pairs (unsupported datasets for a provider,
+    sources added after the backfill ran, work-item family composite keys)
+    permanently "requests" coverage the run never actually attempted -- a gap
+    no future backfill on that pair can ever clear (CHAOS-2869).
 
-    Fallback: if the marker is absent/unparseable, the linked SyncRun row no
-    longer exists, or the run has zero SyncRunUnit rows, we fall back to the
-    legacy all-pairs-in-scope behavior for that job. This keeps pre-marker
-    legacy jobs working as before; such rows naturally age out of the
-    ``HISTORY_LOOKBACK_DAYS`` lookback over time.
+    Three resolution states, handled distinctly so a run that legitimately
+    planned zero units is never conflated with an unresolvable marker:
+
+    * Marker absent/unparseable -> fall back to the legacy all-pairs-in-scope
+      behavior for that job (pre-marker legacy jobs keep working as before;
+      such rows naturally age out of the ``HISTORY_LOOKBACK_DAYS`` lookback).
+    * Marker resolves but the run has zero SyncRunUnit rows -> contribute
+      NOTHING for that job (it requested nothing, so nothing is "requested").
+    * Marker resolves with units -> pair-scoped intervals clipped to each
+      pair's actual unit-window union.
     """
     if not scope.sources:
         return []
@@ -555,29 +605,8 @@ async def _backfill_requested_ranges(
     ranges: list[CoverageInterval] = []
     for job in (await session.execute(stmt)).scalars().all():
         interval = _backfill_interval(job)
-        pairs: set[tuple[str, str]] = set()
-        run_id_str = _backfill_job_sync_run_id(job)
-        if run_id_str is not None:
-            try:
-                run_uuid = uuid.UUID(run_id_str)
-            except ValueError:
-                run_uuid = None
-            if run_uuid is not None:
-                pairs = await _backfill_job_run_pairs(session, org_id, run_uuid)
-        if pairs:
-            for source_id, dataset_key in pairs:
-                if source_id not in scope_source_ids:
-                    continue
-                ranges.append(
-                    CoverageInterval(
-                        since=interval.since,
-                        before=interval.before,
-                        source_ids=(source_id,),
-                        dataset_keys=(dataset_key,),
-                        run_ids=interval.run_ids,
-                    )
-                )
-        else:
+        pair_windows = await _resolve_backfill_job_pair_windows(session, org_id, job)
+        if pair_windows is None:
             ranges.append(
                 CoverageInterval(
                     since=interval.since,
@@ -586,6 +615,20 @@ async def _backfill_requested_ranges(
                     run_ids=interval.run_ids,
                 )
             )
+            continue
+        for (source_id, dataset_key), windows in pair_windows.items():
+            if source_id not in scope_source_ids:
+                continue
+            for clipped in _clip_intervals(windows, interval.since, interval.before):
+                ranges.append(
+                    CoverageInterval(
+                        since=clipped.since,
+                        before=clipped.before,
+                        source_ids=(source_id,),
+                        dataset_keys=(dataset_key,),
+                        run_ids=interval.run_ids,
+                    )
+                )
     return ranges
 
 

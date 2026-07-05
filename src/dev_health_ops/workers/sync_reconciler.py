@@ -689,10 +689,13 @@ def _terminalize_orphaned_backfill_jobs(session, now: datetime, limit: int) -> i
     this separation, a run of non-orphan jobs at the head of the ordering
     (markers resolving to existing SyncRuns) would consume the entire scan
     window and permanently starve an orphan sitting behind them -- every
-    reconciler run would re-select the exact same non-orphan window. The
-    scan budget bounds a single sweep even against a pathological table
-    full of live non-orphans; any remainder past the scan window is picked
-    up on a later run once the leading jobs terminalize or age out.
+    reconciler run would re-select the exact same non-orphan window. This
+    is a bounded BEST-EFFORT scan: an orphan sitting behind more than
+    ``limit * _BACKFILL_JOB_ORPHAN_SCAN_LIMIT_MULTIPLIER`` old non-orphan
+    jobs is not examined this sweep and waits until the leading jobs leave
+    pending/running (via dispatch/finalize or the observer repair above).
+    If production ever shows persistent head-of-line non-orphans, the
+    escalation path is keyset pagination over (created_at, id).
     """
     cutoff = now - timedelta(seconds=_backfill_job_orphan_ttl_seconds())
     max_repairs = max(1, int(limit))

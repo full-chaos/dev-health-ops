@@ -2754,6 +2754,24 @@ def test_total_cap_hard_deny_terminalizes_linked_job_run(db_session, monkeypatch
     from dev_health_ops.workers import sync_units
 
     run, unit = _seed_run(db_session)
+    now = datetime.now(timezone.utc)
+    retrying = SyncRunUnit(
+        org_id=run.org_id,
+        sync_run_id=run.id,
+        integration_id=unit.integration_id,
+        source_id=unit.source_id,
+        provider="github",
+        dataset_key="issues",
+        cost_class="medium",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunUnitStatus.RETRYING.value,
+        attempts=1,
+        available_at=now + timedelta(minutes=10),
+        processor_flags={"sync_issues": True},
+    )
+    run.total_units = 2
+    db_session.add(retrying)
+    db_session.flush()
     scheduled = ScheduledJob(
         org_id=run.org_id,
         name=f"sync-config-{uuid.uuid4()}",
@@ -2787,11 +2805,27 @@ def test_total_cap_hard_deny_terminalizes_linked_job_run(db_session, monkeypatch
 
     db_session.refresh(run)
     db_session.refresh(job_run)
-    assert result == {"status": "denied", "reason": reason}
+    db_session.refresh(unit)
+    db_session.refresh(retrying)
+    assert result == {
+        "status": "denied",
+        "reason": reason,
+        "failed_planned_units": 2,
+    }
     assert run.status == SyncRunStatus.FAILED.value
+    # The stranded units cascade to FAILED with the deny reason — a hard-
+    # denied run can never legally redispatch them, and the reconciler
+    # skips terminal runs, so leaving them PLANNED/RETRYING strands them
+    # forever (and blocks any later finalize on the RETRYING one).
+    assert unit.status == SyncRunUnitStatus.FAILED.value
+    assert unit.error == reason
+    assert retrying.status == SyncRunUnitStatus.FAILED.value
+    assert retrying.error == reason
+    assert run.failed_units == 2
     assert job_run.status == JobRunStatus.FAILED.value
     assert job_run.error == reason
     assert job_run.completed_at is not None
+    assert job_run.result["failed_units"] == 2
 
 
 def test_dispatch_sync_run_continues_accepted_run_after_child_config_pause(

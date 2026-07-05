@@ -340,6 +340,76 @@ async def test_backfill_fanout_creates_job_run_anchor(
 
 
 @pytest.mark.asyncio
+async def test_backfill_over_unit_cap_rejected_before_persisting(
+    client, session_maker, seeded_state, monkeypatch
+):
+    """A backfill whose plan exceeds the run unit cap is a 400, not a 202.
+
+    Regression for the '1872/1000' bug: without the plan-time cap check the
+    endpoint accepted the backfill, persisted the run + every unit, and the
+    dispatch guard hard-denied asynchronously — failing the run after the
+    fact and stranding all its PLANNED units.
+    """
+    ac, _ = client
+
+    create_resp = await _create_sync_config(ac, name="bf-cap", provider="github")
+    assert create_resp.status_code == 201
+    config_id = create_resp.json()["id"]
+    integration_id = await _link_migrated_integration(
+        session_maker, seeded_state["org_id"], config_id
+    )
+    async with session_maker() as session:
+        # Plain-created configs are planner-managed: the planner scopes the
+        # run to sources tagged with this config id, so tag the seeded one.
+        source = (
+            await session.execute(
+                select(IntegrationSource).where(
+                    IntegrationSource.integration_id == integration_id
+                )
+            )
+        ).scalar_one()
+        source.metadata_ = {"planner_managed_sync_config_id": config_id}
+        session.add_all(
+            [
+                IntegrationDataset(
+                    org_id=seeded_state["org_id"],
+                    integration_id=integration_id,
+                    dataset_key=dataset_key,
+                    is_enabled=True,
+                    options={},
+                )
+                for dataset_key in ("commits", "prs")
+            ]
+        )
+        await session.commit()
+
+    # Patch the resolved cap directly: the org here is a real UUID, so the
+    # tier-limit path (max_sync_units) would win over the SYNC_RUN_MAX_UNITS
+    # env fallback. Cap resolution itself is covered in test_sync_planner.py.
+    monkeypatch.setattr(
+        "dev_health_ops.sync.planner._resolve_total_unit_cap",
+        lambda session, org_id: 1,
+    )
+    with _patch_dispatch() as mock_dispatch:
+        resp = await ac.post(
+            f"/api/v1/admin/sync-configs/{config_id}/backfill",
+            json={"since": "2026-01-01", "before": "2026-01-15"},
+        )
+
+    assert resp.status_code == 400, resp.text
+    assert "unit cap" in resp.json()["detail"]
+    mock_dispatch.apply_async.assert_not_called()
+
+    # Fail-fast means NOTHING was persisted: no run, no units, no backfill
+    # job, and no stranded PENDING JobRun anchor.
+    async with session_maker() as session:
+        assert (await session.execute(select(SyncRun))).scalars().all() == []
+        assert (await session.execute(select(SyncRunUnit))).scalars().all() == []
+        assert (await session.execute(select(BackfillJob))).scalars().all() == []
+        assert (await session.execute(select(JobRun))).scalars().all() == []
+
+
+@pytest.mark.asyncio
 async def test_backfill_fanout_commits_backfill_job_before_dispatch(
     client, session_maker, seeded_state
 ):

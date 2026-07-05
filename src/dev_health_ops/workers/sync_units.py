@@ -782,10 +782,19 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                     "failed_stale_dispatching_units": failed_stale_dispatching,
                 }
             else:
+                # No unit is DISPATCHING/RUNNING, so every remaining
+                # non-terminal unit (PLANNED / RETRYING) can never legally
+                # dispatch again — the guard re-denies every redispatch.
+                # Fail them NOW: leaving them stranded under a terminal run
+                # is invisible to the reconciler (it skips terminal runs)
+                # and pollutes coverage as permanent requested-but-uncovered
+                # windows.
                 completed_at = datetime.now(timezone.utc)
+                failed_planned = _fail_planned_units(session, run_uuid, error)
                 run.status = SyncRunStatus.FAILED.value
                 run.completed_at = completed_at
                 run.error = error
+                run.failed_units = int(run.failed_units or 0) + failed_planned
                 run.result = {"capped_unit_ids": list(decision.capped_unit_ids)}
                 sync_observers_for_terminal_sync_run(session, run)
                 session.flush()
@@ -794,9 +803,14 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                     extra={
                         "sync_run_id": sync_run_id,
                         "reason": run.error,
+                        "failed_planned_units": failed_planned,
                     },
                 )
-                return {"status": "denied", "reason": run.error}
+                return {
+                    "status": "denied",
+                    "reason": run.error,
+                    "failed_planned_units": failed_planned,
+                }
 
         if not decision.allowed:
             logger.warning(
@@ -2107,12 +2121,24 @@ def sync_observers_for_terminal_sync_run(session, run: SyncRun) -> None:
 
 
 def _fail_planned_units(session, run_uuid: uuid.UUID, error: str) -> int:
+    """Fail every unit of the run that is not dispatched and never will be.
+
+    Covers PLANNED and RETRYING: on a total-cap hard deny the guard re-denies
+    every future redispatch, so a deferred RETRYING unit is just as stranded
+    as a PLANNED one — and a lingering RETRYING unit blocks finalize_sync_run
+    (it requires all units terminal) forever.
+    """
     now = datetime.now(timezone.utc)
     result = (
         session.query(SyncRunUnit)
         .filter(
             SyncRunUnit.sync_run_id == run_uuid,
-            SyncRunUnit.status == SyncRunUnitStatus.PLANNED.value,
+            SyncRunUnit.status.in_(
+                {
+                    SyncRunUnitStatus.PLANNED.value,
+                    SyncRunUnitStatus.RETRYING.value,
+                }
+            ),
         )
         .update(
             {

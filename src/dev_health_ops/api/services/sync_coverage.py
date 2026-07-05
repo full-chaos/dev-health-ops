@@ -51,6 +51,14 @@ class CoverageInterval:
     before: datetime
     source_ids: tuple[str, ...] = ()
     run_ids: tuple[str, ...] = ()
+    # Dataset keys this interval is scoped to. Empty means "every dataset key
+    # in scope" (the legacy/fallback behavior) -- set by
+    # ``_backfill_requested_ranges`` when a backfill job's linked SyncRun lets
+    # us resolve the exact (source_id, dataset_key) pairs it planned units
+    # for. Never populated on windows/covered/gap intervals -- only on raw
+    # backfill-requested intervals before they are split per pair in
+    # ``build_coverage_summary_payload``.
+    dataset_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -479,6 +487,38 @@ def _backfill_interval(job: BackfillJob) -> CoverageInterval:
     return CoverageInterval(since=since, before=before, run_ids=(str(job.id),))
 
 
+def _backfill_job_sync_run_id(job: BackfillJob) -> str | None:
+    """Extract the linked SyncRun id from a backfill job's celery_task_id.
+
+    Mirrors the identical helper in ``api/admin/routers/sync.py`` and
+    ``workers/sync_reconciler.py`` (duplicated locally -- pulling it in would
+    create a router import cycle from this service module).
+    """
+    task_id = str(job.celery_task_id or "")
+    marker = "sync_run:"
+    if marker not in task_id:
+        return None
+    return task_id.rsplit(marker, 1)[-1] or None
+
+
+async def _backfill_job_run_pairs(
+    session: AsyncSession, org_id: str, run_id: uuid.UUID
+) -> set[tuple[str, str]]:
+    """Return the distinct (source_id, dataset_key) pairs a SyncRun planned units for."""
+    stmt = (
+        select(SyncRunUnit.source_id, SyncRunUnit.dataset_key)
+        .where(
+            SyncRunUnit.org_id == org_id,
+            SyncRunUnit.sync_run_id == run_id,
+        )
+        .distinct()
+    )
+    return {
+        (str(source_id), str(dataset_key))
+        for source_id, dataset_key in (await session.execute(stmt)).all()
+    }
+
+
 async def _backfill_requested_ranges(
     session: AsyncSession,
     org_id: str,
@@ -486,6 +526,24 @@ async def _backfill_requested_ranges(
     scope: EffectiveScope,
     truncated_before: datetime,
 ) -> list[CoverageInterval]:
+    """Return backfill-driven requested intervals.
+
+    Pair-aware: each job's linked SyncRun (resolved via the ``sync_run:<uuid>``
+    suffix of ``celery_task_id``) tells us exactly which (source_id,
+    dataset_key) pairs the backfill actually planned units for, so the job's
+    date range is only counted as "requested" for those pairs. Without this,
+    a backfill that only plans units for a subset of the in-scope pairs
+    (unsupported datasets for a provider, sources added after the backfill
+    ran, work-item family composite keys) permanently "requests" coverage on
+    every other in-scope pair too -- a gap no future backfill on that pair
+    can ever clear (CHAOS-2869).
+
+    Fallback: if the marker is absent/unparseable, the linked SyncRun row no
+    longer exists, or the run has zero SyncRunUnit rows, we fall back to the
+    legacy all-pairs-in-scope behavior for that job. This keeps pre-marker
+    legacy jobs working as before; such rows naturally age out of the
+    ``HISTORY_LOOKBACK_DAYS`` lookback over time.
+    """
     if not scope.sources:
         return []
     stmt = select(BackfillJob).where(
@@ -493,20 +551,41 @@ async def _backfill_requested_ranges(
         BackfillJob.sync_config_id == config.id,
         BackfillJob.created_at >= truncated_before,
     )
+    scope_source_ids = tuple(str(source.id) for source in scope.sources)
     ranges: list[CoverageInterval] = []
     for job in (await session.execute(stmt)).scalars().all():
-        task_id = str(job.celery_task_id or "")
-        if "sync_run:" in task_id:
-            continue
         interval = _backfill_interval(job)
-        ranges.append(
-            CoverageInterval(
-                since=interval.since,
-                before=interval.before,
-                source_ids=tuple(str(source.id) for source in scope.sources),
-                run_ids=interval.run_ids,
+        pairs: set[tuple[str, str]] = set()
+        run_id_str = _backfill_job_sync_run_id(job)
+        if run_id_str is not None:
+            try:
+                run_uuid = uuid.UUID(run_id_str)
+            except ValueError:
+                run_uuid = None
+            if run_uuid is not None:
+                pairs = await _backfill_job_run_pairs(session, org_id, run_uuid)
+        if pairs:
+            for source_id, dataset_key in pairs:
+                if source_id not in scope_source_ids:
+                    continue
+                ranges.append(
+                    CoverageInterval(
+                        since=interval.since,
+                        before=interval.before,
+                        source_ids=(source_id,),
+                        dataset_keys=(dataset_key,),
+                        run_ids=interval.run_ids,
+                    )
+                )
+        else:
+            ranges.append(
+                CoverageInterval(
+                    since=interval.since,
+                    before=interval.before,
+                    source_ids=scope_source_ids,
+                    run_ids=interval.run_ids,
+                )
             )
-        )
     return ranges
 
 
@@ -590,13 +669,21 @@ def build_coverage_summary_payload(
         by_pair[(window.source_id, window.dataset_key)].append(window)
 
     scope_source_ids = {str(source.id) for source in scope.sources}
+    scope_dataset_keys = set(scope.dataset_keys)
     backfill_by_pair: dict[tuple[str, str], list[CoverageInterval]] = defaultdict(list)
     for interval in backfill_requested:
         interval_source_ids = interval.source_ids or tuple(sorted(scope_source_ids))
+        # Empty dataset_keys means "legacy/unresolved backfill" -- spread it
+        # across every dataset in scope (the pre-fix, all-pairs fallback).
+        # Non-empty dataset_keys means the backfill's SyncRun told us exactly
+        # which pairs it planned units for, so we only apply it there.
+        interval_dataset_keys = interval.dataset_keys or scope.dataset_keys
         for source_id in interval_source_ids:
             if source_id not in scope_source_ids:
                 continue
-            for dataset_key in scope.dataset_keys:
+            for dataset_key in interval_dataset_keys:
+                if dataset_key not in scope_dataset_keys:
+                    continue
                 backfill_by_pair[(source_id, dataset_key)].append(
                     CoverageInterval(
                         since=interval.since,

@@ -287,3 +287,67 @@ def test_full_resync_window_can_cover_entire_requested_range():
     assert dataset["covered_ranges"][0]["since"] == _dt(1)
     assert dataset["covered_ranges"][0]["before"] == _dt(31)
     assert summary["overall"]["health"] == "healthy"
+
+
+def test_backfill_interval_pair_scope_excludes_untouched_pairs():
+    # CHAOS-2869 core repro: a backfill's requested interval is scoped to
+    # exactly the (source_id, dataset_key) pairs its linked SyncRun planned
+    # units for. A pair the run never touched must not inherit a permanent
+    # requested gap from that job.
+    source_a = uuid.uuid4()
+    source_b = uuid.uuid4()
+    config = _config()
+    scope = EffectiveScope(
+        integration_id=config.integration_id,
+        sources=(_source(source_a), _source(source_b)),
+        dataset_keys=("commits",),
+    )
+
+    summary = _summary(
+        [],
+        backfill_requested=[
+            CoverageInterval(
+                _dt(1),
+                _dt(3),
+                source_ids=(str(source_a),),
+                dataset_keys=("commits",),
+            )
+        ],
+        config=config,
+        scope=scope,
+    )
+
+    dataset = summary["datasets"][0]
+    assert [
+        (gap["since"], gap["before"], gap["source_ids"]) for gap in dataset["gaps"]
+    ] == [(_dt(1), _dt(3), [str(source_a)])]
+    sources = {source["source_id"]: source for source in summary["sources"]}
+    assert sources[str(source_a)]["status"] == "gaps"
+    assert sources[str(source_b)]["gap_count"] == 0
+    assert sources[str(source_b)]["status"] == "insufficient_data"
+
+
+def test_backfill_interval_without_pair_scope_applies_to_all_scope_pairs():
+    # Legacy/unresolved-marker fallback: an interval with no dataset_keys
+    # (and no source_ids) still spreads across every pair in scope, matching
+    # pre-fix behavior for backfill jobs whose linked SyncRun can't be
+    # resolved.
+    source_a = uuid.uuid4()
+    source_b = uuid.uuid4()
+    config = _config()
+    scope = EffectiveScope(
+        integration_id=config.integration_id,
+        sources=(_source(source_a), _source(source_b)),
+        dataset_keys=("commits",),
+    )
+
+    summary = _summary(
+        [],
+        backfill_requested=[CoverageInterval(_dt(1), _dt(3))],
+        config=config,
+        scope=scope,
+    )
+
+    sources = {source["source_id"]: source for source in summary["sources"]}
+    assert sources[str(source_a)]["gap_count"] == 1
+    assert sources[str(source_b)]["gap_count"] == 1

@@ -240,6 +240,52 @@ async def _seed_unit(
         return str(run.id)
 
 
+async def _seed_run(session_maker, scope: dict, *, status: str = "success") -> str:
+    async with session_maker() as session:
+        run = SyncRun(
+            org_id=scope["org_id"],
+            integration_id=uuid.UUID(scope["integration_id"]),
+            triggered_by="backfill",
+            mode="backfill",
+            status=status,
+            total_units=1,
+            completed_units=1 if status == "success" else 0,
+        )
+        session.add(run)
+        await session.commit()
+        return str(run.id)
+
+
+async def _seed_run_unit(
+    session_maker,
+    scope: dict,
+    run_id: str,
+    *,
+    since: datetime,
+    before: datetime,
+    status: str = "success",
+    source_id: str | None = None,
+    dataset_key: str = "commits",
+) -> None:
+    async with session_maker() as session:
+        unit = SyncRunUnit(
+            org_id=scope["org_id"],
+            sync_run_id=uuid.UUID(run_id),
+            integration_id=uuid.UUID(scope["integration_id"]),
+            source_id=uuid.UUID(source_id or scope["source_id"]),
+            provider="github",
+            dataset_key=dataset_key,
+            cost_class="standard",
+            mode="incremental",
+            since_at=since,
+            before_at=before,
+            status=status,
+            attempts=1,
+        )
+        session.add(unit)
+        await session.commit()
+
+
 @pytest.mark.asyncio
 async def test_sync_coverage_api_returns_complete_summary(client, session_maker):
     ac, seeded_state = client
@@ -422,3 +468,233 @@ async def test_sync_coverage_cross_org_config_returns_404(client, session_maker)
     resp = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
 
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_sync_coverage_api_backfill_pair_scoped_to_planned_run_units(
+    client, session_maker
+):
+    """CHAOS-2869 core repro: a backfill's requested range only applies to the
+    (source, dataset) pairs its linked SyncRun actually planned units for, and
+    is clipped to the ACTUAL unit windows -- not the job's full date range.
+    A job spanning wider than what its run actually planned must not create a
+    phantom gap beyond the units themselves, and untouched pairs/datasets
+    must not inherit a permanent requested gap at all.
+    """
+    ac, seeded_state = client
+    scope = await _seed_scope(session_maker, seeded_state["org_id"])
+    async with session_maker() as session:
+        extra_source = IntegrationSource(
+            org_id=scope["org_id"],
+            integration_id=uuid.UUID(scope["integration_id"]),
+            provider="github",
+            source_type="repository",
+            external_id="acme/other",
+            name="other",
+            full_name="acme/other",
+            metadata_={"planner_managed_sync_config_id": scope["config_id"]},
+            is_enabled=True,
+        )
+        pr_dataset = IntegrationDataset(
+            org_id=scope["org_id"],
+            integration_id=uuid.UUID(scope["integration_id"]),
+            dataset_key="pull_requests",
+            is_enabled=True,
+            options={},
+        )
+        session.add_all([extra_source, pr_dataset])
+        await session.commit()
+        extra_source_id = str(extra_source.id)
+
+    now = datetime.now(timezone.utc)
+    # Unit window is recent (avoids stale classification); the backfill job's
+    # day-quantized range is deliberately WIDER than the unit's actual window
+    # to prove the wider job range does not inflate the requested range.
+    since = now - timedelta(days=2)
+    before = now - timedelta(minutes=5)
+    run_id = await _seed_run(session_maker, scope, status="success")
+    await _seed_run_unit(
+        session_maker, scope, run_id, since=since, before=before, status="success"
+    )
+    async with session_maker() as session:
+        session.add(
+            BackfillJob(
+                org_id=seeded_state["org_id"],
+                sync_config_id=uuid.UUID(scope["config_id"]),
+                status="success",
+                since_date=(now - timedelta(days=3)).date(),
+                before_date=(now + timedelta(days=1)).date(),
+                total_chunks=1,
+                completed_chunks=1,
+                celery_task_id=f"sync_run:{run_id}",
+            )
+        )
+        await session.commit()
+
+    resp = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    sources = {source["source_id"]: source for source in data["sources"]}
+    # Pair (source A, commits) is what the run actually planned units for,
+    # but only for [since, before) -- the backfill job's much wider
+    # [since-1d, before+1d] window must NOT inflate the requested range
+    # beyond that actual unit window, so there is no phantom gap.
+    assert sources[scope["source_id"]]["gap_count"] == 0
+    assert sources[scope["source_id"]]["status"] == "healthy"
+    # Pair (source B, commits) and (either source, pull_requests) were never
+    # planned by this run: they must not inherit a permanent requested gap.
+    assert sources[extra_source_id]["gap_count"] == 0
+    assert sources[extra_source_id]["status"] == "insufficient_data"
+    datasets = {dataset["dataset_key"]: dataset for dataset in data["datasets"]}
+    assert datasets["commits"]["gaps"] == []
+    assert datasets["pull_requests"]["status"] == "insufficient_data"
+    assert datasets["pull_requests"]["gaps"] == []
+    assert data["overall"]["health"] == "healthy"
+
+
+@pytest.mark.asyncio
+async def test_sync_coverage_api_success_matching_backfill_range_clears_gap(
+    client, session_maker
+):
+    """A pair-scoped backfill whose linked run's SUCCESS unit fully covers
+    the job's requested range must resolve to a clean (non-gapped) pair."""
+    ac, seeded_state = client
+    scope = await _seed_scope(session_maker, seeded_state["org_id"])
+    run_id = await _seed_run(session_maker, scope, status="success")
+    now = datetime.now(timezone.utc)
+    # Covered window is recent (avoids stale classification); the backfill's
+    # day-quantized range sits fully inside it so it resolves clean.
+    covered_since = now - timedelta(days=5)
+    covered_before = now - timedelta(minutes=5)
+    await _seed_run_unit(
+        session_maker,
+        scope,
+        run_id,
+        since=covered_since,
+        before=covered_before,
+        status="success",
+    )
+    async with session_maker() as session:
+        session.add(
+            BackfillJob(
+                org_id=seeded_state["org_id"],
+                sync_config_id=uuid.UUID(scope["config_id"]),
+                status="success",
+                since_date=(now - timedelta(days=4)).date(),
+                before_date=(now - timedelta(days=3)).date(),
+                total_chunks=1,
+                completed_chunks=1,
+                celery_task_id=f"sync_run:{run_id}",
+            )
+        )
+        await session.commit()
+
+    resp = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["overall"]["health"] == "healthy"
+    assert data["datasets"][0]["gaps"] == []
+
+
+@pytest.mark.asyncio
+async def test_sync_coverage_api_unresolvable_backfill_marker_falls_back_to_all_pairs(
+    client, session_maker
+):
+    """An unparseable sync_run marker (or one whose run/units are gone) falls
+    back to the legacy all-pairs-in-scope requested range, same as a
+    backfill job with no marker at all."""
+    ac, seeded_state = client
+    scope = await _seed_scope(session_maker, seeded_state["org_id"])
+    async with session_maker() as session:
+        extra_source = IntegrationSource(
+            org_id=scope["org_id"],
+            integration_id=uuid.UUID(scope["integration_id"]),
+            provider="github",
+            source_type="repository",
+            external_id="acme/other-2",
+            name="other-2",
+            full_name="acme/other-2",
+            metadata_={"planner_managed_sync_config_id": scope["config_id"]},
+            is_enabled=True,
+        )
+        session.add(extra_source)
+        await session.commit()
+        extra_source_id = str(extra_source.id)
+
+    async with session_maker() as session:
+        session.add(
+            BackfillJob(
+                org_id=seeded_state["org_id"],
+                sync_config_id=uuid.UUID(scope["config_id"]),
+                status="pending",
+                since_date=datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
+                before_date=datetime(2026, 1, 2, tzinfo=timezone.utc).date(),
+                total_chunks=0,
+                celery_task_id="sync_run:not-a-uuid",
+            )
+        )
+        await session.commit()
+
+    resp = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    sources = {source["source_id"]: source for source in data["sources"]}
+    assert sources[scope["source_id"]]["gap_count"] == 1
+    assert sources[extra_source_id]["gap_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_sync_coverage_api_backfill_marker_resolved_zero_units_contributes_nothing(
+    client, session_maker
+):
+    """A sync_run marker that resolves to an existing run with zero planned
+    units must contribute NOTHING -- it must NOT fall back to the legacy
+    all-pairs-in-scope behavior. Conflating "zero units" with "unresolvable"
+    would reintroduce the exact phantom-gap class CHAOS-2869 exists to kill:
+    a run that legitimately planned no work would otherwise "request"
+    coverage on every in-scope pair."""
+    ac, seeded_state = client
+    scope = await _seed_scope(session_maker, seeded_state["org_id"])
+    async with session_maker() as session:
+        extra_source = IntegrationSource(
+            org_id=scope["org_id"],
+            integration_id=uuid.UUID(scope["integration_id"]),
+            provider="github",
+            source_type="repository",
+            external_id="acme/zero-units",
+            name="zero-units",
+            full_name="acme/zero-units",
+            metadata_={"planner_managed_sync_config_id": scope["config_id"]},
+            is_enabled=True,
+        )
+        session.add(extra_source)
+        await session.commit()
+        extra_source_id = str(extra_source.id)
+
+    # A SyncRun that exists but planned zero SyncRunUnit rows.
+    run_id = await _seed_run(session_maker, scope, status="success")
+    async with session_maker() as session:
+        session.add(
+            BackfillJob(
+                org_id=seeded_state["org_id"],
+                sync_config_id=uuid.UUID(scope["config_id"]),
+                status="success",
+                since_date=datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
+                before_date=datetime(2026, 1, 2, tzinfo=timezone.utc).date(),
+                total_chunks=0,
+                celery_task_id=f"sync_run:{run_id}",
+            )
+        )
+        await session.commit()
+
+    resp = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    sources = {source["source_id"]: source for source in data["sources"]}
+    assert sources[scope["source_id"]]["gap_count"] == 0
+    assert sources[extra_source_id]["gap_count"] == 0
+    assert data["overall"]["health"] == "insufficient_data"

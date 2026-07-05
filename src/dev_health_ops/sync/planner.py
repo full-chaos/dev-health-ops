@@ -67,6 +67,7 @@ from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_DISCOVERY,
     upsert_outbox_wakeup,
 )
+from dev_health_ops.sync.guard import _resolve_total_unit_cap
 from dev_health_ops.sync.watermarks import get_watermark_with_overlap
 
 if TYPE_CHECKING:
@@ -129,6 +130,26 @@ class SyncRunPlan:
     unit_ids: tuple[str, ...]
 
 
+class SyncPlanUnitCapExceededError(ValueError):
+    """Plan-time guard: the expanded plan exceeds the org's run unit cap.
+
+    Raised BEFORE any SyncRun/SyncRunUnit row is persisted so an oversized
+    backfill/sync fails fast at the API boundary instead of being accepted
+    (202) and then hard-denied asynchronously by ``DispatchGuard`` — which
+    would terminalize the run as FAILED after the fact. Subclasses
+    ``ValueError`` so existing planner error handling (admin routers map
+    ``ValueError`` -> HTTP 400) surfaces it without extra wiring.
+    """
+
+    def __init__(self, *, planned_units: int, total_cap: int) -> None:
+        self.planned_units = planned_units
+        self.total_cap = total_cap
+        super().__init__(
+            f"sync plan exceeds the run unit cap: {planned_units}/{total_cap} "
+            "units; reduce the backfill date range or narrow sources/datasets"
+        )
+
+
 def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
     """Expand an integration into persisted SyncRun + SyncRunUnit rows.
 
@@ -161,6 +182,16 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
         mode=mode,
         now=now,
     )
+
+    # Plan-time mirror of DispatchGuard's total-unit cap (CHAOS-2512): deny
+    # oversized plans BEFORE persisting anything. Without this, the run and
+    # all its units are persisted, dispatch hard-denies asynchronously, and
+    # the caller only learns from a FAILED run after the fact.
+    total_cap = _resolve_total_unit_cap(session, str(integration.org_id))
+    if len(planned_units) > total_cap:
+        raise SyncPlanUnitCapExceededError(
+            planned_units=len(planned_units), total_cap=total_cap
+        )
 
     sync_run = SyncRun(
         org_id=integration.org_id,

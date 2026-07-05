@@ -1989,22 +1989,29 @@ async def trigger_sync_config_backfill(
         lambda sync_session: _preflight_planner_credential(sync_session, config)
     )
     try:
-        trigger = await session.run_sync(
-            lambda sync_session: create_sync_execution_trigger(
-                sync_session,
-                config,
-                org_id,
-                triggered_by="backfill",
-                mode="backfill",
-                since=datetime.combine(
-                    payload.since, datetime.min.time(), tzinfo=timezone.utc
-                ),
-                before=datetime.combine(
-                    payload.before, datetime.max.time(), tzinfo=timezone.utc
-                ),
-                initial_job_result={"planner_managed": True},
+        # Planner ValueErrors (e.g. SyncPlanUnitCapExceededError when the
+        # window expands past the org's run unit cap) are client-fixable:
+        # surface them as 400 like the /trigger endpoint does, instead of
+        # letting the generic handler below report 503.
+        try:
+            trigger = await session.run_sync(
+                lambda sync_session: create_sync_execution_trigger(
+                    sync_session,
+                    config,
+                    org_id,
+                    triggered_by="backfill",
+                    mode="backfill",
+                    since=datetime.combine(
+                        payload.since, datetime.min.time(), tzinfo=timezone.utc
+                    ),
+                    before=datetime.combine(
+                        payload.before, datetime.max.time(), tzinfo=timezone.utc
+                    ),
+                    initial_job_result={"planner_managed": True},
+                )
             )
-        )
+        except ValueError as plan_exc:
+            raise HTTPException(status_code=400, detail=sanitize_error_text(plan_exc))
         if trigger is None:
             raise HTTPException(
                 status_code=400,

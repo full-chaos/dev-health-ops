@@ -164,6 +164,44 @@ def test_enabled_sources_and_enabled_datasets_fan_out_to_units(db_session):
     assert discovery.org_id == ORG_ID
 
 
+def test_plan_sync_run_rejects_plan_over_unit_cap(db_session, monkeypatch):
+    """An oversized plan is rejected BEFORE anything is persisted.
+
+    Without the plan-time cap check the run + all its units are persisted,
+    DispatchGuard hard-denies asynchronously, and the caller only learns
+    from a FAILED run after the 202 (the '1872/1000' backfill bug).
+    """
+    from dev_health_ops.sync.planner import SyncPlanUnitCapExceededError
+
+    monkeypatch.setenv("SYNC_RUN_MAX_UNITS", "3")
+    integration = _create_integration(db_session)
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_source(db_session, integration, external_id="full-chaos/dev-health-web")
+    _create_dataset(db_session, integration, "commits")
+    _create_dataset(db_session, integration, "prs")
+
+    with pytest.raises(SyncPlanUnitCapExceededError) as excinfo:
+        plan_sync_run(
+            db_session,
+            SyncPlanRequest(
+                integration_id=str(integration.id),
+                org_id=ORG_ID,
+                mode=SyncRunMode.INCREMENTAL.value,
+                triggered_by="manual",
+                before=datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc),
+            ),
+        )
+
+    assert excinfo.value.planned_units == 4
+    assert excinfo.value.total_cap == 3
+    assert "4/3" in str(excinfo.value)
+    # Fail-fast means NOTHING was persisted: no run, no units, no outbox row.
+    assert db_session.query(SyncRun).count() == 0
+    assert db_session.query(SyncRunUnit).count() == 0
+    assert db_session.query(SyncDispatchOutbox).count() == 0
+    assert db_session.query(SyncRunReferenceDiscovery).count() == 0
+
+
 def test_planner_stamps_single_credential_per_run(db_session):
     """CHAOS-2755: plan_sync_run stamps credential_id + fingerprint + auth_source
     ONCE on the SyncRun, and neither PlannedUnit nor SyncRunUnit gains a

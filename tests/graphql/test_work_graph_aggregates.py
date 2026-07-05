@@ -85,8 +85,8 @@ class TestEdgeTypesFilter:
             filters = WorkGraphEdgeFilterInput(edge_types=dep_types)
             await resolve_work_graph_edges(mock_context, filters)
 
-            sql = mock_query.call_args[0][1]
-            params = mock_query.call_args[0][2]
+            sql = mock_query.call_args_list[0][0][1]
+            params = mock_query.call_args_list[0][0][2]
 
             assert "edge_type IN %(edge_types)s" in sql
             assert params["edge_types"] == [
@@ -97,6 +97,171 @@ class TestEdgeTypesFilter:
             ]
             # The IN clause precedes the LIMIT — proof it filters before the cap.
             assert sql.index("edge_type IN") < sql.index("LIMIT")
+
+    @pytest.mark.asyncio
+    async def test_dependency_edge_types_project_work_item_dependencies(
+        self, mock_context
+    ):
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [
+                [],
+                [
+                    {
+                        "edge_id": "wid:abc",
+                        "source_type": "pr",
+                        "source_id": "ghpr:full-chaos/dev-health-ops#1171",
+                        "target_type": "issue",
+                        "target_id": "linear:CHAOS-2852",
+                        "edge_type": "relates",
+                        "repo_id": None,
+                        "provider": None,
+                        "provenance": "native",
+                        "confidence": 1.0,
+                        "evidence": "linear_attachment",
+                    }
+                ],
+                [],
+                [],
+            ]
+
+            filters = WorkGraphEdgeFilterInput(
+                edge_types=[WorkGraphEdgeTypeInput.RELATES]
+            )
+            result = await resolve_work_graph_edges(mock_context, filters)
+
+        dependency_sql = mock_query.call_args_list[1][0][1]
+        dependency_params = mock_query.call_args_list[1][0][2]
+        assert "FROM work_item_dependencies FINAL" in dependency_sql
+        assert dependency_params["edge_types"] == ["relates"]
+        assert len(result.edges) == 1
+        edge = result.edges[0]
+        assert edge.source_type == WorkGraphNodeType.PR
+        assert edge.source_id == "ghpr:full-chaos/dev-health-ops#1171"
+        assert edge.target_type == WorkGraphNodeType.ISSUE
+        assert edge.target_id == "linear:CHAOS-2852"
+
+    @pytest.mark.asyncio
+    async def test_dependency_projection_preserves_edge_type_and_semantics(
+        self, mock_context
+    ):
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.return_value = []
+
+            filters = WorkGraphEdgeFilterInput(
+                edge_type=WorkGraphEdgeTypeInput.BLOCKS,
+                edge_types=[WorkGraphEdgeTypeInput.RELATES],
+            )
+            result = await resolve_work_graph_edges(mock_context, filters)
+
+        assert result.edges == []
+        assert len(mock_query.call_args_list) == 1
+        assert (
+            "FROM work_item_dependencies FINAL"
+            not in mock_query.call_args_list[0][0][1]
+        )
+
+    @pytest.mark.asyncio
+    async def test_dependency_projection_skips_unscopable_repo_filter(
+        self, mock_context
+    ):
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.return_value = []
+
+            filters = WorkGraphEdgeFilterInput(
+                edge_types=[WorkGraphEdgeTypeInput.RELATES],
+                repo_ids=["00000000-0000-0000-0000-000000000001"],
+            )
+            await resolve_work_graph_edges(mock_context, filters)
+
+        assert all(
+            "FROM work_item_dependencies FINAL" not in call_args[0][1]
+            for call_args in mock_query.call_args_list
+        )
+
+    @pytest.mark.asyncio
+    async def test_dependency_projection_applies_theme_membership_filter(
+        self, mock_context
+    ):
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [
+                [],
+                [],
+                [{"complete_run_markers": 1, "investment_rows": 5}],
+            ]
+
+            filters = WorkGraphEdgeFilterInput(
+                edge_types=[WorkGraphEdgeTypeInput.RELATES],
+                theme="feature_delivery",
+            )
+            await resolve_work_graph_edges(mock_context, filters)
+
+        dependency_sql = mock_query.call_args_list[1][0][1]
+        dependency_params = mock_query.call_args_list[1][0][2]
+        assert "FROM work_item_dependencies FINAL" in dependency_sql
+        assert "FROM work_unit_membership AS m" in dependency_sql
+        assert "source_work_item_id" in dependency_sql
+        assert "target_work_item_id" in dependency_sql
+        assert dependency_params["category_tuples"] == [("theme", "feature_delivery")]
+
+    @pytest.mark.asyncio
+    async def test_dependency_projection_deduplicates_persisted_edges(
+        self, mock_context
+    ):
+        persisted_row = {
+            "edge_id": "edge:persisted",
+            "source_type": "pr",
+            "source_id": "ghpr:full-chaos/dev-health-ops#1171",
+            "target_type": "issue",
+            "target_id": "linear:CHAOS-2852",
+            "edge_type": "relates",
+            "repo_id": None,
+            "provider": None,
+            "provenance": "native",
+            "confidence": 0.9,
+            "evidence": "persisted",
+        }
+        duplicate_dependency_row = persisted_row | {
+            "edge_id": "wid:duplicate",
+            "confidence": 1.0,
+            "evidence": "linear_attachment",
+        }
+        unique_dependency_row = duplicate_dependency_row | {
+            "edge_id": "wid:unique",
+            "target_id": "linear:CHAOS-2853",
+        }
+
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [
+                [persisted_row],
+                [duplicate_dependency_row, unique_dependency_row],
+                [],
+                [],
+            ]
+
+            filters = WorkGraphEdgeFilterInput(
+                edge_types=[WorkGraphEdgeTypeInput.RELATES]
+            )
+            result = await resolve_work_graph_edges(mock_context, filters)
+
+        assert [edge.edge_id for edge in result.edges] == [
+            "edge:persisted",
+            "wid:unique",
+        ]
 
     @pytest.mark.asyncio
     async def test_singular_edge_type_still_works(self, mock_context):
@@ -112,8 +277,8 @@ class TestEdgeTypesFilter:
             )
             await resolve_work_graph_edges(mock_context, filters)
 
-            sql = mock_query.call_args[0][1]
-            params = mock_query.call_args[0][2]
+            sql = mock_query.call_args_list[0][0][1]
+            params = mock_query.call_args_list[0][0][2]
 
             assert "edge_type = %(edge_type)s" in sql
             assert params["edge_type"] == "implements"
@@ -137,8 +302,8 @@ class TestEdgeTypesFilter:
             )
             await resolve_work_graph_edges(mock_context, filters)
 
-            sql = mock_query.call_args[0][1]
-            params = mock_query.call_args[0][2]
+            sql = mock_query.call_args_list[0][0][1]
+            params = mock_query.call_args_list[0][0][2]
 
             assert "edge_type = %(edge_type)s" in sql
             assert "edge_type IN %(edge_types)s" in sql
@@ -164,7 +329,7 @@ class TestEdgeListOrdering:
             mock_query.return_value = []
             await resolve_work_graph_edges(mock_context)
 
-            sql = mock_query.call_args[0][1]
+            sql = mock_query.call_args_list[0][0][1]
             assert "ORDER BY" not in sql
             assert "LIMIT" in sql
 
@@ -179,7 +344,7 @@ class TestEdgeListOrdering:
             mock_query.return_value = []
             await resolve_work_graph_edges(mock_context, WorkGraphEdgeFilterInput())
 
-            sql = mock_query.call_args[0][1]
+            sql = mock_query.call_args_list[0][0][1]
             assert "ORDER BY" not in sql
 
     @pytest.mark.asyncio
@@ -196,7 +361,7 @@ class TestEdgeListOrdering:
             )
             await resolve_work_graph_edges(mock_context, filters)
 
-            sql = mock_query.call_args[0][1]
+            sql = mock_query.call_args_list[0][0][1]
             assert "ORDER BY confidence DESC, edge_id ASC" in sql
             assert sql.index("ORDER BY") < sql.index("LIMIT")
 

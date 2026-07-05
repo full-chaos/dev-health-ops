@@ -391,6 +391,7 @@ async def _has_schedule_row(
 async def _terminal_unit_windows(
     session: AsyncSession,
     org_id: str,
+    config: SyncConfiguration,
     scope: EffectiveScope,
     truncated_before: datetime,
 ) -> list[UnitWindow]:
@@ -412,6 +413,27 @@ async def _terminal_unit_windows(
         .join(SyncRun, SyncRun.id == SyncRunUnit.sync_run_id)
         .where(*base_filters, SyncRunUnit.updated_at >= truncated_before)
     )
+    recent_backfill_stmt = select(BackfillJob).where(
+        BackfillJob.org_id == org_id,
+        BackfillJob.sync_config_id == config.id,
+        BackfillJob.created_at >= truncated_before,
+    )
+    recent_backfill_run_ids: set[uuid.UUID] = set()
+    for job in (await session.execute(recent_backfill_stmt)).scalars().all():
+        run_id_str = _backfill_job_sync_run_id(job)
+        if run_id_str is None:
+            continue
+        try:
+            recent_backfill_run_ids.add(uuid.UUID(run_id_str))
+        except ValueError:
+            continue
+    backfill_unit_stmt = None
+    if recent_backfill_run_ids:
+        backfill_unit_stmt = (
+            select(SyncRunUnit, SyncRun)
+            .join(SyncRun, SyncRun.id == SyncRunUnit.sync_run_id)
+            .where(*base_filters, SyncRunUnit.sync_run_id.in_(recent_backfill_run_ids))
+        )
     latest_success_ranked = (
         select(
             SyncRunUnit.id.label("unit_id"),
@@ -448,6 +470,12 @@ async def _terminal_unit_windows(
         if key not in seen:
             rows.append((unit, run))
             seen.add(key)
+    if backfill_unit_stmt is not None:
+        for unit, run in (await session.execute(backfill_unit_stmt)).all():
+            key = (unit.id, run.id)
+            if key not in seen:
+                rows.append((unit, run))
+                seen.add(key)
     windows: list[UnitWindow] = []
     for unit, run in rows:
         window = _unit_window_from_row(unit, run)
@@ -951,7 +979,9 @@ async def build_sync_coverage_summary(
     scope = await resolve_effective_scope(session, org_id, config)
     schedule = await _active_schedule(session, org_id, config)
     has_schedule = await _has_schedule_row(session, org_id, config)
-    windows = await _terminal_unit_windows(session, org_id, scope, truncated_before)
+    windows = await _terminal_unit_windows(
+        session, org_id, config, scope, truncated_before
+    )
     active_pairs = await _active_run_ids(session, org_id, scope)
     backfill_requested = await _backfill_requested_ranges(
         session, org_id, config, scope, truncated_before

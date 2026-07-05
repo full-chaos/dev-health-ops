@@ -12,6 +12,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.services.auth import AuthenticatedUser
+from dev_health_ops.api.services.sync_coverage import build_sync_coverage_summary
 from dev_health_ops.models.backfill import BackfillJob
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.integrations import (
@@ -266,6 +267,7 @@ async def _seed_run_unit(
     status: str = "success",
     source_id: str | None = None,
     dataset_key: str = "commits",
+    updated_at: datetime | None = None,
 ) -> None:
     async with session_maker() as session:
         unit = SyncRunUnit(
@@ -282,8 +284,28 @@ async def _seed_run_unit(
             status=status,
             attempts=1,
         )
+        if updated_at is not None:
+            unit.updated_at = updated_at
         session.add(unit)
         await session.commit()
+
+
+async def _coverage_summary_at(
+    session_maker,
+    scope: dict,
+    *,
+    org_id: str,
+    generated_at: datetime,
+) -> dict:
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, uuid.UUID(scope["config_id"]))
+        assert config is not None
+        return await build_sync_coverage_summary(
+            session,
+            org_id,
+            config,
+            generated_at=generated_at,
+        )
 
 
 @pytest.mark.asyncio
@@ -596,6 +618,188 @@ async def test_sync_coverage_api_success_matching_backfill_range_clears_gap(
     data = resp.json()
     assert data["overall"]["health"] == "healthy"
     assert data["datasets"][0]["gaps"] == []
+
+
+@pytest.mark.asyncio
+async def test_sync_coverage_recent_backfill_success_stays_cleared_after_unit_ages_out(
+    session_maker, seeded_state
+):
+    scope = await _seed_scope(session_maker, seeded_state["org_id"])
+    generated_at = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    old_unit_updated_at = generated_at - timedelta(days=181)
+    backfill_created_at = generated_at - timedelta(days=179)
+
+    backfill_run_id = await _seed_run(session_maker, scope, status="success")
+    await _seed_run_unit(
+        session_maker,
+        scope,
+        backfill_run_id,
+        since=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        before=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        status="success",
+        updated_at=old_unit_updated_at,
+    )
+    latest_run_id = await _seed_run(session_maker, scope, status="success")
+    await _seed_run_unit(
+        session_maker,
+        scope,
+        latest_run_id,
+        since=generated_at - timedelta(hours=2),
+        before=generated_at - timedelta(hours=1),
+        status="success",
+        updated_at=generated_at - timedelta(hours=1),
+    )
+    async with session_maker() as session:
+        session.add(
+            BackfillJob(
+                org_id=seeded_state["org_id"],
+                sync_config_id=uuid.UUID(scope["config_id"]),
+                status="success",
+                since_date=datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
+                before_date=datetime(2026, 1, 2, tzinfo=timezone.utc).date(),
+                total_chunks=1,
+                completed_chunks=1,
+                celery_task_id=f"sync_run:{backfill_run_id}",
+                created_at=backfill_created_at,
+                updated_at=backfill_created_at,
+            )
+        )
+        await session.commit()
+
+    data = await _coverage_summary_at(
+        session_maker,
+        scope,
+        org_id=seeded_state["org_id"],
+        generated_at=generated_at,
+    )
+
+    assert data["overall"]["health"] == "healthy"
+    assert data["datasets"][0]["gaps"] == []
+    assert data["sources"][0]["gap_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_sync_coverage_recent_backfill_uncovered_range_still_reports_gap(
+    session_maker, seeded_state
+):
+    scope = await _seed_scope(session_maker, seeded_state["org_id"])
+    generated_at = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    old_unit_updated_at = generated_at - timedelta(days=181)
+    backfill_created_at = generated_at - timedelta(days=179)
+
+    backfill_run_id = await _seed_run(session_maker, scope, status="running")
+    await _seed_run_unit(
+        session_maker,
+        scope,
+        backfill_run_id,
+        since=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        before=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        status="planned",
+        updated_at=old_unit_updated_at,
+    )
+    latest_run_id = await _seed_run(session_maker, scope, status="success")
+    await _seed_run_unit(
+        session_maker,
+        scope,
+        latest_run_id,
+        since=generated_at - timedelta(hours=2),
+        before=generated_at - timedelta(hours=1),
+        status="success",
+        updated_at=generated_at - timedelta(hours=1),
+    )
+    async with session_maker() as session:
+        session.add(
+            BackfillJob(
+                org_id=seeded_state["org_id"],
+                sync_config_id=uuid.UUID(scope["config_id"]),
+                status="running",
+                since_date=datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
+                before_date=datetime(2026, 1, 2, tzinfo=timezone.utc).date(),
+                total_chunks=1,
+                completed_chunks=0,
+                celery_task_id=f"sync_run:{backfill_run_id}",
+                created_at=backfill_created_at,
+                updated_at=backfill_created_at,
+            )
+        )
+        await session.commit()
+
+    data = await _coverage_summary_at(
+        session_maker,
+        scope,
+        org_id=seeded_state["org_id"],
+        generated_at=generated_at,
+    )
+
+    assert data["overall"]["health"] == "gaps"
+    assert [(gap["since"], gap["before"]) for gap in data["datasets"][0]["gaps"]] == [
+        (
+            datetime(2026, 1, 1, tzinfo=timezone.utc),
+            datetime(2026, 1, 2, tzinfo=timezone.utc),
+        )
+    ]
+    assert data["sources"][0]["gap_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_sync_coverage_recent_backfill_clock_alignment_remains_pair_scoped(
+    session_maker, seeded_state
+):
+    scope = await _seed_scope(session_maker, seeded_state["org_id"])
+    async with session_maker() as session:
+        extra_source = IntegrationSource(
+            org_id=scope["org_id"],
+            integration_id=uuid.UUID(scope["integration_id"]),
+            provider="github",
+            source_type="repository",
+            external_id="acme/clock-pair-scope",
+            name="clock-pair-scope",
+            full_name="acme/clock-pair-scope",
+            metadata_={"planner_managed_sync_config_id": scope["config_id"]},
+            is_enabled=True,
+        )
+        session.add(extra_source)
+        await session.commit()
+        extra_source_id = str(extra_source.id)
+    generated_at = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    backfill_run_id = await _seed_run(session_maker, scope, status="success")
+    await _seed_run_unit(
+        session_maker,
+        scope,
+        backfill_run_id,
+        since=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        before=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        status="success",
+        updated_at=generated_at - timedelta(days=181),
+    )
+    async with session_maker() as session:
+        session.add(
+            BackfillJob(
+                org_id=seeded_state["org_id"],
+                sync_config_id=uuid.UUID(scope["config_id"]),
+                status="success",
+                since_date=datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
+                before_date=datetime(2026, 1, 2, tzinfo=timezone.utc).date(),
+                total_chunks=1,
+                completed_chunks=1,
+                celery_task_id=f"sync_run:{backfill_run_id}",
+                created_at=generated_at - timedelta(days=179),
+                updated_at=generated_at - timedelta(days=179),
+            )
+        )
+        await session.commit()
+
+    data = await _coverage_summary_at(
+        session_maker,
+        scope,
+        org_id=seeded_state["org_id"],
+        generated_at=generated_at,
+    )
+
+    sources = {source["source_id"]: source for source in data["sources"]}
+    assert sources[scope["source_id"]]["gap_count"] == 0
+    assert sources[extra_source_id]["gap_count"] == 0
+    assert sources[extra_source_id]["status"] == "insufficient_data"
 
 
 @pytest.mark.asyncio

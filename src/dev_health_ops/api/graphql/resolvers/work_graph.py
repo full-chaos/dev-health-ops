@@ -53,6 +53,37 @@ _INCIDENT_STATUS_LABELS: dict[str, str] = {
     "closed": "Closed",
 }
 
+_DEPENDENCY_EDGE_TYPES: frozenset[str] = frozenset(
+    {
+        "blocks",
+        "is_blocked_by",
+        "relates",
+        "is_related_to",
+        "duplicates",
+        "is_duplicate_of",
+        "parent_of",
+        "child_of",
+    }
+)
+
+_DEPENDENCY_RELATIONSHIP_TYPE_MAP: dict[str, str] = {
+    "blocks": "blocks",
+    "blocked_by": "is_blocked_by",
+    "is_blocked_by": "is_blocked_by",
+    "relates": "relates",
+    "relates_to": "relates",
+    "is_related_to": "is_related_to",
+    "duplicates": "duplicates",
+    "duplicate": "duplicates",
+    "is_duplicate_of": "is_duplicate_of",
+    "parent": "parent_of",
+    "parent_of": "parent_of",
+    "is_parent_of": "parent_of",
+    "child": "child_of",
+    "child_of": "child_of",
+    "is_child_of": "child_of",
+}
+
 
 def _uses_scoped_partial(filters: WorkGraphEdgeFilterInput | None) -> bool:
     return bool(_partial_repo_ids(filters))
@@ -114,6 +145,67 @@ def _map_provenance(value: str) -> WorkGraphProvenance:
         return WorkGraphProvenance(value.lower())
     except ValueError:
         return WorkGraphProvenance.HEURISTIC
+
+
+def _dependency_edge_type_sql() -> str:
+    cases = [
+        f"relationship_type = '{relationship_type}', '{edge_type}'"
+        for relationship_type, edge_type in sorted(
+            _DEPENDENCY_RELATIONSHIP_TYPE_MAP.items()
+        )
+    ]
+    return f"multiIf({', '.join(cases)}, 'relates')"
+
+
+def _dependency_node_type_sql(column_name: str) -> str:
+    return (
+        "multiIf("
+        f"startsWith({column_name}, 'ghpr:') OR "
+        f"(startsWith({column_name}, 'gitlab:') AND position({column_name}, '!') > 0), "
+        "'pr', 'issue')"
+    )
+
+
+def _dependency_theme_membership_exists_clause(
+    filters: WorkGraphEdgeFilterInput | None,
+) -> str:
+    return f"""
+        EXISTS (
+            SELECT 1
+            FROM work_unit_membership AS m
+            INNER JOIN ({_membership_run_subquery(filters)}) AS latest_run
+                ON 1 = 1
+            {_LEGACY_NODE_MAX_JOIN}
+            WHERE m.org_id = %(org_id)s
+              AND latest_run.latest_run_id != ''
+              AND ({_RUN_SCOPE_PREDICATE})
+              AND (
+                (m.node_type, m.node_id) = (source_type, source_work_item_id)
+                OR (m.node_type, m.node_id) = (target_type, target_work_item_id)
+              )
+              AND (m.category_kind, m.category) IN %(category_tuples)s
+            GROUP BY m.node_type, m.node_id
+            HAVING uniqExact((m.category_kind, m.category)) = %(wanted_count)s
+        )
+    """
+
+
+def _dependency_edge_filter_values(
+    filters: WorkGraphEdgeFilterInput | None,
+) -> list[str]:
+    if filters is None:
+        return []
+
+    if filters.edge_type and filters.edge_types:
+        plural_values = {edge_type.value for edge_type in filters.edge_types}
+        requested = {filters.edge_type.value} & plural_values
+    elif filters.edge_type:
+        requested = {filters.edge_type.value}
+    elif filters.edge_types:
+        requested = {edge_type.value for edge_type in filters.edge_types}
+    else:
+        return []
+    return sorted(requested & _DEPENDENCY_EDGE_TYPES)
 
 
 def _display_name_for(
@@ -893,6 +985,94 @@ def _build_work_graph_where(
     return where_sql, params
 
 
+async def _query_dependency_edges(
+    client: Any,
+    org_id: str,
+    filters: WorkGraphEdgeFilterInput | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    from dev_health_ops.api.queries.client import query_dicts
+
+    edge_types = _dependency_edge_filter_values(filters)
+    if not edge_types:
+        return []
+    if filters and filters.repo_ids:
+        return []
+
+    mapped_edge_type = _dependency_edge_type_sql()
+    source_type = _dependency_node_type_sql("source_work_item_id")
+    target_type = _dependency_node_type_sql("target_work_item_id")
+    where_clauses = ["org_id = %(org_id)s", "mapped_edge_type IN %(edge_types)s"]
+    params: dict[str, Any] = {
+        "org_id": org_id,
+        "edge_types": edge_types,
+        "limit": limit,
+    }
+    _add_membership_scope_params(params, filters)
+
+    if filters and filters.source_type:
+        where_clauses.append("source_type = %(source_type)s")
+        params["source_type"] = filters.source_type.value
+    if filters and filters.target_type:
+        where_clauses.append("target_type = %(target_type)s")
+        params["target_type"] = filters.target_type.value
+    if filters and filters.node_id:
+        where_clauses.append(
+            "(source_work_item_id = %(node_id)s OR target_work_item_id = %(node_id)s)"
+        )
+        params["node_id"] = filters.node_id
+    if filters and (filters.theme or filters.subcategory):
+        exists_clause, theme_params = _build_theme_filter(
+            filters.theme, filters.subcategory, filters
+        )
+        if exists_clause:
+            dependency_exists_clause = _dependency_theme_membership_exists_clause(
+                filters
+            )
+            where_clauses.append(dependency_exists_clause)
+            params.update(theme_params)
+
+    where_sql = " AND ".join(where_clauses)
+    return await query_dicts(
+        client,
+        f"""
+        SELECT
+            concat(
+                'wid:',
+                hex(MD5(concat(source_type, ':', source_work_item_id, ':', mapped_edge_type, ':', target_type, ':', target_work_item_id)))
+            ) AS edge_id,
+            source_type,
+            source_work_item_id AS source_id,
+            target_type,
+            target_work_item_id AS target_id,
+            mapped_edge_type AS edge_type,
+            CAST(NULL, 'Nullable(UUID)') AS repo_id,
+            CAST(NULL, 'Nullable(String)') AS provider,
+            'native' AS provenance,
+            1.0 AS confidence,
+            if(relationship_type_raw != '', relationship_type_raw, relationship_type) AS evidence
+        FROM (
+            SELECT
+                org_id,
+                source_work_item_id,
+                target_work_item_id,
+                relationship_type,
+                relationship_type_raw,
+                {mapped_edge_type} AS mapped_edge_type,
+                {source_type} AS source_type,
+                {target_type} AS target_type,
+                last_synced
+            FROM work_item_dependencies FINAL
+            WHERE org_id = %(org_id)s
+        )
+        WHERE {where_sql}
+        ORDER BY last_synced DESC, edge_id ASC
+        LIMIT %(limit)s
+        """,
+        params,
+    )
+
+
 async def resolve_work_graph_edges(
     context: GraphQLContext,
     filters: WorkGraphEdgeFilterInput | None = None,
@@ -995,6 +1175,34 @@ async def resolve_work_graph_edges(
             )
             return _empty_edges_result(MEMBERSHIP_NOT_MATERIALIZED, filters)
         raise
+
+    dependency_rows = await _query_dependency_edges(client, org_id, filters, int(limit))
+    if dependency_rows:
+        existing_edge_keys = {
+            (
+                row.get("source_type"),
+                row.get("source_id"),
+                row.get("edge_type"),
+                row.get("target_type"),
+                row.get("target_id"),
+            )
+            for row in rows
+        }
+        rows = (
+            rows
+            + [
+                row
+                for row in dependency_rows
+                if (
+                    row.get("source_type"),
+                    row.get("source_id"),
+                    row.get("edge_type"),
+                    row.get("target_type"),
+                    row.get("target_id"),
+                )
+                not in existing_edge_keys
+            ]
+        )[: int(limit)]
 
     # Degraded-state signal (CHAOS-2430 rollout): a theme filter that yields zero
     # edges is normally a legitimate empty state, but immediately after deploy it

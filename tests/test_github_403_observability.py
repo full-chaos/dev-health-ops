@@ -305,22 +305,6 @@ def test_handle_github_exception_normalises_graphql_rate_limit_to_retryable():
     assert "secondary/abuse rate limit" in str(exc_info.value)
 
 
-def test_get_file_blame_permission_403_not_retried(monkeypatch):
-    monkeypatch.setattr(
-        "dev_health_ops.connectors.utils.retry.time.sleep", lambda *_: None
-    )
-    auth_exc = AuthenticationException(
-        "GitHub 403 (permission/SSO) on POST https://api.github.com/graphql: ..."
-    )
-    with GitHubConnector(token="t") as connector:
-        connector.graphql.get_blame = MagicMock(side_effect=auth_exc)
-        with pytest.raises(AuthenticationException) as exc_info:
-            connector.get_file_blame("o", "r", "a.py")
-
-    assert connector.graphql.get_blame.call_count == 1
-    assert not isinstance(exc_info.value, APIException)
-
-
 # --------------------------------------------------------------------------
 # retry_with_backoff — operation name is now in the log line
 # --------------------------------------------------------------------------

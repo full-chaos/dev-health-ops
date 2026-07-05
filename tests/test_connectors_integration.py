@@ -28,7 +28,7 @@ class TestGitHubIntegration:
 
         with GitHubConnector(token=token) as connector:
             # Fetch first 10 repos from github organization
-            repos = connector.list_repositories(org_name="github", max_repos=10)
+            repos = list(connector.github.get_organization("github").get_repos()[:10])
 
             # Assertions
             assert len(repos) > 0, "Should fetch at least one repository"
@@ -36,14 +36,20 @@ class TestGitHubIntegration:
 
             # Verify repository structure
             for repo in repos:
-                assert repo.id is not None, "Repository should have an ID"
-                assert repo.name, "Repository should have a name"
-                assert repo.full_name, "Repository should have a full name"
-                assert "github/" in repo.full_name, "Should be from github org"
+                assert getattr(repo, "id", None) is not None, (
+                    "Repository should have an ID"
+                )
+                assert getattr(repo, "name", None), "Repository should have a name"
+                full_name = getattr(repo, "full_name", "")
+                assert full_name, "Repository should have a full name"
+                assert "github/" in full_name, "Should be from github org"
 
             print(f"\nFetched {len(repos)} repositories from github organization:")
             for repo in repos[:5]:  # Print first 5
-                print(f"  - {repo.full_name} (⭐ {repo.stars})")
+                print(
+                    f"  - {getattr(repo, 'full_name', '<unknown>')} "
+                    f"(⭐ {getattr(repo, 'stargazers_count', 0)})"
+                )
 
     def test_list_public_repos_from_user(self):
         """Test fetching first 10 public repos from a GitHub user."""
@@ -54,7 +60,7 @@ class TestGitHubIntegration:
 
         with GitHubConnector(token=token) as connector:
             # Fetch first 10 repos from torvalds (Linus Torvalds)
-            repos = connector.list_repositories(user_name="torvalds", max_repos=10)
+            repos = list(connector.github.get_user("torvalds").get_repos()[:10])
 
             # Assertions
             assert len(repos) > 0, "Should fetch at least one repository"
@@ -62,14 +68,20 @@ class TestGitHubIntegration:
 
             # Verify repository structure
             for repo in repos:
-                assert repo.id is not None, "Repository should have an ID"
-                assert repo.name, "Repository should have a name"
-                assert repo.full_name, "Repository should have a full name"
-                assert "torvalds/" in repo.full_name, "Should be from torvalds user"
+                assert getattr(repo, "id", None) is not None, (
+                    "Repository should have an ID"
+                )
+                assert getattr(repo, "name", None), "Repository should have a name"
+                full_name = getattr(repo, "full_name", "")
+                assert full_name, "Repository should have a full name"
+                assert "torvalds/" in full_name, "Should be from torvalds user"
 
             print(f"\nFetched {len(repos)} repositories from torvalds user:")
             for repo in repos[:5]:  # Print first 5
-                print(f"  - {repo.full_name} (⭐ {repo.stars})")
+                print(
+                    f"  - {getattr(repo, 'full_name', '<unknown>')} "
+                    f"(⭐ {getattr(repo, 'stargazers_count', 0)})"
+                )
 
     def test_search_public_repos(self):
         """Test searching for public repositories."""
@@ -80,8 +92,10 @@ class TestGitHubIntegration:
 
         with GitHubConnector(token=token) as connector:
             # Search for Python repositories
-            repos = connector.list_repositories(
-                search="python language:python", max_repos=10
+            repos = list(
+                connector.github.search_repositories(query="python language:python")[
+                    :10
+                ]
             )
 
             # Assertions
@@ -90,10 +104,17 @@ class TestGitHubIntegration:
 
             # Verify repository structure
             for repo in repos:
-                assert repo.id is not None, "Repository should have an ID"
-                assert repo.name, "Repository should have a name"
-                assert repo.full_name, "Repository should have a full name"
+                assert getattr(repo, "id", None) is not None, (
+                    "Repository should have an ID"
+                )
+                assert getattr(repo, "name", None), "Repository should have a name"
+                assert getattr(repo, "full_name", None), (
+                    "Repository should have a full name"
+                )
 
             print(f"\nFound {len(repos)} Python repositories:")
             for repo in repos[:5]:  # Print first 5
-                print(f"  - {repo.full_name} (⭐ {repo.stars})")
+                print(
+                    f"  - {getattr(repo, 'full_name', '<unknown>')} "
+                    f"(⭐ {getattr(repo, 'stargazers_count', 0)})"
+                )

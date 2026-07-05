@@ -1206,8 +1206,9 @@ above. GitHub `git` and `commit_stats` REST-core traffic is instrumented as of
   orchestration now use `GitHubCodeClient` and emit `repo:` usage actuals, and
   the dead GitHub connector PR-review, PR-commit, file-contents, security-alert,
   security-advisory, and rate-limit helpers were retired in CS16 / CHAOS-2818;
-  the PyGithub-based `GitHubConnector` remains only as the credential/PyGithub/
-  artifact holder pending the full base-ABC cleanup (CHAOS-2865). GitLab repo
+  the PyGithub-based `GitHubConnector` now remains only as the credential/
+  PyGithub/artifact holder after the base-ABC data-method cleanup (CHAOS-2865).
+  GitLab repo
   metadata, project discovery, and batch orchestration now use `GitLabCodeClient`
   and emit `project:` usage actuals, and the GitLab connector code-dataset fetch
   methods were retired in CS17 / CHAOS-2819; `connectors/gitlab.py` now retains

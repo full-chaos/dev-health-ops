@@ -34,15 +34,14 @@ async def github_to_storage_example():
     # Initialize connector
     with GitHubConnector(token=token) as connector:
         try:
-            # Get a repository
             print("Fetching repositories...")
-            repos = connector.list_repositories(max_repos=1)
+            repos = list(connector.github.get_user().get_repos()[:1])
 
             if not repos:
                 print("No repositories found")
                 return
 
-            repo = repos[0]
+            repo: Any = repos[0]
             print(f"Using repository: {repo.full_name}\n")
 
             # Store repository in database

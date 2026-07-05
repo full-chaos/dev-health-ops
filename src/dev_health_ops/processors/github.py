@@ -28,7 +28,6 @@ from dev_health_ops.processors.base_git import (
     backfill_file_records,
     blame_backfill_needed,
     build_ci_pipeline_run,
-    build_connector_pull_request,
     build_deployment,
     build_git_pull_request,
     check_backfill_needs,
@@ -253,21 +252,6 @@ async def _fetch_github_commit_stats_async(
                 "_fetch_github_commit_stats_async: drained %d commit_stats usage observations",
                 len(observations),
             )
-
-
-def _fetch_github_prs_sync(connector, owner, repo_name, repo_id, max_prs):
-    """Sync helper to fetch Pull Requests."""
-    prs = connector.get_pull_requests(
-        owner,
-        repo_name,
-        state="all",
-        max_prs=max_prs,
-    )
-    pr_objects = []
-    for pr in prs:
-        git_pr = build_connector_pull_request(pr, repo_id=repo_id)
-        pr_objects.append(git_pr)
-    return pr_objects
 
 
 def _fetch_github_workflow_runs_sync(gh_repo, repo_id, max_runs, since):

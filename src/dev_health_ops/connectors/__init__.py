@@ -14,7 +14,7 @@ from .exceptions import (
     PaginationException,
     RateLimitException,
 )
-from .github import GitHubConnector, match_repo_pattern
+from .github import GitHubConnector
 from .gitlab import GitLabConnector, match_project_pattern
 from .models import (
     Author,
@@ -42,6 +42,7 @@ from .testops import (
     GitLabCIAdapter,
     PipelineSyncBatch,
 )
+from .utils import match_repo_pattern
 
 __all__ = [
     # Base class

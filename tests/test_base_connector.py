@@ -79,62 +79,6 @@ class TestGitConnectorInterface:
         class ConcreteConnector(GitConnector):
             """A complete connector implementation."""
 
-            def list_organizations(self, max_orgs=None):
-                return []
-
-            def list_repositories(
-                self,
-                org_name=None,
-                user_name=None,
-                search=None,
-                pattern=None,
-                max_repos=None,
-            ):
-                return []
-
-            def get_contributors(self, owner, repo, max_contributors=None):
-                return []
-
-            def get_commit_stats(self, owner, repo, sha):
-                return None
-
-            def get_repo_stats(self, owner, repo, max_commits=None):
-                return None
-
-            def get_pull_requests(self, owner, repo, state="all", max_prs=None):
-                return []
-
-            def get_file_blame(self, owner, repo, path, ref="HEAD"):
-                return None
-
-            def get_repos_with_stats(
-                self,
-                org_name=None,
-                user_name=None,
-                pattern=None,
-                batch_size=10,
-                max_concurrent=4,
-                rate_limit_delay=1.0,
-                max_commits_per_repo=None,
-                max_repos=None,
-                on_repo_complete=None,
-            ):
-                return []
-
-            async def get_repos_with_stats_async(
-                self,
-                org_name=None,
-                user_name=None,
-                pattern=None,
-                batch_size=10,
-                max_concurrent=4,
-                rate_limit_delay=1.0,
-                max_commits_per_repo=None,
-                max_repos=None,
-                on_repo_complete=None,
-            ):
-                return []
-
             def close(self):
                 pass
 
@@ -147,62 +91,6 @@ class TestGitConnectorInterface:
 
         class ConcreteConnector(GitConnector):
             """A complete connector implementation."""
-
-            def list_organizations(self, max_orgs=None):
-                return []
-
-            def list_repositories(
-                self,
-                org_name=None,
-                user_name=None,
-                search=None,
-                pattern=None,
-                max_repos=None,
-            ):
-                return []
-
-            def get_contributors(self, owner, repo, max_contributors=None):
-                return []
-
-            def get_commit_stats(self, owner, repo, sha):
-                return None
-
-            def get_repo_stats(self, owner, repo, max_commits=None):
-                return None
-
-            def get_pull_requests(self, owner, repo, state="all", max_prs=None):
-                return []
-
-            def get_file_blame(self, owner, repo, path, ref="HEAD"):
-                return None
-
-            def get_repos_with_stats(
-                self,
-                org_name=None,
-                user_name=None,
-                pattern=None,
-                batch_size=10,
-                max_concurrent=4,
-                rate_limit_delay=1.0,
-                max_commits_per_repo=None,
-                max_repos=None,
-                on_repo_complete=None,
-            ):
-                return []
-
-            async def get_repos_with_stats_async(
-                self,
-                org_name=None,
-                user_name=None,
-                pattern=None,
-                batch_size=10,
-                max_concurrent=4,
-                rate_limit_delay=1.0,
-                max_commits_per_repo=None,
-                max_repos=None,
-                on_repo_complete=None,
-            ):
-                return []
 
             def close(self):
                 pass
@@ -224,62 +112,6 @@ class TestGitConnectorContextManager:
             def __init__(self):
                 super().__init__()
                 self.closed = False
-
-            def list_organizations(self, max_orgs=None):
-                return []
-
-            def list_repositories(
-                self,
-                org_name=None,
-                user_name=None,
-                search=None,
-                pattern=None,
-                max_repos=None,
-            ):
-                return []
-
-            def get_contributors(self, owner, repo, max_contributors=None):
-                return []
-
-            def get_commit_stats(self, owner, repo, sha):
-                return None
-
-            def get_repo_stats(self, owner, repo, max_commits=None):
-                return None
-
-            def get_pull_requests(self, owner, repo, state="all", max_prs=None):
-                return []
-
-            def get_file_blame(self, owner, repo, path, ref="HEAD"):
-                return None
-
-            def get_repos_with_stats(
-                self,
-                org_name=None,
-                user_name=None,
-                pattern=None,
-                batch_size=10,
-                max_concurrent=4,
-                rate_limit_delay=1.0,
-                max_commits_per_repo=None,
-                max_repos=None,
-                on_repo_complete=None,
-            ):
-                return []
-
-            async def get_repos_with_stats_async(
-                self,
-                org_name=None,
-                user_name=None,
-                pattern=None,
-                batch_size=10,
-                max_concurrent=4,
-                rate_limit_delay=1.0,
-                max_commits_per_repo=None,
-                max_repos=None,
-                on_repo_complete=None,
-            ):
-                return []
 
             def close(self):
                 self.closed = True

@@ -675,9 +675,29 @@ def _backfill_job_is_orphaned(
     return sync_run_id is None or sync_run_id not in existing_run_ids
 
 
+_BACKFILL_JOB_ORPHAN_SCAN_LIMIT_MULTIPLIER = 5
+
+
 def _terminalize_orphaned_backfill_jobs(session, now: datetime, limit: int) -> int:
+    """Terminalize orphaned pending/running BackfillJob rows past the TTL.
+
+    The repair budget (`limit`, jobs actually terminalized) is decoupled
+    from the scan budget (candidates examined): candidates are loaded
+    oldest-first up to `limit * _BACKFILL_JOB_ORPHAN_SCAN_LIMIT_MULTIPLIER`
+    rows in one query, bulk-checked against SyncRun in a single follow-up
+    query, then terminalized in order until `limit` is reached. Without
+    this separation, a run of non-orphan jobs at the head of the ordering
+    (markers resolving to existing SyncRuns) would consume the entire scan
+    window and permanently starve an orphan sitting behind them -- every
+    reconciler run would re-select the exact same non-orphan window. The
+    scan budget bounds a single sweep even against a pathological table
+    full of live non-orphans; any remainder past the scan window is picked
+    up on a later run once the leading jobs terminalize or age out.
+    """
     cutoff = now - timedelta(seconds=_backfill_job_orphan_ttl_seconds())
     max_repairs = max(1, int(limit))
+    max_scanned = max_repairs * _BACKFILL_JOB_ORPHAN_SCAN_LIMIT_MULTIPLIER
+
     candidates = (
         session.query(BackfillJob)
         .filter(
@@ -685,7 +705,7 @@ def _terminalize_orphaned_backfill_jobs(session, now: datetime, limit: int) -> i
             BackfillJob.created_at <= cutoff,
         )
         .order_by(BackfillJob.created_at.asc(), BackfillJob.id.asc())
-        .limit(max_repairs)
+        .limit(max_scanned)
         .all()
     )
     if not candidates:
@@ -704,6 +724,8 @@ def _terminalize_orphaned_backfill_jobs(session, now: datetime, limit: int) -> i
 
     terminalized = 0
     for job in candidates:
+        if terminalized >= max_repairs:
+            break
         if not _backfill_job_is_orphaned(marker_run_ids[job.id], existing_run_ids):
             continue
         job.status = "failed"

@@ -1419,3 +1419,51 @@ def test_terminalize_orphaned_backfill_jobs_unparseable_marker_is_orphaned(
     assert terminalized == 1
     assert job.status == "failed"
     assert job.error_message == "backfill job orphaned: no linked sync run"
+
+
+def test_terminalize_orphaned_backfill_jobs_does_not_starve_orphan_behind_limit(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler
+
+    monkeypatch.setenv("SYNC_BACKFILL_JOB_ORPHAN_TTL_SECONDS", "3600")
+    fixed_now = datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc)
+
+    run, running, _planned = _seed_run(db_session, planned_units=0)
+    running.lease_expires_at = fixed_now + timedelta(minutes=5)
+    db_session.flush()
+
+    # Ordered FIRST (oldest created_at): a non-orphan whose marker resolves
+    # to a live, existing SyncRun -- owned by the dispatch/finalize flow,
+    # never terminalized here.
+    non_orphan = _seed_orphan_backfill_job(
+        db_session,
+        org_id=run.org_id,
+        celery_task_id=f"sync_run:{run.id}",
+        status="pending",
+        created_at=fixed_now - timedelta(hours=3),
+    )
+    # Ordered SECOND (behind the non-orphan): a true orphan with no marker.
+    orphan = _seed_orphan_backfill_job(
+        db_session,
+        celery_task_id=None,
+        status="pending",
+        created_at=fixed_now - timedelta(hours=2),
+    )
+
+    # limit=1: the old single-limit query would have selected only
+    # `non_orphan` (the oldest row) and never examined `orphan` at all --
+    # every subsequent sweep would re-select the same non-orphan window,
+    # starving `orphan` forever. The scan budget must look past it.
+    terminalized = sync_reconciler._terminalize_orphaned_backfill_jobs(
+        db_session, fixed_now, limit=1
+    )
+    db_session.flush()
+
+    db_session.refresh(non_orphan)
+    db_session.refresh(orphan)
+    assert terminalized == 1
+    assert non_orphan.status == "pending"
+    assert non_orphan.error_message is None
+    assert orphan.status == "failed"
+    assert orphan.error_message == "backfill job orphaned: no linked sync run"

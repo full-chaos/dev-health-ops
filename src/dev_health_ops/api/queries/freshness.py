@@ -7,6 +7,27 @@ from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from .client import query_dicts
 
 
+def _coerce_datetime(value: datetime | str | None) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            normalized = value.replace(" ", "T")
+            return datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
+
+
+def _source_status(value: datetime | str | None, *, start_day: date) -> str:
+    seen_at = _coerce_datetime(value)
+    if seen_at is None:
+        return "down"
+    if seen_at.date() < start_day:
+        return "degraded"
+    return "ok"
+
+
 async def fetch_last_ingested_at(
     sink: BaseMetricsSink, org_id: str = ""
 ) -> datetime | None:
@@ -97,4 +118,45 @@ async def fetch_coverage(
         "repos_covered_pct": repos_covered_pct,
         "prs_linked_to_issues_pct": prs_linked_pct,
         "issues_with_cycle_states_pct": issues_cycle_pct,
+    }
+
+
+async def fetch_source_statuses(
+    sink: BaseMetricsSink,
+    *,
+    start_day: date,
+    org_id: str = "",
+) -> dict[str, str]:
+    query = """
+        SELECT source, max(last_seen_at) AS last_seen_at
+        FROM (
+            SELECT lower(provider) AS source, max(last_synced) AS last_seen_at
+            FROM repos
+            WHERE org_id = %(org_id)s
+              AND lower(provider) NOT IN ('', 'unknown', 'synthetic')
+            GROUP BY source
+
+            UNION ALL
+
+            SELECT lower(provider) AS source, max(last_synced) AS last_seen_at
+            FROM work_items
+            WHERE org_id = %(org_id)s
+              AND lower(provider) NOT IN ('', 'unknown', 'synthetic')
+            GROUP BY source
+
+            UNION ALL
+
+            SELECT 'ci' AS source, max(last_synced) AS last_seen_at
+            FROM ci_pipeline_runs
+            WHERE org_id = %(org_id)s
+            HAVING count() > 0
+        )
+        GROUP BY source
+        ORDER BY source
+    """
+    rows = await query_dicts(sink, query, {"org_id": org_id})
+    return {
+        str(row["source"]): _source_status(row.get("last_seen_at"), start_day=start_day)
+        for row in rows
+        if row.get("source")
     }

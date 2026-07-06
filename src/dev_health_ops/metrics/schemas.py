@@ -970,6 +970,39 @@ class LLMTokenUsageRecord:
     output_tokens: int
     calls: int
     computed_at: datetime
+    run_id: str = ""
+
+
+@dataclass(frozen=True)
+class LLMTokenSpendRunRecord:
+    run_id: str
+    provider: str
+    model: str
+    calls: int
+    input_tokens: int
+    output_tokens: int
+    computed_at: datetime
+    failures_by_class: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class LLMTokenSpendLegacyRecord:
+    provider: str
+    model: str
+    calls: int
+    input_tokens: int
+    output_tokens: int
+    computed_at: datetime
+    run_id: str = ""
+    marker: str = "legacy_empty_run_id"
+
+
+@dataclass(frozen=True)
+class LLMTokenSpendSummaryRecord:
+    since: datetime
+    limit: int
+    runs: list[LLMTokenSpendRunRecord] = field(default_factory=list)
+    legacy: list[LLMTokenSpendLegacyRecord] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

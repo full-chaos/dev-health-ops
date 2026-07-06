@@ -1389,6 +1389,7 @@ async def test_materialize_fatal_llm_error_flushes_completed_token_usage(monkeyp
         llm_model="test-model",
         llm_concurrency=1,
         org_id="org-token-test",
+        run_id="run-token-test",
     )
 
     with pytest.raises(LLMAuthError, match="quota exhausted"):
@@ -1398,6 +1399,7 @@ async def test_materialize_fatal_llm_error_flushes_completed_token_usage(monkeyp
     assert len(sink.llm_token_rows) == 1
     token_row = sink.llm_token_rows[0]
     assert token_row.org_id == "org-token-test"
+    assert token_row.run_id == "run-token-test"
     assert token_row.source == "investment_materialize"
     assert token_row.input_tokens == 123
     assert token_row.output_tokens == 45

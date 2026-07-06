@@ -28,6 +28,7 @@ import asyncio
 import logging
 from typing import Any
 
+from dev_health_ops.clickhouse_dedup import dedup_from
 from dev_health_ops.metrics.opportunities.models import (
     FlowScopeInput,
     ImproveOpportunity,
@@ -419,7 +420,7 @@ class FlowOpportunityDetector:
             avg(rework_churn_ratio_30d) AS rework_churn_ratio_30d,
             avg(change_failure_rate) AS change_failure_rate,
             sum(total_loc_touched) AS total_loc_touched
-        FROM repo_metrics_daily FINAL
+        FROM repo_metrics_daily
         WHERE {where_clause}
         GROUP BY repo_id
         HAVING data_days >= {_MIN_DATA_DAYS}
@@ -461,7 +462,7 @@ class FlowOpportunityDetector:
             avg(wip_congestion_ratio) AS wip_congestion_ratio,
             sum(items_completed) AS items_completed,
             avg(defect_intro_rate) AS defect_intro_rate
-        FROM work_item_metrics_daily FINAL
+        FROM {dedup_from("work_item_metrics_daily")}
         WHERE {where_clause}
           AND team_id != ''
         GROUP BY team_id

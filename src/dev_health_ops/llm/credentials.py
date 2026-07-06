@@ -220,6 +220,7 @@ def _audit_org_byo_base_url_fallback(
         # emit_audit_log), so redact credential-shaped substrings before
         # persisting, same as those two sinks.
         sanitized_reason = sanitize_error_text(reason) or "invalid_base_url"
+        sanitized_base_url = sanitize_error_text(base_url) or ""
         reason_code: LLMStatusReasonCode = "invalid_base_url"
         safe_provider = _safe_log_value(provider_name)
         base_url_hash = _base_url_hash(base_url)
@@ -228,15 +229,18 @@ def _audit_org_byo_base_url_fallback(
         alert_cutoff = now - BYO_LLM_BASE_URL_FALLBACK_ALERT_WINDOW
 
         with get_postgres_session_sync() as session:
-            recent_result = session.execute(
-                select(AuditLog).where(
-                    AuditLog.org_id == resolved_org_id,
-                    AuditLog.resource_type == AuditResourceType.SETTING.value,
-                    AuditLog.resource_id == _BYO_LLM_BASE_URL_FALLBACK_RESOURCE_ID,
-                    AuditLog.created_at >= alert_cutoff,
+            try:
+                recent_result = session.execute(
+                    select(AuditLog).where(
+                        AuditLog.org_id == resolved_org_id,
+                        AuditLog.resource_type == AuditResourceType.SETTING.value,
+                        AuditLog.resource_id == _BYO_LLM_BASE_URL_FALLBACK_RESOURCE_ID,
+                        AuditLog.created_at >= alert_cutoff,
+                    )
                 )
-            )
-            recent_rows: list[Any] = list(recent_result.scalars().all())
+                recent_rows: list[Any] = list(recent_result.scalars().all())
+            except Exception:
+                recent_rows = []
             duplicate = any(
                 _coerce_aware_utc(row.created_at) >= dedupe_cutoff
                 and _audit_changes_match(
@@ -261,6 +265,7 @@ def _audit_org_byo_base_url_fallback(
                         ),
                         changes={
                             "provider": safe_provider,
+                            "base_url": sanitized_base_url,
                             "base_url_hash": base_url_hash,
                             "reason": sanitized_reason,
                             "reason_code": reason_code,

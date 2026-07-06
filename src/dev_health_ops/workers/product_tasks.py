@@ -77,3 +77,36 @@ def run_capacity_forecast_job(
     except Exception as exc:
         logger.exception("Capacity forecast task failed: %s", exc)
         raise self.retry(exc=exc, countdown=120 * (2**self.request.retries))
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=3,
+    queue="default",
+    name="dev_health_ops.workers.tasks.dispatch_capacity_forecast",
+)
+def dispatch_capacity_forecast(
+    self,
+    db_url: str | None = None,
+) -> dict:
+    from dev_health_ops.workers.recommendations_tasks import _discover_active_org_ids
+
+    try:
+        org_ids = _discover_active_org_ids(strict=True)
+    except Exception as exc:
+        logger.exception("dispatch_capacity_forecast failed to enumerate orgs")
+        raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
+
+    dispatched: list[str] = []
+    for org_id in org_ids:
+        celery_app.send_task(
+            "dev_health_ops.workers.tasks.run_capacity_forecast_job",
+            kwargs={"db_url": db_url, "org_id": org_id, "all_teams": True},
+            queue="metrics",
+        )
+        dispatched.append(org_id)
+
+    logger.info(
+        "Capacity forecast dispatch: dispatched=%d organizations", len(dispatched)
+    )
+    return {"dispatched": dispatched}

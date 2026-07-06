@@ -137,11 +137,11 @@ async def _cmd_maintenance_cleanup_tokens(_ns: argparse.Namespace) -> int:
 
 
 async def _cmd_maintenance_cleanup_all(_ns: argparse.Namespace) -> int:
-    refresh_tokens_deleted = await _run_refresh_token_cleanup()
-    total_deleted = refresh_tokens_deleted
+    deleted_count = await _run_refresh_token_cleanup()
+    total_deleted = deleted_count
     logging.getLogger(__name__).info(
-        "Maintenance cleanup complete: refresh_tokens_deleted=%s total_deleted=%s",
-        refresh_tokens_deleted,
+        "Maintenance cleanup complete: deleted=%s total=%s",
+        deleted_count,
         total_deleted,
     )
     return 0

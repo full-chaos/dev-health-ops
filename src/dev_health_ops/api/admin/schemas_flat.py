@@ -977,6 +977,7 @@ class SetupStatusResponse(BaseModel):
     has_sync_config: bool
     sync_config_id: str | None = None
     first_sync_started: bool
+    first_sync_completed: bool = False
     sync_status: Literal[
         "none", "pending", "running", "partial", "complete", "failed"
     ] = "none"

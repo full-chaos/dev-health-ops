@@ -76,6 +76,7 @@ def test_setup_status_response_contract_defaults() -> None:
         next_action="connect_integration",
     )
     assert resp.providers == []
+    assert resp.first_sync_completed is False
     assert resp.sync_status == "none"
     assert resp.selected_repositories_count == 0
     assert resp.can_start_sync is False

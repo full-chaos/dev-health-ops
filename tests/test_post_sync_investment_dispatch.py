@@ -222,6 +222,44 @@ def test_post_sync_dispatch_forwards_backfill_window() -> None:
     }
 
 
+def test_post_sync_dispatch_derives_metrics_window_from_sync_window() -> None:
+    from dev_health_ops.workers.post_sync_dispatch import _dispatch_post_sync_tasks
+
+    with (
+        patch(
+            "dev_health_ops.workers.post_sync_dispatch.celery_app.signature"
+        ) as window_signature,
+        patch("dev_health_ops.workers.post_sync_dispatch.chain") as window_chain,
+        patch(
+            "dev_health_ops.workers.post_sync_dispatch.celery_app.send_task"
+        ) as window_send_task,
+    ):
+
+        def _make_sig(name, **kwargs):
+            sig = MagicMock(name=f"sig:{name}")
+            sig.task_name = name
+            sig.sig_kwargs = kwargs
+            return sig
+
+        window_signature.side_effect = _make_sig
+        _dispatch_post_sync_tasks(
+            provider="linear",
+            sync_targets=["work-items"],
+            org_id="org-123",
+            from_date="2026-01-01",
+            to_date="2026-01-14",
+        )
+
+    window_send_task.assert_not_called()
+    daily_sig, *_ = window_chain.call_args.args
+    assert daily_sig.task_name == _DAILY_METRICS_TASK
+    assert daily_sig.sig_kwargs["kwargs"] == {
+        "org_id": "org-123",
+        "day": "2026-01-14",
+        "backfill_days": 14,
+    }
+
+
 def test_post_sync_dispatch_does_not_serialize_llm_api_key(monkeypatch) -> None:
     monkeypatch.setenv("LLM_API_KEY", "sk-worker-secret")
 

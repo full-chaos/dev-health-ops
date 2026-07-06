@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 from celery import chain
@@ -154,6 +154,14 @@ def _dispatch_post_sync_tasks(
     has_work_items = bool(target_set & _WORK_ITEM_TARGETS)
     has_dora = bool(target_set & _DORA_TARGETS)
     dispatched: list[str] = []
+
+    if from_date is not None and to_date is not None:
+        metrics_window_start = date.fromisoformat(from_date)
+        metrics_window_end = date.fromisoformat(to_date)
+        if metrics_day is None:
+            metrics_day = metrics_window_end.isoformat()
+        if metrics_backfill_days is None:
+            metrics_backfill_days = (metrics_window_end - metrics_window_start).days + 1
 
     daily_metrics_kwargs: dict[str, Any] = {"org_id": org_id}
     if metrics_day is not None:

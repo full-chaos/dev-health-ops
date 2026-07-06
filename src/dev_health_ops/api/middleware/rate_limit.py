@@ -184,7 +184,10 @@ def get_admin_user_key(request: Request) -> str:
         if token:
             user = get_auth_service().get_authenticated_user(token)
             if user and user.user_id:
-                return f"admin:{user.user_id}"
+                digest = hashlib.sha256(str(user.user_id).encode("utf-8")).hexdigest()[
+                    :16
+                ]
+                return f"admin-user:{digest}"
     return f"admin-ip:{ip}"
 
 

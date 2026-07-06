@@ -252,7 +252,7 @@ async def build_investment_flow_response(
             scope_filter = ""
             scope_params: dict[str, object] = {}
             if filters.scope.level in {"team", "repo"}:
-                repo_ids = await resolve_repo_filter_ids(sink, filters)
+                repo_ids = await resolve_repo_filter_ids(sink, filters, org_id=org_id)
                 scope_filter, scope_params = build_scope_filter_multi(
                     "repo", repo_ids, repo_column="repo_id"
                 )
@@ -388,7 +388,7 @@ async def build_investment_flow_response(
 
         scope_filter, scope_params = "", {}
         if filters.scope.level in {"team", "repo"}:
-            repo_ids = await resolve_repo_filter_ids(sink, filters)
+            repo_ids = await resolve_repo_filter_ids(sink, filters, org_id=org_id)
             scope_filter, scope_params = build_scope_filter_multi(
                 "repo", repo_ids, repo_column="repo_id"
             )
@@ -533,7 +533,7 @@ async def build_investment_repo_team_flow_response(
         scope_filter = ""
         scope_params: dict[str, object] = {}
         if filters.scope.level in {"team", "repo"}:
-            repo_ids = await resolve_repo_filter_ids(sink, filters)
+            repo_ids = await resolve_repo_filter_ids(sink, filters, org_id=org_id)
             scope_filter, scope_params = build_scope_filter_multi(
                 "repo", repo_ids, repo_column="repo_id"
             )

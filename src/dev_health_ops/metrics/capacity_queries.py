@@ -110,16 +110,19 @@ async def get_backlog_from_sink(
     where_clause = " AND ".join(conditions) if conditions else "1=1"
 
     query = f"""
-        SELECT wip_count_end_of_day
+        SELECT sum(wip_count_end_of_day) AS wip_count_end_of_day
         FROM work_item_metrics_daily FINAL
         WHERE {where_clause}
-        ORDER BY day DESC
-        LIMIT 1
+          AND day = (
+              SELECT max(day)
+              FROM work_item_metrics_daily FINAL
+              WHERE {where_clause}
+          )
     """
 
     rows = await asyncio.to_thread(sink.query_dicts, query, params)
     if rows:
-        return int(rows[0].get("wip_count_end_of_day", 0))
+        return int(rows[0].get("wip_count_end_of_day") or 0)
     return 0
 
 

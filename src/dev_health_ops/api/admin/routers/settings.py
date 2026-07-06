@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from collections.abc import Iterator
+from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.admin.llm_settings import (
@@ -18,17 +22,29 @@ from dev_health_ops.api.admin.middleware import get_admin_org_id
 from dev_health_ops.api.admin.schemas import (
     LLMSettingsResponse,
     LLMSettingsUpsert,
+    LLMSpendResponse,
     SettingCreate,
     SettingResponse,
     SettingsListResponse,
     SettingUpdate,
 )
 from dev_health_ops.api.services.configuration import SettingsService
+from dev_health_ops.db import require_clickhouse_uri
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
+from dev_health_ops.metrics.sinks.factory import create_sink
 from dev_health_ops.models.settings import SettingCategory
 
 from .common import get_session
 
 router = APIRouter()
+
+
+def get_metrics_sink() -> Iterator[BaseMetricsSink]:
+    sink = create_sink(require_clickhouse_uri())
+    try:
+        yield sink
+    finally:
+        sink.close()
 
 
 def _setting_response(setting: object) -> SettingResponse:
@@ -97,6 +113,27 @@ async def get_llm_settings(
     await _require_byo_llm_tier(session, org_id)
     svc = SettingsService(session, org_id)
     return await get_llm_settings_response(svc)
+
+
+@router.get(
+    "/llm-settings/spend",
+    response_model=LLMSpendResponse,
+)
+async def get_llm_settings_spend(
+    limit: int = Query(20, ge=1),
+    since: datetime | None = None,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+    sink: BaseMetricsSink = Depends(get_metrics_sink),
+) -> LLMSpendResponse:
+    await _require_byo_llm_tier(session, org_id)
+    summary = sink.read_llm_token_spend(org_id=org_id, limit=limit, since=since)
+    if summary is None:
+        return LLMSpendResponse(
+            since=since or datetime.now(timezone.utc) - timedelta(days=30),
+            limit=min(max(1, limit), 100),
+        )
+    return LLMSpendResponse.model_validate(asdict(summary))
 
 
 @router.put(

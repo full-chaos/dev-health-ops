@@ -1379,6 +1379,7 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
                     provider=resolved_llm_provider,
                     model=model_version,
                     source="investment_materialize",
+                    run_id=run_id,
                     input_tokens=llm_input_tokens,
                     output_tokens=llm_output_tokens,
                     calls=llm_calls,

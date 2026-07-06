@@ -51,6 +51,9 @@ async def test_home_response_sanitizes_non_finite_values(monkeypatch):
             "issues_with_cycle_states_pct": 0.0,
         }
 
+    async def _fake_fetch_source_statuses(*_args, **_kwargs):
+        return {"github": "ok"}
+
     async def _fake_fetch_metric_driver_delta(*_args, **_kwargs):
         return []
 
@@ -79,6 +82,9 @@ async def test_home_response_sanitizes_non_finite_values(monkeypatch):
         home_service, "fetch_last_ingested_at", _fake_fetch_last_ingested_at
     )
     monkeypatch.setattr(home_service, "fetch_coverage", _fake_fetch_coverage)
+    monkeypatch.setattr(
+        home_service, "fetch_source_statuses", _fake_fetch_source_statuses
+    )
     monkeypatch.setattr(
         home_service, "fetch_metric_driver_delta", _fake_fetch_metric_driver_delta
     )

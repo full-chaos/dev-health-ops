@@ -53,6 +53,7 @@ from dev_health_ops.api.admin.schemas_flat import (  # noqa: F401
     JiraActivityInferenceResponse,
     JobRunResponse,
     LLMSettingsResponse,
+    LLMSettingsStatusResponse,
     LLMSettingsUpsert,
     MemberMatchResult,
     MembershipCreate,

@@ -43,6 +43,20 @@ class LLMSettingsResponse(BaseModel):
     concurrency: int | None = None
 
 
+class LLMSettingsStatusResponse(BaseModel):
+    configured: bool
+    active: bool
+    degraded: bool
+    reason_code: Literal[
+        "not_configured",
+        "unknown_provider",
+        "missing_credentials",
+        "invalid_base_url",
+        "active",
+    ]
+    last_fallback_at: datetime | None = None
+
+
 class LLMSettingsUpsert(BaseModel):
     provider: str = Field(..., min_length=1)
     model: str | None = None

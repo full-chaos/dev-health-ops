@@ -7,6 +7,7 @@ import re
 from collections import defaultdict
 from typing import Any
 
+from dev_health_ops.api.queries.scopes import resolve_repo_ids
 from dev_health_ops.api.services.identity import looks_like_uuid
 
 from ..authz import require_org_id
@@ -119,6 +120,33 @@ def _add_membership_scope_params(
         return
     params["scoped_repo_ids"] = scoped_repo_ids
     params["scoped_repo_count"] = len(scoped_repo_ids)
+
+
+async def _resolve_filter_repo_scope(
+    client: Any,
+    filters: WorkGraphEdgeFilterInput | None,
+    org_id: str,
+) -> bool:
+    """Resolve ``filters.repo_ids`` (repo slugs OR UUID strings) to verified
+    repo UUIDs IN PLACE, through the org-scoped ``repos`` catalog — the same
+    ``resolve_repo_ids`` choke point every other repo-scoped surface uses.
+
+    The web global filter bar sends repo slugs (``org/repo``), but every
+    ``work_graph_edges`` / membership column is a UUID. A raw slug reaching SQL
+    throws ClickHouse ``CANNOT_PARSE_UUID`` and empties the graph, so refs MUST
+    be resolved here before they touch any query.
+
+    Returns True when repos WERE requested but NONE resolved to a known repo:
+    the caller MUST short-circuit to an empty result rather than fall through to
+    an unscoped (whole-org) query.
+    """
+    if filters is None or not filters.repo_ids:
+        return False
+    resolved = await resolve_repo_ids(client, filters.repo_ids, org_id=org_id)
+    if not resolved:
+        return True
+    filters.repo_ids = resolved
+    return False
 
 
 def _incident_label(status: str) -> str:
@@ -1085,6 +1113,12 @@ async def resolve_work_graph_edges(
     if client is None:
         raise RuntimeError("Database client not available")
 
+    # Resolve repo slug/UUID refs to catalog UUIDs BEFORE any query (the web
+    # global filter bar sends slugs). If none resolve, the scope is empty —
+    # return an empty result rather than an unscoped whole-org query.
+    if await _resolve_filter_repo_scope(client, filters, org_id):
+        return _empty_edges_result(filters=filters)
+
     limit = filters.limit if filters else 1000
 
     theme_filter = filters.theme if filters else None
@@ -1262,6 +1296,10 @@ async def resolve_work_graph_flow(
     if client is None:
         raise RuntimeError("Database client not available")
 
+    # Resolve repo slug/UUID refs to catalog UUIDs before any query.
+    if await _resolve_filter_repo_scope(client, filters, org_id):
+        return _empty_flow_result(filters=filters)
+
     theme_filter = filters.theme if filters else None
     subcategory_filter = filters.subcategory if filters else None
     theme_filter_active = bool(theme_filter or subcategory_filter)
@@ -1368,6 +1406,10 @@ async def resolve_work_graph_artifacts(
 
     if client is None:
         raise RuntimeError("Database client not available")
+
+    # Resolve repo slug/UUID refs to catalog UUIDs before any query.
+    if await _resolve_filter_repo_scope(client, filters, org_id):
+        return _empty_artifacts_result(filters=filters)
 
     limit = filters.limit if filters else 1000
 

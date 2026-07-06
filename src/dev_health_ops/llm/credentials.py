@@ -6,10 +6,21 @@ import os
 import socket
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from hashlib import sha256
+from typing import TYPE_CHECKING, Any, Final, Literal
 from urllib.parse import urlsplit
 
 from dev_health_ops.llm.errors import LLMAuthError
+from dev_health_ops.metrics.prometheus import (
+    record_byo_llm_base_url_fallback,
+    record_byo_llm_base_url_fallback_alert,
+)
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from dev_health_ops.api.services.configuration import SettingsService
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +61,27 @@ _LLM_MODEL_KEY = "model"
 _LLM_API_KEY_KEY = "api_key"
 _LLM_BASE_URL_KEY = "base_url"
 _LLM_CONCURRENCY_KEY = "concurrency"
+BYO_LLM_BASE_URL_FALLBACK_DEDUPE_WINDOW: Final = timedelta(hours=1)
+BYO_LLM_BASE_URL_FALLBACK_ALERT_WINDOW: Final = timedelta(hours=24)
+BYO_LLM_BASE_URL_FALLBACK_ALERT_THRESHOLD: Final = 2
+_BYO_LLM_BASE_URL_FALLBACK_RESOURCE_ID: Final = "llm.base_url"
+
+LLMStatusReasonCode = Literal[
+    "not_configured",
+    "unknown_provider",
+    "missing_credentials",
+    "invalid_base_url",
+    "active",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class OrgLLMStatusEvaluation:
+    configured: bool
+    active: bool
+    reason_code: LLMStatusReasonCode
+    provider_name: str = ""
+    base_url_hash: str = ""
 
 
 # CHAOS-2552: best-effort app-layer SSRF guard for BYO LLM base_url. Durable
@@ -168,6 +200,8 @@ def _audit_org_byo_base_url_fallback(
         )
         return
     try:
+        from sqlalchemy import select
+
         from dev_health_ops.db import get_postgres_session_sync
         from dev_health_ops.models.audit import (
             AuditAction,
@@ -186,30 +220,117 @@ def _audit_org_byo_base_url_fallback(
         # emit_audit_log), so redact credential-shaped substrings before
         # persisting, same as those two sinks.
         sanitized_reason = sanitize_error_text(reason) or "invalid_base_url"
-        sanitized_base_url = sanitize_error_text(_safe_log_value(base_url))
+        sanitized_base_url = sanitize_error_text(base_url) or ""
+        reason_code: LLMStatusReasonCode = "invalid_base_url"
+        safe_provider = _safe_log_value(provider_name)
+        base_url_hash = _base_url_hash(base_url)
+        now = _utc_now()
+        dedupe_cutoff = now - BYO_LLM_BASE_URL_FALLBACK_DEDUPE_WINDOW
+        alert_cutoff = now - BYO_LLM_BASE_URL_FALLBACK_ALERT_WINDOW
 
         with get_postgres_session_sync() as session:
-            session.add(
-                AuditLog(
-                    org_id=resolved_org_id,
-                    action=AuditAction.OTHER.value,
-                    resource_type=AuditResourceType.SETTING.value,
-                    resource_id="llm.base_url",
-                    description=(
-                        "Org BYO LLM base_url rejected by SSRF guard; falling back "
-                        "to platform default."
-                    ),
-                    changes={
-                        "provider": _safe_log_value(provider_name),
-                        "base_url": sanitized_base_url,
-                        "reason": sanitized_reason,
-                    },
-                    request_metadata={"source": "llm_credentials_resolver"},
-                    status="failure",
-                    error_message=sanitized_reason,
+            try:
+                recent_result = session.execute(
+                    select(AuditLog).where(
+                        AuditLog.org_id == resolved_org_id,
+                        AuditLog.resource_type == AuditResourceType.SETTING.value,
+                        AuditLog.resource_id == _BYO_LLM_BASE_URL_FALLBACK_RESOURCE_ID,
+                        AuditLog.created_at >= alert_cutoff,
+                    )
                 )
+                recent_rows: list[Any] = list(recent_result.scalars().all())
+            except Exception:
+                recent_rows = []
+            duplicate = any(
+                _coerce_aware_utc(row.created_at) >= dedupe_cutoff
+                and _audit_changes_match(
+                    row.changes,
+                    provider_name=provider_name,
+                    base_url_hash=base_url_hash,
+                    reason_code=reason_code,
+                )
+                for row in recent_rows
             )
-            session.flush()
+            audit_inserted = not duplicate
+            if audit_inserted:
+                session.add(
+                    AuditLog(
+                        org_id=resolved_org_id,
+                        action=AuditAction.OTHER.value,
+                        resource_type=AuditResourceType.SETTING.value,
+                        resource_id=_BYO_LLM_BASE_URL_FALLBACK_RESOURCE_ID,
+                        description=(
+                            "Org BYO LLM base_url rejected by SSRF guard; falling "
+                            "back to platform default."
+                        ),
+                        changes={
+                            "provider": safe_provider,
+                            "base_url": sanitized_base_url,
+                            "base_url_hash": base_url_hash,
+                            "reason": sanitized_reason,
+                            "reason_code": reason_code,
+                            "dedupe_window_seconds": int(
+                                BYO_LLM_BASE_URL_FALLBACK_DEDUPE_WINDOW.total_seconds()
+                            ),
+                        },
+                        request_metadata={"source": "llm_credentials_resolver"},
+                        status="failure",
+                        error_message=sanitized_reason,
+                    )
+                )
+                session.flush()
+            recent_count = (
+                sum(
+                    1
+                    for row in recent_rows
+                    if _coerce_aware_utc(row.created_at) >= alert_cutoff
+                )
+                + 1
+            )
+
+        record_byo_llm_base_url_fallback(
+            provider=safe_provider,
+            reason_code=reason_code,
+            audit_inserted=str(audit_inserted).lower(),
+        )
+        logger.warning(
+            "Org BYO LLM base_url fallback",
+            extra={
+                "event": "org_byo_llm_base_url_fallback",
+                "org_hash": _org_hash(resolved_org_id),
+                "provider": safe_provider,
+                "reason_code": reason_code,
+                "audit_inserted": audit_inserted,
+                "dedupe_window_seconds": int(
+                    BYO_LLM_BASE_URL_FALLBACK_DEDUPE_WINDOW.total_seconds()
+                ),
+            },
+        )
+        if recent_count >= BYO_LLM_BASE_URL_FALLBACK_ALERT_THRESHOLD:
+            threshold = str(BYO_LLM_BASE_URL_FALLBACK_ALERT_THRESHOLD)
+            window_seconds = str(
+                int(BYO_LLM_BASE_URL_FALLBACK_ALERT_WINDOW.total_seconds())
+            )
+            record_byo_llm_base_url_fallback_alert(
+                provider=safe_provider,
+                reason_code=reason_code,
+                threshold=threshold,
+                window_seconds=window_seconds,
+            )
+            logger.warning(
+                "Org BYO LLM base_url fallback threshold exceeded",
+                extra={
+                    "event": "org_byo_llm_base_url_fallback_alert",
+                    "org_hash": _org_hash(resolved_org_id),
+                    "provider": safe_provider,
+                    "reason_code": reason_code,
+                    "threshold": BYO_LLM_BASE_URL_FALLBACK_ALERT_THRESHOLD,
+                    "window_seconds": int(
+                        BYO_LLM_BASE_URL_FALLBACK_ALERT_WINDOW.total_seconds()
+                    ),
+                    "recent_count": recent_count,
+                },
+            )
     except Exception as exc:
         logger.debug("Failed to audit org BYO LLM base_url fallback: %s", exc)
 
@@ -230,6 +351,43 @@ def _safe_log_value(value: str) -> str:
     """Strip CR/LF before logging to prevent log injection from org-provided
     values (provider names come from tenant-controlled settings)."""
     return value.replace("\r", "").replace("\n", "")
+
+
+def _hashed_log_value(value: str) -> str:
+    return sha256(_safe_log_value(value).encode("utf-8")).hexdigest()[:16]
+
+
+def _base_url_hash(base_url: str) -> str:
+    return _hashed_log_value(base_url.strip()) if base_url.strip() else ""
+
+
+def _org_hash(org_id: uuid.UUID) -> str:
+    return _hashed_log_value(str(org_id))
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _coerce_aware_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _audit_changes_match(
+    changes: dict[str, Any] | None,
+    *,
+    provider_name: str,
+    base_url_hash: str,
+    reason_code: LLMStatusReasonCode,
+) -> bool:
+    return bool(
+        changes
+        and changes.get("provider") == _safe_log_value(provider_name)
+        and changes.get("base_url_hash") == base_url_hash
+        and changes.get("reason_code") == reason_code
+    )
 
 
 def _apply_byo_llm_flag_gate(
@@ -315,6 +473,102 @@ def _load_org_llm_settings(org_id: str | None) -> dict[str, str]:
         raise
     except Exception:
         return {}
+
+
+async def evaluate_org_llm_status(
+    org_id: str, settings: SettingsService
+) -> OrgLLMStatusEvaluation:
+    _ = org_id
+    provider_name = _normalize_provider(
+        await settings.get(_LLM_PROVIDER_KEY, "llm") or ""
+    )
+    if not provider_name or provider_name in {"auto", "mock", "none"}:
+        return OrgLLMStatusEvaluation(
+            configured=False,
+            active=False,
+            reason_code="not_configured",
+        )
+    if not _is_known_llm_provider(provider_name):
+        return OrgLLMStatusEvaluation(
+            configured=True,
+            active=False,
+            reason_code="unknown_provider",
+            provider_name=provider_name,
+        )
+
+    credentials = LLMCredentials(
+        api_key=await settings.get(_LLM_API_KEY_KEY, "llm") or "",
+        base_url=await settings.get(_LLM_BASE_URL_KEY, "llm") or "",
+    )
+    if not (credentials.api_key or credentials.base_url):
+        return OrgLLMStatusEvaluation(
+            configured=True,
+            active=False,
+            reason_code="missing_credentials",
+            provider_name=provider_name,
+            base_url_hash=_base_url_hash(credentials.base_url),
+        )
+    if not _llm_credentials_complete(provider_name, credentials):
+        return OrgLLMStatusEvaluation(
+            configured=True,
+            active=False,
+            reason_code="missing_credentials",
+            provider_name=provider_name,
+            base_url_hash=_base_url_hash(credentials.base_url),
+        )
+
+    ok, _base_url_error = validate_llm_base_url(credentials.base_url)
+    if not ok:
+        return OrgLLMStatusEvaluation(
+            configured=True,
+            active=False,
+            reason_code="invalid_base_url",
+            provider_name=provider_name,
+            base_url_hash=_base_url_hash(credentials.base_url),
+        )
+    return OrgLLMStatusEvaluation(
+        configured=True,
+        active=True,
+        reason_code="active",
+        provider_name=provider_name,
+        base_url_hash=_base_url_hash(credentials.base_url),
+    )
+
+
+async def latest_recent_org_byo_base_url_fallback_at(
+    session: AsyncSession, org_id: str, evaluation: OrgLLMStatusEvaluation
+) -> datetime | None:
+    if evaluation.reason_code != "invalid_base_url" or not evaluation.base_url_hash:
+        return None
+    try:
+        resolved_org_id = uuid.UUID(org_id)
+    except (TypeError, ValueError):
+        return None
+
+    from sqlalchemy import desc, select
+
+    from dev_health_ops.models.audit import AuditLog, AuditResourceType
+
+    cutoff = _utc_now() - BYO_LLM_BASE_URL_FALLBACK_ALERT_WINDOW
+    result = await session.execute(
+        select(AuditLog)
+        .where(
+            AuditLog.org_id == resolved_org_id,
+            AuditLog.resource_type == AuditResourceType.SETTING.value,
+            AuditLog.resource_id == _BYO_LLM_BASE_URL_FALLBACK_RESOURCE_ID,
+            AuditLog.created_at >= cutoff,
+        )
+        .order_by(desc(AuditLog.created_at))
+    )
+    for row in result.scalars().all():
+        if _audit_changes_match(
+            row.changes,
+            provider_name=evaluation.provider_name,
+            base_url_hash=evaluation.base_url_hash,
+            reason_code="invalid_base_url",
+        ):
+            return _coerce_aware_utc(row.created_at)
+    return None
 
 
 def resolve_llm_org_settings_provider(*, org_id: str | None = None) -> str:

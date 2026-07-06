@@ -130,6 +130,18 @@ if _PROMETHEUS_AVAILABLE:
         buckets=(0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0),
     )
 
+    BYO_LLM_BASE_URL_FALLBACK_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_byo_llm_base_url_fallback_total",
+        "Org BYO LLM base_url fallbacks by provider and reason",
+        ["provider", "reason_code", "audit_inserted"],
+    )
+
+    BYO_LLM_BASE_URL_FALLBACK_ALERT_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_byo_llm_base_url_fallback_alert_total",
+        "Sustained org BYO LLM base_url fallback alert signals",
+        ["provider", "reason_code"],
+    )
+
     # ---------------------------------------------------------------------------
     # GitHub API metrics
     # ---------------------------------------------------------------------------
@@ -166,6 +178,8 @@ else:
     LLM_REQUESTS_TOTAL = _noop_counter()
     LLM_TOKENS_TOTAL = _noop_counter()
     LLM_REQUEST_DURATION_SECONDS = _noop_histogram()
+    BYO_LLM_BASE_URL_FALLBACK_TOTAL = _noop_counter()
+    BYO_LLM_BASE_URL_FALLBACK_ALERT_TOTAL = _noop_counter()
     GITHUB_API_REQUESTS_TOTAL = _noop_counter()
     GITHUB_RATE_LIMIT_REMAINING = _noop_gauge()
     INVESTMENT_MEMBERSHIP_SCOPE_STALE_TOTAL = _noop_counter()
@@ -207,6 +221,26 @@ def record_llm_call(
         LLM_TOKENS_TOTAL.labels(
             provider=provider, model=model, token_type="completion"
         ).inc(completion_tokens)
+
+
+def record_byo_llm_base_url_fallback(
+    *, provider: str, reason_code: str, audit_inserted: str
+) -> None:
+    BYO_LLM_BASE_URL_FALLBACK_TOTAL.labels(
+        provider=provider,
+        reason_code=reason_code,
+        audit_inserted=audit_inserted,
+    ).inc()
+
+
+def record_byo_llm_base_url_fallback_alert(
+    *, provider: str, reason_code: str, threshold: str, window_seconds: str
+) -> None:
+    _ = (threshold, window_seconds)
+    BYO_LLM_BASE_URL_FALLBACK_ALERT_TOTAL.labels(
+        provider=provider,
+        reason_code=reason_code,
+    ).inc()
 
 
 def record_github_api_request(endpoint: str, status_code: str) -> None:

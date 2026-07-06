@@ -21,6 +21,7 @@ from dev_health_ops.api.admin.llm_settings import (
 from dev_health_ops.api.admin.middleware import get_admin_org_id
 from dev_health_ops.api.admin.schemas import (
     LLMSettingsResponse,
+    LLMSettingsStatusResponse,
     LLMSettingsUpsert,
     LLMSpendResponse,
     SettingCreate,
@@ -30,6 +31,10 @@ from dev_health_ops.api.admin.schemas import (
 )
 from dev_health_ops.api.services.configuration import SettingsService
 from dev_health_ops.db import require_clickhouse_uri
+from dev_health_ops.llm.credentials import (
+    evaluate_org_llm_status,
+    latest_recent_org_byo_base_url_fallback_at,
+)
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.metrics.sinks.factory import create_sink
 from dev_health_ops.models.settings import SettingCategory
@@ -113,6 +118,29 @@ async def get_llm_settings(
     await _require_byo_llm_tier(session, org_id)
     svc = SettingsService(session, org_id)
     return await get_llm_settings_response(svc)
+
+
+@router.get(
+    "/llm-settings/status",
+    response_model=LLMSettingsStatusResponse,
+)
+async def get_llm_settings_status(
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+) -> LLMSettingsStatusResponse:
+    await _require_byo_llm_tier(session, org_id)
+    svc = SettingsService(session, org_id)
+    evaluation = await evaluate_org_llm_status(org_id, svc)
+    last_fallback_at = await latest_recent_org_byo_base_url_fallback_at(
+        session, org_id, evaluation
+    )
+    return LLMSettingsStatusResponse(
+        configured=evaluation.configured,
+        active=evaluation.active,
+        degraded=evaluation.reason_code == "invalid_base_url",
+        reason_code=evaluation.reason_code,
+        last_fallback_at=last_fallback_at,
+    )
 
 
 @router.get(

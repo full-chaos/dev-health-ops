@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any
 
 from dev_health_ops.metrics.schemas import (
@@ -31,6 +32,7 @@ from dev_health_ops.metrics.schemas import (
     InvestmentExplanationRecord,
     InvestmentMetricsRecord,
     IssueTypeMetricsRecord,
+    LLMTokenSpendSummaryRecord,
     LLMTokenUsageRecord,
     ManualAttributionFallbackRecord,
     MemberRecord,
@@ -429,6 +431,15 @@ class BaseMetricsSink(ABC):
 
     def write_llm_token_usage(self, rows: Sequence[LLMTokenUsageRecord]) -> None:
         pass
+
+    def read_llm_token_spend(
+        self,
+        *,
+        org_id: str,
+        limit: int = 20,
+        since: datetime | None = None,
+    ) -> LLMTokenSpendSummaryRecord | None:
+        return None
 
     def read_investment_explanation(
         self, cache_key: str

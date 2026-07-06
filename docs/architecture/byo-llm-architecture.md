@@ -78,4 +78,12 @@ The platform supports multiple provider implementations:
 
 ### 4. Storage Layer
 - **Postgres**: Stores organization-scoped settings. The `SettingsService` encrypts sensitive values like API keys before saving them.
-- **ClickHouse**: Stores computed investment distributions and evidence quotes. The materializer writes directly to ClickHouse sinks.
+- **ClickHouse**: Stores computed investment distributions, evidence quotes, and LLM token usage. The materializer writes token usage with the investment `run_id` so admins can inspect spend per materialization run.
+
+## Admin Spend Endpoint
+
+Org admins with BYO-LLM access can read spend through `GET /api/v1/admin/llm-settings/spend`. The endpoint is gated by the same `byo_llm` feature flag and TEAM-tier floor as the settings CRUD endpoints, and every ClickHouse read is scoped to the authenticated organization.
+
+Default behavior returns the latest 20 non-empty `run_id` values from `llm_token_usage` in the last 30 days, ordered by each run's latest `computed_at`. `limit` is capped at 100 and `since` can narrow or expand the window. Each run entry reports `run_id`, `provider`, `model`, `calls`, `input_tokens`, `output_tokens`, `computed_at`, and `failures_by_class`.
+
+Failure counts are categorization-outcome classes derived from persisted `work_unit_investments.categorization_status` and `categorization_errors_json`; they are not exact provider exception counts. Legacy token rows that predate `run_id` are returned separately under `legacy` with `marker: "legacy_empty_run_id"` and `run_id: ""`, never as per-run spend.

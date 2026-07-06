@@ -51,6 +51,35 @@ class LLMSettingsUpsert(BaseModel):
     concurrency: int | None = Field(default=None, ge=1, le=32)
 
 
+class LLMSpendRun(BaseModel):
+    run_id: str
+    provider: str
+    model: str
+    calls: int
+    input_tokens: int
+    output_tokens: int
+    computed_at: datetime
+    failures_by_class: dict[str, int] = Field(default_factory=dict)
+
+
+class LLMSpendLegacyUsage(BaseModel):
+    run_id: str = ""
+    marker: Literal["legacy_empty_run_id"] = "legacy_empty_run_id"
+    provider: str
+    model: str
+    calls: int
+    input_tokens: int
+    output_tokens: int
+    computed_at: datetime
+
+
+class LLMSpendResponse(BaseModel):
+    since: datetime
+    limit: int
+    runs: list[LLMSpendRun] = Field(default_factory=list)
+    legacy: list[LLMSpendLegacyUsage] = Field(default_factory=list)
+
+
 class IntegrationCredentialResponse(BaseModel):
     id: str
     provider: str

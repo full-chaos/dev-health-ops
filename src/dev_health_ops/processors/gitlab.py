@@ -36,9 +36,11 @@ from dev_health_ops.processors.base_git import (
     build_deployment,
     build_git_pull_request,
     check_backfill_needs,
+    historical_backfill_day,
     resolve_commit_stats_limit,
     resolve_incident_labels,
     select_unblamed_paths,
+    write_historical_complexity,
 )
 from dev_health_ops.processors.fetch_utils import (
     AsyncBatchCollector,
@@ -1475,6 +1477,33 @@ async def _fetch_gitlab_repository_tree(
         )
 
 
+async def _resolve_gitlab_backfill_ref(
+    connector: Any,
+    project_full_name: str,
+    default_branch: str,
+    until: datetime | None,
+    usage_sink: list[dict[str, Any]] | None,
+) -> str | None:
+    if until is None:
+        return default_branch
+
+    drained_observations: list[dict[str, Any]] = []
+    try:
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                return await client.get_latest_commit_sha(
+                    project_full_name,
+                    ref=default_branch,
+                    until=until,
+                )
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
+    finally:
+        _drain_gitlab_code_usage(
+            "_resolve_gitlab_backfill_ref", drained_observations, usage_sink
+        )
+
+
 async def _backfill_gitlab_missing_data(
     store: Any,
     ingestion_sink: IngestionSink,
@@ -1487,7 +1516,10 @@ async def _backfill_gitlab_missing_data(
     include_files: bool = True,
     include_blame: bool = True,
     include_commit_stats: bool = True,
+    since: datetime | None = None,
+    until: datetime | None = None,
     usage_sink: list[dict[str, Any]] | None = None,
+    metrics_sink: Any | None = None,
 ) -> None:
     # check_backfill_needs's blame_only flag doubles as "skip commit stats".
     needs = await check_backfill_needs(
@@ -1498,7 +1530,11 @@ async def _backfill_gitlab_missing_data(
     # (contents NULL), which has_any_git_files treats as "done". Upgrade
     # them by re-running the files backfill when no contents exist yet;
     # ReplacingMergeTree(last_synced) supersedes the stale rows.
-    needs_files = needs.files if include_files else False
+    historical_day = historical_backfill_day(until)
+    needs_historical_complexity = include_files and historical_day is not None
+    needs_files = (
+        needs.files if include_files else False
+    ) or needs_historical_complexity
     if (
         include_files
         and not needs_files
@@ -1523,10 +1559,25 @@ async def _backfill_gitlab_missing_data(
 
     file_paths: list[str] = []
     blame_paths: list[str] = []
+    backfill_ref = default_branch
     if needs_files or needs_blame:
-        items = await _fetch_gitlab_repository_tree(
-            connector, project_full_name, default_branch, usage_sink
+        resolved_ref = await _resolve_gitlab_backfill_ref(
+            connector, project_full_name, default_branch, until, usage_sink
         )
+        if resolved_ref is None:
+            logging.warning(
+                "No GitLab commit found for %s at or before %s; skipping file backfill",
+                project_full_name,
+                until.isoformat() if until is not None else "unknown",
+            )
+            needs_files = False
+            needs_blame = False
+            items = []
+        else:
+            backfill_ref = resolved_ref
+            items = await _fetch_gitlab_repository_tree(
+                connector, project_full_name, backfill_ref, usage_sink
+            )
 
         for item in items or []:
             if item.get("type") != "blob":
@@ -1540,15 +1591,24 @@ async def _backfill_gitlab_missing_data(
             contents_by_path = await _fetch_scannable_contents(
                 connector,
                 project_full_name,
-                default_branch,
+                backfill_ref,
                 file_paths,
                 usage_sink=usage_sink,
             )
-            await backfill_file_records(
-                ingestion_sink,
-                db_repo.id,
-                file_paths,
-                project_full_name,
+            if historical_day is None:
+                await backfill_file_records(
+                    ingestion_sink,
+                    db_repo.id,
+                    file_paths,
+                    project_full_name,
+                    contents_by_path=contents_by_path,
+                )
+            write_historical_complexity(
+                store=store,
+                metrics_sink=metrics_sink,
+                repo_id=db_repo.id,
+                day=historical_day,
+                ref_value=backfill_ref,
                 contents_by_path=contents_by_path,
             )
 
@@ -1570,11 +1630,11 @@ async def _backfill_gitlab_missing_data(
             project_full_name,
             max_commits,
             db_repo.id,
-            None,
-            None,
+            since,
+            until,
             usage_sink,
         )
-        stats_limit = resolve_commit_stats_limit(len(commit_hashes), max_commits, None)
+        stats_limit = resolve_commit_stats_limit(len(commit_hashes), max_commits, since)
         stats_objects = await loop.run_in_executor(
             None,
             _fetch_gitlab_commit_stats_sync,
@@ -1632,7 +1692,7 @@ async def _backfill_gitlab_missing_data(
                         for path in blame_paths:
                             try:
                                 blame_items = await client.get_file_blame(
-                                    project_full_name, path, ref=default_branch
+                                    project_full_name, path, ref=backfill_ref
                                 )
                             except Exception as e:
                                 if _is_rate_limit_exception(e):
@@ -2209,6 +2269,8 @@ async def process_gitlab_project(
                 default_branch=db_repo.settings.get("default_branch", "main"),
                 max_commits=max_commits,
                 blame_only=True,
+                since=since,
+                until=until,
                 usage_sink=usage_sink,
             )
             logging.info("Completed blame-only sync for GitLab project: %s", project_id)
@@ -2391,6 +2453,8 @@ async def process_gitlab_project(
                     include_files=run_files,
                     include_blame=run_blame,
                     include_commit_stats=False,
+                    since=since,
+                    until=until,
                     usage_sink=usage_sink,
                 )
             except Exception as e:

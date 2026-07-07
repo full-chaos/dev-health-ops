@@ -58,6 +58,7 @@ class _FakeGitLabCodeClientForFiles:
         blame_error_paths=None,
         tree_items=None,
         observations=None,
+        latest_commit_sha="resolved-sha",
     ):
         self.contents = contents or {}
         self.contents_error = contents_error
@@ -65,8 +66,11 @@ class _FakeGitLabCodeClientForFiles:
         self.blame_error_paths = blame_error_paths or {}
         self.tree_items = tree_items if tree_items is not None else []
         self.observations = observations or []
+        self.latest_commit_sha = latest_commit_sha
+        self.get_latest_commit_sha_calls: list[Any] = []
         self.get_file_contents_calls: list[Any] = []
         self.get_file_blame_calls: list[Any] = []
+        self.list_repository_tree_calls: list[Any] = []
 
     async def __aenter__(self):
         return self
@@ -88,9 +92,14 @@ class _FakeGitLabCodeClientForFiles:
             raise self.blame_error_paths[file_path]
         return self.blame_by_path.get(file_path, GitLabFileBlame(file_path=file_path))
 
+    async def get_latest_commit_sha(self, project_id, *, ref, until):
+        self.get_latest_commit_sha_calls.append((project_id, ref, until))
+        return self.latest_commit_sha
+
     async def list_repository_tree(
         self, project_id, *, ref, per_page=100, max_items=1_000_000
     ):
+        self.list_repository_tree_calls.append((project_id, ref, per_page, max_items))
         return self.tree_items
 
     def drain_usage_observations(self):
@@ -252,6 +261,7 @@ class _FakeGitLabCodeClientForStats:
         self.commit_stats = commit_stats or {}
         self.observations = observations or []
         self.get_commits_calls: list[Any] = []
+        self.get_commits_window_calls: list[Any] = []
         self.get_commit_stats_calls: list[Any] = []
 
     async def __aenter__(self):
@@ -264,6 +274,7 @@ class _FakeGitLabCodeClientForStats:
         self, project_id, *, max_commits, since=None, until=None, per_page=100
     ):
         self.get_commits_calls.append(project_id)
+        self.get_commits_window_calls.append((project_id, max_commits, since, until))
         return self.commits[:max_commits] if max_commits is not None else self.commits
 
     async def get_commit_stats(self, project_id, commit_sha):
@@ -360,6 +371,165 @@ class TestGitLabBackfillCommitStats:
         # usage_sink plumbing (CHAOS-2803/CS2): the client's drained per-request
         # observations must reach the caller-supplied sink.
         assert usage_sink == [{"route_family": "project"}]
+
+    @pytest.mark.asyncio
+    async def test_historical_commit_stats_backfill_fetches_entire_window(
+        self, monkeypatch
+    ):
+        since = datetime(2026, 1, 10, tzinfo=timezone.utc)
+        until = datetime(2026, 1, 12, tzinfo=timezone.utc)
+        commits = [
+            GitLabCommitData(
+                commit_id=f"sha-{idx}",
+                message="ship it",
+                author_name="Ada",
+                authored_date=since,
+                committer_name="Ada",
+                committed_date=since,
+                parent_ids=(),
+            )
+            for idx in range(60)
+        ]
+        fake_client = _FakeGitLabCodeClientForStats(
+            commits=commits,
+            commit_stats={
+                commit.commit_id: GitLabCommitStatsData(commit.commit_id, 1, 0)
+                for commit in commits
+            },
+        )
+        monkeypatch.setattr(
+            "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+            lambda connector: fake_client,
+        )
+
+        store = Mock()
+        store.has_any_git_files = AsyncMock(return_value=True)
+        store.has_any_git_file_contents = AsyncMock(return_value=True)
+        store.has_any_git_commit_stats = AsyncMock(return_value=False)
+        store.has_any_git_blame = AsyncMock(return_value=True)
+
+        recorded_stats: list[Any] = []
+        sink = Mock()
+        sink.insert_git_commit_stats = AsyncMock(side_effect=recorded_stats.extend)
+
+        db_repo = Mock()
+        db_repo.id = uuid.uuid4()
+
+        await _backfill_gitlab_missing_data(
+            store=store,
+            ingestion_sink=sink,
+            connector=Mock(),
+            db_repo=db_repo,
+            project_full_name="group/proj",
+            default_branch="main",
+            max_commits=None,
+            include_files=False,
+            include_blame=False,
+            include_commit_stats=True,
+            since=since,
+            until=until,
+        )
+
+        assert fake_client.get_commits_window_calls == [
+            ("group/proj", None, since, until)
+        ]
+        assert len(fake_client.get_commit_stats_calls) == 60
+        assert [row.commit_hash for row in recorded_stats] == [
+            f"sha-{idx}" for idx in range(60)
+        ]
+
+    @pytest.mark.asyncio
+    async def test_historical_backfill_uses_resolved_ref_for_tree_content_blame_and_complexity(
+        self, monkeypatch
+    ):
+        until = datetime(2026, 1, 12, tzinfo=timezone.utc)
+        store = TestGitLabBackfillBlame._store({"src/app.py"})
+        store.org_id = "test-org"
+        store.has_any_git_file_contents = AsyncMock(return_value=True)
+        store.get_blamed_paths = AsyncMock(return_value={"README.md"})
+
+        written_files: list[Any] = []
+        written_blame: list[Any] = []
+
+        async def insert_files(batch):
+            written_files.extend(batch)
+
+        async def insert_blame(batch):
+            written_blame.extend(batch)
+
+        sink = Mock()
+        sink.insert_git_file_data = AsyncMock(side_effect=insert_files)
+        sink.insert_blame_data = AsyncMock(side_effect=insert_blame)
+        metrics_sink = ComplexityReadinessSink(ComplexityReadinessClient([]))
+
+        connector = Mock()
+        connector.gitlab.projects.get.return_value = Mock(id=42)
+        tree_items = [
+            {"type": "blob", "path": "src/app.py"},
+            {"type": "blob", "path": "README.md"},
+        ]
+        fake_client = _FakeGitLabCodeClientForFiles(
+            contents={"src/app.py": "def app():\n    return 1\n"},
+            blame_by_path={
+                "src/app.py": GitLabFileBlame(
+                    file_path="src/app.py",
+                    ranges=(
+                        GitLabBlameRange(
+                            1,
+                            1,
+                            "resolved-sha",
+                            "Ada",
+                            "ada@example.com",
+                            0,
+                            ("def app():",),
+                        ),
+                    ),
+                )
+            },
+            tree_items=tree_items,
+            latest_commit_sha="resolved-sha",
+        )
+        monkeypatch.setattr(
+            "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+            lambda connector: fake_client,
+        )
+
+        db_repo = Mock()
+        db_repo.id = uuid.uuid4()
+
+        await _backfill_gitlab_missing_data(
+            store=store,
+            ingestion_sink=sink,
+            connector=connector,
+            db_repo=db_repo,
+            project_full_name="group/proj",
+            default_branch="main",
+            max_commits=None,
+            include_blame=True,
+            include_commit_stats=False,
+            until=until,
+            metrics_sink=metrics_sink,
+        )
+
+        assert fake_client.get_latest_commit_sha_calls == [
+            ("group/proj", "main", until)
+        ]
+        assert fake_client.list_repository_tree_calls == [
+            ("group/proj", "resolved-sha", 100, 1_000_000)
+        ]
+        assert fake_client.get_file_contents_calls == [
+            ("group/proj", ("src/app.py",), "resolved-sha", 1_000_000)
+        ]
+        assert fake_client.get_file_blame_calls == [
+            ("group/proj", "src/app.py", "resolved-sha")
+        ]
+        sink.insert_git_file_data.assert_not_called()
+        assert written_files == []
+        assert [row.commit_hash for row in written_blame] == ["resolved-sha"]
+        assert [snap.ref for snap in metrics_sink.snapshots] == ["resolved-sha"]
+        assert [snap.as_of_day for snap in metrics_sink.snapshots] == [until.date()]
+        assert [daily.day for daily in metrics_sink.dailies] == [until.date()]
+        assert metrics_sink.dailies[0].org_id == "test-org"
 
     @pytest.mark.asyncio
     async def test_backfill_skips_commit_stats_when_already_present(self, monkeypatch):

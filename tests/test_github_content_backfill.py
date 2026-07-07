@@ -39,16 +39,39 @@ class _FakeCodeClient:
     tests double the CLIENT, never ``connector.get_file_contents``/
     ``connector.get_file_blame`` (which the processor no longer calls)."""
 
-    def __init__(self, *, contents=None, blame=None, issues=None, side_effect=None):
+    def __init__(
+        self,
+        *,
+        contents=None,
+        blame=None,
+        issues=None,
+        latest_commit_sha="resolved-sha",
+        side_effect=None,
+    ):
         self.contents = contents if contents is not None else {}
         self.blame = blame
         self.issues = issues if issues is not None else []
+        self.latest_commit_sha = latest_commit_sha
         self.side_effect = side_effect
+        self.latest_commit_calls: list[tuple[str, str, str, datetime]] = []
         self.file_content_calls: list[tuple[str, str, list[str], str]] = []
         self.file_blame_calls: list[tuple[str, str, str, str]] = []
         self.issue_calls: list[tuple[str, str, str, list[str], int | None]] = []
         self.drain_usage_observations = Mock(return_value=[])
         self.close = AsyncMock()
+
+    async def get_latest_commit_sha(
+        self,
+        owner: str,
+        repo: str,
+        *,
+        ref: str,
+        until: datetime,
+    ) -> str | None:
+        self.latest_commit_calls.append((owner, repo, ref, until))
+        if self.side_effect is not None:
+            raise self.side_effect
+        return self.latest_commit_sha
 
     async def get_file_contents(
         self,
@@ -417,7 +440,7 @@ class TestPathsOnlyUpgrade:
         by_path = {f.path: f.contents for f in written}
         assert by_path == {"src/app.py": "x = 1\n", "README.md": None}
         assert code_client.file_content_calls == [
-            ("octo", "repo", ["src/app.py"], "main")
+            ("octo", "repo", ["src/app.py"], "abc")
         ]
         code_client.close.assert_awaited_once()
         connector.get_file_contents.assert_not_called()
@@ -751,11 +774,108 @@ class TestCommitStatsBackfill:
 
         sink.insert_git_commit_stats.assert_not_called()
         assert stats_calls == []
-        assert code_client.file_blame_calls == [("octo", "repo", "src/app.py", "main")]
+        assert code_client.file_blame_calls == [
+            ("octo", "repo", "src/app.py", "resolved-sha")
+        ]
         code_client.close.assert_awaited_once()
         connector.get_file_blame.assert_not_called()
         assert [row.path for row in blame_rows] == ["src/app.py"]
         assert [row.line for row in blame_rows] == [None]
+
+    @pytest.mark.asyncio
+    async def test_historical_backfill_uses_resolved_ref_for_tree_content_blame_and_complexity(
+        self, monkeypatch
+    ):
+        from dev_health_ops.connectors.models import BlameRange, FileBlame
+        from dev_health_ops.processors import github
+        from dev_health_ops.processors.github import _backfill_github_missing_data
+
+        until = datetime(2026, 1, 12, tzinfo=timezone.utc)
+
+        store = Mock()
+        store.org_id = "test-org"
+        store.has_any_git_files = AsyncMock(return_value=True)
+        store.has_any_git_file_contents = AsyncMock(return_value=True)
+        store.has_any_git_commit_stats = AsyncMock(return_value=True)
+        store.has_any_git_blame = AsyncMock(return_value=False)
+        store.get_blamed_paths = AsyncMock(return_value={"README.md"})
+
+        written_files = []
+        written_blame = []
+
+        async def insert_files(batch):
+            written_files.extend(batch)
+
+        async def insert_blame(batch):
+            written_blame.extend(batch)
+
+        sink = Mock()
+        sink.insert_git_file_data = AsyncMock(side_effect=insert_files)
+        sink.insert_blame_data = AsyncMock(side_effect=insert_blame)
+
+        metrics_sink = ComplexityReadinessSink(ComplexityReadinessClient([]))
+
+        gh_repo = Mock()
+        gh_repo.get_git_tree.return_value = Mock(
+            tree=[_FakeTreeEntry("src/app.py"), _FakeTreeEntry("README.md")]
+        )
+        connector = Mock()
+        connector.github.get_repo.return_value = gh_repo
+
+        code_client = _FakeCodeClient(
+            contents={"src/app.py": "def app():\n    return 1\n"},
+            blame=FileBlame(
+                file_path="src/app.py",
+                ranges=[
+                    BlameRange(
+                        starting_line=1,
+                        ending_line=1,
+                        commit_sha="resolved-sha",
+                        author="Ada",
+                        author_email="ada@example.com",
+                        age_seconds=0,
+                    )
+                ],
+            ),
+            latest_commit_sha="resolved-sha",
+        )
+        monkeypatch.setattr(
+            github, "_github_code_client_from_connector", lambda _connector: code_client
+        )
+
+        db_repo = Mock()
+        db_repo.id = uuid.uuid4()
+
+        await _backfill_github_missing_data(
+            store=store,
+            ingestion_sink=sink,
+            connector=connector,
+            db_repo=db_repo,
+            repo_full_name="octo/repo",
+            default_branch="main",
+            max_commits=None,
+            include_blame=True,
+            include_commit_stats=False,
+            until=until,
+            metrics_sink=metrics_sink,
+        )
+
+        assert code_client.latest_commit_calls == [("octo", "repo", "main", until)]
+        gh_repo.get_branch.assert_not_called()
+        gh_repo.get_git_tree.assert_called_once_with("resolved-sha", recursive=True)
+        assert code_client.file_content_calls == [
+            ("octo", "repo", ["src/app.py"], "resolved-sha")
+        ]
+        assert code_client.file_blame_calls == [
+            ("octo", "repo", "src/app.py", "resolved-sha")
+        ]
+        sink.insert_git_file_data.assert_not_called()
+        assert written_files == []
+        assert [row.commit_hash for row in written_blame] == ["resolved-sha"]
+        assert [snap.ref for snap in metrics_sink.snapshots] == ["resolved-sha"]
+        assert [snap.as_of_day for snap in metrics_sink.snapshots] == [until.date()]
+        assert [daily.day for daily in metrics_sink.dailies] == [until.date()]
+        assert metrics_sink.dailies[0].org_id == "test-org"
 
     @pytest.mark.asyncio
     async def test_backfill_commit_stats_full_history_writes_capped_sample(

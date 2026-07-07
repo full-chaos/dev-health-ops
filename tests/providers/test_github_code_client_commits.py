@@ -125,6 +125,32 @@ async def _test_commits_usage_resolves_to_git_family() -> None:
     assert observations[0]["request_count"] == 1
 
 
+def test_latest_commit_sha_sends_ref_and_until_window() -> None:
+    asyncio.run(_test_latest_commit_sha_sends_ref_and_until_window())
+
+
+async def _test_latest_commit_sha_sends_ref_and_until_window() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=[{"sha": "abc123"}])
+
+    client = _client(httpx.MockTransport(handler))
+    until = datetime(2026, 1, 2, tzinfo=timezone.utc)
+
+    sha = await client.get_latest_commit_sha("acme", "widgets", ref="main", until=until)
+    observations = client.drain_usage_observations()
+    await client.close()
+
+    assert sha == "abc123"
+    assert seen[0].url.params["sha"] == "main"
+    assert seen[0].url.params["until"] == until.isoformat()
+    assert seen[0].url.params["per_page"] == "1"
+    assert observations[0]["route_family"] == "git"
+    assert observations[0]["request_count"] == 1
+
+
 def test_uncapped_commits_follow_all_link_pages() -> None:
     asyncio.run(_test_uncapped_commits_follow_all_link_pages())
 

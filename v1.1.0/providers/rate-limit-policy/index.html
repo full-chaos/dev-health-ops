@@ -1,0 +1,5227 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Developer health and operations analytics platform">
+      
+      
+      
+      
+        <link rel="prev" href="../../user-guide/github-app-setup/">
+      
+      
+        <link rel="next" href="../../metrics/">
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.39">
+    
+    
+      
+        <title>Rate-Limit Policy - dev-health-ops</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.8c3ca2c6.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#provider-rate-limit-policy" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="dev-health-ops" class="md-header__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            dev-health-ops
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Rate-Limit Policy
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="dev-health-ops" class="md-nav__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    dev-health-ops
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Product
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Product
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/feature-flags/feature-flag-user-impact-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Feature Flag and User Impact PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/feature-flags/feature-flag-prd-review/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Feature Flag PRD Review
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/product-brief/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Brief
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/concepts/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Concepts
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/investment-taxonomy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Taxonomy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/capacity-planning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Capacity Planning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/monetization-strategy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Monetization Strategy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/test-ops-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TestOps PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../self-hosted-quickstart/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Self-Hosted Quickstart
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../team-configuration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Configuration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../email-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Email Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sso-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SSO Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../webhooks/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Webhooks
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../alerting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Alerting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            Architecture
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/data-pipeline/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Pipeline
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/dispatch-outbox/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Durable Dispatch Outbox
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/sync-unit-model/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Sync Unit Model
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/team-attribution/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Attribution
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/investment-categorization-pipeline/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Categorization Pipeline
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/investment-data-model/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Data Model
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/repo-layout/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Repo Layout
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/frontend-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Frontend Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/middleware-impersonation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Middleware Impersonation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/auth-journey/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Auth User Journeys
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/database-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Database Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/worker-scaling-readiness/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Worker Scaling Readiness
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/normalization-helpers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Normalization Helpers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/enterprise-overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Enterprise Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/licensing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Licensing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/adr/001-enterprise-edition/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ADR-001 Enterprise Edition
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/byo-llm-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    BYO-LLM Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_12" >
+        
+          
+          <label class="md-nav__link" for="__nav_12" id="__nav_12_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Operations
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_12">
+            <span class="md-nav__icon md-icon"></span>
+            Operations
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/observability-tooling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Observability Tooling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/deployment-guide/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Deployment Guide
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/connector-inventory/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Connector Inventory
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/stripe-billing-runbook/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Stripe Billing Runbook
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/testing-governance/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Testing Governance
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/enterprise-test-plan/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Enterprise Test Plan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/workers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Workers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../slos/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SLOs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/customer-offboarding/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Customer Offboarding
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/investment-materialization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Materialization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    CLI
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            CLI
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_14" id="__nav_14_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Connectors
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_14">
+            <span class="md-nav__icon md-icon"></span>
+            Connectors
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../connectors/usage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Usage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../connectors/private-repo-testing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Private Repos
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/github-app-auth/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Auth
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/github-app-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_15" id="__nav_15_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Providers
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_15">
+            <span class="md-nav__icon md-icon"></span>
+            Providers
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Rate-Limit Policy
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  <span class="md-ellipsis">
+    Rate-Limit Policy
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#credentials-are-not-capacity" class="md-nav__link">
+    <span class="md-ellipsis">
+      Credentials are not capacity
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-rate-limits-are-handled" class="md-nav__link">
+    <span class="md-ellipsis">
+      How rate limits are handled
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How rate limits are handled">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#budget-reservation-and-route-families" class="md-nav__link">
+    <span class="md-ellipsis">
+      Budget reservation and route families
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#actual-vs-estimated-calibration-chaos-2759" class="md-nav__link">
+    <span class="md-ellipsis">
+      Actual-vs-estimated calibration (CHAOS-2759)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#observation-store" class="md-nav__link">
+    <span class="md-ellipsis">
+      Observation store
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#legacy-error-text-columns-sync_run_unitserror-and-siblings" class="md-nav__link">
+    <span class="md-ellipsis">
+      Legacy error-text columns (sync_run_units.error and siblings)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cooldown-gating" class="md-nav__link">
+    <span class="md-ellipsis">
+      Cooldown gating
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#instrumented-transport-core-chaos-2773-cs1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Instrumented transport core (CHAOS-2773 CS1)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Instrumented transport core (CHAOS-2773 CS1)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#usage-drain-wiring-first-re-bucketing-chaos-2773-cs2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage drain wiring + first re-bucketing (CHAOS-2773 CS2)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#per-provider-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Per-provider policy
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Per-provider policy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#github" class="md-nav__link">
+    <span class="md-ellipsis">
+      GitHub
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="GitHub">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#route-families" class="md-nav__link">
+    <span class="md-ellipsis">
+      Route families
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gitlab" class="md-nav__link">
+    <span class="md-ellipsis">
+      GitLab
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="GitLab">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#route-families_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Route families
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jira" class="md-nav__link">
+    <span class="md-ellipsis">
+      Jira
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Jira">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#route-families_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Route families
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#linear" class="md-nav__link">
+    <span class="md-ellipsis">
+      Linear
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Linear">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#route-families_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      Route families
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#launchdarkly" class="md-nav__link">
+    <span class="md-ellipsis">
+      LaunchDarkly
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="LaunchDarkly">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#route-families_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      Route families
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#known-gaps" class="md-nav__link">
+    <span class="md-ellipsis">
+      Known gaps
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#references" class="md-nav__link">
+    <span class="md-ellipsis">
+      References
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_16" id="__nav_16_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Metrics
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16">
+            <span class="md-nav__icon md-icon"></span>
+            Metrics
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../metrics-inventory/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inventory
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../canonical-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Canonical Metrics (API Mapping)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/canonical-metrics-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Canonical Metrics (PRD)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/ai-opportunity-detector/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Opportunity Detector
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/metric-calculations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Metric Calculations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Computations Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Views Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_16_9" id="__nav_16_9_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Views
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_16_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16_9">
+            <span class="md-nav__icon md-icon"></span>
+            Views
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/investment-view/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment View
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-mix/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Mix
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-flows/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Flows
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-expense/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Expense
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/code-hotspots/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Hotspots
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/pr-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PR Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/quadrants/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quadrants
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/flame-diagrams/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Flame Diagrams
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/capacity-planning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Capacity Planning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/work-graph/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Work Graph View
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-impact/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Impact
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-review-load/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Review Load
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-risk/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Risk
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-attribution/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Attribution
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/work-graph/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Work Graph
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/reports/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Reports
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/product-telemetry/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Telemetry
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/product-telemetry-dashboard-assessment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Telemetry Dashboard Assessment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_17" >
+        
+          
+          <label class="md-nav__link" for="__nav_17" id="__nav_17_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    API
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_17_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_17">
+            <span class="md-nav__icon md-icon"></span>
+            API
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GraphQL Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/investment-api/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment API
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-ai/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Workflow Analytics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-security/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GraphQL Security
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/persisted-queries/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Persisted Queries
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/view-mapping/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    View Mapping
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/web-graphql-client/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Web GraphQL Client
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/web-graphql-investment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Web Investment Queries
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/team-catalog-source-of-truth/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Catalog Source of Truth
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/operating-review/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Operating Review Aggregation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../visualizations/patterns/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Visualizations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_19" >
+        
+          
+          <label class="md-nav__link" for="__nav_19" id="__nav_19_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    LLM
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_19_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_19">
+            <span class="md-nav__icon md-icon"></span>
+            LLM
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/categorization-contract/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Categorization Contract
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/byo-llm-credentials/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Credential Resolution
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/errors-circuit-breaker/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Errors and Circuit-Breaker
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/materialize-fanout/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Materialize Fan-Out
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/spend-observability/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Spend Observability
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/user-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    User Flows
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../task_trackers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Task Trackers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../roadmap/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Roadmap
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../project/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Project Plan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_23" >
+        
+          
+          <label class="md-nav__link" for="__nav_23" id="__nav_23_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Plans
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_23_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_23">
+            <span class="md-nav__icon md-icon"></span>
+            Plans
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/dead-code-cleanup-plan/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dead Code Cleanup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/atlassian-client-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Atlassian Client Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/github-app-marketplace/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Marketplace + Install
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_24" >
+        
+          
+          <label class="md-nav__link" for="__nav_24" id="__nav_24_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Appendix
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_24_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_24">
+            <span class="md-nav__icon md-icon"></span>
+            Appendix
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../appendix/legacy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Legacy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../appendix/legacy/export-schema-usage-audit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Export Schema Usage Audit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#credentials-are-not-capacity" class="md-nav__link">
+    <span class="md-ellipsis">
+      Credentials are not capacity
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-rate-limits-are-handled" class="md-nav__link">
+    <span class="md-ellipsis">
+      How rate limits are handled
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How rate limits are handled">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#budget-reservation-and-route-families" class="md-nav__link">
+    <span class="md-ellipsis">
+      Budget reservation and route families
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#actual-vs-estimated-calibration-chaos-2759" class="md-nav__link">
+    <span class="md-ellipsis">
+      Actual-vs-estimated calibration (CHAOS-2759)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#observation-store" class="md-nav__link">
+    <span class="md-ellipsis">
+      Observation store
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#legacy-error-text-columns-sync_run_unitserror-and-siblings" class="md-nav__link">
+    <span class="md-ellipsis">
+      Legacy error-text columns (sync_run_units.error and siblings)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cooldown-gating" class="md-nav__link">
+    <span class="md-ellipsis">
+      Cooldown gating
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#instrumented-transport-core-chaos-2773-cs1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Instrumented transport core (CHAOS-2773 CS1)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Instrumented transport core (CHAOS-2773 CS1)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#usage-drain-wiring-first-re-bucketing-chaos-2773-cs2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage drain wiring + first re-bucketing (CHAOS-2773 CS2)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#per-provider-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Per-provider policy
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Per-provider policy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#github" class="md-nav__link">
+    <span class="md-ellipsis">
+      GitHub
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="GitHub">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#route-families" class="md-nav__link">
+    <span class="md-ellipsis">
+      Route families
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gitlab" class="md-nav__link">
+    <span class="md-ellipsis">
+      GitLab
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="GitLab">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#route-families_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Route families
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jira" class="md-nav__link">
+    <span class="md-ellipsis">
+      Jira
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Jira">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#route-families_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Route families
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#linear" class="md-nav__link">
+    <span class="md-ellipsis">
+      Linear
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Linear">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#route-families_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      Route families
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#launchdarkly" class="md-nav__link">
+    <span class="md-ellipsis">
+      LaunchDarkly
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="LaunchDarkly">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#route-families_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      Route families
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#known-gaps" class="md-nav__link">
+    <span class="md-ellipsis">
+      Known gaps
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#references" class="md-nav__link">
+    <span class="md-ellipsis">
+      References
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+<h1 id="provider-rate-limit-policy">Provider rate-limit policy<a class="headerlink" href="#provider-rate-limit-policy" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>What this documents:</strong> how each ingest provider (GitHub, GitLab, Jira,
+Linear, LaunchDarkly) exposes rate-limit state, how the sync stack reacts to
+it (in-place backoff, worker-level deferral, budget reservation), which
+auth/permission failures are <strong>not</strong> retryable, and the product invariant that
+<strong>credentials are not capacity</strong>. It is the durable record for the rate-limit
+and budget hardening tracked under
+<a href="https://linear.app/fullchaos/issue/CHAOS-2742">CHAOS-2742</a>. Where a behavior
+is not yet shipped it is labeled with the sub-issue that lands it — do not
+read a target contract as current behavior.</p>
+</blockquote>
+<h2 id="credentials-are-not-capacity">Credentials are not capacity<a class="headerlink" href="#credentials-are-not-capacity" title="Permanent link">&para;</a></h2>
+<p>This is a <strong>product invariant</strong>, not an implementation detail:</p>
+<blockquote>
+<p><strong>Changing or rotating a provider credential must never increase sync
+dispatch capacity.</strong></p>
+</blockquote>
+<p>Credentials are authentication/runtime state. They are never a throughput lever.
+The concrete shape that enforces this today:</p>
+<ul>
+<li><strong>One credential per integration.</strong> An <code>Integration</code> carries a single nullable
+  <code>credential_id</code> (<code>models/integrations.py</code>), resolved once per unit in
+  <code>workers/sync_bootstrap.py</code>. There is no credential pool, no round-robin, and
+  no unit-level credential selection. A sync unit uses exactly the integration's
+  one active credential (or the env fallback when <code>credential_id is None</code>).</li>
+<li><strong>Exactly one place a credential attaches to sync work.</strong>
+  <code>SyncConfiguration</code> (the admin API's sync-config row) used to carry its own
+  <code>credential_id</code> column — a second, <em>unfrozen</em> copy of the same selection,
+  writable independently of <code>Integration.credential_id</code> and never read by
+  planning, budgeting, or auth resolution. It was removed
+  (<a href="https://linear.app/fullchaos/issue/CHAOS-2762">CHAOS-2762</a>); the admin API
+  still accepts/returns <code>credential_id</code> on sync-config payloads, but it is now
+  resolved live from the linked <code>Integration.credential_id</code> on every read (see
+  <code>api/admin/routers/sync.py</code>), so it can never drift from the surface auth
+  resolution actually uses. <strong><code>SyncConfigResponse.credential_id</code> is a
+  compatibility read-through alias, not a design target</strong> — it exists only
+  because the web admin UI still reads a sync config's credential off the
+  sync-config response. It is a candidate for removal once web reads
+  credentials at the <code>Integration</code> level directly instead.</li>
+<li><strong>Runtime cache is credential-scoped for isolation, not capacity.</strong> The
+  provider runtime reuse cache keys on
+  <code>RuntimeCacheKey(org_id, integration_id, credential_id, credential_fingerprint,
+  provider, db_url)</code> (<code>workers/sync_bootstrap.py</code>). A rotated credential produces
+  a new fingerprint and therefore a fresh runtime — this exists so rotation is
+  correct and runtimes never leak across orgs/credentials, <strong>not</strong> so more
+  credentials buy more concurrency.</li>
+<li><strong>The budget bucket is keyed by a credential <em>fingerprint</em>, so more
+  credentials cannot dilute a shared limit into extra allowance.</strong> Budget
+  estimates are bucketed by
+  <code>provider:org_id:host:credential_fingerprint:dimension:route_family</code>
+  (<code>sync/budget_guard.py</code> <code>_budget_key</code>). Operators set limits by the coarser
+  prefixes (<code>provider:dimension</code>, <code>provider:host:dimension:route_family</code>, …; see
+  the candidate ladder in <code>budget_guard.py</code>), so capacity is governed by
+  provider/host/route, never by how many credentials exist.</li>
+<li><strong>Run-level auth freezing is determinism, not capacity.</strong> Freezing the
+  credential identity/version onto a <code>SyncRun</code> at plan time (so a mid-run
+  credential edit cannot produce a mixed-auth run) is a <em>determinism</em> mechanism.
+  It selects <strong>one</strong> auth context for the whole run and must never be used to
+  pick different credentials per unit for throughput. <strong>Shipped</strong>
+  (<a href="https://linear.app/fullchaos/issue/CHAOS-2755">CHAOS-2755</a>, migration
+  <code>0030</code>): <code>sync_runs</code> carries <code>credential_id</code> / <code>credential_fingerprint</code> /
+  <code>auth_source</code>, stamped once at plan time by <code>sync/planner.py</code>'s
+  <code>_resolve_credential_stamp</code> and never re-resolved mid-run —
+  <code>workers/sync_bootstrap.py</code> reads the frozen stamp, falling back to the
+  mutable <code>Integration.credential_id</code> path only for legacy/in-flight-at-deploy
+  runs whose stamp is <code>NULL</code>. Enforced by <code>tests/test_sync_run_auth_freeze.py</code>
+  and <code>tests/test_sync_planner.py</code>.</li>
+</ul>
+<p><strong>Out of scope, permanently:</strong> credential pools, credential round-robin,
+unit-level credential assignment for throughput, and any UI/API language
+implying that more credentials create more allowance.</p>
+<p>The invariant is enforced by <code>tests/test_credential_capacity_invariants.py</code>
+(landing with <a href="https://linear.app/fullchaos/issue/CHAOS-2756">CHAOS-2756</a>),
+which asserts the planner supports no multiple-active-credential path for one
+integration, that the runtime cache stays credential-scoped, and that any future
+unit-level credential selection fails the suite until budget semantics are
+revisited.</p>
+<h2 id="how-rate-limits-are-handled">How rate limits are handled<a class="headerlink" href="#how-rate-limits-are-handled" title="Permanent link">&para;</a></h2>
+<p>Rate limits are treated as <strong>deferred work, not task failures</strong>. There are three
+cooperating layers:</p>
+<ol>
+<li><strong>In-provider gate + in-place retry.</strong> Each provider client owns its
+   fetch/auth/pagination/retry/rate-limit handling (the provider boundary; raw
+   fetch never leaves the provider). A shared backoff gate
+   (<code>connectors/utils/rate_limit_queue.py</code> <code>RateLimitGate</code>, and its Redis-backed
+   <code>DistributedRateLimitGate</code>) serializes waits so many workers don't stampede
+   one API. Server <code>Retry-After</code> values are honored but <strong>clamped</strong> to
+   <code>RateLimitConfig.max_backoff_seconds</code> (default <strong>300s</strong>) so a misbehaving
+   upstream cannot park the gate indefinitely. In-place retry budgets per client
+   (the shared <code>retry_with_backoff</code> decorator in <code>connectors/utils/retry.py</code>
+   defaults to 5 attempts, but the REST connectors pin <code>max_retries=3</code>):</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th>Client</th>
+<th>In-place attempts on a rate limit</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GitHub REST connector</td>
+<td>3 (<code>retry_with_backoff(max_retries=3)</code>)</td>
+<td><code>connectors/github.py</code></td>
+</tr>
+<tr>
+<td>GitHub GraphQL client</td>
+<td>5 (<code>max_retries=5</code>)</td>
+<td><code>connectors/utils/graphql.py</code></td>
+</tr>
+<tr>
+<td>GitHub code client (canonical: repo metadata/listing, git/commit_stats/security/deployments REST, files/blame GraphQL)</td>
+<td>5 (<code>InstrumentedRESTCore</code> default)</td>
+<td><code>providers/github/code_client.py</code> + <code>providers/github/graphql.py</code></td>
+</tr>
+<tr>
+<td>GitLab legacy connector shell</td>
+<td>n/a (code-dataset fetch methods retired)</td>
+<td><code>connectors/gitlab.py</code></td>
+</tr>
+<tr>
+<td>GitLab code client (canonical: security/pipelines/deployments/tests/commits/files/blame/merge_requests/notes)</td>
+<td>5 (<code>InstrumentedRESTCore</code> default)</td>
+<td><code>providers/gitlab/code_client.py</code></td>
+</tr>
+<tr>
+<td>GitLab feature-flags (canonical)</td>
+<td>5 (<code>max_retries=5</code>)</td>
+<td><code>providers/gitlab/feature_flags.py</code></td>
+</tr>
+<tr>
+<td>Jira client (JQL + enrichment)</td>
+<td>4 (<code>max_retries_429=3</code> → <code>+1</code> initial)</td>
+<td><code>providers/jira/client.py</code></td>
+</tr>
+<tr>
+<td>Jira Atlassian REST compat</td>
+<td>5 (<code>RESTClient(max_retries=5)</code>)</td>
+<td><code>connectors/utils/rest.py</code></td>
+</tr>
+<tr>
+<td>Linear</td>
+<td>5 (<code>DEFAULT_MAX_ATTEMPTS</code>)</td>
+<td><code>providers/linear/client.py</code></td>
+</tr>
+<tr>
+<td>LaunchDarkly (flags/audit_log)</td>
+<td>5 (<code>max_retries=5</code>)</td>
+<td><code>providers/launchdarkly/client.py</code></td>
+</tr>
+<tr>
+<td>LaunchDarkly (code_refs)</td>
+<td>5 (<code>max_retries=5</code>)</td>
+<td><code>providers/launchdarkly/code_refs.py</code></td>
+</tr>
+</tbody>
+</table>
+<ol>
+<li>
+<p><strong><code>RateLimitException</code> as the carrier.</strong> When in-place retries are exhausted
+   (or a 429/permission-vs-limit decision is made), the <strong>canonical provider
+   clients</strong> (<code>providers/&lt;provider&gt;/client.py</code>) raise
+   <code>dev_health_ops.exceptions.RateLimitException</code> carrying a normalized
+   <code>RateLimitSignal</code> (<code>route_family</code>, <code>dimension</code>,
+   <code>reason</code>, <code>retry_after_seconds</code>, <code>reset_at</code>, <code>request_id</code>), and the worker
+   deferral (<code>workers/sync_units.py</code>) catches exactly that type. The frozen
+   legacy connectors (<code>connectors/github.py</code>, <code>connectors/gitlab.py</code>) raise
+   <code>connectors.base.RateLimitException</code>, which <strong>subclasses the canonical root</strong>
+   (shipped as <a href="https://linear.app/fullchaos/issue/CHAOS-2753">CHAOS-2753</a>,
+   ops#1111) — so a rate limit raised deep in a legacy connector reaches the
+   same deferral branch and carries the same signal, one unified hierarchy.</p>
+</li>
+<li>
+<p><strong>Worker-level deferral (<code>workers/rate_limit_defer.py</code>).</strong> Instead of
+   consuming the genuine-failure retry budget and stamping the run <code>FAILED</code>, a
+   <code>RateLimitException</code> re-enqueues a fresh task with the server-provided delay.
+   Two budgets bound it so a permanently limited provider still eventually
+   surfaces as a real failure:</p>
+</li>
+<li>
+<p>a <strong>count</strong> budget: <code>RATE_LIMIT_MAX_DEFERRALS = 10</code>, incremented once per
+     provider 429;</p>
+</li>
+<li>a <strong>wall-clock</strong> budget: <code>RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS = 2h</code>, measured
+     from the first deferral.</li>
+</ol>
+<p>Long server delays (e.g. a GitHub primary-limit reset up to ~1h) are
+   <strong>chunked</strong>: a single Celery countdown is capped at
+   <code>RATE_LIMIT_MAX_COUNTDOWN_SECONDS = 600s</code> (kept at/below the distributed
+   gate's Redis TTL, <code>RateLimitConfig.max_backoff_seconds * 2 == 600s</code>) and an
+   absolute <code>not_before</code> timestamp is carried forward so the task re-defers
+   <strong>without calling the provider again</strong> until the window elapses. Chunk
+   re-defers do not consume the count budget. Additive jitter (0–5s)
+   de-correlates many orgs waking against the same provider at once.</p>
+<h3 id="budget-reservation-and-route-families">Budget reservation and route families<a class="headerlink" href="#budget-reservation-and-route-families" title="Permanent link">&para;</a></h3>
+<p>Before a unit dispatches, <code>estimate_provider_budget(context)</code> (<code>sync/budget.py</code>)
+routes to the per-provider estimator under <code>providers/&lt;provider&gt;/budget.py</code>,
+which returns <code>BudgetEstimate</code> values. Each estimate carries a <code>route_family</code>
+(a provider-specific label for a group of endpoints) and a <code>BudgetDimension</code>
+from the shared vocabulary in <code>sync/budget_types.py</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Dimension</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rest_core</code></td>
+<td>Standard REST request budget</td>
+</tr>
+<tr>
+<td><code>graphql_cost</code></td>
+<td>GraphQL query-cost / complexity budget</td>
+</tr>
+<tr>
+<td><code>contents_blob</code></td>
+<td>Repository tree/blob/content expansion (high variance)</td>
+</tr>
+<tr>
+<td><code>search</code></td>
+<td>Search/JQL request budget (separately rate-limited)</td>
+</tr>
+<tr>
+<td><code>secondary_abuse_risk</code></td>
+<td>Timeline/social/expansion calls that can trip secondary/abuse limits</td>
+</tr>
+</tbody>
+</table>
+<p>The dispatch budget guard reserves against
+<code>provider:org_id:host:credential_fingerprint:dimension:route_family</code> buckets and
+defers units that would exceed <code>SYNC_BUDGET_BUCKET_LIMITS</code>. The per-provider
+route families below are the authoritative catalog; the estimators are the
+source of truth and
+<code>tests/test_rate_limit_policy_doc.py::test_documented_route_families_match_estimators</code>
+fails if code emits a family this page does not document.</p>
+<h3 id="actual-vs-estimated-calibration-chaos-2759">Actual-vs-estimated calibration (CHAOS-2759)<a class="headerlink" href="#actual-vs-estimated-calibration-chaos-2759" title="Permanent link">&para;</a></h3>
+<p>Every successful <code>run_sync_unit</code> result carries a <code>budget_comparison</code> under
+<code>result['observations']</code>, joining the unit's run-time budget audit
+(<code>estimate_provider_budget</code>, same call <code>budget_estimate</code> is built from) to
+CHAOS-2754's normalized <code>provider_usage</code> actuals, one row per
+<code>(route_family, dimension)</code> with drained actuals this run:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;route_family&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;git&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;dimension&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;rest_core&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;estimated_units&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;actual_requests&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;ratio&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">2.5</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;underestimated&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;underestimation_assessable&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;underestimation_assessable_reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;unbudgeted_actual&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;incomplete&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;bucket&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;provider&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;github&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;org_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;host&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;api.github.com&quot;</span><span class="p">,</span>
+<span class="w">             </span><span class="nt">&quot;credential_fingerprint&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;dimension&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;rest_core&quot;</span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;budget_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;github:...:api.github.com:...:rest_core:git&quot;</span>
+<span class="p">}</span>
+</code></pre></div>
+<ul>
+<li><strong>Raw numbers only.</strong> <code>estimated_units</code> are abstract reservation units
+  (see <code>SYNC_BUDGET_BUCKET_LIMITS</code> above), never converted against
+  <code>actual_requests</code>; the two are reported side by side, not blended into one
+  number.</li>
+<li><strong>A route_family/dimension with an estimate but no drained actuals this
+  run produces no row</strong> (remaining GitHub/GitLab code datasets still on the frozen
+  connector path, a <code>contents_blob</code>/<code>secondary_abuse_risk</code> dimension sharing
+  its single REST call with an already-recorded <code>rest_core</code> dimension, …) —
+  never a fabricated 100% over-estimation.</li>
+<li><strong><code>unbudgeted_actual</code></strong> is the reverse case: actual traffic on a
+  route_family/dimension with <strong>no matching estimate at all</strong>, including the
+  shared recorder's <code>unclassified</code> fallback for an operation that couldn't be
+  resolved to any budget family. This is surfaced, not dropped — it is the
+  highest-value calibration signal (real provider calls against zero admitted
+  budget) — with <code>estimated_units: 0</code> and <code>ratio: null</code>. The row's <code>bucket</code> is
+  a shell borrowed from a sibling estimate in the same unit (same
+  provider/org/host/credential — a unit has one ctx, so those fields are
+  constant across every estimate it produces) with only <code>dimension</code>
+  overridden to match the actual observation.</li>
+<li><strong><code>underestimated</code></strong> is <code>actual_requests &gt; estimated_units</code>, but only
+  trustworthy when <strong><code>underestimation_assessable</code></strong> is <code>true</code>. A raw request
+  count is only comparable to <code>estimated_units</code> when the dimension
+  denominates in something request-count-like — <code>rest_core</code> ("Standard REST
+  request budget") and <code>search</code> ("Search/JQL request budget"), per the
+  dimension table above — or when there is no estimate at all
+  (<code>unbudgeted_actual</code>; a zero baseline is never a unit-conversion problem).
+  For <code>graphql_cost</code> (query-cost/complexity points), <code>contents_blob</code>
+  (high-variance blob/tree expansion), and <code>secondary_abuse_risk</code> (a flat
+  risk-flag reservation, not a request count), comparing a request count
+  against a nonzero estimate would invent a conversion the estimator never
+  made: <code>underestimation_assessable</code> is <code>false</code>,
+  <code>underestimation_assessable_reason</code> explains why, <code>ratio</code> is <code>null</code>, and
+  <code>underestimated</code> stays <code>false</code> — <strong>no warning is logged</strong> for that row.</li>
+<li><strong><code>incomplete</code></strong> is <code>true</code> for every row on a unit whose CHAOS-2754
+  recorder hit its 50-key overflow cap. Dropped operations aren't attributed
+  to a specific family (the recorder never learns which family they'd have
+  joined), so an <code>incomplete</code> row's <code>ratio &lt;= 1</code> must <strong>not</strong> be read as a
+  confirmed over-estimation. A visible <code>underestimated: true</code> stays valid even
+  when <code>incomplete</code>: a capped (undercounted) actual that already exceeds the
+  estimate only understates the true overage.</li>
+<li><strong>Underestimation is surfaced, never auto-tuned.</strong> Each row with
+  <code>underestimated: true</code> (whether a genuine underestimation or an
+  <code>unbudgeted_actual</code> row) logs <code>run_sync_unit.budget_underestimated</code> with
+  the same structured field vocabulary BudgetGuard's own admission logs use
+  (<code>bucket</code>, <code>budget_key</code>, <code>estimated_units</code>, <code>route_family</code> — see
+  <code>_observe_estimate</code> above) plus a <code>reason</code> of <code>"underestimated"</code> or
+  <code>"unbudgeted_actual"</code>, so an operator can correlate a calibration warning
+  with the run's actual admission decision and tell the two cases apart. The
+  comparison never changes an estimator's output or <code>SYNC_BUDGET_*</code>
+  consumption — it is a pure, read-only join
+  (<code>tests/test_budget_calibration.py::test_estimates_never_mutated_by_comparison</code>).</li>
+<li><strong>Drift caveat.</strong> This compares against the <strong>run-time</strong> budget audit —
+  recomputed just before the unit's dataset fetch — not the estimate
+  BudgetGuard admitted at dispatch time. Env-flag-dependent estimators (e.g.
+  Jira's <code>JIRA_FETCH_WORKLOGS</code> / <code>ATLASSIAN_GQL_ENABLED</code> gating) can in
+  principle disagree between admission and execution; <code>observations</code>'s
+  sibling <code>budget_comparison_computed_at</code> records when the run-time audit
+  ran so that drift is inspectable. Persisting the admit-time estimate onto
+  the unit for a drift-free comparison is a deliberately <strong>deferred</strong>
+  follow-up (open decision) — it would add an extra UPDATE per admitted unit
+  per dispatch pass, and isn't worth it until calibration data shows material
+  drift.</li>
+<li><strong>Out of scope.</strong> The CLI and backfill runner discard job/task returns
+  (<code>metrics/job_work_items.py</code>, <code>backfill/runner.py</code>), so this comparison only
+  surfaces through the unitized sync path (unit result / structured logs /
+  the admin API's <code>result</code> passthrough) — not CLI or backfill output. A unit
+  whose estimator produces <strong>no estimate at all</strong> (<code>budget_audit</code> empty) is
+  also out of scope — there's no bucket context to attribute even an
+  unbudgeted row to.</li>
+</ul>
+<h2 id="observation-store">Observation store<a class="headerlink" href="#observation-store" title="Permanent link">&para;</a></h2>
+<p>Shipped in <a href="https://linear.app/fullchaos/issue/CHAOS-2758">CHAOS-2758</a>. Every
+<code>RateLimitException</code> that defers a sync unit (the worker-level deferral path
+above) now attempts one durable, normalized row into the
+<code>provider_rate_limit_observations</code> Postgres table, in the <strong>same
+session</strong> as the unit's <code>RETRYING</code> stamp
+(<code>workers/sync_units.py</code>, the <code>except RateLimitException</code> branch of
+<code>run_sync_unit</code>), attempted only after the CAS confirming that stamp landed
+succeeds — so the write never fires for a deferral that didn't actually
+happen. The write itself is isolated in its own <code>SAVEPOINT</code>
+(<code>session.begin_nested()</code>), not folded into the outer transaction outright:
+the observation store is diagnostic, not load-bearing, so a DB-level failure
+persisting it (a rolling deploy where migration <code>0031</code> isn't applied to every
+node yet, schema drift, or any other insert-time error) rolls back only the
+observation attempt and is logged — it must never turn a recoverable
+rate-limit deferral into a lost/failed unit.</p>
+<p><strong>Schema:</strong> <code>id</code>, <code>org_id</code> (indexed), <code>provider</code>, <code>host</code>, <code>integration_id</code>,
+<code>sync_run_id</code>, <code>sync_run_unit_id</code>, <code>route_family</code>, <code>route_family_attribution</code>,
+<code>dimension</code>, <code>retry_after_seconds</code>, <code>reset_at</code>, <code>reason</code>, <code>request_id</code>,
+<code>observed_at</code>, plus a composite index <code>(provider, integration_id,
+route_family, observed_at)</code> for the cooldown lookup a future consumer needs
+(migration <code>0031</code>, <code>models/rate_limit_observations.py</code>). Only normalized
+fields are persisted — <strong>never raw provider headers or exception text</strong>
+(leak/bloat risk); header capture stays best-effort and provider-local
+exactly as documented per-provider above, and <code>reason</code> is one of a fixed,
+allow-listed category vocabulary (below), never free text.</p>
+<p><strong>Why Postgres, not ClickHouse.</strong> This answers the open question the earlier
+CHAOS-2742 budget plan left unresolved ("no new persistence table unless
+log/result metadata proves insufficient — durable store TBD"). Every store the
+dispatch path already consults transactionally is Postgres:
+<code>SyncDispatchOutbox</code> (<code>models/integrations.py</code>), the per-unit rate-limit
+deferral columns on <code>sync_run_units</code> (migration <code>0022</code>),
+<code>SyncComputeCheckpoint</code> (migration <code>0025</code>), and <code>BudgetGuard</code>'s own
+reservation runs inside a Postgres advisory-lock transaction
+(<code>sync/budget_guard.py</code>). The <a href="#known-gaps">cooldown-gating consumer</a>
+(CHAOS-2760) needs to read recent observations from inside that same
+advisory-lock transaction — only Postgres supports that join here; ClickHouse
+is a separate analytics cluster with no transactional relationship to the
+dispatch guard. ClickHouse mirroring is deferred and would only be revisited
+if this table becomes an analytics source in its own right, not a dispatch
+input.</p>
+<p><strong>Enrichment (worker boundary, not the client).</strong> Per the
+<a href="#how-rate-limits-are-handled"><code>RateLimitSignal</code> contract</a>, provider clients
+leave <code>integration_id</code>/<code>route_family</code> unset. The worker boundary enriches
+both before persisting: <code>integration_id</code> comes from the unit row already
+loaded for the deferral (<code>SyncRunUnit.integration_id</code> — never re-resolved from
+mutable <code>Integration</code> state), and <code>route_family</code> is picked from the
+<code>BudgetEstimate</code> list <strong>already computed for this unit's dispatch</strong> (never
+re-estimated — estimators require credential decryption).</p>
+<p><strong>Route-family attribution is confidence-gated, never guessed.</strong> A unit's
+estimate can carry multiple <code>(route_family, dimension)</code> pairs, and dimension
+alone frequently does <strong>not</strong> disambiguate them: Linear's <code>work-items</code>
+estimator emits <code>teams</code>/<code>issues</code>/<code>cycles</code>/<code>comments</code>/<code>attachments</code>/<code>history</code>
+<strong>all</strong> under <code>graphql_cost</code>, and Jira's comment-bearing datasets can emit
+both <code>jira_issue_enrichment</code> and <code>jira_comments</code> under <code>rest_core</code>. The
+observation writer (<code>_route_family_and_attribution</code> in <code>workers/sync_units.py</code>)
+narrows the unit's estimates by the signal's <code>dimension</code> (which call kind
+actually hit the limit) and only commits to a <code>route_family</code> when the
+surviving candidates name exactly <strong>one distinct</strong> family — this also covers
+the common case of a single-estimate unit, and estimates that share one
+family across dimensions (e.g. GitHub's <code>commit_stats</code>). Whenever that check
+can't produce a unique family — no budget audit, no dimension match, or more
+than one distinct family — <code>route_family</code> is <code>NULL</code> and
+<code>route_family_attribution</code> is set to <code>ambiguous_dimension</code>; <code>dimension</code>
+itself is still populated. <strong>The CHAOS-2760 cooldown-gating consumer must
+fall back to provider+integration+dimension gating whenever
+<code>route_family_attribution</code> is set</strong>, rather than trusting a guessed family.</p>
+<p><strong><code>reason</code> is a normalized category, never raw exception text.</strong> Legacy
+no-signal raise sites build their message from the provider's raw response
+body, which can embed header/body-shaped diagnostic content; persisting that
+verbatim for the retention window would be a leak risk. <code>reason</code> is always
+one of a fixed vocabulary — <code>primary</code>, <code>secondary</code>, <code>permission</code> (reserved for
+a future classification site), <code>complexity</code>, or <code>unknown</code> (no signal, or a
+value outside this vocabulary) — never <code>str(exception)</code>.</p>
+<p><strong>Retention.</strong> A beat-scheduled task (<code>prune_rate_limit_observations</code>,
+<code>workers/sync_reconciler.py</code>, <code>workers/config.py</code>) deletes rows older than
+<code>SYNC_RATE_LIMIT_OBSERVATION_RETENTION_DAYS</code> (default <strong>14</strong>, env-overridable)
+once daily. This is an observation log, not an audit trail — expired rows are
+deleted outright, no archival path.</p>
+<p><strong>Cooldown gating reads this table back before dispatch</strong> — see the next
+section.</p>
+<h2 id="legacy-error-text-columns-sync_run_unitserror-and-siblings">Legacy error-text columns (<code>sync_run_units.error</code> and siblings)<a class="headerlink" href="#legacy-error-text-columns-sync_run_unitserror-and-siblings" title="Permanent link">&para;</a></h2>
+<p>Shipped in <a href="https://linear.app/fullchaos/issue/CHAOS-2766">CHAOS-2766</a>. Live
+verification of CHAOS-2758 above (evidence comment on CHAOS-2742) found that
+the <em>observation store</em>'s <code>reason</code> allow-list did its job, but a
+provider exception whose message embeds an <code>Authorization</code> header (e.g.
+<code>403 rate limited -- Authorization: Bearer ghp_FAKE...</code>) still landed
+<strong>verbatim</strong> in the pre-existing, free-form <code>sync_run_units.error</code> column —
+these legacy columns predate CHAOS-2742 and were never brought under the same
+discipline.</p>
+<p><strong>Redaction, not an allow-list — deliberately.</strong> <code>reason</code> above is a closed,
+normalized enum with no diagnostic-text mandate, so allow-listing a fixed
+vocabulary is correct there. <code>sync_run_units.error</code> and its siblings
+(<code>sync_runs.error</code>, <code>sync_run_reference_discoveries.error</code>,
+<code>sync_dispatch_outbox.last_error</code>) are free-form, operator-facing
+diagnostics — the entire point of persisting them is to help debug a failed
+sync without re-running it. Collapsing them to a category string would defeat
+that purpose. Instead, <code>dev_health_ops.sync.error_sanitize.sanitize_error_text</code>
+(one shared helper, imported at every persistence site — no per-site regexes)
+strips/masks only the specific credential-shaped substrings that must never
+reach the database:</p>
+<ul>
+<li><code>Authorization</code> / <code>Proxy-Authorization</code> headers, any scheme</li>
+<li>Bearer tokens, with or without a leading header name</li>
+<li>HTTP Basic auth base64 blobs</li>
+<li>Provider PAT/bot-token prefixes: <code>ghp_</code>/<code>gho_</code>/<code>ghu_</code>/<code>ghs_</code>/<code>ghr_</code>,
+  <code>github_pat_</code>, <code>glpat-</code>, <code>xoxb-</code>/<code>xoxp-</code>/<code>xoxa-</code>/<code>xoxr-</code></li>
+<li><code>token=</code>/<code>private_token=</code>/<code>api_key=</code>/<code>access_token=</code>/<code>secret=</code>-style
+  key/value pairs</li>
+<li>A credential embedded in a URL's userinfo component
+  (<code>scheme://user:pass@host</code>, e.g. <code>redis://:password@host:6379/0</code>,
+  <code>amqp://user:pass@host</code>) — added for a codex review finding on this PR: a
+  Celery/broker enqueue-failure exception can embed the configured
+  broker/result-backend connection string, and that shape evades every
+  pattern above</li>
+</ul>
+<p>Everything else in the message — status codes, provider names, retry
+context — passes through unchanged. A redacted match is replaced with the
+<code>REDACTION_MARKER</code> sentinel (<code>"[REDACTED]"</code>), and when the input is an
+exception object (the common case) the output is prefixed with the exception
+<strong>class name</strong> (<code>"RateLimitException: 403 rate limited -- [REDACTED]"</code>), so
+even a bare <code>raise SomeError()</code> with no message still persists something
+diagnostically useful. Redaction always runs <em>before</em> the length cap
+(<code>DEFAULT_MAX_ERROR_TEXT_LENGTH</code>, 4000 chars — <code>sync_dispatch_outbox.last_error</code>
+keeps its pre-existing, tighter 2000-char cap) so truncation can never split a
+credential in half and leave a partial value exposed.</p>
+<p><strong>Enforced by a source-level guard, not review discipline.</strong> There is no
+type-system way to require "this exception must be sanitized before it
+reaches a DB column." <code>tests/test_error_sanitize_guard.py</code> AST-walks the
+worker/sync modules that own these columns and fails if any raw
+<code>str(exc)</code>-shaped call or bare <code>f"...{exc}"</code> interpolation exists outside a
+<code>logger.*(...)</code> call (diagnostic logs are a separate risk surface, out of
+this ticket's scope) — mirroring the doc-drift-guard precedent in
+<code>tests/test_rate_limit_policy_doc.py</code> (CHAOS-2757). Two internal
+classification helpers (<code>_classify_error</code> in <code>workers/sync_units.py</code>,
+<code>_is_retryable_discovery_error</code> in <code>workers/reference_discovery.py</code>) are
+exempted: they lowercase <code>str(exc)</code> only to pattern-match it against a fixed,
+curated vocabulary and return a category — the raw text itself is discarded,
+never persisted, the same shape as the <code>reason</code> allow-list above.</p>
+<p><strong>Out of scope.</strong> Diagnostic <em>logs</em> (<code>logger.warning(..., extra={"error":
+str(exc)})</code>) are not touched — they are a different risk surface (a log
+aggregator, not this Postgres table) and were not part of the live-verified
+case. <code>MetricCheckpoint.error</code> (<code>metrics/checkpoints.py</code>) and
+<code>InvestmentBatchJob.error</code> (<code>work_graph/investment/batch_store.py</code>) are also
+out of scope: they belong to the LLM-categorization and metrics-checkpoint
+subsystems, not the sync-run/unit execution ledger this epic hardens, and
+their exception provenance (classification/LLM-batch errors, not raw
+provider-client HTTP exceptions) differs from the live-verified case.</p>
+<p><strong><code>JobRun.error</code> / <code>BackfillJob.error_message</code> (manual-trigger enqueue
+path).</strong> Added for a codex review finding on this PR: <code>sync/execution_trigger.py</code>
+<code>mark_job_run_failed</code> and <code>api/admin/routers/sync.py</code> <code>_mark_backfill_job_failed</code>
+sanitize <strong>at the sink</strong>, not their callers — a Celery/broker enqueue-failure
+exception raised from <code>dispatch_sync_run.apply_async(...)</code> in the manual-trigger
+and backfill admin endpoints can embed the broker/result-backend URL
+(credentials included), and both columns surface through admin job-history
+responses. Both functions now accept <code>BaseException | str</code> and call
+<code>sanitize_error_text</code> internally, so a future caller cannot bypass it by
+passing an already-formatted string; the corresponding <code>HTTPException</code>
+<code>detail</code> on the same enqueue-failure path is sanitized the same way. The
+CHAOS-2766 guard test (<code>tests/test_error_sanitize_guard.py</code>) covers this file
+too, scoped to only the functions that touch these columns — the router file
+has many unrelated <code>except ... str(exc)</code> sites for ordinary HTTP validation
+errors that are out of this guard's scope.</p>
+<p><strong>Copied-column propagation (<code>sync_observers_for_terminal_sync_run</code>,
+<code>finalize_sync_run</code>'s <code>stamp_sync_run_canonical_config</code> call).</strong> Added for a
+codex review finding on this PR, round 2: two sites in <code>workers/sync_units.py</code>
+read <code>SyncRun.error</code> and assign it VERBATIM into another durable column via a
+plain variable (<code>error = ... (run.error or "...")</code>, <code>run_error = ... (run.error
+or "...")</code>) rather than a <code>str(exc)</code>/<code>f"...{exc}"</code> expression -- a shape the
+AST guard, which only recognizes exception-stringification forms, cannot see.
+<code>sync_observers_for_terminal_sync_run</code> copies it into both
+<code>BackfillJob.error_message</code> and <code>JobRun.error</code>; <code>finalize_sync_run</code> copies it
+into <code>SyncConfiguration.last_sync_error</code> via <code>stamp_sync_run_canonical_config</code>.
+Both now wrap the copied value in <code>sanitize_error_text</code> too (idempotent and
+cheap on already-sanitized text) -- this matters even with every write site
+above already covered, because <code>sync_observers_for_terminal_sync_run</code> also
+runs from the reconciler's stale-observer repair path
+(<code>reconcile_sync_dispatch</code>), which can touch a <code>SyncRun.error</code> value written
+by an OLDER code path or before this ticket shipped. Since AST-detecting
+arbitrary variable-to-column flows (as opposed to a fixed <code>str(exc)</code> shape)
+is not a tractable static check, this is covered by a targeted regression
+test instead
+(<code>test_finalize_sync_run_sanitizes_copied_run_error_into_observer_columns</code> in
+<code>tests/test_sync_units.py</code>) rather than an AST guard extension.</p>
+<p><strong>Pre-existing rows.</strong> Any <code>sync_run_units.error</code>/<code>sync_runs.error</code>/etc. row
+written before this column was brought under <code>sanitize_error_text</code> keeps its
+raw text at rest until the row is next overwritten by a sanitizing write path
+(or copied through one of the sinks above, which now re-sanitizes on the way
+through). <a href="https://linear.app/fullchaos/issue/CHAOS-2780">CHAOS-2780</a> closes
+that gap: <code>dev-hops maintenance scrub-error-text</code> applies <code>sanitize_error_text</code>
+to every already-persisted row across all ten in-scope columns (the eight
+listed above plus <code>integration_credentials.last_test_error</code>, whose write path
+CHAOS-2780 also sanitizes at the source, and
+<code>sync_configurations.last_sync_stats</code>'s <code>'error'</code> JSON key). Dry-run by
+default; <code>--apply</code> mutates, <code>--org</code> optionally scopes to one organization,
+and re-running after a full apply reports zero changes (the scrub, like
+<code>sanitize_error_text</code> itself, is idempotent). See
+<code>src/dev_health_ops/maintenance/scrub_error_text.py</code> for the column registry
+and compare-and-swap update semantics.</p>
+<h2 id="cooldown-gating">Cooldown gating<a class="headerlink" href="#cooldown-gating" title="Permanent link">&para;</a></h2>
+<p>Shipped in <a href="https://linear.app/fullchaos/issue/CHAOS-2760">CHAOS-2760</a>. A 429
+observed by one unit today only defers <em>that</em> unit
+(<code>workers/sync_units.py:731-836</code>, the <code>RateLimitException</code> handler above) —
+siblings of the same provider/integration/route-family would otherwise
+dispatch anyway and rediscover the same limit in-worker, each burning a
+worker slot and a provider round-trip the observation store already knows is
+futile. <code>BudgetGuard.enforce_run</code> (<code>sync/budget_guard.py</code>) closes that gap:
+before admitting this dispatch pass's candidates against budget, it consults
+<code>provider_rate_limit_observations</code> for an ACTIVE cooldown and defers (or, on
+deferral-budget exhaustion, terminally fails) any candidate that matches.</p>
+<p><strong>Match key: <code>(org_id, provider, integration_id, route_family)</code> — org-scoped,
+and deliberately excluding <code>credential_fingerprint</code>/<code>host</code>.</strong> This is the
+credentials-are-not-capacity invariant applied to gating: rotating an
+integration's credential between the observation write and the next dispatch
+pass must never let a sibling unit slip past a cooldown that is still active
+(<code>tests/test_budget_guard_cooldown.py::test_credential_rotation_does_not_bypass_cooldown</code>).
+<code>host</code> is diagnostic-only on the observation row (multi-host GitHub
+Enterprise, etc.) and is never part of the match. A cooldown observed under
+one <code>org_id</code> never gates another org's units, even if <code>(provider,
+integration_id, route_family)</code> coincide
+(<code>test_cooldown_never_crosses_org_boundary</code>).</p>
+<p><strong>Ambiguous-attribution fallback.</strong> Per the <a href="#observation-store">observation store's confidence
+gate</a>, a row with <code>route_family=NULL</code> and
+<code>route_family_attribution='ambiguous_dimension'</code> carries a populated
+<code>dimension</code> instead. The gate never treats that NULL family as matching
+every candidate (over-defer) or none (silent under-defer): it falls back to
+matching on <code>(org_id, provider, integration_id, dimension)</code>, gating every
+candidate estimate whose dimension matches, regardless of which specific
+family within that dimension actually hit the limit
+(<code>test_ambiguous_attribution_falls_back_to_dimension_gating</code>).</p>
+<p><strong>Cooldown window.</strong> <code>coalesce(reset_at, observed_at + retry_after_seconds)</code>,
+falling back to a fixed conservative window
+(<code>RATE_LIMIT_DEFAULT_COUNTDOWN_SECONDS</code>, 60s) when an observation carried
+neither — never treated as "already expired" (under-defer) nor "cooldown
+forever" (stuck run). <code>available_at</code> for a gated unit is derived from
+<code>plan_rate_limit_deferral</code>'s own <code>not_before</code> (plus the same jitter,
+<code>SYNC_BUDGET_DEFERRAL_JITTER_SECONDS</code>, the budget-defer path already uses),
+<strong>not</strong> the raw cooldown expiry — <code>not_before</code> already clamps to the
+remaining <code>RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS</code> wall-clock budget, so a
+far-future <code>reset_at</code> cannot park a unit past the point the shared
+rate-limit-deferral budget says to terminalize instead
+(<code>test_cooldown_available_at_respects_wall_clock_clamp</code>,
+<code>test_cooldown_wall_clock_budget_exhausted_terminalizes_rather_than_sleeping_past_clamp</code>).
+The jitter itself is added AFTER <code>not_before</code>, so it is clamped a second
+time against the wall-clock deadline
+(<code>first_seen_at + RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS</code>) — jitter stacked on an
+already-clamped <code>not_before</code> must not itself push <code>available_at</code> past the
+deadline (review finding, round 2). A unit whose estimates span multiple
+route families is deferred if <strong>any</strong> one is cooling down (mirrors the
+existing would-defer-any-estimate budget semantics) and, when more than one
+matches, waits for the last one to clear.</p>
+<p><strong>One indexed query per dispatch pass, never per unit — plus one cheap
+re-check immediately before the claim, which fully defers/terminalizes any
+match it catches.</strong> <code>enforce_run</code> issues a single
+<code>provider_rate_limit_observations</code> query, scoped to the dispatch pass's
+candidate <code>(org_id, provider, integration_id)</code> tuples and a bounded recency
+window (<code>SYNC_RATE_LIMIT_COOLDOWN_LOOKBACK_SECONDS</code>, default
+<code>RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS</code> plus the max configured jitter plus a
+300s skew margin — deliberately NOT equal to the wall-clock budget alone;
+see the termination note below), using the <code>ws-d</code>
+<code>(provider, integration_id, route_family, observed_at)</code> index
+(<code>test_single_observation_query_per_dispatch_pass</code>). Because <code>enforce_run</code>
+itself does further DB work after that read (budget admission,
+active-consumption re-estimation), a sibling unit's 429 can commit a
+brand-new observation in that window — one the snapshot never saw — and
+without a second look <code>_claim_units</code> would dispatch straight into it. Review
+finding, closed: <code>dispatch_sync_run</code> calls <code>BudgetGuard.reconfirm_cooldowns</code>
+— the SAME cheap query and matching logic, reusing the estimates
+<code>enforce_run</code> already computed (no re-estimation, no credential decryption)
+— as the LAST read before the atomic claim. A match here is NOT a bare
+exclusion: it goes through the exact same <code>_apply_cooldown_deferral</code> /
+<code>_terminalize_rate_limit_exhausted</code> write path <code>enforce_run</code>'s own cooldown
+loop uses — full <code>RETRYING</code> + <code>available_at</code> + <code>rate_limit_deferrals</code>
+bookkeeping, or termination on budget exhaustion — folding the result into
+the claim's excluded-id set AND <code>next_deferred_at</code> for the redispatch
+re-arm. A bare PLANNED exclusion (the original CHAOS-2760 review-round-1
+shape) left the unit with zero deferral-budget bookkeeping and livelocked
+the run redispatching on a bare ~60s countdown forever, re-triggering the
+same exclusion indefinitely without ever counting toward termination
+(review finding, round 2) —
+(<code>test_concurrent_observation_between_enforce_run_and_claim_still_defers_sibling</code>,
+<code>test_late_reconfirm_match_short_reset_window_defers_with_full_bookkeeping</code>,
+<code>test_late_reconfirm_match_long_reset_window_clamps_to_wall_clock_deadline</code>,
+<code>test_reconfirm_cooldowns_terminalizes_exhausted_match_directly</code>). This is
+not full serializability — a commit landing in the residual microsecond gap
+between that re-check and the claim's own <code>UPDATE</code> could still slip through
+— but it collapses the exposure window from "however long budget admission
+takes" down to back-to-back statements, consistent with how the rest of the
+dispatch path tolerates narrow races via CAS predicates rather than
+<code>SERIALIZABLE</code> transactions.</p>
+<p><strong>Termination does not depend on re-reading the observation.</strong> A unit
+deferred by this gate gets <code>available_at</code> clamped to the wall-clock budget,
+so it becomes due again at roughly the SAME age its causing observation's
+<code>observed_at</code> has reached — a lookback window equal to
+<code>RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS</code> would age the row out of visibility at
+almost exactly the instant termination should fire instead, making the
+observation invisible right when it matters most (review finding, round 2).
+Two-part fix: (a) the lookback window carries slack beyond the bare
+wall-clock budget (jitter max + a generous skew margin — see above), so a
+row that is merely a little older than the budget stays visible
+(<code>test_cooldown_lookback_window_has_slack_beyond_wall_clock_budget</code>); (b) as
+a belt-and-suspenders backstop that does not depend on that window at all,
+every candidate with rate-limit-deferral history is ALSO checked directly
+against its own persisted <code>rate_limit_deferrals</code>/<code>rate_limit_first_seen_at</code>
+(<code>_rate_limit_deferral_exhausted</code>) — if the shared budget is already spent,
+it terminalizes from that state alone, with or without a currently-visible
+cooldown observation
+(<code>test_cooldown_observation_aged_past_lookback_terminalizes_from_unit_state</code>).</p>
+<p><strong><code>rate_limit_deferrals</code>/<code>rate_limit_first_seen_at</code> are cleared at episode
+boundaries — not left to go stale.</strong> Checking a unit's own persisted
+deferral state directly (the belt-and-suspenders backstop above) only works
+if that state actually reflects the CURRENT episode. Review finding, round
+3: these columns were never cleared once a unit left a rate-limit episode —
+a successful claim of a due <code>RETRYING</code> unit doesn't touch them, and neither
+did any non-rate-limit retry path (expired lease, soft timeout, generic
+worker-lost retry). Sequence that broke: a unit takes one rate-limit
+deferral, is later claimed fine (the provider recovers), then loses its
+worker (lease expiry) or soft-times-out for a totally unrelated reason; once
+the stale <code>first_seen_at</code> from the OLD episode is more than
+<code>RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS</code> old, <code>_rate_limit_deferral_exhausted</code>
+would fire against it and wrongly terminalize healthy, unrelated work — a
+silent data gap. Fixed at the root: every transition to <code>SUCCESS</code> and every
+<code>RETRYING</code> stamp for a reason OTHER than a rate limit now explicitly clears
+both columns to <code>0</code>/<code>NULL</code>; only a rate-limit-caused deferral (the in-worker
+429 path, or this gate's own cooldown deferral) keeps/accumulates them,
+because that is the episode continuing. Defense in depth on top:
+<code>_rate_limit_deferral_exhausted</code> ALSO requires the unit's own
+most-recently-recorded <code>result.error_category</code> to be rate-limit-related
+(<code>rate_limit</code> or <code>rate_limit_cooldown_deferred</code>) before it can fire at all —
+a stale row that somehow survives a missed clear site still cannot
+terminalize healthy work, because its last recorded cause would show
+something else
+(<code>test_stale_rate_limit_columns_without_rate_limit_error_category_do_not_terminalize</code>).
+Gating alone would not have been sufficient as the root fix, though: a
+genuinely NEW rate-limit episode starting while a stale <code>first_seen_at</code>
+persists would still terminalize prematurely against the old clock, which
+is exactly why the clear-at-episode-boundary fix is the primary mechanism
+and the <code>error_category</code> check is the backstop, not the other way around.</p>
+<p>Every <code>SyncRunUnit</code> transition to <code>RETRYING</code> or a terminal state across
+<code>workers/sync_units.py</code>, <code>sync/budget_guard.py</code>, and
+<code>workers/sync_reconciler.py</code> was swept for an explicit keep-or-clear
+decision:</p>
+<table>
+<thead>
+<tr>
+<th>Site</th>
+<th>Transition</th>
+<th>Cause</th>
+<th>Decision</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>run_sync_unit</code> success stamp (<code>sync_units.py</code>)</td>
+<td><code>RUNNING</code>→<code>SUCCESS</code></td>
+<td>episode resolved</td>
+<td><strong>clear</strong></td>
+</tr>
+<tr>
+<td>In-worker <code>RateLimitException</code> deferral (<code>sync_units.py</code>)</td>
+<td><code>RUNNING</code>→<code>RETRYING</code></td>
+<td>rate limit</td>
+<td><strong>keep/accumulate</strong></td>
+</tr>
+<tr>
+<td>Soft-timeout retry (<code>_stamp_sync_unit_soft_timeout</code>, <code>sync_units.py</code>)</td>
+<td><code>RUNNING</code>→<code>RETRYING</code></td>
+<td>unrelated</td>
+<td><strong>clear</strong></td>
+</tr>
+<tr>
+<td>Soft-timeout exhausted (<code>sync_units.py</code>)</td>
+<td><code>RUNNING</code>→<code>FAILED</code></td>
+<td>unrelated, terminal</td>
+<td>leave (informational)</td>
+</tr>
+<tr>
+<td>Generic failure (<code>_stamp_sync_unit_failed</code>, <code>sync_units.py</code>)</td>
+<td><code>RUNNING</code>→<code>FAILED</code></td>
+<td>unrelated/terminal</td>
+<td>leave (informational)</td>
+</tr>
+<tr>
+<td>Total-cap stale-dispatch fail (<code>sync_units.py</code>)</td>
+<td><code>DISPATCHING</code>→<code>FAILED</code></td>
+<td>unrelated, terminal</td>
+<td>leave (informational)</td>
+</tr>
+<tr>
+<td><code>PLANNED</code> claim (<code>_claim_units</code>, <code>sync_units.py</code>)</td>
+<td><code>PLANNED</code>→<code>DISPATCHING</code></td>
+<td>n/a (always fresh)</td>
+<td>no change needed</td>
+</tr>
+<tr>
+<td>Due-<code>RETRYING</code> claim (<code>_claim_units</code>, <code>sync_units.py</code>)</td>
+<td><code>RETRYING</code>→<code>DISPATCHING</code></td>
+<td>unknown (batch claim, any prior reason)</td>
+<td><strong>no change</strong> — must NOT clear here: this fires before the attempt's outcome is known, so clearing would prematurely reset an ONGOING rate-limit episode's counter before the redispatch even runs; the correct clear point is the transition AFTER this attempt resolves (<code>SUCCESS</code>, or a specific non-rate-limit retry stamp)</td>
+</tr>
+<tr>
+<td>Lease acquire (<code>DISPATCHING</code>→<code>RUNNING</code>, <code>sync_units.py</code>)</td>
+<td>transient</td>
+<td>n/a</td>
+<td>no change needed (outcome still unknown)</td>
+</tr>
+<tr>
+<td>Expired-lease retry (<code>sync_reconciler.py</code>)</td>
+<td><code>RUNNING</code>→<code>RETRYING</code></td>
+<td>unrelated</td>
+<td><strong>clear</strong></td>
+</tr>
+<tr>
+<td>Expired-lease exhausted (<code>sync_reconciler.py</code>)</td>
+<td><code>RUNNING</code>→<code>FAILED</code></td>
+<td>unrelated, terminal</td>
+<td>leave (informational)</td>
+</tr>
+<tr>
+<td>Budget-guard deferral (<code>_defer_unit_for_budget</code>, <code>budget_guard.py</code>)</td>
+<td>any→<code>RETRYING</code></td>
+<td>unrelated (budget capacity, not a provider rate limit)</td>
+<td><strong>clear</strong></td>
+</tr>
+<tr>
+<td>Cooldown-gate deferral (<code>_apply_cooldown_deferral</code>, <code>budget_guard.py</code>)</td>
+<td>any→<code>RETRYING</code></td>
+<td>rate limit</td>
+<td><strong>keep/accumulate</strong></td>
+</tr>
+<tr>
+<td>Wall-clock/cooldown exhaustion terminalize (<code>_terminalize_rate_limit_exhausted</code>, <code>budget_guard.py</code>)</td>
+<td>any→<code>FAILED</code></td>
+<td>rate limit, terminal</td>
+<td>leave (informational — the count that caused termination)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Fail-open on a broken read, including a single malformed row.</strong> Any error
+querying the observation store (migration not yet applied on a rolling
+node, transient DB error, etc.) is logged and treated as "no active
+cooldown" — a diagnostic store must never block dispatch
+(<code>test_cooldown_read_failure_fails_open</code>). Per-row parsing is fail-open too:
+a single malformed row (e.g. a non-finite <code>retry_after_seconds</code>, where
+<code>timedelta(seconds=...)</code> raises <code>OverflowError</code>) is skipped and logged
+rather than aborting the whole pass and blocking dispatch org-wide
+(<code>test_cooldown_read_survives_malformed_observation_row</code>). The writer
+(<code>workers/sync_units.py</code> <code>_build_rate_limit_observation</code>) also sanitizes
+<code>retry_after_seconds</code> before it is ever persisted — rejecting non-finite/
+negative values and clamping to <code>RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS</code> — so a
+corrupt value should never reach the store in the first place; the reader's
+guard is defense in depth, not the only line of defense
+(<code>test_observation_sanitizes_non_finite_retry_after_seconds</code>,
+<code>test_observation_clamps_excessive_retry_after_seconds</code> in
+<code>tests/test_rate_limit_observations.py</code>).</p>
+<p><strong>Deferral mechanics reuse the existing budget-guard vocabulary, not a new
+unit status.</strong> A gated unit is stamped <code>RETRYING</code> with the computed
+<code>available_at</code>, exactly like <code>_defer_unit_for_budget</code>, but with a
+<strong>distinct</strong> <code>result.error_category</code>: <code>rate_limit_cooldown_deferred</code> — so
+operators can tell a shared-cooldown hit apart from <code>budget_deferred</code>
+(budget admission) and <code>rate_limit</code> (the in-worker per-unit 429 path).
+<code>BudgetGuardResult.next_deferred_at</code> folds in the earliest cooldown-deferred
+<code>available_at</code> exactly like a budget deferral, so the existing
+<code>_schedule_redispatch</code> re-arm (<code>workers/sync_units.py</code>) fires and the run
+does not strand until the periodic reconciler scan
+(<code>test_next_deferred_at_rearms_redispatch</code>).</p>
+<p><strong>Cooldown deferrals count against the existing per-unit rate-limit-deferral
+budget.</strong> <code>plan_rate_limit_deferral</code>
+(<code>workers/rate_limit_defer.py</code>, <code>RATE_LIMIT_MAX_DEFERRALS=10</code> /
+<code>RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS=2h</code>) is reused for the
+<code>rate_limit_deferrals</code>/<code>rate_limit_first_seen_at</code> bookkeeping — the SAME
+columns and budget the in-worker 429 path already uses. This was a deliberate
+CHAOS-2742 recon decision: run-liveness beats optimism, so a chronically
+rate-limited provider <strong>terminalizes</strong> (stamped <code>FAILED</code>,
+<code>error_category=rate_limit_cooldown_exhausted</code>) once the shared budget is
+spent, rather than holding the run open indefinitely on gate hits that never
+even reach the provider
+(<code>test_cooldown_deferral_consumes_rate_limit_budget_and_terminalizes</code>).</p>
+<p><strong>Herd-on-expiry is naturally paced.</strong> <code>RETRYING</code> units never consume
+concurrency capacity, and due-<code>RETRYING</code> claims are still bounded by
+<code>SYNC_UNIT_CONCURRENCY_PER_BUCKET</code> per dispatch pass exactly like any other
+candidate — an expired cooldown does not cause every sibling to dispatch at
+once beyond what DispatchGuard's concurrency cap already allows
+(<code>test_cooldown_expiry_drains_bounded_by_concurrency_cap</code>).</p>
+<h2 id="instrumented-transport-core-chaos-2773-cs1">Instrumented transport core (CHAOS-2773 CS1)<a class="headerlink" href="#instrumented-transport-core-chaos-2773-cs1" title="Permanent link">&para;</a></h2>
+<p><a href="https://linear.app/fullchaos/issue/CHAOS-2773">CHAOS-2773</a> migrates the
+frozen GitHub/GitLab code-dataset fetch paths (<code>git</code>, <code>commit_stats</code>,
+<code>files</code>, <code>blame</code>, <code>cicd</code>, <code>tests</code>, <code>deployments</code>, <code>security</code> and their
+GitLab equivalents — see the "Frozen <code>connectors/</code> path" entry under
+<a href="#known-gaps">Known gaps</a>) off <code>connectors/</code> onto canonical, instrumented
+<code>providers/github/</code> / <code>providers/gitlab/</code> clients. <strong>CS1 lands the shared
+foundation every per-family changeset (CS3+) builds on; it does NOT itself
+migrate any dataset</strong> — the frozen connector path is unchanged and remains
+the live fetch path for every code-dataset family until its own changeset
+cuts over.</p>
+<p><strong><code>providers/_http.py::InstrumentedRESTCore</code></strong> is the one httpx transport
+primitive every canonical code client composes (never inherits) — mirroring
+<code>providers/launchdarkly/client.py</code> (the sanctioned template) and the
+"will be folded into the shared core once it lands" precedent already noted
+on <code>providers/gitlab/feature_flags.py</code>:</p>
+<ul>
+<li><code>request(method, path, *, operation, params, headers)</code> records ONE
+  <code>UsageRecorder.record</code> per PHYSICAL HTTP round trip, including retried
+  429/5xx attempts — never one record per logical call. The recorded
+  diagnostic-header set is <strong>provider-configurable</strong>
+  (<code>diagnostic_header_names</code> constructor param): code clients pass
+  <code>GITHUB_DIAGNOSTIC_HEADER_NAMES</code> / <code>GITLAB_DIAGNOSTIC_HEADER_NAMES</code>, which
+  are pinned by parity tests
+  (<code>tests/providers/test_http_core.py::TestDiagnosticHeaderParity</code>) to match
+  the existing work-client recorders' header sets EXACTLY (request IDs,
+  <code>x-ratelimit-used</code>/<code>-resource</code>, <code>x-accepted-github-permissions</code>,
+  <code>x-request-id</code>/<code>x-runtime</code> — never the token), so observations from the
+  core are shape-compatible with today's <code>latest_headers</code> diagnostics.</li>
+<li>Retry/backoff and terminal-429 delay resolution go through the EXISTING
+  shared <code>providers/_ratelimit.py</code> helpers — <code>Retry-After</code> first
+  (delta-seconds or HTTP-date), <strong>falling back to the provider's
+  epoch-seconds reset header</strong> (<code>reset_header_name</code>:
+  <code>X-RateLimit-Reset</code>/<code>RateLimit-Reset</code>) via
+  <code>resolve_retry_after_seconds(...)</code>, the provider-parameterized
+  generalization of #1142's <code>gitlab_resolve_retry_after_seconds</code> (which now
+  delegates to it — still exactly one implementation). This matters at the
+  worker boundary: <code>workers/sync_units.py</code> plans a deferral's <code>not_before</code>
+  from <code>exc.retry_after_seconds</code>, not <code>signal.reset_at</code>, so a reset-only
+  429 must carry the derived delay rather than <code>None</code> (which would wake the
+  unit on the 60s default instead of the provider's real reset window). On
+  retry exhaustion of a 429 the core raises the canonical
+  <code>dev_health_ops.exceptions.RateLimitException</code> carrying a CHAOS-2753
+  <code>RateLimitSignal</code> built via <code>RateLimitSignal.reset_at_from_epoch_seconds</code>
+  (GitHub/GitLab both report epoch SECONDS, unlike LaunchDarkly's epoch
+  milliseconds) — <code>integration_id</code>/<code>route_family</code> are left <code>None</code>
+  (worker-boundary enrichment, unchanged).</li>
+<li><strong>Explicit redirect policy + unauthenticated follow-up hop.</strong> The
+  underlying httpx client never follows redirects, so the core refuses to
+  let a 3xx masquerade as success: by default any 3xx is a terminal
+  <code>APIException</code> naming the redirect target (the physical attempt is still
+  recorded — no unaccounted hops). The two-hop pattern for GitHub's
+  artifact-zip download (<code>connectors/github.py::download_artifact_zip</code>;
+  ports in CS5): (1) a per-call <code>raw_redirect=True</code> opt-in returns the 3xx
+  response itself (recorded, never retried); (2)
+  <code>request_unauthenticated(location, operation=...)</code> follows the absolute
+  <code>Location</code> through a SECOND, headerless client owned by the core — httpx
+  sends a client's default headers even on absolute-URL requests and
+  rejects <code>Authorization: None</code>, so a separate no-default-headers client is
+  the only clean way to keep the provider token off the pre-signed
+  blob/CDN URL. The hop is still recorded through the same <code>UsageRecorder</code>,
+  and the response comes back unclassified (the pre-signed host is a
+  different error domain — the artifact contract's 404/410 →
+  convenience-empty decision belongs to the CS5 code client, not the
+  transport). Pinned end-to-end by
+  <code>tests/providers/test_http_core.py::TestUnauthenticatedFollow</code> (second
+  hop carries no <code>Authorization</code>, both hops recorded one apiece).</li>
+<li><code>paginate_link_header</code> (GitHub's RFC 5988 <code>Link</code> header) and
+  <code>paginate_page_param</code> (GitLab's <code>page</code>/<code>per_page</code> + <code>X-Next-Page</code>) both
+  carry hard page caps as a defensive backstop against a misbehaving/looping
+  cursor.</li>
+<li>Base-URL joining reuses the existing <code>GitHubAuth.base_url</code> /
+  <code>GitLabAuth.base_url</code> string fields (<code>github_rest_base_url</code> /
+  <code>gitlab_rest_base_url</code>) — GHE (<code>https://ghe.example.com/api/v3</code>, joined
+  as-is) and self-hosted GitLab (<code>GITLAB_URL</code> + <code>/api/v4</code>) both preserved.</li>
+<li>Credential resolution stays entirely ABOVE this module — it never touches
+  auth, only the headers a caller already resolved.</li>
+<li><strong>Composition, not inheritance.</strong> The core's own status-code
+  classification is intentionally generic (429/5xx retry; 401/403/404/other
+  4xx map to the obvious exception). GitHub's 403 triage and GitLab's
+  header-qualified-403 semantics are NOT baked in here — a future code
+  client wires them in via the <code>is_retryable_status</code> / <code>classify_error</code>
+  extension points, reusing the shared classifiers below.</li>
+</ul>
+<p><strong>Shared 403/429 classifiers</strong> (extracted so a REST work client and its
+future httpx code-client twin never carry a second copy of the same
+triage):</p>
+<ul>
+<li><code>providers/github/ratelimit.py::classify_github_403</code> — primary
+  (<code>x-ratelimit-remaining: 0</code>) vs. secondary/abuse (<code>Retry-After</code> header or
+  documented body wording) vs. permission/SSO (not a rate limit).
+  <code>providers/github/client.py::GitHubWorkClient._raise_github_exception</code> now
+  delegates to it for the 403 branch; behavior is pinned by porting the
+  relevant cases from <code>tests/test_github_403_observability.py</code> into
+  <code>tests/providers/test_github_ratelimit_classifier.py</code>.</li>
+<li><code>providers/gitlab/ratelimit.py::classify_gitlab_status</code> — 429-primary /
+  header-qualified-403-secondary, built directly on the
+  <code>providers/_ratelimit.py</code> primitives (<code>gitlab_403_is_rate_limited</code> /
+  <code>gitlab_resolve_retry_after_seconds</code>, #1142).
+  <code>providers/gitlab/client.py::_maybe_raise_gitlab_rate_limit</code> now delegates
+  to it, so exactly one predicate/delay implementation exists for GitLab
+  (the #1142 feature-flags client already called the <code>_ratelimit.py</code>
+  primitives directly; this closes the remaining gap in the work client).</li>
+</ul>
+<p><strong>Resolver explicit-prefix short-circuit</strong>
+(<code>providers/usage.py::OperationResolver.resolve</code>). The substring marker scan
+alone cannot carry a family-prefixed operation-label scheme: families are
+scanned in order and the FIRST marker hit wins, and GitLab's <code>project</code>
+family already registers broad markers (<code>"/projects/:id"</code>, <code>"/projects/"</code>)
+that would swallow, e.g., a <code>pipelines:GET /projects/:id/pipelines</code> label
+before <code>pipelines</code> is ever consulted. Fixed structurally: before the marker
+scan runs, an operation label of the form <code>"&lt;registered-family&gt;:..."</code>
+resolves DIRECTLY to that family. Unprefixed labels — every existing
+work-client label today — take the marker-scan path completely UNCHANGED,
+pinned by an exhaustive label→family resolver test
+(<code>tests/providers/test_usage_resolver_prefix.py</code>) that (a) asserts every
+current GitHub/GitLab work-client operation label resolves EXACTLY as it did
+before this change, (b) asserts representative prefixed labels per
+registered family resolve directly to that family, and (c) asserts no
+existing work-client label accidentally starts with a registered
+<code>"&lt;family&gt;:"</code> prefix (the false-trigger regression guard). Code clients
+built on this core (CS3+) are expected to author both the label and its
+family prefix themselves, so resolution for their traffic is deterministic
+by construction rather than by marker tuning.</p>
+<h3 id="usage-drain-wiring-first-re-bucketing-chaos-2773-cs2">Usage drain wiring + first re-bucketing (CHAOS-2773 CS2)<a class="headerlink" href="#usage-drain-wiring-first-re-bucketing-chaos-2773-cs2" title="Permanent link">&para;</a></h3>
+<p>CS1 landed the shared transport/resolver plumbing but migrated no traffic.
+<a href="https://linear.app/fullchaos/issue/CHAOS-2803">CHAOS-2803</a> (CS2) is the
+proof-of-pipe that the plumbing actually reaches a <code>budget_comparison</code> row:</p>
+<ul>
+<li><strong><code>usage_sink</code> contract.</strong> <code>processors/dataset_adapters.py::_run_github_dataset</code>
+  / <code>_run_gitlab_dataset</code> own a <code>usage_sink: list[dict]</code> list, pass it into
+  <code>process_github_repo</code> / <code>process_gitlab_project</code>, and the processor drains
+  every instrumented client it constructs into it in a <code>finally:</code> block — on
+  BOTH the success and failure path. On success the returned payload gains
+  <code>observations: {provider_usage: &lt;sink&gt;}</code>, the exact shape
+  <code>workers/sync_units.py::_attach_budget_comparison</code> joins as-is. On a
+  mid-sync raise, whatever was drained before the exception is attached to it
+  via <code>providers/usage.py::attach_partial_observations</code> — a provider-neutral
+  alias for the mechanism <code>metrics/job_work_items.py</code> already used for the
+  work-items sync path (<code>attach_work_item_partial_observations</code>, which now
+  delegates to it); both write the SAME exception attribute, so
+  <code>workers/sync_units.py::_merge_partial_observations_into_result</code> reads
+  either origin unchanged. Within the review batch itself, failure semantics
+  are split: a <code>RateLimitException</code> PROPAGATES (after the finally-drain) so
+  the unit defers to RETRYING with the partial actuals preserved — swallowing
+  it would stamp SUCCESS with reviews silently missing and bypass the
+  deferral branch entirely (codex HIGH on the CS2 review); any other
+  review-fetch error keeps the pre-existing degrade-and-log behavior, since
+  reviews are optional enrichment on top of the PR rows. Legacy entry points
+  that call a processor without an adapter-owned sink (the CLI
+  <code>processors/sync.py</code> batch path, webhooks) get <code>usage_sink=None</code>; the
+  processor still drains any client it builds (so its recorder never leaks
+  across calls) but only logs the observations at debug level — never
+  persisted.</li>
+<li><strong>First intentional re-bucketing: <code>prs</code> / <code>pr_social</code>.</strong> GitHub's PR
+  review-batch enrichment (<code>processors/github.py::_enrich_prs_with_reviews_batch</code>)
+  constructs a local <code>GitHubWorkClient</code> to batch-fetch reviews over GraphQL,
+  but never drained it and emitted an unprefixed operation label — so its
+  traffic silently fell through the resolver's transport default onto
+  <code>work_item_prs</code> (documented as a gap below) and was discarded outright (no
+  drain at all). CS2 fixes both: the client is now drained via the
+  <code>usage_sink</code> contract above, and its GraphQL calls are labeled with the
+  <code>pr_social:</code> prefix (the CS1 short-circuit convention), so they resolve
+  DIRECTLY to the <code>pr_social</code> route family the estimator already reserves for
+  the <code>prs</code>/<code>pr-reviews</code>/<code>pr-comments</code> dataset family. The unprefixed call
+  shape (<code>operation_family=None</code>) is preserved exactly for the work-items
+  PR-as-work-item path (<code>providers/github/provider.py</code>), which keeps
+  resolving to <code>work_item_prs</code> unshifted — pinned by
+  <code>tests/providers/test_usage_resolver_prefix.py</code>'s new
+  <code>pr_social:</code>-prefixed cases alongside its existing unshifted-attribution
+  proof, and by call-count tests in
+  <code>tests/providers/test_github_pr_social_batch.py</code> (N physical GraphQL
+  requests → one aggregated <code>pr_social</code>/<code>graphql_cost</code> observation with
+  <code>request_count == N</code>; a mid-pagination failure leaves the prior successful
+  request(s) drained). CS8 moves the REST <code>prs</code> listing and PR-commit fetches
+  onto <code>GitHubCodeClient</code>, labels them with the <code>prs:</code> prefix, and flips the
+  <code>providers/github/budget.py</code> <code>prs</code> REST-core marker; <code>pr_social</code> remains the
+  separate GRAPHQL_COST family for review/social enrichment.</li>
+<li><strong>GitLab.</strong> <code>process_gitlab_project</code> accepts the same <code>usage_sink</code>
+  parameter for a uniform cross-provider adapter contract. Migrated
+  GitLabCodeClient-backed families drain into it on both success and failure:
+  <code>security</code> (CS10), <code>pipelines</code>/<code>deployments</code> (CS11), <code>tests</code> (CS12),
+  commits + aggregate commit stats (CS13), and <code>files</code>/<code>blame</code> (CS14) --
+  all under the existing <code>project</code> family.
+  Frozen connector-only paths still leave the sink untouched until their own
+  migration changeset lands.</li>
+</ul>
+<h2 id="per-provider-policy">Per-provider policy<a class="headerlink" href="#per-provider-policy" title="Permanent link">&para;</a></h2>
+<h3 id="github">GitHub<a class="headerlink" href="#github" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Quota dimensions.</strong> REST core hourly quota, GraphQL point/cost budget, and
+  <strong>secondary (abuse) limits</strong> for burst/expansion-heavy traffic. Content/blob
+  expansion is tracked separately (<code>contents_blob</code>) because tree/blob reads are
+  high variance.</li>
+<li><strong>Headers.</strong> <code>X-RateLimit-Limit</code> / <code>X-RateLimit-Remaining</code> /
+  <code>X-RateLimit-Reset</code>, and <code>Retry-After</code> on secondary/abuse limits. Only a safe
+  diagnostic subset of headers is ever logged — never the token.</li>
+<li><strong>Retry semantics.</strong> Primary-limit resets can be up to ~1h; those are chunked
+  through the worker <code>not_before</code> path rather than blocking a worker. Secondary
+  limits back off per <code>Retry-After</code> (or a 60s default when the body signals
+  secondary/abuse with no header) and retry in place.</li>
+<li><strong>403 triage — non-retryable vs. rate limit.</strong> A 403 is classified before
+  deciding retryability (<code>connectors/github.py</code> <code>_classify_github_403</code>,
+  <code>connectors/utils/graphql.py</code>, and <code>providers/github/client.py</code>
+  <code>_raise_github_exception</code>):</li>
+<li><strong>(a) primary rate limit</strong> — <code>x-ratelimit-remaining: 0</code> → <code>RateLimitException</code>
+    (wait for reset).</li>
+<li><strong>(b) secondary/abuse limit</strong> — <code>Retry-After</code> present, or the body carries
+    GitHub's documented <code>rate limit</code> / <code>abuse</code> / <code>secondary</code> wording →
+    <code>RateLimitException</code> (back off + retry).</li>
+<li><strong>(c) permission / SSO / other 403</strong> — no rate-limit markers → non-retryable
+    <code>AuthenticationException</code>. This short-circuits the otherwise-wasteful retry
+    spin on an unfixable permission/SAML-SSO error.</li>
+<li><strong>Known gaps.</strong> <code>pr_social</code> / <code>work_item_prs</code> <strong>secondary-limit</strong> pressure
+  (the <code>secondary_abuse_risk</code> dimension) is still <em>estimated</em>, not measured —
+  no client observes a distinct secondary-limit signal on a success response,
+  so this stays an abstract reservation for both families. <code>pr_social</code>'s
+  primary (<code>graphql_cost</code>) traffic IS now measured as of
+  <a href="https://linear.app/fullchaos/issue/CHAOS-2803">CHAOS-2803</a> (CS2, see
+  <a href="#usage-drain-wiring-first-re-bucketing-chaos-2773-cs2">Usage drain wiring</a>
+  above) for the PR review-batch enrichment; REST <code>prs</code> listing/PR commits and
+  incident-label issue fetches are measured as of CHAOS-2809 (CS8). See
+  <a href="#known-gaps">Known gaps</a>.</li>
+<li><strong>Actuals instrumentation (CHAOS-2807).</strong> Commit listing (<code>git</code>) and
+  per-commit file stats (<code>commit_stats</code>) now fetch through
+  <code>providers/github/code_client.py::GitHubCodeClient</code> from processor/backfill paths,
+  drain into the shared <code>usage_sink</code>, and resolve through explicit <code>git:</code> /
+  <code>commit_stats:</code> operation prefixes. The <code>commit_stats</code> <code>contents_blob</code>
+  reservation remains estimate-only because the migrated REST commit-detail call
+  reports as <code>rest_core</code>.</li>
+<li><strong>Actuals instrumentation (CHAOS-2808).</strong> File contents (<code>files</code>) and blame
+  (<code>blame</code>) now fetch via GraphQL through the SAME
+  <code>providers/github/code_client.py::GitHubCodeClient</code>, over provider-owned
+  GraphQL support relocated from the frozen connector's GraphQL client onto
+  <code>providers/github/graphql.py</code>, and drain into the shared <code>usage_sink</code>,
+  resolving through explicit <code>files:</code> / <code>blame:</code> operation prefixes. Unlike
+  <code>commit_stats</code> (where <code>rest_core</code> is the live dimension), <code>files</code>/<code>blame</code>
+  traffic is 100% GraphQL, so <code>contents_blob</code> carries the marker; their
+  <code>rest_core</code> reservation stays estimate-only -- it belongs to the
+  repository tree listing that discovers candidate paths, which remains on
+  the frozen PyGithub connector (out of CS7 scope).</li>
+<li><strong>Actuals instrumentation (CHAOS-2809).</strong> Pull-request listing and PR commits
+  (<code>prs</code>) now fetch through <code>GitHubCodeClient</code> REST pagers and resolve through
+  explicit <code>prs:</code> operation prefixes. Incident-label issue fetches also use
+  <code>GitHubCodeClient</code> and emit an <code>incidents:</code> prefix; <code>incidents</code> is a
+  resolver/actuals-only family so the estimator vocabulary stays frozen while
+  real incident issue traffic still appears in calibration output as an
+  unbudgeted actual when present.</li>
+<li><strong>Actuals instrumentation (CHAOS-2810).</strong> Repository metadata (<code>get_repo</code>)
+  and discovery/listing (<code>list_repositories</code>, <code>list_installation_repositories</code>)
+  now fetch through <code>GitHubCodeClient</code>, resolving through an explicit <code>repo:</code>
+  operation prefix; <code>process_github_repos_batch</code>'s repo discovery/metadata
+  fan-out and the admin credential repo-list endpoint
+  (<code>api/admin/routers/credentials.py</code>) both moved off <code>GitHubConnector</code>/PyGithub
+  onto the same client.</li>
+</ul>
+<h4 id="route-families">Route families<a class="headerlink" href="#route-families" title="Permanent link">&para;</a></h4>
+<!-- route-families:github -->
+
+<table>
+<thead>
+<tr>
+<th>Route family</th>
+<th>Dimension(s)</th>
+<th>Covers</th>
+<th>Confidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>repo</code></td>
+<td><code>rest_core</code></td>
+<td>Repository metadata + discovery (<code>GitHubCodeClient</code>, CHAOS-2773 CS9)</td>
+<td>high</td>
+</tr>
+<tr>
+<td><code>git</code></td>
+<td><code>rest_core</code></td>
+<td>Commit listing (<code>GitHubCodeClient</code>, CHAOS-2773 CS6)</td>
+<td>medium</td>
+</tr>
+<tr>
+<td><code>commit_stats</code></td>
+<td><code>rest_core</code>, <code>contents_blob</code></td>
+<td>Per-commit file/stat expansion (<code>GitHubCodeClient</code> REST core, CHAOS-2773 CS6; contents/blob still estimate-only)</td>
+<td>low</td>
+</tr>
+<tr>
+<td><code>files</code></td>
+<td><code>rest_core</code>, <code>contents_blob</code></td>
+<td>Repository tree listing (<code>rest_core</code>, frozen/estimate-only) + blob-text reads (<code>contents_blob</code>, <code>GitHubCodeClient</code> GraphQL, CHAOS-2773 CS7)</td>
+<td>low</td>
+</tr>
+<tr>
+<td><code>blame</code></td>
+<td><code>rest_core</code>, <code>contents_blob</code></td>
+<td>Blame expansion (file-count dependent; <code>contents_blob</code> via <code>GitHubCodeClient</code> GraphQL, CHAOS-2773 CS7)</td>
+<td>low</td>
+</tr>
+<tr>
+<td><code>prs</code></td>
+<td><code>rest_core</code></td>
+<td>Pull-request listing + PR commits (<code>GitHubCodeClient</code>, CHAOS-2773 CS8)</td>
+<td>medium</td>
+</tr>
+<tr>
+<td><code>incidents</code></td>
+<td><code>rest_core</code></td>
+<td>Incident-label issue fetches (<code>GitHubCodeClient</code>, resolver-only actuals family, CHAOS-2773 CS8)</td>
+<td>low</td>
+</tr>
+<tr>
+<td><code>pr_social</code></td>
+<td><code>graphql_cost</code>, <code>secondary_abuse_risk</code></td>
+<td>PR timeline/social expansion</td>
+<td>medium</td>
+</tr>
+<tr>
+<td><code>cicd</code></td>
+<td><code>rest_core</code>, <code>contents_blob</code></td>
+<td>CI/CD workflow runs + artifact expansion</td>
+<td>low</td>
+</tr>
+<tr>
+<td><code>tests</code></td>
+<td><code>rest_core</code>, <code>contents_blob</code></td>
+<td>Test report ingestion</td>
+<td>low</td>
+</tr>
+<tr>
+<td><code>deployments</code></td>
+<td><code>rest_core</code>, <code>contents_blob</code></td>
+<td>Deployment ingestion</td>
+<td>low</td>
+</tr>
+<tr>
+<td><code>security</code></td>
+<td><code>rest_core</code></td>
+<td>Security alerts</td>
+<td>low</td>
+</tr>
+<tr>
+<td><code>work_items</code></td>
+<td><code>rest_core</code></td>
+<td>Issues / labels / projects / history / comments</td>
+<td>medium</td>
+</tr>
+<tr>
+<td><code>work_item_prs</code></td>
+<td><code>graphql_cost</code>, <code>secondary_abuse_risk</code></td>
+<td>Linked-PR expansion on work items (when <code>sync_prs</code>)</td>
+<td>medium</td>
+</tr>
+</tbody>
+</table>
+<h3 id="gitlab">GitLab<a class="headerlink" href="#gitlab" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Quota dimensions.</strong> Request-count rate limits on the REST API (and, for
+  self-managed instances, per-instance/application limits). All GitLab families
+  currently reserve against <code>rest_core</code>.</li>
+<li><strong>Headers.</strong> <code>RateLimit-Limit</code> / <code>RateLimit-Remaining</code> / <code>RateLimit-Reset</code>
+  and <code>Retry-After</code>.</li>
+<li><strong>Retry semantics.</strong> <code>429</code> (and a <code>403</code> that carries rate-limit headers) →
+  <code>RateLimitException</code>, honoring <code>Retry-After</code> or deriving from
+  <code>RateLimit-Reset</code> (<code>providers/gitlab/client.py</code>
+  <code>_maybe_raise_gitlab_rate_limit</code>).</li>
+<li><strong>403 convention — non-retryable (CHAOS-2383).</strong> For GitLab, <strong>429 is the rate
+  limit; a plain 403 is permission / feature-disabled and is non-retryable.</strong>
+  When a 403 carries no rate-limit headers it means the feature (e.g. Feature
+  Flags) is disabled for the project or the token lacks Developer+ scope; it is
+  re-raised as a non-retryable <code>AuthenticationException</code> so the retry decorator
+  does not spin on an unfixable error (<code>connectors/gitlab.py</code>, mirroring
+  GitHub's permission-403 handling).</li>
+<li><strong>Feature-flag fetch migrated off the frozen connector (CHAOS-2785).</strong>
+  <code>GitLabConnector.get_feature_flags</code> / <code>get_project_name</code>
+  (<code>connectors/gitlab.py</code>) previously carried this same 403/429 convention but
+  through the un-instrumented <code>connectors/utils/rest.py::GitLabRESTClient</code>, so
+  the fetch never produced actuals. The feature-flags sync unit now fetches
+  through the canonical <code>providers/gitlab/feature_flags.py::
+  GitLabFeatureFlagsClient</code> -- byte-for-byte behavior parity (403 stays
+  non-retryable, 429 stays a retryable <code>RateLimitException</code> with signal;
+  pinned by <code>tests/test_gitlab_feature_flags_client.py</code>), now wired to the
+  shared CHAOS-2754 recorder. <code>connectors/gitlab.py</code> is left in place, unused
+  by the feature-flags sync path; its other (code-dataset) methods were
+  retired as dead code in CS17 / CHAOS-2819 (see below), leaving only the
+  credential shell needed by processor bridges.</li>
+<li><strong>Actuals instrumentation (CHAOS-2785).</strong> The feature-flags fetch
+  (<code>get_feature_flags</code>, <code>get_project_name</code>) records real per-request counts
+  through the shared CHAOS-2754 recorder, resolving under the existing
+  <code>project</code> route family the <code>GitLabBudgetEstimator</code> already reserves for
+  <code>DatasetKey.FEATURE_FLAGS</code> -- no new route family or estimator change was
+  needed, since <code>GITLAB_USAGE_ROUTE_FAMILIES</code>' <code>project</code> marker (<code>/projects/</code>)
+  already matches these operations.</li>
+<li><strong>Known gaps.</strong> GitLab feature-flag budgeting shares the <code>project</code> REST-core
+  family; dedicated GitLab feature-flag budget families (distinguishing them
+  from generic project-metadata reads in calibration) remain a follow-up.</li>
+</ul>
+<h4 id="route-families_1">Route families<a class="headerlink" href="#route-families_1" title="Permanent link">&para;</a></h4>
+<!-- route-families:gitlab -->
+
+<table>
+<thead>
+<tr>
+<th>Route family</th>
+<th>Dimension(s)</th>
+<th>Covers</th>
+<th>Confidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>project</code></td>
+<td><code>rest_core</code></td>
+<td>Project metadata, commits, files/blame, feature-flags</td>
+<td>high–low</td>
+</tr>
+<tr>
+<td><code>merge_requests</code></td>
+<td><code>rest_core</code></td>
+<td>Merge request iterators, MR commits, approvals (<code>GitLabCodeClient</code>, CHAOS-2816/CS15)</td>
+<td>medium</td>
+</tr>
+<tr>
+<td><code>notes</code></td>
+<td><code>rest_core</code></td>
+<td>MR note + discussion expansion (<code>GitLabCodeClient</code>, CHAOS-2816/CS15); issue notes still use work-item paths</td>
+<td>low</td>
+</tr>
+<tr>
+<td><code>pipelines</code></td>
+<td><code>rest_core</code></td>
+<td>CI/CD pipeline listing + job expansion (<code>GitLabCodeClient.get_pipelines</code>)</td>
+<td>low</td>
+</tr>
+<tr>
+<td><code>deployments</code></td>
+<td><code>rest_core</code></td>
+<td>Deployments, releases, deployment→MR resolution (<code>GitLabCodeClient</code>, CHAOS-2773 CS11)</td>
+<td>low</td>
+</tr>
+<tr>
+<td><code>security</code></td>
+<td><code>rest_core</code></td>
+<td>Vulnerability findings + dependency-scan alerts (<code>GitLabCodeClient</code>, CHAOS-2773 CS10)</td>
+<td>low</td>
+</tr>
+<tr>
+<td><code>tests</code></td>
+<td><code>rest_core</code></td>
+<td>Pipeline test_report, pipeline jobs, job artifact download (<code>GitLabCodeClient</code>, CHAOS-2773 CS12)</td>
+<td>low</td>
+</tr>
+<tr>
+<td><code>issues</code></td>
+<td><code>rest_core</code></td>
+<td>Issue iterator + per-issue events</td>
+<td>medium</td>
+</tr>
+<tr>
+<td><code>milestones</code></td>
+<td><code>rest_core</code></td>
+<td>Project/group milestone iterators</td>
+<td>medium</td>
+</tr>
+<tr>
+<td><code>epics</code></td>
+<td><code>rest_core</code></td>
+<td>Group epic expansion (premium APIs)</td>
+<td>low</td>
+</tr>
+</tbody>
+</table>
+<h3 id="jira">Jira<a class="headerlink" href="#jira" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Quota dimensions.</strong> Atlassian Cloud enforces per-tenant request-cost limits;
+  work-item <strong>listing</strong> goes through the separately-limited REST <code>search/jql</code>
+  endpoint (<code>search</code> dimension), while enrichment (changelog/comments/sprints)
+  uses <code>rest_core</code>. AGG GraphQL enrichment, when enabled, uses <code>graphql_cost</code>.</li>
+<li><strong>Headers.</strong> <code>Retry-After</code> on <code>429</code> (authoritative delay). <code>X-RateLimit-Reset</code>
+  is also sent, but as an <strong>ISO 8601 timestamp</strong> (e.g. <code>2025-10-08T15:00:00Z</code>),
+  not epoch seconds/milliseconds like GitHub/GitLab/Linear — verified against
+  Atlassian's Cloud rate-limiting docs
+  (<code>developer.atlassian.com/cloud/jira/platform/rate-limiting/</code>) for CHAOS-2758
+  (previously unverified; <code>RateLimitSignal.reset_at_from_iso8601</code> parses it).</li>
+<li><strong>Retry semantics.</strong> On <code>429</code>, Jira retries <strong>in place</strong> honoring <code>Retry-After</code>
+  (<code>providers/jira/client.py</code> <code>_request_json</code>, <code>max_retries_429=3</code> → 4 attempts),
+  then raises <code>RateLimitException</code> when exhausted so the worker deferral path
+  takes over.</li>
+<li><strong>Non-retryable auth cases.</strong> Jira has <strong>no dedicated 403 rate-limit vs.
+  permission classification</strong> — a 403 surfaces through the shared HTTP error path
+  (<code>raise_for_status</code>). This is a known asymmetry vs. GitHub/GitLab — see
+  <a href="#known-gaps">Known gaps</a>.</li>
+<li><strong>Gating.</strong> Worklog and AGG-GraphQL route families only appear when
+  <code>JIRA_FETCH_WORKLOGS</code> / <code>ATLASSIAN_GQL_ENABLED</code> are set (<code>providers/jira/budget.py</code>).</li>
+</ul>
+<h4 id="route-families_2">Route families<a class="headerlink" href="#route-families_2" title="Permanent link">&para;</a></h4>
+<!-- route-families:jira -->
+
+<table>
+<thead>
+<tr>
+<th>Route family</th>
+<th>Dimension(s)</th>
+<th>Covers</th>
+<th>Confidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jira_metadata</code></td>
+<td><code>rest_core</code></td>
+<td>Project/label metadata</td>
+<td>high</td>
+</tr>
+<tr>
+<td><code>jira_jql</code></td>
+<td><code>search</code></td>
+<td>Work-item listing via REST <code>search/jql</code> pagination</td>
+<td>medium</td>
+</tr>
+<tr>
+<td><code>jira_issue_enrichment</code></td>
+<td><code>rest_core</code></td>
+<td>Per-issue changelog / comment / sprint enrichment</td>
+<td>medium</td>
+</tr>
+<tr>
+<td><code>jira_comments</code></td>
+<td><code>rest_core</code></td>
+<td>Comment pagination (activity-dependent)</td>
+<td>low</td>
+</tr>
+<tr>
+<td><code>jira_worklogs</code></td>
+<td><code>rest_core</code></td>
+<td>Per-issue worklog expansion (<code>JIRA_FETCH_WORKLOGS</code>)</td>
+<td>low</td>
+</tr>
+<tr>
+<td><code>jira_gql_enrichment</code></td>
+<td><code>graphql_cost</code></td>
+<td>AGG GraphQL enrichment (<code>ATLASSIAN_GQL_ENABLED</code>)</td>
+<td>medium</td>
+</tr>
+</tbody>
+</table>
+<h3 id="linear">Linear<a class="headerlink" href="#linear" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Quota dimensions.</strong> Request-count budget <strong>and</strong> a distinct GraphQL
+  <strong>complexity</strong> budget (Linear's ~10,000-complexity limit). All Linear families
+  reserve against <code>graphql_cost</code>.</li>
+<li><strong>Headers.</strong> <code>X-RateLimit-Requests-Limit</code> / <code>X-RateLimit-Requests-Remaining</code> /
+  <code>X-RateLimit-Requests-Reset</code> (parsed in <code>providers/linear/client.py</code>
+  <code>_update_rate_limit</code>). The client <strong>proactively throttles</strong>: when remaining
+  ≤ 5 it sleeps until the reset before issuing the next request.</li>
+<li><strong>Retry semantics.</strong> HTTP <code>429</code> → back off (server <code>Retry-After</code> when present,
+  else gate backoff) and retry in place up to <code>DEFAULT_MAX_ATTEMPTS = 5</code>, then
+  raise <code>LinearRateLimitError</code> (a <code>RateLimitException</code>).</li>
+<li><strong>Non-retryable — complexity rejection.</strong> Linear returns complexity-limit
+  rejections as <strong>HTTP 400 GraphQL errors</strong>, surfaced as
+  <code>LinearComplexityLimitError</code>. This is <strong>not retryable</strong>: the query itself must
+  be restructured (smaller nested page sizes), so it never enters the 429
+  backoff/deferral loop.</li>
+<li><strong>Known gaps.</strong> Real request/complexity <strong>actuals</strong> are not yet recorded per
+  route family; estimates are static. See <a href="#known-gaps">Known gaps</a>.</li>
+</ul>
+<h4 id="route-families_3">Route families<a class="headerlink" href="#route-families_3" title="Permanent link">&para;</a></h4>
+<!-- route-families:linear -->
+
+<table>
+<thead>
+<tr>
+<th>Route family</th>
+<th>Dimension(s)</th>
+<th>Covers</th>
+<th>Confidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>teams</code></td>
+<td><code>graphql_cost</code></td>
+<td>Team listing</td>
+<td>medium</td>
+</tr>
+<tr>
+<td><code>issues</code></td>
+<td><code>graphql_cost</code></td>
+<td>Issue pages (nested labels/project/comments/attachments/history)</td>
+<td>low</td>
+</tr>
+<tr>
+<td><code>cycles</code></td>
+<td><code>graphql_cost</code></td>
+<td>Cycle expansion</td>
+<td>low</td>
+</tr>
+<tr>
+<td><code>comments</code></td>
+<td><code>graphql_cost</code></td>
+<td>Comment pages</td>
+<td>low</td>
+</tr>
+<tr>
+<td><code>attachments</code></td>
+<td><code>graphql_cost</code></td>
+<td>Attachment edges</td>
+<td>low</td>
+</tr>
+<tr>
+<td><code>history</code></td>
+<td><code>graphql_cost</code></td>
+<td>Issue history edges</td>
+<td>low</td>
+</tr>
+<tr>
+<td><code>team_members</code></td>
+<td><code>graphql_cost</code></td>
+<td>Team member edges (large teams paginate)</td>
+<td>medium</td>
+</tr>
+<tr>
+<td><code>projects</code></td>
+<td><code>graphql_cost</code></td>
+<td>Project listing</td>
+<td>medium</td>
+</tr>
+</tbody>
+</table>
+<h3 id="launchdarkly">LaunchDarkly<a class="headerlink" href="#launchdarkly" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Quota dimensions.</strong> Global and <strong>route-level</strong> REST limits. The audit-log
+  endpoint hard-caps pages at 20 entries. Code-reference reads carry a
+  <code>secondary_abuse_risk</code> reservation in addition to <code>rest_core</code>.</li>
+<li><strong>Headers.</strong> <code>X-RateLimit-Route-Remaining</code> (per-route remaining budget) and
+  <code>Retry-After</code> on <code>429</code> (<code>providers/launchdarkly/client.py</code>,
+  <code>providers/launchdarkly/code_refs.py</code>).</li>
+<li><strong>Retry semantics.</strong> <code>429</code> and <code>5xx</code> are retried with exponential backoff
+  (honoring <code>Retry-After</code>) up to <code>max_retries = 5</code>. On exhaustion the terminal
+  type differs: a <code>429</code> raises <code>RateLimitException</code> (→ worker deferral) while a
+  <code>5xx</code> raises <code>APIException</code> (a normal failure, <code>providers/launchdarkly/
+  client.py</code> / <code>providers/launchdarkly/code_refs.py</code> <code>_raise_for_status</code>). A
+  low <code>X-RateLimit-Route-Remaining</code> (&lt; 5) is currently only <strong>logged as a
+  warning</strong>, not fed into the deferral/cooldown machinery — see
+  <a href="#known-gaps">Known gaps</a>.</li>
+<li><strong>Non-retryable auth cases.</strong> <code>401</code> → <code>AuthenticationException</code>; <code>403</code> →
+  <code>APIException</code> (forbidden). LaunchDarkly does <strong>not</strong> distinguish a
+  permission-403 from a rate-limit case the way GitHub/GitLab do.</li>
+<li><strong>Canonical provider migration complete (CHAOS-2761).</strong> Flag and audit-log
+  fetches moved off the frozen legacy connector
+  (<code>connectors/launchdarkly.py</code>, left in place unused by the sync path — it
+  still backs the admin credentials "test connection" endpoint, which mirrors
+  the same raw/legacy-client pattern already used there for Jira/Linear
+  connectivity checks and carries no actuals-instrumentation gap) into
+  <code>providers/launchdarkly/client.py::LaunchDarklyClient</code>, mirroring the
+  request/retry semantics byte-for-byte (parity pinned by
+  <code>tests/test_rate_limit_signal.py::test_launchdarkly_403_is_authentication_error</code>).
+  Combined with the pre-existing canonical <code>providers/launchdarkly/code_refs.py</code>,
+  all of <code>providers/launchdarkly/</code> is now canonical. See
+  <a href="../../architecture/launchdarkly-sync-budgeting/">LaunchDarkly sync budgeting</a>.</li>
+<li><strong>Actuals instrumentation (CHAOS-2761).</strong> All 3 currently-emitted route
+  families (<code>flags</code>, <code>audit_log</code>, <code>code_refs</code>) now record real per-request
+  counts through the shared CHAOS-2754 recorder
+  (<code>LAUNCHDARKLY_USAGE_RESOLVER</code> in <code>providers/launchdarkly/budget.py</code>), so
+  LaunchDarkly units produce a <code>budget_comparison</code> row like GitHub/GitLab/
+  Jira/Linear work-item units already did. <code>code_refs</code>' <code>secondary_abuse_risk</code>
+  reservation shares its single REST call with the <code>rest_core</code> reservation, so
+  only <code>rest_core</code> ever gets a live actual (same one-call/two-dimension shape
+  as GitHub's <code>commit_stats</code>/<code>files</code>/<code>blame</code> <code>contents_blob</code> entries).</li>
+<li><strong>Documented vs. emitted families.</strong> The estimator currently emits <code>flags</code>,
+  <code>audit_log</code>, and <code>code_refs</code>. <code>projects</code>, <code>segments</code>, and <code>members</code> are
+  <strong>modeled route families</strong> (<code>LAUNCHDARKLY_BUDGET_ROUTE_FAMILIES</code> in
+  <code>providers/launchdarkly/budget.py</code>) that the current <code>feature-flags</code> estimator
+  does not yet reserve, and no client fetches yet; they are documented here for
+  completeness.</li>
+</ul>
+<h4 id="route-families_4">Route families<a class="headerlink" href="#route-families_4" title="Permanent link">&para;</a></h4>
+<!-- route-families:launchdarkly -->
+
+<table>
+<thead>
+<tr>
+<th>Route family</th>
+<th>Dimension(s)</th>
+<th>Covers</th>
+<th>Confidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>flags</code></td>
+<td><code>rest_core</code></td>
+<td><code>GET /api/v2/flags/{projectKey}</code></td>
+<td>medium</td>
+</tr>
+<tr>
+<td><code>audit_log</code></td>
+<td><code>rest_core</code></td>
+<td><code>GET</code>/<code>POST /api/v2/auditlog</code> (20-entry page cap)</td>
+<td>low</td>
+</tr>
+<tr>
+<td><code>code_refs</code></td>
+<td><code>rest_core</code>, <code>secondary_abuse_risk</code></td>
+<td><code>GET /api/v2/code-refs/repositories</code></td>
+<td>medium–low</td>
+</tr>
+<tr>
+<td><code>projects</code></td>
+<td><code>rest_core</code></td>
+<td><code>GET /api/v2/projects</code> + environments (modeled, not yet emitted)</td>
+<td>medium</td>
+</tr>
+<tr>
+<td><code>segments</code></td>
+<td><code>rest_core</code></td>
+<td><code>GET /api/v2/segments/{projectKey}/{environmentKey}</code> (modeled)</td>
+<td>low</td>
+</tr>
+<tr>
+<td><code>members</code></td>
+<td><code>rest_core</code></td>
+<td><code>GET /api/v2/members</code> (modeled)</td>
+<td>low</td>
+</tr>
+</tbody>
+</table>
+<h2 id="known-gaps">Known gaps<a class="headerlink" href="#known-gaps" title="Permanent link">&para;</a></h2>
+<p>These are the remaining instrumentation/coverage gaps after the
+<a href="https://linear.app/fullchaos/issue/CHAOS-2742">CHAOS-2742</a> epic (all eight
+sub-issues shipped). They are documented as <strong>current reality</strong>, not defects to
+paper over:</p>
+<ul>
+<li><strong>Jira 403s are not classified rate-limit vs. permission.</strong> Unlike
+  GitHub/GitLab, Jira has no dedicated 403 classification — a 403 surfaces
+  through the shared HTTP error path rather than as a <code>RateLimitSignal</code> with a
+  <code>permission</code> reason (see <a href="#jira">Jira</a> above). Untracked; file under a
+  follow-up if it bites in practice.</li>
+<li><strong>Calibration only covers instrumented route families.</strong> <a href="https://linear.app/fullchaos/issue/CHAOS-2759">CHAOS-2759</a>
+  attaches a <code>budget_comparison</code> (see
+  <a href="#actual-vs-estimated-calibration-chaos-2759">Actual-vs-estimated calibration</a>
+  above) wherever CHAOS-2754's recorder actually drained actuals for a
+  route_family, but the recorder only records where a client calls it.
+  GitHub/GitLab <code>pr_social</code>/<code>work_item_prs</code> <strong>secondary</strong> (<code>secondary_abuse_risk</code>)
+  pressure, Linear request/complexity actuals, and LaunchDarkly
+  route-remaining are still <strong>uninstrumented</strong>, so those families never
+  produce a comparison row for that dimension. GitHub <code>pr_social</code>'s primary
+  (<code>graphql_cost</code>) traffic from the PR review-batch enrichment IS now
+  instrumented as of <a href="https://linear.app/fullchaos/issue/CHAOS-2803">CHAOS-2803</a>
+  (CS2) — see
+  <a href="#usage-drain-wiring-first-re-bucketing-chaos-2773-cs2">Usage drain wiring</a>
+above. GitHub <code>git</code> and <code>commit_stats</code> REST-core traffic is instrumented as of
+  CHAOS-2807, <code>files</code>/<code>blame</code> <code>contents_blob</code> traffic (GraphQL) as of
+  CHAOS-2808, REST <code>prs</code> listing / PR commits / incident-label issue
+  fetches as of CHAOS-2809, and <code>repo</code> metadata/discovery traffic as of
+  CHAOS-2810 (CS9); GitLab merge-request and MR-note REST-core traffic
+  is instrumented as of CHAOS-2816 (CS15), and GitLab repo metadata, project
+  discovery, and batch orchestration as of CHAOS-2817 (CS15b). The
+  <code>files</code>/<code>blame</code> <code>rest_core</code> tree listing and remaining GitHub/GitLab
+  code-dataset families stay uninstrumented pending their own CHAOS-2773
+  changesets (see
+  "Frozen <code>connectors/</code> path" below). There is also no cross-run
+  aggregation/dashboard yet — calibration today is visible per-unit (result +
+  structured log), not rolled up over time.</li>
+<li><strong>Frozen <code>connectors/</code> path.</strong> GitHub repo metadata/listing and batch
+  orchestration now use <code>GitHubCodeClient</code> and emit <code>repo:</code> usage actuals, and
+  the dead GitHub connector PR-review, PR-commit, file-contents, security-alert,
+  security-advisory, and rate-limit helpers were retired in CS16 / CHAOS-2818;
+  the PyGithub-based <code>GitHubConnector</code> now remains only as the credential/
+  PyGithub/artifact holder after the base-ABC data-method cleanup (CHAOS-2865).
+  GitLab repo
+  metadata, project discovery, and batch orchestration now use <code>GitLabCodeClient</code>
+  and emit <code>project:</code> usage actuals, and the GitLab connector code-dataset fetch
+  methods were retired in CS17 / CHAOS-2819; <code>connectors/gitlab.py</code> now retains
+  only the credential shell needed by processor bridges, while
+  <code>connectors/utils/rest.py</code> is intentionally retained in the tree for a future
+  consumer. No new code may be added under <code>connectors/</code> (see
+  <a href="../../AGENTS.md"><code>AGENTS.md</code></a>); rate-limit/actuals instrumentation for those
+  datasets lands as the fetch moves to <code>providers/github/</code> / <code>providers/gitlab/</code>
+  — tracked as its own canonical-provider-migration effort in
+  <a href="https://linear.app/fullchaos/issue/CHAOS-2773">CHAOS-2773</a>, since it is a
+  much larger migration (~1400 lines per connector, off PyGithub/python-gitlab
+  entirely) than a follow-up-ticket-sized change. LaunchDarkly's equivalent
+  gap (flag/audit-log fetches on the frozen connector) was closed in
+  <a href="https://linear.app/fullchaos/issue/CHAOS-2761">CHAOS-2761</a>; see
+  <a href="#launchdarkly">LaunchDarkly</a> above. GitLab's feature-flags fetch
+  (<code>get_feature_flags</code> / <code>get_project_name</code>) is likewise closed as of
+  <a href="https://linear.app/fullchaos/issue/CHAOS-2785">CHAOS-2785</a> — see
+  <a href="#gitlab">GitLab</a> above. GitHub's <code>git</code>/<code>commit_stats</code>
+  (<a href="https://linear.app/fullchaos/issue/CHAOS-2807">CHAOS-2807</a>, CS6) and
+  <code>files</code>/<code>blame</code> (<a href="https://linear.app/fullchaos/issue/CHAOS-2808">CHAOS-2808</a>,
+  CS7 -- the file-contents/blame GraphQL fetch relocated onto
+  <code>providers/github/graphql.py</code>) moved to
+  <code>providers/github/code_client.py::GitHubCodeClient</code>; GitHub <code>prs</code> REST
+  listing, PR commits, and incident-label issue fetches
+  (<a href="https://linear.app/fullchaos/issue/CHAOS-2809">CHAOS-2809</a>, CS8), and
+  GitHub repo metadata + batch discovery/orchestration
+  (<a href="https://linear.app/fullchaos/issue/CHAOS-2810">CHAOS-2810</a>, CS9) also moved
+  onto <code>GitHubCodeClient</code>. GitLab's <code>security</code>
+  (<a href="https://linear.app/fullchaos/issue/CHAOS-2811">CHAOS-2811</a>, CS10),
+  <code>pipelines</code>+<code>deployments</code>
+  (<a href="https://linear.app/fullchaos/issue/CHAOS-2812">CHAOS-2812</a>, CS11), and
+  <code>tests</code> (+CI adapter usage draining;
+  <a href="https://linear.app/fullchaos/issue/CHAOS-2813">CHAOS-2813</a>, CS12),
+  commits + aggregate commit stats
+  (<a href="https://linear.app/fullchaos/issue/CHAOS-2814">CHAOS-2814</a>, CS13), and
+  <code>files</code>/<code>blame</code> (<code>get_file_contents</code> batched GraphQL blob fetch +
+  <code>get_file_blame</code> REST, both under the <code>project</code> family;
+  <a href="https://linear.app/fullchaos/issue/CHAOS-2815">CHAOS-2815</a>, CS14), and
+  <code>merge_requests</code>/<code>notes</code> (<code>iter_merge_requests</code>, MR commits, MR approvals,
+  MR notes;
+  <a href="https://linear.app/fullchaos/issue/CHAOS-2816">CHAOS-2816</a>, CS15)
+  code-dataset families plus repo metadata/project discovery/batch orchestration
+  (<a href="https://linear.app/fullchaos/issue/CHAOS-2817">CHAOS-2817</a>, CS15b) are
+  migrated onto the canonical, instrumented
+  <code>providers/gitlab/code_client.py::GitLabCodeClient</code>; the legacy connector
+  methods for those families were removed in CS17 / CHAOS-2819.</li>
+</ul>
+<h2 id="references">References<a class="headerlink" href="#references" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Epic: <a href="https://linear.app/fullchaos/issue/CHAOS-2742">CHAOS-2742</a> — Harden sync
+  budget and provider rate-limit handling without credential capacity.</li>
+<li><a href="../../architecture/sync-unit-model/">Sync Unit Model</a> — how a run decomposes
+  into units and why reference data belongs on a different axis.</li>
+<li><a href="../../architecture/launchdarkly-sync-budgeting/">LaunchDarkly sync budgeting</a> — LD estimator
+  contract and operator budget defaults.</li>
+<li><a href="../../architecture/dispatch-outbox/">Durable Dispatch Outbox</a>,
+  <a href="../../ops/connector-inventory/">Connector Inventory</a>,
+  <a href="../../ops/workers/">Workers</a>.</li>
+<li>Code: <code>providers/&lt;provider&gt;/client.py</code> (fetch + rate-limit),
+  <code>providers/&lt;provider&gt;/budget.py</code> (estimators),
+  <code>sync/budget_guard.py</code> (bucket keys + reservation),
+  <code>workers/rate_limit_defer.py</code> (deferral budgets),
+  <code>connectors/utils/rate_limit_queue.py</code> (shared gate).</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.instant", "navigation.sections", "navigation.tracking", "search.highlight", "search.suggest"], "search": "../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.525ec568.min.js"></script>
+      
+    
+  </body>
+</html>

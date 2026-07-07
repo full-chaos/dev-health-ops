@@ -1,0 +1,6238 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Developer health and operations analytics platform">
+      
+      
+      
+      
+        <link rel="prev" href="../testing-governance/">
+      
+      
+        <link rel="next" href="../workers/">
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.39">
+    
+    
+      
+        <title>Enterprise Test Plan - dev-health-ops</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.8c3ca2c6.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#enterprise-features-manual-test-plan" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="dev-health-ops" class="md-header__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            dev-health-ops
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Enterprise Test Plan
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="dev-health-ops" class="md-nav__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    dev-health-ops
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Product
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Product
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/feature-flags/feature-flag-user-impact-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Feature Flag and User Impact PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/feature-flags/feature-flag-prd-review/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Feature Flag PRD Review
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/product-brief/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Brief
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/concepts/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Concepts
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/investment-taxonomy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Taxonomy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/capacity-planning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Capacity Planning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/monetization-strategy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Monetization Strategy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/test-ops-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TestOps PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../self-hosted-quickstart/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Self-Hosted Quickstart
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../team-configuration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Configuration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../email-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Email Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sso-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SSO Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../webhooks/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Webhooks
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../alerting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Alerting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            Architecture
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/data-pipeline/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Pipeline
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/dispatch-outbox/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Durable Dispatch Outbox
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/sync-unit-model/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Sync Unit Model
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/team-attribution/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Attribution
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/investment-categorization-pipeline/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Categorization Pipeline
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/investment-data-model/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Data Model
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/repo-layout/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Repo Layout
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/frontend-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Frontend Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/middleware-impersonation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Middleware Impersonation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/auth-journey/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Auth User Journeys
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/database-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Database Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/worker-scaling-readiness/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Worker Scaling Readiness
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/normalization-helpers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Normalization Helpers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/enterprise-overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Enterprise Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/licensing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Licensing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/adr/001-enterprise-edition/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ADR-001 Enterprise Edition
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/byo-llm-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    BYO-LLM Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_12" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_12" id="__nav_12_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Operations
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_12_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_12">
+            <span class="md-nav__icon md-icon"></span>
+            Operations
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../observability-tooling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Observability Tooling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deployment-guide/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Deployment Guide
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../connector-inventory/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Connector Inventory
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../stripe-billing-runbook/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Stripe Billing Runbook
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing-governance/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Testing Governance
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Enterprise Test Plan
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  <span class="md-ellipsis">
+    Enterprise Test Plan
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#table-of-contents" class="md-nav__link">
+    <span class="md-ellipsis">
+      Table of Contents
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-execution-workflow-and-batches-chaos-516" class="md-nav__link">
+    <span class="md-ellipsis">
+      11. Execution Workflow and Batches (CHAOS-516)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="11. Execution Workflow and Batches (CHAOS-516)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#111-phase-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      11.1 Phase Order
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#112-batch-catalog" class="md-nav__link">
+    <span class="md-ellipsis">
+      11.2 Batch Catalog
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#113-batch-prerequisite-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      11.3 Batch Prerequisite Checklist
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#114-evidence-capture-template" class="md-nav__link">
+    <span class="md-ellipsis">
+      11.4 Evidence Capture Template
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#115-explicit-blocked-by-mapping" class="md-nav__link">
+    <span class="md-ellipsis">
+      11.5 Explicit Blocked-By Mapping
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#116-batch-execution-tracker" class="md-nav__link">
+    <span class="md-ellipsis">
+      11.6 Batch Execution Tracker
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-test-environment-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Test Environment Setup
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. Test Environment Setup">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#11-required-environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.1 Required Environment Variables
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1.1 Required Environment Variables">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#saas-primary-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      SaaS (Primary) Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#self-hosted-testing-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Self-Hosted Testing Configuration
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#12-test-license-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.2 Test License Keys
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#13-test-data-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.3 Test Data Setup
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#14-start-services" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.4 Start Services
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-license-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. License Validation
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. License Validation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-community-tier-no-license" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.1 Community Tier (No License)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-team-tier-license" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.2 Team Tier License
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-enterprise-tier-license" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.3 Enterprise Tier License
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-grace-period-behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.4 Grace Period Behavior
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#25-invalid-license-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.5 Invalid License Handling
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-rbac-enforcement" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. RBAC Enforcement
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. RBAC Enforcement">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-role-definitions" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.1 Role Definitions
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-permission-checks" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.2 Permission Checks
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-role-assignment" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.3 Role Assignment
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#34-ownership-transfer" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.4 Ownership Transfer
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-sso-authentication" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. SSO Authentication
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. SSO Authentication">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41-saml-provider-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.1 SAML Provider Setup
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-saml-login-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.2 SAML Login Flow
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#43-oidc-provider-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.3 OIDC Provider Setup
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#44-oidc-login-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.4 OIDC Login Flow
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#45-sso-edge-cases" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.5 SSO Edge Cases
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-audit-logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. Audit Logging
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Audit Logging">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-audit-event-generation" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.1 Audit Event Generation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#52-audit-log-queries" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.2 Audit Log Queries
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#53-audit-log-details" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.3 Audit Log Details
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#54-audit-feature-gating" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.4 Audit Feature Gating
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-retention-policies" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. Retention Policies
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Retention Policies">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#61-policy-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.1 Policy Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#62-policy-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.2 Policy Execution
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#63-legal-hold-future" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.3 Legal Hold (Future)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-ip-allowlisting" class="md-nav__link">
+    <span class="md-ellipsis">
+      7. IP Allowlisting
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. IP Allowlisting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#71-allowlist-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      7.1 Allowlist Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#72-ip-checking" class="md-nav__link">
+    <span class="md-ellipsis">
+      7.2 IP Checking
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-limit-enforcement" class="md-nav__link">
+    <span class="md-ellipsis">
+      8. Limit Enforcement
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. Limit Enforcement">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#81-user-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      8.1 User Limits
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#82-repository-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      8.2 Repository Limits
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#83-api-rate-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      8.3 API Rate Limits
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-admin-portal" class="md-nav__link">
+    <span class="md-ellipsis">
+      9. Admin Portal
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. Admin Portal">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#91-user-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      9.1 User Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#92-organization-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      9.2 Organization Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#93-settings-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      9.3 Settings Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#94-integration-credentials" class="md-nav__link">
+    <span class="md-ellipsis">
+      9.4 Integration Credentials
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-deployment-specific-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      10. Deployment-Specific Tests
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="10. Deployment-Specific Tests">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#101-docker-compose" class="md-nav__link">
+    <span class="md-ellipsis">
+      10.1 Docker Compose
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#102-kubernetes-helm" class="md-nav__link">
+    <span class="md-ellipsis">
+      10.2 Kubernetes (Helm)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#103-self-hosted-enterprise" class="md-nav__link">
+    <span class="md-ellipsis">
+      10.3 Self-Hosted Enterprise
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#test-result-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      Test Result Summary
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#passfail-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      Pass/Fail Criteria
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Pass/Fail Criteria">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#overall-pass-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overall Pass Criteria
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Related Documentation
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../workers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Workers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../slos/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SLOs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../customer-offboarding/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Customer Offboarding
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../investment-materialization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Materialization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    CLI
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            CLI
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_14" id="__nav_14_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Connectors
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_14">
+            <span class="md-nav__icon md-icon"></span>
+            Connectors
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../connectors/usage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Usage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../connectors/private-repo-testing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Private Repos
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/github-app-auth/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Auth
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/github-app-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_15" id="__nav_15_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Providers
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_15">
+            <span class="md-nav__icon md-icon"></span>
+            Providers
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../providers/rate-limit-policy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Rate-Limit Policy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_16" id="__nav_16_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Metrics
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16">
+            <span class="md-nav__icon md-icon"></span>
+            Metrics
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../metrics-inventory/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inventory
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../canonical-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Canonical Metrics (API Mapping)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/canonical-metrics-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Canonical Metrics (PRD)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/ai-opportunity-detector/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Opportunity Detector
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/metric-calculations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Metric Calculations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Computations Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Views Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_16_9" id="__nav_16_9_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Views
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_16_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16_9">
+            <span class="md-nav__icon md-icon"></span>
+            Views
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/investment-view/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment View
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-mix/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Mix
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-flows/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Flows
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-expense/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Expense
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/code-hotspots/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Hotspots
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/pr-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PR Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/quadrants/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quadrants
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/flame-diagrams/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Flame Diagrams
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/capacity-planning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Capacity Planning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/work-graph/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Work Graph View
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-impact/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Impact
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-review-load/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Review Load
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-risk/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Risk
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-attribution/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Attribution
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/work-graph/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Work Graph
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/reports/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Reports
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/product-telemetry/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Telemetry
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/product-telemetry-dashboard-assessment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Telemetry Dashboard Assessment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_17" >
+        
+          
+          <label class="md-nav__link" for="__nav_17" id="__nav_17_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    API
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_17_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_17">
+            <span class="md-nav__icon md-icon"></span>
+            API
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GraphQL Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/investment-api/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment API
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-ai/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Workflow Analytics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-security/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GraphQL Security
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/persisted-queries/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Persisted Queries
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/view-mapping/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    View Mapping
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/web-graphql-client/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Web GraphQL Client
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/web-graphql-investment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Web Investment Queries
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/team-catalog-source-of-truth/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Catalog Source of Truth
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/operating-review/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Operating Review Aggregation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../visualizations/patterns/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Visualizations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_19" >
+        
+          
+          <label class="md-nav__link" for="__nav_19" id="__nav_19_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    LLM
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_19_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_19">
+            <span class="md-nav__icon md-icon"></span>
+            LLM
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/categorization-contract/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Categorization Contract
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/byo-llm-credentials/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Credential Resolution
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/errors-circuit-breaker/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Errors and Circuit-Breaker
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/materialize-fanout/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Materialize Fan-Out
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/spend-observability/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Spend Observability
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/user-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    User Flows
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../task_trackers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Task Trackers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../roadmap/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Roadmap
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../project/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Project Plan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_23" >
+        
+          
+          <label class="md-nav__link" for="__nav_23" id="__nav_23_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Plans
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_23_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_23">
+            <span class="md-nav__icon md-icon"></span>
+            Plans
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/dead-code-cleanup-plan/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dead Code Cleanup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/atlassian-client-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Atlassian Client Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/github-app-marketplace/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Marketplace + Install
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_24" >
+        
+          
+          <label class="md-nav__link" for="__nav_24" id="__nav_24_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Appendix
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_24_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_24">
+            <span class="md-nav__icon md-icon"></span>
+            Appendix
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../appendix/legacy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Legacy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../appendix/legacy/export-schema-usage-audit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Export Schema Usage Audit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#table-of-contents" class="md-nav__link">
+    <span class="md-ellipsis">
+      Table of Contents
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-execution-workflow-and-batches-chaos-516" class="md-nav__link">
+    <span class="md-ellipsis">
+      11. Execution Workflow and Batches (CHAOS-516)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="11. Execution Workflow and Batches (CHAOS-516)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#111-phase-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      11.1 Phase Order
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#112-batch-catalog" class="md-nav__link">
+    <span class="md-ellipsis">
+      11.2 Batch Catalog
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#113-batch-prerequisite-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      11.3 Batch Prerequisite Checklist
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#114-evidence-capture-template" class="md-nav__link">
+    <span class="md-ellipsis">
+      11.4 Evidence Capture Template
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#115-explicit-blocked-by-mapping" class="md-nav__link">
+    <span class="md-ellipsis">
+      11.5 Explicit Blocked-By Mapping
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#116-batch-execution-tracker" class="md-nav__link">
+    <span class="md-ellipsis">
+      11.6 Batch Execution Tracker
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-test-environment-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Test Environment Setup
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. Test Environment Setup">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#11-required-environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.1 Required Environment Variables
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1.1 Required Environment Variables">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#saas-primary-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      SaaS (Primary) Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#self-hosted-testing-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Self-Hosted Testing Configuration
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#12-test-license-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.2 Test License Keys
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#13-test-data-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.3 Test Data Setup
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#14-start-services" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.4 Start Services
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-license-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. License Validation
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. License Validation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-community-tier-no-license" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.1 Community Tier (No License)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-team-tier-license" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.2 Team Tier License
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-enterprise-tier-license" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.3 Enterprise Tier License
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-grace-period-behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.4 Grace Period Behavior
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#25-invalid-license-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.5 Invalid License Handling
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-rbac-enforcement" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. RBAC Enforcement
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. RBAC Enforcement">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-role-definitions" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.1 Role Definitions
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-permission-checks" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.2 Permission Checks
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-role-assignment" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.3 Role Assignment
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#34-ownership-transfer" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.4 Ownership Transfer
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-sso-authentication" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. SSO Authentication
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. SSO Authentication">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41-saml-provider-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.1 SAML Provider Setup
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-saml-login-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.2 SAML Login Flow
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#43-oidc-provider-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.3 OIDC Provider Setup
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#44-oidc-login-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.4 OIDC Login Flow
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#45-sso-edge-cases" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.5 SSO Edge Cases
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-audit-logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. Audit Logging
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Audit Logging">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-audit-event-generation" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.1 Audit Event Generation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#52-audit-log-queries" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.2 Audit Log Queries
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#53-audit-log-details" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.3 Audit Log Details
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#54-audit-feature-gating" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.4 Audit Feature Gating
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-retention-policies" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. Retention Policies
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Retention Policies">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#61-policy-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.1 Policy Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#62-policy-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.2 Policy Execution
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#63-legal-hold-future" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.3 Legal Hold (Future)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-ip-allowlisting" class="md-nav__link">
+    <span class="md-ellipsis">
+      7. IP Allowlisting
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. IP Allowlisting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#71-allowlist-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      7.1 Allowlist Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#72-ip-checking" class="md-nav__link">
+    <span class="md-ellipsis">
+      7.2 IP Checking
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-limit-enforcement" class="md-nav__link">
+    <span class="md-ellipsis">
+      8. Limit Enforcement
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. Limit Enforcement">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#81-user-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      8.1 User Limits
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#82-repository-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      8.2 Repository Limits
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#83-api-rate-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      8.3 API Rate Limits
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-admin-portal" class="md-nav__link">
+    <span class="md-ellipsis">
+      9. Admin Portal
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. Admin Portal">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#91-user-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      9.1 User Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#92-organization-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      9.2 Organization Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#93-settings-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      9.3 Settings Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#94-integration-credentials" class="md-nav__link">
+    <span class="md-ellipsis">
+      9.4 Integration Credentials
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-deployment-specific-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      10. Deployment-Specific Tests
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="10. Deployment-Specific Tests">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#101-docker-compose" class="md-nav__link">
+    <span class="md-ellipsis">
+      10.1 Docker Compose
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#102-kubernetes-helm" class="md-nav__link">
+    <span class="md-ellipsis">
+      10.2 Kubernetes (Helm)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#103-self-hosted-enterprise" class="md-nav__link">
+    <span class="md-ellipsis">
+      10.3 Self-Hosted Enterprise
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#test-result-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      Test Result Summary
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#passfail-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      Pass/Fail Criteria
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Pass/Fail Criteria">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#overall-pass-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overall Pass Criteria
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Related Documentation
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+<h1 id="enterprise-features-manual-test-plan">Enterprise Features Manual Test Plan<a class="headerlink" href="#enterprise-features-manual-test-plan" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>Document Status</strong>: Active<br />
+<strong>Last Updated</strong>: 2026-02-25<br />
+<strong>Related Issues</strong>: <a href="https://github.com/full-chaos/dev-health-ops/issues/338">#338</a>, <a href="https://github.com/full-chaos/dev-health-ops/issues/299">#299</a>, CHAOS-512, CHAOS-516</p>
+</blockquote>
+<p>This document defines step-by-step manual test procedures for validating enterprise features across SaaS and self-hosted deployments.</p>
+<hr />
+<h2 id="table-of-contents">Table of Contents<a class="headerlink" href="#table-of-contents" title="Permanent link">&para;</a></h2>
+<ol>
+<li><a href="#1-test-environment-setup">Test Environment Setup</a></li>
+<li><a href="#2-license-validation">License Validation</a></li>
+<li><a href="#3-rbac-enforcement">RBAC Enforcement</a></li>
+<li><a href="#4-sso-authentication">SSO Authentication</a></li>
+<li><a href="#5-audit-logging">Audit Logging</a></li>
+<li><a href="#6-retention-policies">Retention Policies</a></li>
+<li><a href="#7-ip-allowlisting">IP Allowlisting</a></li>
+<li><a href="#8-limit-enforcement">Limit Enforcement</a></li>
+<li><a href="#9-admin-portal">Admin Portal</a></li>
+<li><a href="#10-deployment-specific-tests">Deployment-Specific Tests</a></li>
+<li><a href="#11-execution-workflow-and-batches-chaos-516">Execution Workflow and Batches (CHAOS-516)</a></li>
+</ol>
+<hr />
+<h2 id="11-execution-workflow-and-batches-chaos-516">11. Execution Workflow and Batches (CHAOS-516)<a class="headerlink" href="#11-execution-workflow-and-batches-chaos-516" title="Permanent link">&para;</a></h2>
+<p>This section converts the full manual plan into executable batches. Existing section test cases remain unchanged and are executed through the batch workflow below.</p>
+<h3 id="111-phase-order">11.1 Phase Order<a class="headerlink" href="#111-phase-order" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Phase A - Foundation</strong>: Batch A1</li>
+<li><strong>Phase B - Access and Identity</strong>: Batch B1, Batch B2</li>
+<li><strong>Phase C - Enterprise Controls</strong>: Batch C1, Batch C2, Batch C3</li>
+<li><strong>Phase D - Limits and Operations</strong>: Batch D1, Batch D2</li>
+</ul>
+<h3 id="112-batch-catalog">11.2 Batch Catalog<a class="headerlink" href="#112-batch-catalog" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Batch</th>
+<th>Scope (Existing Sections)</th>
+<th>Required Prerequisites</th>
+<th>Owner</th>
+<th>Evidence Template ID</th>
+<th>Exit Criteria</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A1</td>
+<td>Section 1 + Section 2 + Section 10.1-10.3</td>
+<td>Env vars set, fixtures created, deployment target selected</td>
+<td>QA Lead</td>
+<td><code>EV-BATCH-A1</code></td>
+<td>Licensing and deployment baseline validated</td>
+</tr>
+<tr>
+<td>B1</td>
+<td>Section 3 + Section 9.1-9.3</td>
+<td>A1 complete, owner/admin/editor/viewer accounts active</td>
+<td>QA + Security</td>
+<td><code>EV-BATCH-B1</code></td>
+<td>RBAC and admin surface behavior validated</td>
+</tr>
+<tr>
+<td>B2</td>
+<td>Section 4</td>
+<td>B1 complete, IdP sandbox available, enterprise entitlement active</td>
+<td>QA + IAM Owner</td>
+<td><code>EV-BATCH-B2</code></td>
+<td>SAML/OIDC flows and SSO edge cases validated</td>
+</tr>
+<tr>
+<td>C1</td>
+<td>Section 5</td>
+<td>B1 complete, enterprise entitlement active</td>
+<td>QA + Compliance</td>
+<td><code>EV-BATCH-C1</code></td>
+<td>Audit generation/query/detail/gating validated</td>
+</tr>
+<tr>
+<td>C2</td>
+<td>Section 6</td>
+<td>C1 complete, retention test dataset seeded</td>
+<td>QA + Data Governance</td>
+<td><code>EV-BATCH-C2</code></td>
+<td>Retention lifecycle behavior validated</td>
+</tr>
+<tr>
+<td>C3</td>
+<td>Section 7</td>
+<td>B1 complete, test CIDRs and request replay setup available</td>
+<td>QA + Security</td>
+<td><code>EV-BATCH-C3</code></td>
+<td>Allowlist CRUD and enforcement validated</td>
+</tr>
+<tr>
+<td>D1</td>
+<td>Section 8</td>
+<td>A1 complete, tier-specific org fixtures prepared</td>
+<td>QA + Platform</td>
+<td><code>EV-BATCH-D1</code></td>
+<td>Tier limits and rate behaviors validated</td>
+</tr>
+<tr>
+<td>D2</td>
+<td>Section 9.4 + regression sweep across Sections 2-9</td>
+<td>B2/C1/C2/C3/D1 complete</td>
+<td>QA Lead</td>
+<td><code>EV-BATCH-D2</code></td>
+<td>Credential flow and final regression signoff complete</td>
+</tr>
+</tbody>
+</table>
+<h3 id="113-batch-prerequisite-checklist">11.3 Batch Prerequisite Checklist<a class="headerlink" href="#113-batch-prerequisite-checklist" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Checkpoint</th>
+<th>Description</th>
+<th>Owner</th>
+<th>Evidence Required</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PR-1</td>
+<td>Test environment initialized (Section 1.1-1.4)</td>
+<td>QA Lead</td>
+<td>Environment export, startup logs, health checks</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>PR-2</td>
+<td>Tier fixtures and account roles prepared</td>
+<td>QA + Platform</td>
+<td>Entitlements output + user/org seed logs</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>PR-3</td>
+<td>IdP integrations available for SAML/OIDC</td>
+<td>IAM Owner</td>
+<td>Provider metadata and callback endpoint verification</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>PR-4</td>
+<td>Audit/retention datasets seeded for delete/query checks</td>
+<td>Compliance</td>
+<td>Record counts before execution</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>PR-5</td>
+<td>Network paths available for allowlist scenarios</td>
+<td>Security</td>
+<td>Source IP inventory and test route capture</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<h3 id="114-evidence-capture-template">11.4 Evidence Capture Template<a class="headerlink" href="#114-evidence-capture-template" title="Permanent link">&para;</a></h3>
+<p>Use one record per executed batch and attach it to the issue comment or test run note.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Template ID</td>
+<td><code>EV-BATCH-&lt;BATCH-ID&gt;</code></td>
+</tr>
+<tr>
+<td>Linear Issue</td>
+<td><code>CHAOS-516</code></td>
+</tr>
+<tr>
+<td>Parent Issue</td>
+<td><code>CHAOS-512</code></td>
+</tr>
+<tr>
+<td>Batch ID</td>
+<td></td>
+</tr>
+<tr>
+<td>Sections Covered</td>
+<td></td>
+</tr>
+<tr>
+<td>Owner</td>
+<td></td>
+</tr>
+<tr>
+<td>Support Roles</td>
+<td></td>
+</tr>
+<tr>
+<td>Environment</td>
+<td>SaaS / Self-Hosted / Both</td>
+</tr>
+<tr>
+<td>Build/Commit Ref</td>
+<td></td>
+</tr>
+<tr>
+<td>Start Time (UTC)</td>
+<td></td>
+</tr>
+<tr>
+<td>End Time (UTC)</td>
+<td></td>
+</tr>
+<tr>
+<td>Result</td>
+<td>Pass / Fail / Blocked</td>
+</tr>
+<tr>
+<td>Blocked By</td>
+<td><code>CHAOS-176</code>, <code>CHAOS-184</code>, <code>CHAOS-185</code>, <code>CHAOS-136</code>, or <code>none</code></td>
+</tr>
+<tr>
+<td>Evidence Links</td>
+<td>API responses, logs, screenshots, exports</td>
+</tr>
+<tr>
+<td>Notes / Deviations</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h3 id="115-explicit-blocked-by-mapping">11.5 Explicit Blocked-By Mapping<a class="headerlink" href="#115-explicit-blocked-by-mapping" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Blocked Area</th>
+<th>Affected Batches</th>
+<th>Blocked By (Linear)</th>
+<th>Dependency Reason</th>
+<th>Unblock Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SSO provider provisioning and login flows (Section 4)</td>
+<td>B2, D2</td>
+<td><code>CHAOS-176</code></td>
+<td>Upstream SSO plumbing and provider lifecycle must be stable before full manual execution</td>
+<td>Provider create/activate/login paths complete without known blocker tags</td>
+</tr>
+<tr>
+<td>Audit event visibility and query fidelity (Section 5)</td>
+<td>C1, D2</td>
+<td><code>CHAOS-184</code></td>
+<td>Audit event schema/query behavior must match expected contract for manual validation</td>
+<td>Audit list/detail/filter endpoints return expected event payloads</td>
+</tr>
+<tr>
+<td>Retention execution + legal hold path (Section 6)</td>
+<td>C2, D2</td>
+<td><code>CHAOS-185</code></td>
+<td>Retention policy execution and hold semantics require upstream completion</td>
+<td>Execute/delete/history behavior matches expected outcomes without bypasses</td>
+</tr>
+<tr>
+<td>IP allowlist enforcement and edge behavior (Section 7)</td>
+<td>C3, D2</td>
+<td><code>CHAOS-136</code></td>
+<td>Allowlist middleware/control-path needs upstream fixes before deterministic testing</td>
+<td>Allowed/blocked decisions consistently match configured CIDRs</td>
+</tr>
+</tbody>
+</table>
+<h3 id="116-batch-execution-tracker">11.6 Batch Execution Tracker<a class="headerlink" href="#116-batch-execution-tracker" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Batch</th>
+<th>Planned Window</th>
+<th>Owner</th>
+<th>Result</th>
+<th>Evidence ID</th>
+<th>Blocked By</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A1</td>
+<td></td>
+<td></td>
+<td>[ ] Pass [ ] Fail [ ] Blocked</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>B1</td>
+<td></td>
+<td></td>
+<td>[ ] Pass [ ] Fail [ ] Blocked</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>B2</td>
+<td></td>
+<td></td>
+<td>[ ] Pass [ ] Fail [ ] Blocked</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>C1</td>
+<td></td>
+<td></td>
+<td>[ ] Pass [ ] Fail [ ] Blocked</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>C2</td>
+<td></td>
+<td></td>
+<td>[ ] Pass [ ] Fail [ ] Blocked</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>C3</td>
+<td></td>
+<td></td>
+<td>[ ] Pass [ ] Fail [ ] Blocked</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>D1</td>
+<td></td>
+<td></td>
+<td>[ ] Pass [ ] Fail [ ] Blocked</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>D2</td>
+<td></td>
+<td></td>
+<td>[ ] Pass [ ] Fail [ ] Blocked</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="1-test-environment-setup">1. Test Environment Setup<a class="headerlink" href="#1-test-environment-setup" title="Permanent link">&para;</a></h2>
+<h3 id="11-required-environment-variables">1.1 Required Environment Variables<a class="headerlink" href="#11-required-environment-variables" title="Permanent link">&para;</a></h3>
+<h4 id="saas-primary-configuration">SaaS (Primary) Configuration<a class="headerlink" href="#saas-primary-configuration" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><span class="c1"># Core SaaS configuration</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">DATABASE_URI</span><span class="o">=</span><span class="s2">&quot;clickhouse://localhost:8123/default&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">POSTGRES_URI</span><span class="o">=</span><span class="s2">&quot;postgresql+asyncpg://postgres:postgres@localhost:5432/devhealth&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">AUTH_SECRET</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>openssl<span class="w"> </span>rand<span class="w"> </span>-base64<span class="w"> </span><span class="m">32</span><span class="k">)</span><span class="s2">&quot;</span>
+
+<span class="c1"># SSO test IdP (optional, for SSO tests)</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">SSO_TEST_IDP_URL</span><span class="o">=</span><span class="s2">&quot;https://idp.test.local&quot;</span>
+</code></pre></div>
+<h4 id="self-hosted-testing-configuration">Self-Hosted Testing Configuration<a class="headerlink" href="#self-hosted-testing-configuration" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><span class="c1"># License configuration (for self-hosted enterprise features)</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">LICENSE_PUBLIC_KEY</span><span class="o">=</span><span class="s2">&quot;&lt;base64-encoded-ed25519-public-key&gt;&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">LICENSE_KEY</span><span class="o">=</span><span class="s2">&quot;&lt;valid-license-key&gt;&quot;</span><span class="w">  </span><span class="c1"># Generate from ops CLI (see below)</span>
+</code></pre></div>
+<blockquote>
+<p><strong>Note</strong>: SaaS deployments manage entitlements via Stripe webhooks directly to <code>dev-health-ops</code> (no license key needed). License keys are for self-hosted testing only.</p>
+</blockquote>
+<h3 id="12-test-license-keys">1.2 Test License Keys<a class="headerlink" href="#12-test-license-keys" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p><strong>SaaS Entitlements</strong>: In SaaS deployments, entitlements are managed via Stripe webhooks sent directly to <code>dev-health-ops</code> at <code>/api/v1/billing/webhooks/stripe</code>. No license key environment variable is needed. The license key generation below is for <strong>self-hosted testing only</strong>.</p>
+</blockquote>
+<p>Generate test licenses for each tier using the <code>dev-health-ops</code> CLI:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Generate an Ed25519 keypair (one-time setup)</span>
+python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>licenses<span class="w"> </span>keygen
+
+<span class="c1"># Community tier (no license needed - default behavior)</span>
+<span class="nb">unset</span><span class="w"> </span>LICENSE_KEY
+
+<span class="c1"># Team tier license</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">LICENSE_KEY</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>licenses<span class="w"> </span>create<span class="w"> </span>--tier<span class="w"> </span>team<span class="w"> </span>--org<span class="w"> </span>test-org<span class="w"> </span>--days<span class="w"> </span><span class="m">30</span><span class="k">)</span><span class="s2">&quot;</span>
+
+<span class="c1"># Enterprise tier license</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">LICENSE_KEY</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>licenses<span class="w"> </span>create<span class="w"> </span>--tier<span class="w"> </span>enterprise<span class="w"> </span>--org<span class="w"> </span>test-org<span class="w"> </span>--days<span class="w"> </span><span class="m">30</span><span class="k">)</span><span class="s2">&quot;</span>
+
+<span class="c1"># Expired license (for grace period testing)</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">LICENSE_KEY</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>licenses<span class="w"> </span>create<span class="w"> </span>--tier<span class="w"> </span>enterprise<span class="w"> </span>--org<span class="w"> </span>test-org<span class="w"> </span>--days<span class="w"> </span>-1<span class="k">)</span><span class="s2">&quot;</span>
+
+<span class="c1"># Hard-expired license (past grace period)</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">LICENSE_KEY</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>licenses<span class="w"> </span>create<span class="w"> </span>--tier<span class="w"> </span>enterprise<span class="w"> </span>--org<span class="w"> </span>test-org<span class="w"> </span>--days<span class="w"> </span>-45<span class="k">)</span><span class="s2">&quot;</span>
+</code></pre></div>
+<h3 id="13-test-data-setup">1.3 Test Data Setup<a class="headerlink" href="#13-test-data-setup" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># Create admin user</span>
+python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>users<span class="w"> </span>create<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--email<span class="w"> </span>admin@test.local<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--password<span class="w"> </span><span class="s2">&quot;TestPassword123!&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--superuser
+
+<span class="c1"># Create test organization</span>
+python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>orgs<span class="w"> </span>create<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--name<span class="w"> </span><span class="s2">&quot;Test Organization&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--owner-email<span class="w"> </span>admin@test.local<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--tier<span class="w"> </span>enterprise
+
+<span class="c1"># Create additional test users</span>
+python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>users<span class="w"> </span>create<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--email<span class="w"> </span>viewer@test.local<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--password<span class="w"> </span><span class="s2">&quot;ViewerPass123!&quot;</span>
+
+python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>users<span class="w"> </span>create<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--email<span class="w"> </span>editor@test.local<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--password<span class="w"> </span><span class="s2">&quot;EditorPass123!&quot;</span>
+</code></pre></div>
+<h3 id="14-start-services">1.4 Start Services<a class="headerlink" href="#14-start-services" title="Permanent link">&para;</a></h3>
+<p><strong>Docker Compose:</strong>
+<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>dev-health-ops
+docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
+alembic<span class="w"> </span>upgrade<span class="w"> </span>head
+dev-hops<span class="w"> </span>api<span class="w"> </span>--db<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$DATABASE_URI</span><span class="s2">&quot;</span><span class="w"> </span>--reload
+</code></pre></div></p>
+<p><strong>Kubernetes:</strong>
+<div class="highlight"><pre><span></span><code>helm<span class="w"> </span>install<span class="w"> </span>dev-health<span class="w"> </span>fullchaos/dev-health-platform<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-f<span class="w"> </span>values-test.yaml<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--namespace<span class="w"> </span>dev-health-test<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--create-namespace
+</code></pre></div></p>
+<hr />
+<h2 id="2-license-validation">2. License Validation<a class="headerlink" href="#2-license-validation" title="Permanent link">&para;</a></h2>
+<h3 id="21-community-tier-no-license">2.1 Community Tier (No License)<a class="headerlink" href="#21-community-tier-no-license" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2.1.1</td>
+<td>Unset <code>LICENSE_KEY</code> and restart API</td>
+<td>API starts successfully</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>2.1.2</td>
+<td>Call <code>GET /api/v1/entitlements</code></td>
+<td>Returns <code>tier: "community"</code></td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>2.1.3</td>
+<td>Verify feature flags</td>
+<td><code>sso: false</code>, <code>audit_log: false</code>, <code>retention_policies: false</code></td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>2.1.4</td>
+<td>Verify limits</td>
+<td><code>users: 5</code>, <code>repos: 3</code>, <code>api_rate: 60</code></td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<h3 id="22-team-tier-license">2.2 Team Tier License<a class="headerlink" href="#22-team-tier-license" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2.2.1</td>
+<td>Set valid Team license and restart</td>
+<td>API starts, logs "License validated"</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>2.2.2</td>
+<td>Call <code>GET /api/v1/entitlements</code></td>
+<td>Returns <code>tier: "team"</code></td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>2.2.3</td>
+<td>Verify feature flags</td>
+<td><code>team_dashboard: true</code>, <code>sso: false</code>, <code>audit_log: false</code></td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>2.2.4</td>
+<td>Verify limits</td>
+<td><code>users: 25</code>, <code>repos: 20</code>, <code>api_rate: 300</code></td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<h3 id="23-enterprise-tier-license">2.3 Enterprise Tier License<a class="headerlink" href="#23-enterprise-tier-license" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2.3.1</td>
+<td>Set valid Enterprise license and restart</td>
+<td>API starts, logs "License validated"</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>2.3.2</td>
+<td>Call <code>GET /api/v1/entitlements</code></td>
+<td>Returns <code>tier: "enterprise"</code></td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>2.3.3</td>
+<td>Verify feature flags</td>
+<td>All enterprise features <code>true</code></td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>2.3.4</td>
+<td>Verify limits</td>
+<td>All limits <code>-1</code> (unlimited)</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<h3 id="24-grace-period-behavior">2.4 Grace Period Behavior<a class="headerlink" href="#24-grace-period-behavior" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2.4.1</td>
+<td>Set expired license (within grace period)</td>
+<td>API starts with warning banner</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>2.4.2</td>
+<td>Call <code>GET /api/v1/entitlements</code></td>
+<td><code>in_grace_period: true</code>, features still active</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>2.4.3</td>
+<td>Check audit logs</td>
+<td>"license_grace_period_entered" event logged</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>2.4.4</td>
+<td>Set hard-expired license</td>
+<td>API starts, downgrades to community</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>2.4.5</td>
+<td>Call enterprise-gated endpoint</td>
+<td>Returns 402 Payment Required</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<h3 id="25-invalid-license-handling">2.5 Invalid License Handling<a class="headerlink" href="#25-invalid-license-handling" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2.5.1</td>
+<td>Set malformed license key</td>
+<td>API starts, falls back to community</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>2.5.2</td>
+<td>Set license with invalid signature</td>
+<td>API starts, falls back to community</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>2.5.3</td>
+<td>Set license with wrong issuer</td>
+<td>API starts, falls back to community</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>2.5.4</td>
+<td>Check logs</td>
+<td>"License validation failed" with error details</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="3-rbac-enforcement">3. RBAC Enforcement<a class="headerlink" href="#3-rbac-enforcement" title="Permanent link">&para;</a></h2>
+<h3 id="31-role-definitions">3.1 Role Definitions<a class="headerlink" href="#31-role-definitions" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Role</th>
+<th>Permissions</th>
+<th>Test User</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>owner</code></td>
+<td>Full control, billing, org deletion</td>
+<td>admin@test.local</td>
+</tr>
+<tr>
+<td><code>admin</code></td>
+<td>Manage users, settings, full data</td>
+<td>-</td>
+</tr>
+<tr>
+<td><code>editor</code></td>
+<td>Modify teams, run syncs, write access</td>
+<td>editor@test.local</td>
+</tr>
+<tr>
+<td><code>viewer</code></td>
+<td>Read-only analytics</td>
+<td>viewer@test.local</td>
+</tr>
+</tbody>
+</table>
+<h3 id="32-permission-checks">3.2 Permission Checks<a class="headerlink" href="#32-permission-checks" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>3.2.1</td>
+<td>Login as <code>viewer@test.local</code></td>
+<td>Login succeeds, JWT includes <code>role: viewer</code></td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>3.2.2</td>
+<td>Call <code>GET /api/v1/metrics</code></td>
+<td>Returns 200 OK with data</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>3.2.3</td>
+<td>Call <code>POST /api/v1/admin/settings</code></td>
+<td>Returns 403 Forbidden</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>3.2.4</td>
+<td>Call <code>POST /api/v1/admin/users</code></td>
+<td>Returns 403 Forbidden</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<h3 id="33-role-assignment">3.3 Role Assignment<a class="headerlink" href="#33-role-assignment" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>3.3.1</td>
+<td>Login as owner</td>
+<td>Login succeeds</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>3.3.2</td>
+<td>Add viewer@test.local to org as editor</td>
+<td><code>POST /api/v1/admin/orgs/{id}/memberships</code> succeeds</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>3.3.3</td>
+<td>Login as viewer (now editor)</td>
+<td>JWT shows updated role</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>3.3.4</td>
+<td>Test editor permissions</td>
+<td>Can run syncs, cannot manage users</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<h3 id="34-ownership-transfer">3.4 Ownership Transfer<a class="headerlink" href="#34-ownership-transfer" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>3.4.1</td>
+<td>Transfer ownership from admin to editor</td>
+<td><code>POST /api/v1/admin/orgs/{id}/transfer-ownership</code> succeeds</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>3.4.2</td>
+<td>Verify old owner demoted</td>
+<td>Previous owner now has <code>admin</code> role</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>3.4.3</td>
+<td>Verify new owner promoted</td>
+<td>New user has <code>owner</code> role</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="4-sso-authentication">4. SSO Authentication<a class="headerlink" href="#4-sso-authentication" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p><strong>Prerequisite</strong>: Enterprise license with <code>sso: true</code> feature enabled</p>
+</blockquote>
+<h3 id="41-saml-provider-setup">4.1 SAML Provider Setup<a class="headerlink" href="#41-saml-provider-setup" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>4.1.1</td>
+<td>Call <code>POST /api/v1/auth/sso/providers</code> with SAML config</td>
+<td>Provider created, status: pending</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>4.1.2</td>
+<td>Configure IdP with SP metadata</td>
+<td>IdP accepts metadata</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>4.1.3</td>
+<td>Activate provider</td>
+<td><code>POST /sso/providers/{id}/activate</code> returns active provider</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>4.1.4</td>
+<td>List providers</td>
+<td><code>GET /api/v1/auth/sso/providers</code> shows active provider</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<p><strong>SAML Provider Create Payload:</strong>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Test SAML IdP&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;protocol&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;saml&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;saml_config&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;entity_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://idp.test.local/metadata&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;sso_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://idp.test.local/sso&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;certificate&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;attribute_mapping&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;email&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;email&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;full_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;displayName&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;auto_provision_users&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;default_role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;viewer&quot;</span>
+<span class="p">}</span>
+</code></pre></div></p>
+<h3 id="42-saml-login-flow">4.2 SAML Login Flow<a class="headerlink" href="#42-saml-login-flow" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>4.2.1</td>
+<td>Initiate SAML login</td>
+<td><code>POST /api/v1/auth/sso/saml/init</code> returns redirect URL</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>4.2.2</td>
+<td>Authenticate at IdP</td>
+<td>User authenticates successfully</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>4.2.3</td>
+<td>Process SAML callback</td>
+<td><code>POST /api/v1/auth/sso/saml/acs</code> returns JWT</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>4.2.4</td>
+<td>Verify user created</td>
+<td>New user exists with SSO link</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>4.2.5</td>
+<td>Verify JWT claims</td>
+<td>JWT contains org_id, role, email</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<h3 id="43-oidc-provider-setup">4.3 OIDC Provider Setup<a class="headerlink" href="#43-oidc-provider-setup" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>4.3.1</td>
+<td>Call <code>POST /api/v1/auth/sso/providers</code> with OIDC config</td>
+<td>Provider created</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>4.3.2</td>
+<td>Verify discovery endpoint fetched</td>
+<td>Provider has token_endpoint, userinfo_endpoint</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>4.3.3</td>
+<td>Activate provider</td>
+<td>Provider status becomes active</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<p><strong>OIDC Provider Create Payload:</strong>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Test OIDC IdP&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;protocol&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;oidc&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;oidc_config&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;client_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;dev-health-client&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;client_secret&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;test-secret&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;issuer&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://oidc.test.local&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;scopes&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;openid&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;email&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;profile&quot;</span><span class="p">]</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;auto_provision_users&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;default_role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;viewer&quot;</span>
+<span class="p">}</span>
+</code></pre></div></p>
+<h3 id="44-oidc-login-flow">4.4 OIDC Login Flow<a class="headerlink" href="#44-oidc-login-flow" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>4.4.1</td>
+<td>Initiate OIDC login</td>
+<td><code>POST /api/v1/auth/sso/oidc/init</code> returns auth URL</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>4.4.2</td>
+<td>Authenticate at IdP</td>
+<td>User authenticates, grants consent</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>4.4.3</td>
+<td>Process OIDC callback</td>
+<td><code>POST /api/v1/auth/sso/oidc/callback</code> with code</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>4.4.4</td>
+<td>Verify token exchange</td>
+<td>Access token obtained, user info fetched</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>4.4.5</td>
+<td>Verify JWT issued</td>
+<td>User logged in, JWT returned</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<h3 id="45-sso-edge-cases">4.5 SSO Edge Cases<a class="headerlink" href="#45-sso-edge-cases" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>4.5.1</td>
+<td>SSO login without enterprise license</td>
+<td>Returns 402 Payment Required</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>4.5.2</td>
+<td>SAML response with invalid signature</td>
+<td>Returns 401, login fails</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>4.5.3</td>
+<td>OIDC callback with invalid state</td>
+<td>Returns 400, login fails</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>4.5.4</td>
+<td>User from disallowed domain</td>
+<td>Returns 403 if domain filtering enabled</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>4.5.5</td>
+<td>SSO provider disabled</td>
+<td>Login redirects to standard auth</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="5-audit-logging">5. Audit Logging<a class="headerlink" href="#5-audit-logging" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p><strong>Prerequisite</strong>: Enterprise license with <code>audit_log: true</code> feature enabled</p>
+</blockquote>
+<h3 id="51-audit-event-generation">5.1 Audit Event Generation<a class="headerlink" href="#51-audit-event-generation" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>5.1.1</td>
+<td>User logs in</td>
+<td>Audit event: <code>user.login</code></td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>5.1.2</td>
+<td>User created</td>
+<td>Audit event: <code>user.created</code></td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>5.1.3</td>
+<td>Setting changed</td>
+<td>Audit event: <code>setting.updated</code> with changes</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>5.1.4</td>
+<td>SSO provider configured</td>
+<td>Audit event: <code>sso_provider.created</code></td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>5.1.5</td>
+<td>License validated</td>
+<td>Audit event: <code>license_validated</code></td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<h3 id="52-audit-log-queries">5.2 Audit Log Queries<a class="headerlink" href="#52-audit-log-queries" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>5.2.1</td>
+<td>List all logs</td>
+<td><code>GET /api/v1/admin/audit-logs</code> returns paginated results</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>5.2.2</td>
+<td>Filter by user</td>
+<td><code>?user_id=xxx</code> returns only that user's actions</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>5.2.3</td>
+<td>Filter by action</td>
+<td><code>?action=user.login</code> returns login events</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>5.2.4</td>
+<td>Filter by date range</td>
+<td><code>?start_date=...&amp;end_date=...</code> works</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>5.2.5</td>
+<td>Filter by resource</td>
+<td><code>?resource_type=user&amp;resource_id=xxx</code> works</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<h3 id="53-audit-log-details">5.3 Audit Log Details<a class="headerlink" href="#53-audit-log-details" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>5.3.1</td>
+<td>Get single audit log</td>
+<td><code>GET /api/v1/admin/audit-logs/{id}</code> returns full details</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>5.3.2</td>
+<td>Verify changes captured</td>
+<td><code>changes</code> field shows before/after values</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>5.3.3</td>
+<td>Verify request metadata</td>
+<td>IP address, user agent captured</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>5.3.4</td>
+<td>Get resource history</td>
+<td><code>GET /api/v1/admin/audit-logs/resource/{type}/{id}</code> works</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>5.3.5</td>
+<td>Get user activity</td>
+<td><code>GET /api/v1/admin/audit-logs/user/{id}</code> works</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<h3 id="54-audit-feature-gating">5.4 Audit Feature Gating<a class="headerlink" href="#54-audit-feature-gating" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>5.4.1</td>
+<td>Query audit logs without enterprise license</td>
+<td>Returns 402 Payment Required</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>5.4.2</td>
+<td>Events still logged internally</td>
+<td>Logs contain audit entries</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>5.4.3</td>
+<td>Upgrade to enterprise</td>
+<td>Audit history becomes accessible</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="6-retention-policies">6. Retention Policies<a class="headerlink" href="#6-retention-policies" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p><strong>Prerequisite</strong>: Enterprise license with <code>retention_policies: true</code> feature enabled</p>
+</blockquote>
+<h3 id="61-policy-management">6.1 Policy Management<a class="headerlink" href="#61-policy-management" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>6.1.1</td>
+<td>List available resource types</td>
+<td><code>GET /api/v1/admin/retention-policies/resource-types</code></td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>6.1.2</td>
+<td>Create retention policy</td>
+<td><code>POST /api/v1/admin/retention-policies</code> succeeds</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>6.1.3</td>
+<td>List policies</td>
+<td><code>GET /api/v1/admin/retention-policies</code> shows new policy</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>6.1.4</td>
+<td>Update policy</td>
+<td><code>PATCH /api/v1/admin/retention-policies/{id}</code> updates retention_days</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>6.1.5</td>
+<td>Deactivate policy</td>
+<td>Set <code>is_active: false</code>, policy stops running</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Create Policy Payload:</strong>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;resource_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;audit_log&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;retention_days&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">90</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Keep audit logs for 90 days&quot;</span>
+<span class="p">}</span>
+</code></pre></div></p>
+<h3 id="62-policy-execution">6.2 Policy Execution<a class="headerlink" href="#62-policy-execution" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>6.2.1</td>
+<td>Manually execute policy</td>
+<td><code>POST /api/v1/admin/retention-policies/{id}/execute</code></td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>6.2.2</td>
+<td>Verify records deleted</td>
+<td>Response shows <code>deleted_count</code></td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>6.2.3</td>
+<td>Verify policy updated</td>
+<td><code>last_run_at</code>, <code>last_run_deleted_count</code> updated</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>6.2.4</td>
+<td>Delete policy</td>
+<td><code>DELETE /api/v1/admin/retention-policies/{id}</code></td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<h3 id="63-legal-hold-future">6.3 Legal Hold (Future)<a class="headerlink" href="#63-legal-hold-future" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>6.3.1</td>
+<td>Create legal hold</td>
+<td>Policy execution skips affected data</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>6.3.2</td>
+<td>Release legal hold</td>
+<td>Data becomes eligible for deletion</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="7-ip-allowlisting">7. IP Allowlisting<a class="headerlink" href="#7-ip-allowlisting" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p><strong>Prerequisite</strong>: Enterprise license with <code>ip_allowlist: true</code> feature enabled</p>
+</blockquote>
+<h3 id="71-allowlist-management">7.1 Allowlist Management<a class="headerlink" href="#71-allowlist-management" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>7.1.1</td>
+<td>Add IP range</td>
+<td><code>POST /api/v1/admin/ip-allowlist</code> with CIDR</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>7.1.2</td>
+<td>List entries</td>
+<td><code>GET /api/v1/admin/ip-allowlist</code> shows entries</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>7.1.3</td>
+<td>Update entry</td>
+<td><code>PATCH /api/v1/admin/ip-allowlist/{id}</code> works</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>7.1.4</td>
+<td>Deactivate entry</td>
+<td>Set <code>is_active: false</code></td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>7.1.5</td>
+<td>Delete entry</td>
+<td><code>DELETE /api/v1/admin/ip-allowlist/{id}</code></td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Add IP Range Payload:</strong>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;ip_range&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;192.168.1.0/24&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Office network&quot;</span>
+<span class="p">}</span>
+</code></pre></div></p>
+<h3 id="72-ip-checking">7.2 IP Checking<a class="headerlink" href="#72-ip-checking" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>7.2.1</td>
+<td>Check allowed IP</td>
+<td><code>POST /api/v1/admin/ip-allowlist/check</code> returns <code>allowed: true</code></td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>7.2.2</td>
+<td>Check blocked IP</td>
+<td>Returns <code>allowed: false</code></td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>7.2.3</td>
+<td>Check with expired entry</td>
+<td>Expired entries not considered</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="8-limit-enforcement">8. Limit Enforcement<a class="headerlink" href="#8-limit-enforcement" title="Permanent link">&para;</a></h2>
+<h3 id="81-user-limits">8.1 User Limits<a class="headerlink" href="#81-user-limits" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>8.1.1</td>
+<td>Community tier: add 6th user</td>
+<td>Returns 402 with <code>limit_exceeded</code></td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>8.1.2</td>
+<td>Team tier: add 26th user</td>
+<td>Returns 402 with <code>limit_exceeded</code></td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>8.1.3</td>
+<td>Enterprise tier: unlimited users</td>
+<td>User creation succeeds</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>8.1.4</td>
+<td>Check audit log</td>
+<td><code>limit_exceeded</code> event logged</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<h3 id="82-repository-limits">8.2 Repository Limits<a class="headerlink" href="#82-repository-limits" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>8.2.1</td>
+<td>Community tier: sync 4th repo</td>
+<td>Returns 402 with <code>limit_exceeded</code></td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>8.2.2</td>
+<td>Team tier: sync 21st repo</td>
+<td>Returns 402 with <code>limit_exceeded</code></td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>8.2.3</td>
+<td>Enterprise tier: unlimited repos</td>
+<td>Sync succeeds</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<h3 id="83-api-rate-limits">8.3 API Rate Limits<a class="headerlink" href="#83-api-rate-limits" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>8.3.1</td>
+<td>Community tier: exceed 60 req/min</td>
+<td>Returns 429 Too Many Requests</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>8.3.2</td>
+<td>Team tier: exceed 300 req/min</td>
+<td>Returns 429</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>8.3.3</td>
+<td>Enterprise tier: no rate limit</td>
+<td>All requests succeed</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="9-admin-portal">9. Admin Portal<a class="headerlink" href="#9-admin-portal" title="Permanent link">&para;</a></h2>
+<h3 id="91-user-management">9.1 User Management<a class="headerlink" href="#91-user-management" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>9.1.1</td>
+<td>List users</td>
+<td><code>GET /api/v1/admin/users</code> returns all org users</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>9.1.2</td>
+<td>Create user</td>
+<td><code>POST /api/v1/admin/users</code> creates user</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>9.1.3</td>
+<td>Update user</td>
+<td><code>PATCH /api/v1/admin/users/{id}</code> updates user</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>9.1.4</td>
+<td>Set password</td>
+<td><code>POST /api/v1/admin/users/{id}/set-password</code> works</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>9.1.5</td>
+<td>Deactivate user</td>
+<td>User cannot log in</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<h3 id="92-organization-management">9.2 Organization Management<a class="headerlink" href="#92-organization-management" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>9.2.1</td>
+<td>Get org details</td>
+<td><code>GET /api/v1/admin/orgs/{id}</code> returns org</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>9.2.2</td>
+<td>Update org</td>
+<td><code>PATCH /api/v1/admin/orgs/{id}</code> updates settings</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>9.2.3</td>
+<td>List memberships</td>
+<td><code>GET /api/v1/admin/orgs/{id}/memberships</code> works</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>9.2.4</td>
+<td>Add member</td>
+<td><code>POST /api/v1/admin/orgs/{id}/memberships</code> works</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>9.2.5</td>
+<td>Remove member</td>
+<td><code>DELETE /api/v1/admin/memberships/{id}</code> works</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<h3 id="93-settings-management">9.3 Settings Management<a class="headerlink" href="#93-settings-management" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>9.3.1</td>
+<td>List setting categories</td>
+<td><code>GET /api/v1/admin/settings/categories</code></td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>9.3.2</td>
+<td>Get settings by category</td>
+<td><code>GET /api/v1/admin/settings/{category}</code></td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>9.3.3</td>
+<td>Set a setting</td>
+<td><code>PUT /api/v1/admin/settings/{category}/{key}</code></td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>9.3.4</td>
+<td>Set encrypted setting</td>
+<td>Setting stored encrypted, displayed as <code>[ENCRYPTED]</code></td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>9.3.5</td>
+<td>Delete setting</td>
+<td><code>DELETE /api/v1/admin/settings/{category}/{key}</code></td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<h3 id="94-integration-credentials">9.4 Integration Credentials<a class="headerlink" href="#94-integration-credentials" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>9.4.1</td>
+<td>Add GitHub credential</td>
+<td><code>POST /api/v1/admin/credentials</code> stores token</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>9.4.2</td>
+<td>Test connection</td>
+<td><code>POST /api/v1/admin/credentials/{id}/test</code> validates token</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>9.4.3</td>
+<td>List credentials</td>
+<td>Secrets masked in response</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>9.4.4</td>
+<td>Update credential</td>
+<td>Token updated, old token invalidated</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>9.4.5</td>
+<td>Delete credential</td>
+<td>Credential removed</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="10-deployment-specific-tests">10. Deployment-Specific Tests<a class="headerlink" href="#10-deployment-specific-tests" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p><strong>SaaS (Primary)</strong>: Sections 10.1 (Docker Compose) and 10.2 (Kubernetes) cover the primary SaaS deployment paths. Section 10.3 covers self-hosted enterprise deployments.</p>
+</blockquote>
+<h3 id="101-docker-compose">10.1 Docker Compose<a class="headerlink" href="#101-docker-compose" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>10.1.1</td>
+<td>Fresh install</td>
+<td><code>docker compose up -d</code> starts all services</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>10.1.2</td>
+<td>Migrations run</td>
+<td><code>alembic upgrade head</code> completes</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>10.1.3</td>
+<td>API accessible</td>
+<td><code>curl http://localhost:8000/health</code> returns OK</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>10.1.4</td>
+<td>Web accessible</td>
+<td><code>curl http://localhost:3000</code> returns HTML</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>10.1.5</td>
+<td>Grafana accessible</td>
+<td><code>curl http://localhost:3001</code> returns login page</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>10.1.6</td>
+<td>License applied</td>
+<td>Restart with LICENSE_KEY env var works</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>10.1.7</td>
+<td>Data persists</td>
+<td>Restart containers, data still present</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<h3 id="102-kubernetes-helm">10.2 Kubernetes (Helm)<a class="headerlink" href="#102-kubernetes-helm" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>10.2.1</td>
+<td>Helm install</td>
+<td><code>helm install</code> completes without errors</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>10.2.2</td>
+<td>Pods running</td>
+<td>All pods reach Ready state</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>10.2.3</td>
+<td>Ingress configured</td>
+<td>External URL accessible</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>10.2.4</td>
+<td>License via secret</td>
+<td>Create Kubernetes secret, pods pick up license</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>10.2.5</td>
+<td>Rolling update</td>
+<td><code>helm upgrade</code> completes without downtime</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>10.2.6</td>
+<td>Horizontal scaling</td>
+<td>Increase replicas, load balanced</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<h3 id="103-self-hosted-enterprise">10.3 Self-Hosted Enterprise<a class="headerlink" href="#103-self-hosted-enterprise" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Action</th>
+<th>Expected Result</th>
+<th>Pass/Fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>10.3.1</td>
+<td>Offline installation</td>
+<td>No internet required after images pulled</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>10.3.2</td>
+<td>License offline validation</td>
+<td>Public key embedded, no phone-home</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>10.3.3</td>
+<td>Custom database</td>
+<td>Connect to external PostgreSQL/ClickHouse</td>
+<td>[ ]</td>
+</tr>
+<tr>
+<td>10.3.4</td>
+<td>TLS termination</td>
+<td>Works behind reverse proxy with TLS</td>
+<td>[ ]</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="test-result-summary">Test Result Summary<a class="headerlink" href="#test-result-summary" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Section</th>
+<th>Tests</th>
+<th>Passed</th>
+<th>Failed</th>
+<th>Blocked</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>License Validation</td>
+<td>16</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>RBAC Enforcement</td>
+<td>11</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>SSO Authentication</td>
+<td>20</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Audit Logging</td>
+<td>14</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Retention Policies</td>
+<td>9</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>IP Allowlisting</td>
+<td>7</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Limit Enforcement</td>
+<td>10</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Admin Portal</td>
+<td>19</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Deployment Tests</td>
+<td>13</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><strong>Total</strong></td>
+<td><strong>119</strong></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="passfail-criteria">Pass/Fail Criteria<a class="headerlink" href="#passfail-criteria" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Pass</strong>: All steps complete successfully with expected results</li>
+<li><strong>Fail</strong>: Any step produces unexpected result or error</li>
+<li><strong>Blocked</strong>: Cannot execute due to missing dependency or environment issue</li>
+</ul>
+<h3 id="overall-pass-criteria">Overall Pass Criteria<a class="headerlink" href="#overall-pass-criteria" title="Permanent link">&para;</a></h3>
+<ul>
+<li>All critical path tests (licensing, auth, RBAC) must pass</li>
+<li>No security-related tests may fail</li>
+<li>At least 95% of total tests must pass</li>
+</ul>
+<hr />
+<h2 id="related-documentation">Related Documentation<a class="headerlink" href="#related-documentation" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../../architecture/enterprise-overview/">Enterprise Overview</a></li>
+<li><a href="../../architecture/licensing/">Licensing Architecture</a></li>
+<li><a href="../../sso-setup/">SSO Setup Guide</a></li>
+<li><a href="../../architecture/adr/001-enterprise-edition/">ADR-001: Enterprise Edition</a></li>
+<li><a href="../../self-hosted-quickstart/">Self-Hosted Quickstart</a></li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.instant", "navigation.sections", "navigation.tracking", "search.highlight", "search.suggest"], "search": "../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.525ec568.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -401,6 +401,8 @@ dev-hops metrics dora --backfill 30 --metrics deployment_frequency,lead_time
 
 Compute file complexity and hotspot metrics from persisted `git_files`/`git_blame` data. Uses `CLICKHOUSE_URI`.
 
+> **Note (CHAOS-2850/CHAOS-2888):** `--backfill N` must not fabricate N days of historical complexity from current file contents. There is no persisted historical file-content snapshot, so the DB complexity path writes complexity only when it has a real target-day input contract; run it daily (or let the scheduled `dispatch_complexity_job` cadence run) to build a genuine trend. Historical API backfills skip complexity recompute unless a future real historical source of truth is added.
+
 ```bash
 dev-hops metrics complexity --backfill 30
 
@@ -483,6 +485,8 @@ dev-hops metrics validate-flags --lookback 30
 ### `metrics compounding-risk`
 
 Compute the Compounding Risk composite from persisted inputs (`repo_metrics_daily` + `repo_complexity_daily`) and write `compounding_risk_daily`. Requires `CLICKHOUSE_URI` **and** an organization id.
+
+> **Note (CHAOS-2888):** this command exits `0` whenever the compounding-risk query and write both complete, even if some rows have `severity="unknown"` due to missing required inputs — it exits non-zero only for configuration, validation, or infrastructure failures. Missing-input reason counts (`missing_rework_churn`, `missing_complexity_delta`, `missing_review_latency`, `missing_ownership_signal`) are logged per run. For API-triggered backfills, the same missing-input counts and per-day table coverage are surfaced on `GET /backfill-jobs/{job_id}` via `metrics_diagnostics`.
 
 ```bash
 dev-hops metrics compounding-risk --org "$ORG_ID"

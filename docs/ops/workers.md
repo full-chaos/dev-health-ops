@@ -166,6 +166,9 @@ The system registers Celery tasks under the `workers/` directory. The primary re
 | `run_daily_metrics_finalize_task` | None | `default` | Finalizes daily metrics computation. Source: `metrics_partitioned.py`. |
 | `run_complexity_job` | None | `metrics` | Analyzes code complexity for repositories. Source: `metrics_extra.py:16-319`. |
 | `dispatch_complexity_job` | None | `default` | Fans out `run_complexity_job` per active organization on an independent daily cadence (CHAOS-2850), so complexity refreshes even for orgs with infrequent syncs. Source: `metrics_extra.py`. |
+
+> ⚠️ **Limitation (CHAOS-2888):** `run_complexity_job` computes complexity only from current `git_files`/`git_blame` contents — there is no historical file-content snapshot store. Post-sync dispatch (`post_sync_dispatch.py`) therefore enqueues it only for a current single-day sync (`metrics_backfill_days` in `(None, 1)` and `metrics_day` absent or equal to `utc_today()`); historical single-day and multi-day sync windows skip the complexity enqueue entirely and log a `historical_complexity_unsupported` diagnostic instead of fabricating a misleading flat historical trend. Daily metrics, work-graph build, and investment materialization continue to run over the full requested historical window regardless.
+
 | `run_dora_metrics` | None | `metrics` | Computes DORA metrics. Source: `metrics_extra.py:16-319`. |
 | `run_release_impact_job` | None | `metrics` | Computes release impact metrics. Source: `metrics_extra.py:16-319`. |
 | `dispatch_release_impact` | None | `default` | Fans out release impact computation. Source: `metrics_extra.py`. |

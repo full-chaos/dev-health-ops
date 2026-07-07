@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol, cast
@@ -665,7 +666,11 @@ def _job_run_response(
     )
 
 
-def _backfill_job_response(job: object, run_counts: dict[str, Any] | None = None):
+def _backfill_job_response(
+    job: object,
+    run_counts: dict[str, Any] | None = None,
+    metrics_diagnostics: Any | None = None,
+):
     from dev_health_ops.api.schemas.backfill import BackfillJobResponse
 
     run_counts = run_counts or {}
@@ -697,6 +702,7 @@ def _backfill_job_response(job: object, run_counts: dict[str, Any] | None = None
         # Response-level updated_at is effective liveness: the raw BackfillJob
         # row-write timestamp OR the latest linked fanout unit activity.
         updated_at=effective_updated_at or job_updated_at,
+        metrics_diagnostics=metrics_diagnostics,
     )
 
 
@@ -763,6 +769,44 @@ async def _backfill_job_run_counts(
             latest_unit_heartbeat_at,
         ),
     }
+
+
+async def _open_backfill_metrics_sink() -> AsyncIterator[Any | None]:
+    """Open a ClickHouse metrics sink for backfill diagnostics reads.
+
+    ``GET /backfill-jobs/{job_id}`` populates ``metrics_diagnostics`` from
+    ClickHouse analytics tables only -- no Postgres shortcuts (CHAOS-2888).
+    Yields ``None`` when ClickHouse is not configured so the detail
+    endpoint can omit diagnostics instead of failing.
+    """
+    from dev_health_ops.db import get_clickhouse_uri
+    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+
+    uri = get_clickhouse_uri()
+    if not uri:
+        yield None
+        return
+    sink = ClickHouseMetricsSink(dsn=uri)
+    try:
+        yield sink
+    finally:
+        sink.close()
+
+
+def get_backfill_metrics_sink() -> Callable[
+    [], AbstractAsyncContextManager[Any | None]
+]:
+    """Return a lazy factory for the backfill-diagnostics ClickHouse sink.
+
+    Returns the factory itself -- not an opened sink -- so resolving this
+    FastAPI dependency performs no I/O. ``GET /backfill-jobs/{job_id}``
+    only calls the factory (opening ClickHouse) after confirming the job
+    exists; a 404 for a missing job never opens a ClickHouse client
+    (CHAOS-2888 Workstream C review fix). Tests override this dependency
+    with a factory returning their fake sink -- the same structural
+    contract ``metrics/compounding_risk.py`` already uses.
+    """
+    return asynccontextmanager(_open_backfill_metrics_sink)
 
 
 # Canonical mapping of provider → supported sync targets.
@@ -2343,6 +2387,9 @@ async def get_backfill_job(
     job_id: str,
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
+    metrics_sink_factory: Callable[
+        [], AbstractAsyncContextManager[Any | None]
+    ] = Depends(get_backfill_metrics_sink),
 ):
     from dev_health_ops.api.services.backfill import BackfillJobService
 
@@ -2351,4 +2398,22 @@ async def get_backfill_job(
     if job is None:
         raise HTTPException(status_code=404, detail="Backfill job not found")
     run_counts = await _backfill_job_run_counts(session, job)
-    return _backfill_job_response(job, run_counts)
+    metrics_diagnostics = None
+    # The sink is opened lazily, only now that the job is confirmed to
+    # exist -- a 404 above never triggers a ClickHouse connection
+    # (CHAOS-2888 Workstream C review fix).
+    async with metrics_sink_factory() as metrics_sink:
+        if metrics_sink is not None:
+            from dev_health_ops.api.services.backfill_diagnostics import (
+                build_backfill_metrics_diagnostics,
+            )
+
+            metrics_diagnostics = build_backfill_metrics_diagnostics(
+                metrics_sink,
+                org_id=org_id,
+                range_start=getattr(job, "since_date"),
+                range_end=getattr(job, "before_date"),
+            )
+    return _backfill_job_response(
+        job, run_counts, metrics_diagnostics=metrics_diagnostics
+    )

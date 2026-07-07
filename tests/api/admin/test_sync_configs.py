@@ -10,7 +10,7 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.services.auth import AuthenticatedUser
@@ -1576,6 +1576,109 @@ async def test_list_sync_config_jobs_enriches_planner_run_and_paginates(
     second = second_page.json()
     assert len(second) == 1
     assert second[0]["sync_run"] is None
+
+
+@pytest.mark.asyncio
+async def test_list_sync_config_jobs_uses_rollups_without_loading_unit_rows(
+    client, session_maker
+):
+    ac, _ = client
+    create_resp = await _create_sync_config(ac, name="jobs-large-rollup")
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = create_resp.json()["id"]
+    unit_count = 201
+
+    async with session_maker() as session:
+        config = (
+            await session.execute(
+                select(SyncConfiguration).where(
+                    SyncConfiguration.id == uuid.UUID(config_id)
+                )
+            )
+        ).scalar_one()
+        job = (
+            await session.execute(
+                select(ScheduledJob).where(
+                    ScheduledJob.sync_config_id == uuid.UUID(config_id)
+                )
+            )
+        ).scalar_one()
+        source = IntegrationSource(
+            org_id=config.org_id,
+            integration_id=config.integration_id,
+            provider="github",
+            source_type="repository",
+            external_id="acme/large-repo",
+            name="large-repo",
+            full_name="acme/large-repo",
+            metadata_={"planner_managed_sync_config_id": str(config.id)},
+            is_enabled=True,
+        )
+        session.add(source)
+        await session.flush()
+        sync_run = SyncRun(
+            org_id=config.org_id,
+            integration_id=config.integration_id,
+            triggered_by="manual",
+            mode="incremental",
+            status="success",
+            total_units=unit_count,
+            completed_units=unit_count,
+            failed_units=0,
+            started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            completed_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        )
+        session.add(sync_run)
+        await session.flush()
+        session.add_all(
+            SyncRunUnit(
+                org_id=config.org_id,
+                sync_run_id=sync_run.id,
+                integration_id=config.integration_id,
+                source_id=source.id,
+                provider="github",
+                dataset_key="commits",
+                cost_class="standard",
+                mode="incremental",
+                since_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                before_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+                status="success",
+                attempts=1,
+            )
+            for _ in range(unit_count)
+        )
+        enriched_run = JobRun(
+            job.id, triggered_by="manual", status=JobRunStatus.RUNNING.value
+        )
+        enriched_run.created_at = datetime(2026, 1, 3, tzinfo=timezone.utc)
+        enriched_run.result = {"sync_run_id": str(sync_run.id)}
+        session.add(enriched_run)
+        await session.commit()
+
+    loaded_unit_rows = 0
+
+    def count_loaded_unit_row(_target, _context) -> None:
+        nonlocal loaded_unit_rows
+        loaded_unit_rows += 1
+
+    event.listen(SyncRunUnit, "load", count_loaded_unit_row)
+    try:
+        resp = await ac.get(f"/api/v1/admin/sync-configs/{config_id}/jobs?limit=1")
+    finally:
+        event.remove(SyncRunUnit, "load", count_loaded_unit_row)
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data[0]["sync_run"]["total_units"] == unit_count
+    assert data[0]["sync_run"]["completed_units"] == unit_count
+    assert data[0]["sync_run"]["failed_units"] == 0
+    assert data[0]["sync_run"]["requested_range"] == {
+        "since": "2026-01-01T00:00:00Z",
+        "before": "2026-01-02T00:00:00Z",
+        "source_ids": [str(source.id)],
+        "run_ids": [str(sync_run.id)],
+    }
+    assert loaded_unit_rows == 0
 
 
 def test_sync_run_unit_range_normalizes_naive_datetimes_to_utc():

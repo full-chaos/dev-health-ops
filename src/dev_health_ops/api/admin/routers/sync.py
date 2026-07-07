@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol, cast
 
@@ -243,6 +244,13 @@ class _MutableSyncConfiguration(Protocol):
     is_active: bool
 
 
+@dataclass(frozen=True, slots=True)
+class _SyncRunUnitRollup:
+    status_counts: Mapping[str, int]
+    requested_range: SyncCoverageRange | None
+    covered_range: SyncCoverageRange | None
+
+
 async def _integration_credential_id_for_config(
     session: AsyncSession, config: object, org_id: str
 ) -> uuid.UUID | None:
@@ -339,7 +347,7 @@ def _latest_datetime(*values: datetime | None) -> datetime | None:
 
 
 def _effective_backfill_run_status(
-    run_status: str, status_counts: dict[str, int], total_units: int
+    run_status: str, status_counts: Mapping[str, int], total_units: int
 ) -> str:
     success_count = status_counts.get(SyncRunUnitStatus.SUCCESS.value, 0)
     failed_count = status_counts.get(SyncRunUnitStatus.FAILED.value, 0)
@@ -436,9 +444,9 @@ async def _planner_sync_runs_for_job_runs(
     return {str(sync_run.id): sync_run for sync_run in result.scalars().all()}
 
 
-async def _planner_sync_run_units_for_job_runs(
+async def _planner_sync_run_unit_rollups_for_job_runs(
     session: AsyncSession, runs: Sequence[object], org_id: str
-) -> dict[str, list[SyncRunUnit]]:
+) -> dict[str, _SyncRunUnitRollup]:
     sync_run_ids = {
         sync_run_id
         for run in runs
@@ -446,16 +454,87 @@ async def _planner_sync_run_units_for_job_runs(
     }
     if not sync_run_ids:
         return {}
-    result = await session.execute(
-        select(SyncRunUnit).where(
+
+    status_result = await session.execute(
+        select(
+            SyncRunUnit.sync_run_id,
+            SyncRunUnit.status,
+            func.count(SyncRunUnit.id),
+        )
+        .where(
             SyncRunUnit.sync_run_id.in_(sync_run_ids),
             SyncRunUnit.org_id == org_id,
         )
+        .group_by(SyncRunUnit.sync_run_id, SyncRunUnit.status)
     )
-    units_by_run: dict[str, list[SyncRunUnit]] = {}
-    for unit in result.scalars().all():
-        units_by_run.setdefault(str(unit.sync_run_id), []).append(unit)
-    return units_by_run
+    status_counts_by_run: dict[str, dict[str, int]] = {}
+    for sync_run_id, status, count in status_result.all():
+        status_counts_by_run.setdefault(str(sync_run_id), {})[str(status)] = int(count)
+
+    requested_ranges = await _planner_sync_run_unit_ranges(
+        session, sync_run_ids, org_id, success_only=False
+    )
+    covered_ranges = await _planner_sync_run_unit_ranges(
+        session, sync_run_ids, org_id, success_only=True
+    )
+    return {
+        str(sync_run_id): _SyncRunUnitRollup(
+            status_counts=status_counts_by_run.get(str(sync_run_id), {}),
+            requested_range=requested_ranges.get(str(sync_run_id)),
+            covered_range=covered_ranges.get(str(sync_run_id)),
+        )
+        for sync_run_id in sync_run_ids
+    }
+
+
+async def _planner_sync_run_unit_ranges(
+    session: AsyncSession,
+    sync_run_ids: set[uuid.UUID],
+    org_id: str,
+    *,
+    success_only: bool,
+) -> dict[str, SyncCoverageRange]:
+    range_stmt = (
+        select(
+            SyncRunUnit.sync_run_id,
+            SyncRunUnit.source_id,
+            func.min(SyncRunUnit.since_at),
+            func.max(SyncRunUnit.before_at),
+        )
+        .where(
+            SyncRunUnit.sync_run_id.in_(sync_run_ids),
+            SyncRunUnit.org_id == org_id,
+            SyncRunUnit.since_at.is_not(None),
+            SyncRunUnit.before_at.is_not(None),
+        )
+        .group_by(SyncRunUnit.sync_run_id, SyncRunUnit.source_id)
+    )
+    if success_only:
+        range_stmt = range_stmt.where(
+            SyncRunUnit.status == SyncRunUnitStatus.SUCCESS.value
+        )
+
+    range_result = await session.execute(range_stmt)
+    since_by_run: dict[str, datetime] = {}
+    before_by_run: dict[str, datetime] = {}
+    source_ids_by_run: dict[str, set[str]] = {}
+    for sync_run_id, source_id, since_at, before_at in range_result.all():
+        run_id = str(sync_run_id)
+        since = ensure_utc(since_at)
+        before = ensure_utc(before_at)
+        since_by_run[run_id] = min(since_by_run.get(run_id, since), since)
+        before_by_run[run_id] = max(before_by_run.get(run_id, before), before)
+        source_ids_by_run.setdefault(run_id, set()).add(str(source_id))
+
+    return {
+        run_id: SyncCoverageRange(
+            since=since,
+            before=before_by_run[run_id],
+            source_ids=sorted(source_ids_by_run.get(run_id, set())),
+            run_ids=[run_id],
+        )
+        for run_id, since in since_by_run.items()
+    }
 
 
 def _sync_run_unit_range(
@@ -487,12 +566,8 @@ def _sync_run_unit_range(
 
 
 def _sync_run_unit_rollup(
-    sync_run: SyncRun, units: Sequence[SyncRunUnit]
+    sync_run: SyncRun, status_counts: Mapping[str, int]
 ) -> tuple[int, int, int, str]:
-    status_counts: dict[str, int] = {}
-    for unit in units:
-        status_counts[unit.status] = status_counts.get(unit.status, 0) + 1
-
     total_units = max(sum(status_counts.values()), int(sync_run.total_units))
     completed_units = status_counts.get(SyncRunUnitStatus.SUCCESS.value, 0)
     failed_units = status_counts.get(SyncRunUnitStatus.FAILED.value, 0)
@@ -503,7 +578,7 @@ def _sync_run_unit_rollup(
 
 
 def _sync_run_job_enrichment(
-    sync_run: SyncRun | None, units: Sequence[SyncRunUnit]
+    sync_run: SyncRun | None, unit_rollup: _SyncRunUnitRollup | None
 ) -> SyncRunJobEnrichment | None:
     if sync_run is None:
         return None
@@ -512,14 +587,15 @@ def _sync_run_job_enrichment(
     triggered_by = getattr(sync_run, "triggered_by", None)
     if sync_run_id is None or mode is None or triggered_by is None:
         return None
+    status_counts = unit_rollup.status_counts if unit_rollup is not None else {}
     total_units, completed_units, failed_units, _ = _sync_run_unit_rollup(
-        sync_run, units
+        sync_run, status_counts
     )
     return SyncRunJobEnrichment(
         mode=str(mode),
         triggered_by=str(triggered_by),
-        requested_range=_sync_run_unit_range(units),
-        covered_range=_sync_run_unit_range(units, success_only=True),
+        requested_range=unit_rollup.requested_range if unit_rollup else None,
+        covered_range=unit_rollup.covered_range if unit_rollup else None,
         total_units=total_units,
         completed_units=completed_units,
         failed_units=failed_units,
@@ -530,7 +606,7 @@ def _sync_run_job_enrichment(
 def _job_run_response(
     run: object,
     planner_sync_run: SyncRun | None = None,
-    planner_sync_run_units: Sequence[SyncRunUnit] = (),
+    planner_sync_run_unit_rollup: _SyncRunUnitRollup | None = None,
 ) -> JobRunResponse:
     status_value = int(getattr(run, "status"))
     started_at = getattr(run, "started_at")
@@ -547,7 +623,12 @@ def _job_run_response(
         # The linked SyncRun owns execution lifecycle and runtime stats.
         sync_result = getattr(planner_sync_run, "result")
         total_units, completed_units, failed_units, effective_status = (
-            _sync_run_unit_rollup(planner_sync_run, planner_sync_run_units)
+            _sync_run_unit_rollup(
+                planner_sync_run,
+                planner_sync_run_unit_rollup.status_counts
+                if planner_sync_run_unit_rollup
+                else {},
+            )
         )
         result = {
             **(result if isinstance(result, dict) else {}),
@@ -577,7 +658,7 @@ def _job_run_response(
             "error": error,
             "triggered_by": getattr(run, "triggered_by"),
             "sync_run": _sync_run_job_enrichment(
-                planner_sync_run, planner_sync_run_units
+                planner_sync_run, planner_sync_run_unit_rollup
             ),
             "created_at": getattr(run, "created_at"),
         }
@@ -2216,7 +2297,7 @@ async def list_sync_config_jobs(
     runs_result = await session.execute(runs_stmt)
     runs = list(runs_result.scalars().all())
     planner_sync_runs = await _planner_sync_runs_for_job_runs(session, runs, org_id)
-    planner_sync_run_units = await _planner_sync_run_units_for_job_runs(
+    planner_sync_run_unit_rollups = await _planner_sync_run_unit_rollups_for_job_runs(
         session, runs, org_id
     )
 
@@ -2224,7 +2305,9 @@ async def list_sync_config_jobs(
         _job_run_response(
             run,
             planner_sync_runs.get(str(sync_run_id)) if sync_run_id else None,
-            planner_sync_run_units.get(str(sync_run_id), ()) if sync_run_id else (),
+            planner_sync_run_unit_rollups.get(str(sync_run_id))
+            if sync_run_id
+            else None,
         )
         for run in runs
         for sync_run_id in [_planner_job_run_sync_run_id(run)]

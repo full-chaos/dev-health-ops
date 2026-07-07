@@ -9,6 +9,7 @@ from typing import Any
 from celery import chain
 
 from dev_health_ops.models import SyncRun, SyncRunUnit, SyncRunUnitStatus
+from dev_health_ops.utils.datetime import utc_today
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.task_utils import _GIT_TARGETS, _WORK_ITEM_TARGETS
 
@@ -186,15 +187,40 @@ def _dispatch_post_sync_tasks(
     # downstream steps would fail anyway; daily also degrades gracefully on a
     # missing snapshot, so the next cycle recovers. If hard isolation is ever
     # needed, decouple via a non-raising wrapper task rather than link_error.
+    # Historical backfills must not enqueue complexity implicitly: run_complexity_db_job
+    # scans CURRENT persisted file contents/blame, so writing it across a
+    # historical window (or a past single day) would fabricate a flat/incorrect
+    # historical complexity trend rather than reflecting real historical state
+    # (CHAOS-2888). Complexity is safe to enqueue only for a current single-day
+    # sync: backfill_days in (None, 1) and day absent or == utc_today().
     complexity_sig = None
     if has_git:
-        complexity_sig = celery_app.signature(
-            "dev_health_ops.workers.tasks.run_complexity_job",
-            kwargs={"org_id": org_id},
-            queue="metrics",
-            immutable=True,
+        is_current_single_day = metrics_backfill_days in (None, 1) and (
+            metrics_day is None or metrics_day == utc_today().isoformat()
         )
-        dispatched.append("run_complexity_job")
+        if is_current_single_day:
+            complexity_kwargs: dict[str, Any] = {"org_id": org_id}
+            if metrics_day is not None:
+                complexity_kwargs["day"] = metrics_day
+                complexity_kwargs["backfill_days"] = 1
+            complexity_sig = celery_app.signature(
+                "dev_health_ops.workers.tasks.run_complexity_job",
+                kwargs=complexity_kwargs,
+                queue="metrics",
+                immutable=True,
+            )
+            dispatched.append("run_complexity_job")
+        else:
+            logger.warning(
+                "historical_complexity_unsupported: skipping run_complexity_job "
+                "org_id=%s from_date=%s to_date=%s metrics_day=%s "
+                "metrics_backfill_days=%s",
+                org_id,
+                from_date,
+                to_date,
+                metrics_day,
+                metrics_backfill_days,
+            )
 
     if has_git or has_work_items:
         build_kwargs: dict[str, Any] = {"org_id": org_id}

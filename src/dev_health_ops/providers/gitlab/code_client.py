@@ -789,6 +789,29 @@ class GitLabCodeClient:
         )
         return [_map_commit(item) for item in raw_items[:max_commits]]
 
+    async def get_latest_commit_sha(
+        self,
+        project_id: int | str,
+        *,
+        ref: str,
+        until: datetime,
+    ) -> str | None:
+        encoded_project_id = _encode_project_id(project_id)
+        raw_items = await self._get_gitlab_list(
+            f"/projects/{encoded_project_id}/repository/commits",
+            operation=f"{_PROJECT_FAMILY_PREFIX}:GET /projects/{{id}}/repository/commits latest",
+            params={
+                "ref_name": ref,
+                "until": _format_gitlab_window_datetime(until),
+            },
+            per_page=1,
+            paginate=False,
+            max_items=1,
+        )
+        if not raw_items:
+            return None
+        return _map_commit(raw_items[0]).commit_id or None
+
     async def get_commit_stats(
         self, project_id: int | str, commit_sha: str
     ) -> GitLabCommitStatsData:

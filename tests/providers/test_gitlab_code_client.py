@@ -902,6 +902,30 @@ class TestCommitsParity:
         assert calls[_COMMITS_PATH] == 2
 
     @pytest.mark.asyncio
+    async def test_latest_commit_sha_sends_ref_and_until_window(self) -> None:
+        commit = {"id": "abc123", "committed_date": "2026-01-10T00:00:00Z"}
+        transport, calls = _router_transport(
+            {_COMMITS_PATH: _json_response(200, [commit])}
+        )
+        client = _client(transport)
+        until = datetime(2026, 1, 31, tzinfo=timezone.utc)
+
+        sha = await client.get_latest_commit_sha(42, ref="main", until=until)
+
+        assert sha == "abc123"
+        assert calls[_COMMITS_PATH] == 1
+        query = dict(transport.captured_urls[_COMMITS_PATH].params)  # type: ignore[attr-defined]
+        assert query == {
+            "ref_name": "main",
+            "until": "2026-01-31T00:00:00Z",
+            "page": "1",
+            "per_page": "1",
+        }
+        observations = client.drain_usage_observations()
+        assert observations[0]["route_family"] == "project"
+        assert observations[0]["request_count"] == 1
+
+    @pytest.mark.asyncio
     async def test_commit_stats_maps_aggregate_stats_and_usage_family(self) -> None:
         detail = {"id": "abc123", "stats": {"additions": 12, "deletions": 3}}
         transport, calls = _router_transport(

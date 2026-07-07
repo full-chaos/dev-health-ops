@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, cast
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -21,6 +21,7 @@ import pytest
 # pre-existing providers._base <-> connectors circular import when this file
 # is collected in isolation.
 import dev_health_ops.connectors  # noqa: F401
+import dev_health_ops.metrics.job_complexity_db as job
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.processors import gitlab as gitlab_processor
 from dev_health_ops.processors.gitlab import (
@@ -33,6 +34,10 @@ from dev_health_ops.providers.gitlab.code_client import (
     GitLabCommitData,
     GitLabCommitStatsData,
     GitLabFileBlame,
+)
+from tests._complexity_readiness_fixtures import (
+    ComplexityReadinessClient,
+    ComplexityReadinessSink,
 )
 
 
@@ -935,3 +940,327 @@ def test_gitlab_mr_sync_flushes_rows_before_terminal_rate_limit() -> None:
         (99, 1, "all", 100),
         (99, 2, "all", 100),
     ]
+
+
+class TestGitLabBackfillFeedsComplexityReadiness:
+    """CHAOS-2888 Workstream D: mirrors the GitHub-side regression in
+    ``tests/test_github_content_backfill.py`` -- proves persisted
+    GitLab-backfilled ``git_files`` content satisfies the complexity job's
+    readiness contract end-to-end."""
+
+    @staticmethod
+    def _store() -> Mock:
+        store = Mock()
+        store.has_any_git_files = AsyncMock(return_value=True)
+        store.has_any_git_file_contents = AsyncMock(return_value=False)
+        store.has_any_git_commit_stats = AsyncMock(return_value=True)
+        store.has_any_git_blame = AsyncMock(return_value=True)
+        return store
+
+    @pytest.mark.asyncio
+    async def test_gitlab_scanner_backfilled_contents_satisfy_complexity_job(
+        self, monkeypatch
+    ):
+        store = self._store()
+        written: list = []
+
+        async def insert(batch):
+            written.extend(batch)
+
+        sink = Mock()
+        sink.insert_git_file_data = AsyncMock(side_effect=insert)
+
+        project = Mock()
+        connector = Mock()
+        connector.gitlab.projects.get.return_value = project
+
+        tree_items = [
+            {"type": "blob", "path": "src/alpha.py"},
+            {"type": "blob", "path": "src/beta.py"},
+        ]
+        fake_client = _FakeGitLabCodeClientForFiles(
+            contents={
+                "src/alpha.py": "def alpha():\n    return 1\n",
+                "src/beta.py": (
+                    "def beta(x):\n    if x:\n        return x\n    return 0\n"
+                ),
+            },
+            tree_items=tree_items,
+        )
+        monkeypatch.setattr(
+            "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+            lambda connector: fake_client,
+        )
+
+        db_repo = Mock()
+        db_repo.id = uuid.uuid4()
+
+        await _backfill_gitlab_missing_data(
+            store=store,
+            ingestion_sink=sink,
+            connector=connector,
+            db_repo=db_repo,
+            project_full_name="group/proj",
+            default_branch="main",
+            max_commits=None,
+            include_blame=False,
+            include_commit_stats=False,
+        )
+
+        ch_client = ComplexityReadinessClient([(f.path, f.contents) for f in written])
+        ch_sink = ComplexityReadinessSink(ch_client)
+        monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: ch_sink)
+
+        rc = job.run_complexity_db_job(
+            repo_id=db_repo.id,
+            db_url="clickhouse://localhost:8123/default",
+            date=date(2026, 6, 12),
+            backfill_days=1,
+            language_globs=None,
+            max_files=None,
+            org_id="test-org",
+        )
+
+        assert rc == 0
+        assert fake_client.get_file_contents_calls == [
+            ("group/proj", ("src/alpha.py", "src/beta.py"), "main", 1_000_000)
+        ]
+        assert {snap.file_path for snap in ch_sink.snapshots} == {
+            "src/alpha.py",
+            "src/beta.py",
+        }
+        assert sum(snap.functions_count for snap in ch_sink.snapshots) == 2
+        assert len(ch_sink.dailies) == 1
+        daily = ch_sink.dailies[0]
+        assert daily.day == date(2026, 6, 12)
+        assert daily.org_id == "test-org"
+        assert daily.loc_total > 0
+        assert daily.cyclomatic_total > 0
+
+    @pytest.mark.asyncio
+    async def test_gitlab_paths_only_records_do_not_satisfy_complexity_job(
+        self, monkeypatch
+    ):
+        """A GitLab sync that discovered file paths but whose content fetch
+        degraded to empty (content backfill not effectively run) must NOT
+        let the complexity job silently report success -- it must fail
+        loudly per the job's existing readiness contract."""
+        store = self._store()
+        written: list = []
+
+        async def insert(batch):
+            written.extend(batch)
+
+        sink = Mock()
+        sink.insert_git_file_data = AsyncMock(side_effect=insert)
+
+        project = Mock()
+        connector = Mock()
+        connector.gitlab.projects.get.return_value = project
+
+        tree_items = [
+            {"type": "blob", "path": "src/alpha.py"},
+            {"type": "blob", "path": "src/beta.py"},
+        ]
+        fake_client = _FakeGitLabCodeClientForFiles(
+            contents={},
+            tree_items=tree_items,
+        )
+        monkeypatch.setattr(
+            "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+            lambda connector: fake_client,
+        )
+
+        db_repo = Mock()
+        db_repo.id = uuid.uuid4()
+
+        await _backfill_gitlab_missing_data(
+            store=store,
+            ingestion_sink=sink,
+            connector=connector,
+            db_repo=db_repo,
+            project_full_name="group/proj",
+            default_branch="main",
+            max_commits=None,
+            include_blame=False,
+            include_commit_stats=False,
+        )
+
+        assert [f.contents for f in written] == [None, None]
+
+        ch_client = ComplexityReadinessClient([(f.path, f.contents) for f in written])
+        ch_sink = ComplexityReadinessSink(ch_client)
+        monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: ch_sink)
+
+        rc = job.run_complexity_db_job(
+            repo_id=db_repo.id,
+            db_url="clickhouse://localhost:8123/default",
+            date=date(2026, 6, 12),
+            backfill_days=1,
+            language_globs=None,
+            max_files=None,
+            org_id="test-org",
+        )
+
+        assert rc == 1
+        assert not ch_sink.snapshots
+        assert not ch_sink.dailies
+
+    @pytest.mark.asyncio
+    async def test_partial_content_backfill_still_computes_complexity_for_available_files(
+        self, monkeypatch
+    ):
+        """A GitLab project where content backfill only hydrated some paths
+        (mixed content / paths-only rows) must still compute complexity from
+        the files that DO have contents. This exercises the complexity job's
+        missing-paths query and git_blame usable-line-text probe branches
+        that the full-content and empty-content cases above never reach."""
+        store = self._store()
+        written: list = []
+
+        async def insert(batch):
+            written.extend(batch)
+
+        sink = Mock()
+        sink.insert_git_file_data = AsyncMock(side_effect=insert)
+
+        project = Mock()
+        connector = Mock()
+        connector.gitlab.projects.get.return_value = project
+
+        tree_items = [
+            {"type": "blob", "path": "src/alpha.py"},
+            {"type": "blob", "path": "src/beta.py"},
+            {"type": "blob", "path": "src/gamma.py"},
+        ]
+        fake_client = _FakeGitLabCodeClientForFiles(
+            contents={
+                "src/alpha.py": "def alpha():\n    return 1\n",
+                "src/beta.py": (
+                    "def beta(x):\n    if x:\n        return x\n    return 0\n"
+                ),
+            },
+            tree_items=tree_items,
+        )
+        monkeypatch.setattr(
+            "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+            lambda connector: fake_client,
+        )
+
+        db_repo = Mock()
+        db_repo.id = uuid.uuid4()
+
+        await _backfill_gitlab_missing_data(
+            store=store,
+            ingestion_sink=sink,
+            connector=connector,
+            db_repo=db_repo,
+            project_full_name="group/proj",
+            default_branch="main",
+            max_commits=None,
+            include_blame=False,
+            include_commit_stats=False,
+        )
+
+        by_path = {f.path: f.contents for f in written}
+        assert by_path == {
+            "src/alpha.py": "def alpha():\n    return 1\n",
+            "src/beta.py": "def beta(x):\n    if x:\n        return x\n    return 0\n",
+            "src/gamma.py": None,
+        }
+
+        ch_client = ComplexityReadinessClient([(f.path, f.contents) for f in written])
+        ch_sink = ComplexityReadinessSink(ch_client)
+        monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: ch_sink)
+
+        rc = job.run_complexity_db_job(
+            repo_id=db_repo.id,
+            db_url="clickhouse://localhost:8123/default",
+            date=date(2026, 6, 12),
+            backfill_days=1,
+            language_globs=None,
+            max_files=None,
+            org_id="test-org",
+        )
+
+        assert rc == 0
+        assert {snap.file_path for snap in ch_sink.snapshots} == {
+            "src/alpha.py",
+            "src/beta.py",
+        }
+        assert len(ch_sink.dailies) == 1
+        assert ch_sink.dailies[0].loc_total > 0
+
+    @pytest.mark.asyncio
+    async def test_backfill_days_greater_than_one_does_not_fabricate_historical_rows(
+        self, monkeypatch
+    ):
+        """CHAOS-2850/2888: even when a historical multi-day window is
+        requested, the job has no historical content snapshot store, so it
+        must write exactly ONE ``repo_complexity_daily`` row -- for the
+        requested ``date`` only -- never ``backfill_days`` duplicate flat
+        rows that would fabricate a misleading historical trend."""
+        store = self._store()
+        written: list = []
+
+        async def insert(batch):
+            written.extend(batch)
+
+        sink = Mock()
+        sink.insert_git_file_data = AsyncMock(side_effect=insert)
+
+        project = Mock()
+        connector = Mock()
+        connector.gitlab.projects.get.return_value = project
+
+        tree_items = [
+            {"type": "blob", "path": "src/alpha.py"},
+            {"type": "blob", "path": "src/beta.py"},
+        ]
+        fake_client = _FakeGitLabCodeClientForFiles(
+            contents={
+                "src/alpha.py": "def alpha():\n    return 1\n",
+                "src/beta.py": (
+                    "def beta(x):\n    if x:\n        return x\n    return 0\n"
+                ),
+            },
+            tree_items=tree_items,
+        )
+        monkeypatch.setattr(
+            "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+            lambda connector: fake_client,
+        )
+
+        db_repo = Mock()
+        db_repo.id = uuid.uuid4()
+
+        await _backfill_gitlab_missing_data(
+            store=store,
+            ingestion_sink=sink,
+            connector=connector,
+            db_repo=db_repo,
+            project_full_name="group/proj",
+            default_branch="main",
+            max_commits=None,
+            include_blame=False,
+            include_commit_stats=False,
+        )
+
+        ch_client = ComplexityReadinessClient([(f.path, f.contents) for f in written])
+        ch_sink = ComplexityReadinessSink(ch_client)
+        monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: ch_sink)
+
+        rc = job.run_complexity_db_job(
+            repo_id=db_repo.id,
+            db_url="clickhouse://localhost:8123/default",
+            date=date(2026, 6, 12),
+            backfill_days=5,
+            language_globs=None,
+            max_files=None,
+            org_id="test-org",
+        )
+
+        assert rc == 0
+        assert len(ch_sink.dailies) == 1
+        assert ch_sink.dailies[0].day == date(2026, 6, 12)
+        assert len({snap.as_of_day for snap in ch_sink.snapshots}) == 1

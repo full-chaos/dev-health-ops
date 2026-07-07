@@ -38,7 +38,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.admin.routers.integrations import _unit_to_response
-from dev_health_ops.api.admin.routers.sync import _job_run_response
+from dev_health_ops.api.admin.routers.sync import _job_run_response, _SyncRunUnitRollup
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.backfill import BackfillJob
 from dev_health_ops.models.git import Base
@@ -799,6 +799,18 @@ def _fake_unit(**overrides):
     return types.SimpleNamespace(**base)
 
 
+def _unit_rollup(units) -> _SyncRunUnitRollup:
+    status_counts: dict[str, int] = {}
+    for unit in units:
+        status = str(unit.status)
+        status_counts[status] = status_counts.get(status, 0) + 1
+    return _SyncRunUnitRollup(
+        status_counts=status_counts,
+        requested_range=None,
+        covered_range=None,
+    )
+
+
 def test_unit_to_response_projects_all_retry_result_keys():
     """All 8 worker-emitted retry/timeout result keys project onto the response."""
     resp = _unit_to_response(
@@ -1075,9 +1087,7 @@ def test_job_run_response_distinguishes_partial_failed_and_forwards_retry_aggreg
         _fake_unit(status=SyncRunUnitStatus.FAILED.value),
     ]
 
-    resp = _job_run_response(
-        run, cast(SyncRun, planner), cast(list[SyncRunUnit], units)
-    )
+    resp = _job_run_response(run, cast(SyncRun, planner), _unit_rollup(units))
 
     # JobRunStatus enum/labels are unchanged: PARTIAL_FAILED collapses to the
     # 'failed' label, but the literal run state stays distinguishable in result.
@@ -1124,9 +1134,7 @@ def test_job_run_response_uses_unit_statuses_when_sync_run_counters_are_stale():
         _fake_unit(status=SyncRunUnitStatus.FAILED.value),
     ]
 
-    resp = _job_run_response(
-        run, cast(SyncRun, planner), cast(list[SyncRunUnit], units)
-    )
+    resp = _job_run_response(run, cast(SyncRun, planner), _unit_rollup(units))
 
     assert resp.status == "failed"
     assert resp.items_synced == 3
@@ -1172,9 +1180,7 @@ def test_job_run_response_uses_unit_statuses_when_run_status_is_stale_terminal()
         _fake_unit(status=SyncRunUnitStatus.RUNNING.value),
     ]
 
-    resp = _job_run_response(
-        run, cast(SyncRun, planner), cast(list[SyncRunUnit], units)
-    )
+    resp = _job_run_response(run, cast(SyncRun, planner), _unit_rollup(units))
 
     assert resp.status == "running"
     assert resp.items_synced == 1

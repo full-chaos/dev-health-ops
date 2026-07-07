@@ -31,7 +31,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 from dev_health_ops.metrics.schemas import CompoundingRiskDailyRecord
 
@@ -126,6 +126,107 @@ class CompoundingInputs:
         if self.single_owner_ratio is None and self.ownership_gini is None:
             return False
         return True
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics (CHAOS-2888): fixed reason names for missing required inputs
+# ---------------------------------------------------------------------------
+
+#: Shared reason names for missing-input diagnostics (CHAOS-2888 contract).
+#: Fixed across workstreams -- do not rename or add ad hoc variants.
+REASON_MISSING_REWORK_CHURN: Final[str] = "missing_rework_churn"
+REASON_MISSING_COMPLEXITY_DELTA: Final[str] = "missing_complexity_delta"
+REASON_MISSING_REVIEW_LATENCY: Final[str] = "missing_review_latency"
+REASON_MISSING_OWNERSHIP_SIGNAL: Final[str] = "missing_ownership_signal"
+
+#: Ordered, fixed set of all missing-input reason names. Callers seed
+#: aggregate/report dicts from this tuple so output shape and key order are
+#: stable regardless of which reasons actually occur in a given batch.
+MISSING_INPUT_REASONS: Final[tuple[str, ...]] = (
+    REASON_MISSING_REWORK_CHURN,
+    REASON_MISSING_COMPLEXITY_DELTA,
+    REASON_MISSING_REVIEW_LATENCY,
+    REASON_MISSING_OWNERSHIP_SIGNAL,
+)
+
+
+class _RiskSignalSource(Protocol):
+    """Structural shape shared by ``CompoundingInputs`` and the persisted
+    ``CompoundingRiskDailyRecord`` -- both carry the same five raw signal
+    fields, so diagnostics can inspect either without importing one from
+    the other.
+    """
+
+    @property
+    def rework_churn(self) -> float | None: ...
+    @property
+    def complexity_delta(self) -> float | None: ...
+    @property
+    def review_latency_p90h(self) -> float | None: ...
+    @property
+    def single_owner_ratio(self) -> float | None: ...
+    @property
+    def ownership_gini(self) -> float | None: ...
+
+
+def missing_input_reasons(source: _RiskSignalSource) -> list[str]:
+    """Return the fixed reason name for each required input that is absent.
+
+    Mirrors ``CompoundingInputs.has_required_inputs()`` but names *which*
+    signal is missing instead of collapsing to a single boolean. Works on
+    both ``CompoundingInputs`` (pre-compute) and ``CompoundingRiskDailyRecord``
+    (post-compute, e.g. rows read back from a sink).
+    """
+    reasons: list[str] = []
+    if source.rework_churn is None:
+        reasons.append(REASON_MISSING_REWORK_CHURN)
+    if source.complexity_delta is None:
+        reasons.append(REASON_MISSING_COMPLEXITY_DELTA)
+    if source.review_latency_p90h is None:
+        reasons.append(REASON_MISSING_REVIEW_LATENCY)
+    if source.single_owner_ratio is None and source.ownership_gini is None:
+        reasons.append(REASON_MISSING_OWNERSHIP_SIGNAL)
+    return reasons
+
+
+@dataclass(frozen=True)
+class CompoundingRiskDiagnostics:
+    """Row-level input-completeness summary for a batch of computed rows.
+
+    Pure aggregation -- no I/O. Callers (the standalone job, backfill
+    observability) decide how to log or expose it. Field names and the
+    reason vocabulary are the fixed CHAOS-2888 shared diagnostics contract
+    consumed by the backfill observability workstream.
+    """
+
+    total_rows: int
+    non_null_rows: int
+    unknown_rows: int
+    reason_counts: dict[str, int]
+
+
+def summarize_compounding_risk_diagnostics(
+    rows: Iterable[CompoundingRiskDailyRecord],
+) -> CompoundingRiskDiagnostics:
+    """Aggregate missing-input reasons across already-computed rows."""
+    reason_counts: dict[str, int] = {reason: 0 for reason in MISSING_INPUT_REASONS}
+    total = 0
+    non_null = 0
+    unknown = 0
+    for row in rows:
+        total += 1
+        if row.compounding_risk is not None:
+            non_null += 1
+        if row.severity == "unknown":
+            unknown += 1
+        for reason in missing_input_reasons(row):
+            reason_counts[reason] += 1
+    return CompoundingRiskDiagnostics(
+        total_rows=total,
+        non_null_rows=non_null,
+        unknown_rows=unknown,
+        reason_counts=reason_counts,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -515,13 +616,21 @@ def _nullable_float(value: Any) -> float | None:
 __all__ = [
     "COMPLEXITY_WINDOW_DAYS",
     "CompoundingInputs",
+    "CompoundingRiskDiagnostics",
     "CompoundingThresholds",
     "CompoundingWeights",
     "DEFAULT_THRESHOLDS",
     "DEFAULT_WEIGHTS",
+    "MISSING_INPUT_REASONS",
+    "REASON_MISSING_COMPLEXITY_DELTA",
+    "REASON_MISSING_OWNERSHIP_SIGNAL",
+    "REASON_MISSING_REVIEW_LATENCY",
+    "REASON_MISSING_REWORK_CHURN",
     "REFERENCE_VALUES",
     "build_compounding_risk_rows_for_day",
     "compute_compounding_risk",
     "load_repo_complexity_delta_30d",
+    "missing_input_reasons",
     "severity_for",
+    "summarize_compounding_risk_diagnostics",
 ]

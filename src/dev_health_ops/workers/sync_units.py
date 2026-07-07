@@ -1157,6 +1157,17 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                 computed_at=budget_audit_computed_at,
             )
         )
+        watermark_at: datetime | None = None
+        if ctx.mode in {
+            SyncRunMode.INCREMENTAL.value,
+            SyncRunMode.FULL_RESYNC.value,
+        }:
+            watermark_at = ctx.window_end
+            if watermark_at is None:
+                raise ValueError(
+                    "sync unit cannot stamp watermark without before_at: "
+                    f"unit_id={unit_id} mode={ctx.mode}"
+                )
 
         completed_at = datetime.now(timezone.utc)
         duration_seconds = max(0, int((completed_at - started_at).total_seconds()))
@@ -1209,17 +1220,14 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                 available_at=completed_at,
                 now=completed_at,
             )
-            if ctx.mode in {
-                SyncRunMode.INCREMENTAL.value,
-                SyncRunMode.FULL_RESYNC.value,  # full_resync stamps watermark on success
-            }:
+            if watermark_at is not None:
                 for watermark_dataset_key in _watermark_dataset_keys(ctx):
                     set_watermark(
                         session,
                         ctx.org_id,
                         ctx.source_external_id,
                         watermark_dataset_key,
-                        started_at,
+                        watermark_at,
                     )
             session.flush()
             should_finalize = True

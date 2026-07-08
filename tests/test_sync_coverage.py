@@ -204,6 +204,41 @@ def test_complete_summary_is_healthy():
     assert summary["datasets"][0]["gaps"] == []
 
 
+def test_summary_caps_covered_through_at_generation_time():
+    source_id = uuid.uuid4()
+    now = datetime(2026, 7, 8, 19, 2, tzinfo=timezone.utc)
+    summary = _summary(
+        [
+            _window(
+                datetime(2026, 7, 8, tzinfo=timezone.utc),
+                datetime(2026, 7, 9, 6, 59, 59, tzinfo=timezone.utc),
+                source_id=source_id,
+            )
+        ],
+        now=now,
+    )
+
+    assert summary["overall"]["latest_covered_through"] == now
+    assert summary["datasets"][0]["covered_through"] == now
+    assert summary["sources"][0]["covered_through"] == now
+
+
+def test_future_only_success_does_not_mask_stale_coverage():
+    source_id = uuid.uuid4()
+    summary = _summary(
+        [
+            _window(_dt(1), _dt(2), source_id=source_id),
+            _window(_dt(5), _dt(6), source_id=source_id),
+        ],
+        now=_dt(4),
+    )
+
+    assert summary["overall"]["latest_covered_through"] == _dt(2)
+    assert summary["overall"]["health"] == "stale"
+    assert summary["datasets"][0]["covered_through"] == _dt(2)
+    assert summary["datasets"][0]["status"] == "stale"
+
+
 def test_failed_window_without_later_success_marks_failed():
     source_id = uuid.uuid4()
     summary = _summary([_window(_dt(1), _dt(2), source_id=source_id, status="failed")])

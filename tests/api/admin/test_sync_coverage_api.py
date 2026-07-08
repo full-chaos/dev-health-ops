@@ -112,13 +112,20 @@ async def client(session_maker, seeded_state):
     app.dependency_overrides.clear()
 
 
-async def _seed_scope(session_maker, org_id: str, *, other_org: bool = False) -> dict:
+async def _seed_scope(
+    session_maker,
+    org_id: str,
+    *,
+    other_org: bool = False,
+    provider: str = "github",
+    source_external_id: str = "acme/repo",
+) -> dict:
     row_org_id = str(uuid.uuid4()) if other_org else org_id
     async with session_maker() as session:
         integration = Integration(
             org_id=row_org_id,
-            provider="github",
-            name="GitHub",
+            provider=provider,
+            name=f"{provider.title()} Integration",
             config={},
             is_active=True,
         )
@@ -127,7 +134,7 @@ async def _seed_scope(session_maker, org_id: str, *, other_org: bool = False) ->
         config = SyncConfiguration(
             org_id=row_org_id,
             name="Coverage",
-            provider="github",
+            provider=provider,
             sync_targets=["git"],
             sync_options={"schedule_cron": "0 * * * *"},
             integration_id=integration.id,
@@ -138,11 +145,11 @@ async def _seed_scope(session_maker, org_id: str, *, other_org: bool = False) ->
         source = IntegrationSource(
             org_id=row_org_id,
             integration_id=integration.id,
-            provider="github",
+            provider=provider,
             source_type="repository",
-            external_id="acme/repo",
+            external_id=source_external_id,
             name="repo",
-            full_name="acme/repo",
+            full_name=source_external_id,
             metadata_={"planner_managed_sync_config_id": str(config.id)},
             is_enabled=True,
         )
@@ -157,7 +164,7 @@ async def _seed_scope(session_maker, org_id: str, *, other_org: bool = False) ->
             org_id=row_org_id,
             name="sync-config-coverage",
             job_type="sync",
-            provider="github",
+            provider=provider,
             schedule_cron="0 * * * *",
             sync_config_id=config.id,
             status=JobStatus.ACTIVE.value,
@@ -171,6 +178,7 @@ async def _seed_scope(session_maker, org_id: str, *, other_org: bool = False) ->
             "config_id": str(config.id),
             "integration_id": str(integration.id),
             "source_id": str(source.id),
+            "provider": provider,
         }
 
 
@@ -199,6 +207,8 @@ async def _seed_unit(
     status: str = "success",
     updated_at: datetime | None = None,
     source_id: str | None = None,
+    dataset_key: str = "commits",
+    processor_flags: dict | None = None,
 ) -> str:
     async with session_maker() as session:
         run_status = "success"
@@ -225,14 +235,15 @@ async def _seed_unit(
             sync_run_id=run.id,
             integration_id=uuid.UUID(scope["integration_id"]),
             source_id=uuid.UUID(source_id or scope["source_id"]),
-            provider="github",
-            dataset_key="commits",
+            provider=scope.get("provider", "github"),
+            dataset_key=dataset_key,
             cost_class="standard",
             mode="incremental",
             since_at=since,
             before_at=before,
             status=status,
             attempts=1,
+            processor_flags=processor_flags,
         )
         if updated_at is not None:
             unit.updated_at = updated_at
@@ -268,6 +279,7 @@ async def _seed_run_unit(
     source_id: str | None = None,
     dataset_key: str = "commits",
     updated_at: datetime | None = None,
+    processor_flags: dict | None = None,
 ) -> None:
     async with session_maker() as session:
         unit = SyncRunUnit(
@@ -275,7 +287,7 @@ async def _seed_run_unit(
             sync_run_id=uuid.UUID(run_id),
             integration_id=uuid.UUID(scope["integration_id"]),
             source_id=uuid.UUID(source_id or scope["source_id"]),
-            provider="github",
+            provider=scope.get("provider", "github"),
             dataset_key=dataset_key,
             cost_class="standard",
             mode="incremental",
@@ -283,6 +295,7 @@ async def _seed_run_unit(
             before_at=before,
             status=status,
             attempts=1,
+            processor_flags=processor_flags,
         )
         if updated_at is not None:
             unit.updated_at = updated_at
@@ -902,3 +915,74 @@ async def test_sync_coverage_api_backfill_marker_resolved_zero_units_contributes
     assert sources[scope["source_id"]]["gap_count"] == 0
     assert sources[extra_source_id]["gap_count"] == 0
     assert data["overall"]["health"] == "insufficient_data"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["jira", "gitlab", "github", "linear"])
+async def test_sync_coverage_api_backfill_requested_range_expands_by_family_flag(
+    client, session_maker, provider
+):
+    """CHAOS-2721/coverage-fix core repro: a pair-scoped backfill's linked
+    collapsed composite work-items run unit must only request coverage for
+    the work-item-family child dataset(s) whose ``family_dataset_*`` flag was
+    true on that unit. A disabled child dataset in the same scope must NOT
+    inherit a requested range from the same composite unit -- provider
+    agnostic across jira/gitlab/github/linear."""
+    ac, seeded_state = client
+    scope = await _seed_scope(session_maker, seeded_state["org_id"], provider=provider)
+    async with session_maker() as session:
+        for dataset_key in ("work-item-comments", "work-item-labels"):
+            session.add(
+                IntegrationDataset(
+                    org_id=scope["org_id"],
+                    integration_id=uuid.UUID(scope["integration_id"]),
+                    dataset_key=dataset_key,
+                    is_enabled=True,
+                    options={},
+                )
+            )
+        await session.commit()
+
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=2)
+    before = now - timedelta(minutes=5)
+    run_id = await _seed_run(session_maker, scope, status="success")
+    await _seed_run_unit(
+        session_maker,
+        scope,
+        run_id,
+        since=since,
+        before=before,
+        status="success",
+        dataset_key="work-items",
+        processor_flags={"family_dataset_work_item_comments": True},
+    )
+    async with session_maker() as session:
+        session.add(
+            BackfillJob(
+                org_id=seeded_state["org_id"],
+                sync_config_id=uuid.UUID(scope["config_id"]),
+                status="success",
+                since_date=(now - timedelta(days=3)).date(),
+                before_date=(now + timedelta(days=1)).date(),
+                total_chunks=1,
+                completed_chunks=1,
+                celery_task_id=f"sync_run:{run_id}",
+            )
+        )
+        await session.commit()
+
+    resp = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    datasets = {dataset["dataset_key"]: dataset for dataset in data["datasets"]}
+    # Flagged child: the composite run's actual window resolves the pair
+    # clean, with no gap and no phantom failed range.
+    assert datasets["work-item-comments"]["status"] == "healthy"
+    assert datasets["work-item-comments"]["gaps"] == []
+    # Unflagged child in the same scope must not inherit any requested range
+    # from the composite unit -- it stays at insufficient_data, not gapped.
+    assert datasets["work-item-labels"]["requested_ranges"] == []
+    assert datasets["work-item-labels"]["gaps"] == []
+    assert datasets["work-item-labels"]["status"] == "insufficient_data"

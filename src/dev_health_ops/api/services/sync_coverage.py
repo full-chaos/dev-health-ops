@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, timezone
 from typing import Any
@@ -22,6 +22,7 @@ from dev_health_ops.models.integrations import (
 )
 from dev_health_ops.models.settings import JobStatus, ScheduledJob, SyncConfiguration
 from dev_health_ops.sync.datasets import supported_datasets
+from dev_health_ops.sync.planner import family_dataset_keys_from_flags
 
 HISTORY_LOOKBACK_DAYS = 180
 STALE_MINIMUM_GRACE = timedelta(hours=6)
@@ -269,7 +270,14 @@ def _range_to_dict(interval: CoverageInterval) -> dict[str, Any]:
     return payload
 
 
-def _unit_window_from_row(unit: SyncRunUnit, run: SyncRun) -> UnitWindow | None:
+def _unit_window_from_row(
+    unit: SyncRunUnit, run: SyncRun, dataset_key: str | None = None
+) -> UnitWindow | None:
+    """Build a ``UnitWindow`` for one row, optionally under an effective
+    dataset key (CHAOS-2721 work-item-family expansion) instead of the raw
+    persisted ``unit.dataset_key``. Run id/source id/status/timestamps always
+    reflect the raw unit -- only the reported dataset key changes.
+    """
     since_at = unit.since_at
     before_at = unit.before_at
     if since_at is None or before_at is None:
@@ -279,11 +287,78 @@ def _unit_window_from_row(unit: SyncRunUnit, run: SyncRun) -> UnitWindow | None:
         since=ensure_utc(since_at),
         before=ensure_utc(before_at),
         source_id=str(unit.source_id),
-        dataset_key=str(unit.dataset_key),
+        dataset_key=dataset_key if dataset_key is not None else str(unit.dataset_key),
         run_id=str(unit.sync_run_id),
         status=str(unit.status),
         run_time=ensure_utc(run_time),
     )
+
+
+# CHAOS-2721 collapses the enabled work-item-family datasets (work-items,
+# work-item-labels, work-item-projects, work-item-history, work-item-comments)
+# into ONE composite SyncRunUnit per (source, window) with canonical
+# dataset_key="work-items" and boolean family_dataset_<key> processor flags
+# per enabled child dataset. Coverage math must expand a persisted unit into
+# its effective child dataset keys before doing interval/status math, or a
+# later successful composite run never supersedes stale child-dataset gaps or
+# failures. This mirrors the identical expansion in
+# ``workers/sync_units.py::_watermark_dataset_keys``/``_family_dataset_audit_metadata``.
+_WORK_ITEMS_CANONICAL_DATASET_KEY = "work-items"
+
+
+def _effective_dataset_keys(
+    dataset_key: str, processor_flags: Mapping[str, object] | None
+) -> list[str]:
+    """Expand a raw ``dataset_key``/``processor_flags`` pair into effective
+    coverage dataset keys.
+
+    Only the canonical composite key (``"work-items"``) is ever expanded --
+    a raw, non-composite ``dataset_key`` is returned as-is even if stray
+    ``family_dataset_*`` flags are present, since a plain unit never carries
+    a real work-item-family collapse. For the canonical key, returns the
+    enabled work-item-family child keys (canonical order) decoded from
+    ``processor_flags`` when any are true; otherwise falls back to the raw
+    ``dataset_key`` (missing/false/unknown flags never advance coverage for a
+    dataset that was not actually run).
+    """
+    if str(dataset_key) != _WORK_ITEMS_CANONICAL_DATASET_KEY:
+        return [str(dataset_key)]
+    family_keys = family_dataset_keys_from_flags(processor_flags)
+    return family_keys or [str(dataset_key)]
+
+
+def _effective_dataset_keys_for_unit(unit: SyncRunUnit) -> list[str]:
+    """Expand a persisted ``SyncRunUnit`` into its effective coverage dataset keys."""
+    return _effective_dataset_keys(unit.dataset_key, unit.processor_flags)
+
+
+def _is_work_item_family_dataset_key(dataset_key: str) -> bool:
+    """True when ``dataset_key`` is one of the work-item-family child datasets.
+
+    Probes the public ``family_dataset_keys_from_flags`` helper with that key's
+    own synthetic flag rather than importing planner's private
+    ``_WORK_ITEM_FAMILY_DATASETS`` constant, keeping this fix localized to
+    coverage math (mirrors the family-flag naming convention already relied on
+    by ``workers/sync_units.py``).
+    """
+    probe_flag = "family_dataset_" + dataset_key.replace("-", "_")
+    return dataset_key in family_dataset_keys_from_flags({probe_flag: True})
+
+
+def _query_dataset_keys_for_scope(dataset_keys: Sequence[str]) -> tuple[str, ...]:
+    """Expand scope dataset keys with the canonical work-item-family key.
+
+    Persisted ``SyncRunUnit`` rows carry the collapsed composite key
+    ``"work-items"`` for every enabled work-item-family dataset (CHAOS-2721).
+    A scope covering any family child key (e.g. ``work-item-comments``) must
+    therefore also query for rows keyed ``"work-items"``, or the composite row
+    is invisible to per-dataset coverage queries entirely. Non-family scopes
+    are returned unchanged.
+    """
+    keys = set(dataset_keys)
+    if any(_is_work_item_family_dataset_key(key) for key in dataset_keys):
+        keys.add(_WORK_ITEMS_CANONICAL_DATASET_KEY)
+    return tuple(sorted(keys))
 
 
 def _dataset_keys_for_config(config: SyncConfiguration) -> tuple[str, ...]:
@@ -398,11 +473,12 @@ async def _terminal_unit_windows(
     if scope.integration_id is None or not scope.sources or not scope.dataset_keys:
         return []
     source_ids = [source.id for source in scope.sources]
+    query_dataset_keys = _query_dataset_keys_for_scope(scope.dataset_keys)
     base_filters = [
         SyncRunUnit.org_id == org_id,
         SyncRunUnit.integration_id == scope.integration_id,
         SyncRunUnit.source_id.in_(source_ids),
-        SyncRunUnit.dataset_key.in_(scope.dataset_keys),
+        SyncRunUnit.dataset_key.in_(query_dataset_keys),
         SyncRunUnit.status.in_(REQUESTED_UNIT_STATUSES),
         SyncRunUnit.since_at.is_not(None),
         SyncRunUnit.before_at.is_not(None),
@@ -478,9 +554,12 @@ async def _terminal_unit_windows(
                 seen.add(key)
     windows: list[UnitWindow] = []
     for unit, run in rows:
-        window = _unit_window_from_row(unit, run)
-        if window is not None:
-            windows.append(window)
+        for effective_key in _effective_dataset_keys_for_unit(unit):
+            if effective_key not in scope.dataset_keys:
+                continue
+            window = _unit_window_from_row(unit, run, effective_key)
+            if window is not None:
+                windows.append(window)
     return windows
 
 
@@ -489,8 +568,13 @@ async def _active_run_ids(
 ) -> set[tuple[str, str]]:
     if scope.integration_id is None or not scope.sources or not scope.dataset_keys:
         return set()
+    query_dataset_keys = _query_dataset_keys_for_scope(scope.dataset_keys)
     stmt = (
-        select(SyncRunUnit.source_id, SyncRunUnit.dataset_key)
+        select(
+            SyncRunUnit.source_id,
+            SyncRunUnit.dataset_key,
+            SyncRunUnit.processor_flags,
+        )
         .select_from(SyncRun)
         .join(SyncRunUnit, SyncRunUnit.sync_run_id == SyncRun.id)
         .where(
@@ -499,14 +583,20 @@ async def _active_run_ids(
             SyncRun.status.in_(ACTIVE_RUN_STATUSES),
             SyncRunUnit.org_id == org_id,
             SyncRunUnit.source_id.in_([source.id for source in scope.sources]),
-            SyncRunUnit.dataset_key.in_(scope.dataset_keys),
+            SyncRunUnit.dataset_key.in_(query_dataset_keys),
         )
-        .distinct()
     )
-    return {
-        (str(source_id), str(dataset_key))
-        for source_id, dataset_key in (await session.execute(stmt)).all()
-    }
+    # No SQL-level .distinct(): SyncRunUnit.processor_flags is a plain JSON
+    # column (not JSONB), which Postgres cannot compare for DISTINCT. Dedup
+    # happens naturally by building a set of expanded (source_id,
+    # effective_dataset_key) pairs below.
+    pairs: set[tuple[str, str]] = set()
+    for source_id, dataset_key, processor_flags in (await session.execute(stmt)).all():
+        for effective_key in _effective_dataset_keys(dataset_key, processor_flags):
+            if effective_key not in scope.dataset_keys:
+                continue
+            pairs.add((str(source_id), effective_key))
+    return pairs
 
 
 def _backfill_interval(job: BackfillJob) -> CoverageInterval:
@@ -538,6 +628,12 @@ async def _backfill_job_run_pair_windows(
     MUST treat that as "this job requested nothing", not as "unresolvable"
     (see ``_backfill_requested_ranges``): a run that legitimately planned zero
     units must not be conflated with a marker we simply couldn't parse.
+
+    Pairs are keyed by effective dataset key (CHAOS-2721 work-item-family
+    expansion via ``_effective_dataset_keys_for_unit``), not the raw persisted
+    ``dataset_key``, so a collapsed composite unit's window is attributed to
+    each of its actually-enabled child datasets rather than the invisible
+    canonical "work-items" key.
     """
     stmt = select(SyncRunUnit).where(
         SyncRunUnit.org_id == org_id,
@@ -551,10 +647,12 @@ async def _backfill_job_run_pair_windows(
         before_at = unit.before_at
         if since_at is None or before_at is None:
             continue
-        pair = (str(unit.source_id), str(unit.dataset_key))
-        raw_windows[pair].append(
-            CoverageInterval(since=ensure_utc(since_at), before=ensure_utc(before_at))
+        interval = CoverageInterval(
+            since=ensure_utc(since_at), before=ensure_utc(before_at)
         )
+        for effective_key in _effective_dataset_keys_for_unit(unit):
+            pair = (str(unit.source_id), effective_key)
+            raw_windows[pair].append(interval)
     return {pair: merge_intervals(intervals) for pair, intervals in raw_windows.items()}
 
 

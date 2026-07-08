@@ -887,7 +887,13 @@ def build_coverage_summary_payload(
             failed_ranges = failed_ranges_not_superseded(failures, successes)
             gaps = subtract_intervals(requested, covered)
             covered_through = max(
-                (interval.before for interval in covered), default=None
+                (
+                    clipped_before
+                    for interval in covered
+                    if ensure_utc(interval.since)
+                    < (clipped_before := min(ensure_utc(interval.before), now))
+                ),
+                default=None,
             )
             stale = classify_staleness(
                 covered_through,

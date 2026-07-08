@@ -13,6 +13,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.services.auth import AuthenticatedUser
+from dev_health_ops.api.services.configuration import SettingsService
 from dev_health_ops.metrics.schemas import (
     LLMTokenSpendLegacyRecord,
     LLMTokenSpendRunRecord,
@@ -20,6 +21,7 @@ from dev_health_ops.metrics.schemas import (
 )
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride, OrgLicense
+from dev_health_ops.models.settings import Setting, SettingCategory
 from dev_health_ops.models.users import Organization, User
 from tests._helpers import tables_of
 
@@ -37,6 +39,7 @@ _TABLES = tables_of(
     OrgLicense,
     FeatureFlag,
     OrgFeatureOverride,
+    Setting,
 )
 
 
@@ -97,6 +100,14 @@ async def _seed_org(
     return {"org_id": str(org_id), "user_id": str(user_id)}
 
 
+async def _seed_active_llm_settings(session_maker, org_id: str) -> None:
+    async with session_maker() as session:
+        svc = SettingsService(session, org_id)
+        await svc.set("provider", "openai", SettingCategory.LLM.value)
+        await svc.set("api_key", "sk-org", SettingCategory.LLM.value, encrypt=True)
+        await session.commit()
+
+
 class FakeSpendSink:
     def __init__(self, summary: LLMTokenSpendSummaryRecord) -> None:
         self.summary = summary
@@ -138,11 +149,13 @@ def _make_app(
             await session.commit()
 
     def _sink_override():
-        yield sink
+        yield sink.read_llm_token_spend
 
     app.dependency_overrides[auth_router_module.get_current_user] = lambda: admin_user
     app.dependency_overrides[admin_router_module.get_session] = _session_override
-    app.dependency_overrides[settings_router_module.get_metrics_sink] = _sink_override
+    app.dependency_overrides[settings_router_module.get_llm_spend_reader] = (
+        _sink_override
+    )
     return app
 
 
@@ -180,6 +193,7 @@ def _summary() -> LLMTokenSpendSummaryRecord:
 @pytest.mark.asyncio
 async def test_admin_llm_settings_spend_returns_org_scoped_summary(session_maker):
     state = await _seed_org(session_maker, tier="team", flag_enabled=True)
+    await _seed_active_llm_settings(session_maker, state["org_id"])
     sink = FakeSpendSink(_summary())
     app = _make_app(session_maker, state, sink)
 
@@ -209,6 +223,7 @@ async def test_admin_llm_settings_spend_returns_org_scoped_summary(session_maker
 @pytest.mark.asyncio
 async def test_admin_llm_settings_spend_returns_empty_summary(session_maker):
     state = await _seed_org(session_maker, tier="team", flag_enabled=True)
+    await _seed_active_llm_settings(session_maker, state["org_id"])
     empty = LLMTokenSpendSummaryRecord(
         since=datetime(2025, 12, 3, 3, tzinfo=timezone.utc),
         limit=20,
@@ -225,6 +240,25 @@ async def test_admin_llm_settings_spend_returns_empty_summary(session_maker):
     assert resp.status_code == 200, resp.text
     assert resp.json()["runs"] == []
     assert resp.json()["legacy"] == []
+
+
+@pytest.mark.asyncio
+async def test_admin_llm_settings_spend_hides_platform_usage_without_active_byo(
+    session_maker,
+):
+    state = await _seed_org(session_maker, tier="team", flag_enabled=True)
+    sink = FakeSpendSink(_summary())
+    app = _make_app(session_maker, state, sink)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.get("/api/v1/admin/llm-settings/spend")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["runs"] == []
+    assert body["legacy"] == []
+    assert sink.org_ids == []
 
 
 @pytest.mark.asyncio

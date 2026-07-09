@@ -3,10 +3,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any, cast
 
+from dev_health_ops.api.services.configuration.clickhouse_identity_drift import (
+    split_memberships_for_review,
+)
 from dev_health_ops.api.services.configuration.clickhouse_team_drift_projector import (
     project_provider_team_rows,
     project_team_rows_with_store,
@@ -21,6 +24,7 @@ from dev_health_ops.metrics.schemas import TeamMembershipRecord, TeamRepoOwnersh
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.providers.identity import IdentityResolver, load_identity_resolver
 from dev_health_ops.providers.team_capabilities import team_provider_capabilities
+from dev_health_ops.storage.clickhouse import ClickHouseStore
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +110,7 @@ async def _populate_async(
     resolver = load_identity_resolver()
     team_rows = _team_rows(org_id=org_id, teams=teams, now=now)
     repo_rows = _repo_ownership_rows(org_id=org_id, teams=teams, now=now)
-    membership_rows, member_roster = await _membership_rows(
+    membership_rows, _, observed_team_ids = await _membership_rows(
         org_id=org_id,
         token=token,
         org_name=org_name,
@@ -115,10 +119,19 @@ async def _populate_async(
         resolver=resolver,
         strict=strict,
     )
+    sink = _sink(scope)
+    membership_rows = await _split_memberships_for_review(
+        org_id=org_id,
+        rows=membership_rows,
+        observed_team_ids=tuple(observed_team_ids),
+        sink=sink,
+        team_store=team_store,
+        discovered_at=now,
+    )
+    member_roster = _roster_from_memberships(membership_rows)
     for team_row in team_rows:
         team_row["members"] = member_roster.get(str(team_row["id"]), [])
 
-    sink = _sink(scope)
     await _project_team_rows(
         org_id=org_id,
         team_rows=team_rows,
@@ -273,10 +286,11 @@ async def _membership_rows(
     now: datetime,
     resolver: IdentityResolver,
     strict: bool,
-) -> tuple[list[TeamMembershipRecord], dict[str, list[str]]]:
+) -> tuple[list[TeamMembershipRecord], dict[str, list[str]], set[tuple[str, str]]]:
     service = TeamMembershipService(session=cast(Any, None), org_id=org_id)
     rows: list[TeamMembershipRecord] = []
     roster: dict[str, list[str]] = {}
+    observed_team_ids: set[tuple[str, str]] = set()
     seen: set[tuple[str, str]] = set()
     for team in teams:
         team_slug = str(getattr(team, "provider_team_id"))
@@ -297,6 +311,7 @@ async def _membership_rows(
                 exc,
             )
             continue
+        observed_team_ids.add((PROVIDER, team_id))
         for member in members:
             raw_identity = str(getattr(member, "provider_identity", "")).strip()
             if not raw_identity:
@@ -339,7 +354,7 @@ async def _membership_rows(
                     updated_at=now,
                 )
             )
-    return rows, roster
+    return rows, roster, observed_team_ids
 
 
 def _sink(scope: Mapping[str, Any]) -> ClickHouseMetricsSink:
@@ -347,6 +362,21 @@ def _sink(scope: Mapping[str, Any]) -> ClickHouseMetricsSink:
     if not dsn:
         raise ValueError("CLICKHOUSE_URI is required for GitHub team auto-import")
     return ClickHouseMetricsSink(dsn=dsn)
+
+
+def _roster_from_memberships(
+    rows: Iterable[TeamMembershipRecord],
+) -> dict[str, list[str]]:
+    roster: dict[str, list[str]] = {}
+    for row in rows:
+        roster_for_team = roster.setdefault(str(row.team_id), [])
+        values = tuple(row.identity_facets) or tuple(
+            value for value in (row.raw_provider_user_id, row.raw_email) if value
+        )
+        for value in values:
+            if value and value not in roster_for_team:
+                roster_for_team.append(str(value))
+    return roster
 
 
 async def _project_team_rows(
@@ -378,6 +408,36 @@ async def _project_team_rows(
         )
         return
     await sink.insert_teams(team_rows)
+
+
+async def _split_memberships_for_review(
+    *,
+    org_id: str,
+    rows: list[TeamMembershipRecord],
+    observed_team_ids: Sequence[tuple[str, str]],
+    sink: Any,
+    team_store: Any | None,
+    discovered_at: datetime,
+) -> list[TeamMembershipRecord]:
+    if team_store is not None:
+        return await split_memberships_for_review(
+            store=team_store,
+            org_id=org_id,
+            rows=rows,
+            observed_team_ids=observed_team_ids,
+            discovered_at=discovered_at,
+        )
+    if isinstance(sink, _REAL_CLICKHOUSE_SINK_TYPE):
+        async with ClickHouseStore(sink.dsn) as store:
+            store.org_id = org_id
+            return await split_memberships_for_review(
+                store=store,
+                org_id=org_id,
+                rows=rows,
+                observed_team_ids=observed_team_ids,
+                discovered_at=discovered_at,
+            )
+    return rows
 
 
 def _team_id(provider_team_id: str) -> str:

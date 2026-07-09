@@ -44,6 +44,7 @@ _NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 _PENDING_ALIASES = (
     "change_id",
+    "entity_type",
     "team_id",
     "team_name",
     "provider",
@@ -107,6 +108,8 @@ class FakeDriftStore:
         self.observations: dict[str, dict[str, Any]] = {}
         self.pending: list[dict[str, Any]] = []
         self.drift_inserts: list[dict[str, Any]] = []
+        self.memberships: list[dict[str, Any]] = []
+        self.manual_fallbacks: list[dict[str, Any]] = []
         self._lock = asyncio.Lock()
         self.client = _FakeDriftClient(self)
 
@@ -135,6 +138,14 @@ class FakeDriftStore:
 
     async def insert_team_drift_changes(self, rows: list[dict[str, Any]]) -> None:
         self.drift_inserts.extend(dict(row) for row in rows)
+
+    async def insert_team_memberships(self, rows: list[dict[str, Any]]) -> None:
+        self.memberships.extend(dict(row) for row in rows)
+
+    async def insert_manual_attribution_fallbacks(
+        self, rows: list[dict[str, Any]]
+    ) -> None:
+        self.manual_fallbacks.extend(dict(row) for row in rows)
 
 
 def _seed_catalog_team(
@@ -172,11 +183,31 @@ def _seed_observation(store: FakeDriftStore, **overrides: Any) -> None:
 def _pending(change_id: str, *, field: str, old: Any, new: Any) -> dict[str, Any]:
     return {
         "change_id": change_id,
+        "entity_type": "team",
         "team_id": "team-1",
         "team_name": "Platform",
         "provider": "linear",
         "native_team_key": "TEAM",
         "change_type": "field_changed",
+        "field": field,
+        "old_value_json": json.dumps(old, separators=(",", ":")),
+        "new_value_json": json.dumps(new, separators=(",", ":")),
+        "first_seen_at": _NOW,
+        "last_seen_at": _NOW,
+    }
+
+
+def _identity_pending(
+    change_id: str, *, old: Any, new: Any, field: str = "team_memberships"
+) -> dict[str, Any]:
+    return {
+        "change_id": change_id,
+        "entity_type": "identity",
+        "team_id": "team-1",
+        "team_name": "Platform",
+        "provider": "linear",
+        "native_team_key": "team-1",
+        "change_type": "membership_changed",
         "field": field,
         "old_value_json": json.dumps(old, separators=(",", ":")),
         "new_value_json": json.dumps(new, separators=(",", ":")),
@@ -336,3 +367,61 @@ def test_approve_without_change_ids_and_not_all_is_a_noop() -> None:
     assert store.teams["team-1"]["name"] == "Old"
     assert store.drift_inserts == []
     assert result == {"approved": 0, "change_ids": []}
+
+
+def test_approve_identity_membership_change_applies_exact_membership() -> None:
+    store = FakeDriftStore()
+    _seed_catalog_team(store, name="Platform", description=None)
+    old = {
+        "field": "team_memberships",
+        "manual_membership": {
+            "org_id": ORG_ID,
+            "provider": "linear",
+            "team_id": "manual-team",
+            "member_id": "linear:alice",
+            "raw_provider_user_id": "alice@example.com",
+            "raw_email": "alice@example.com",
+            "source": "manual",
+            "is_primary": 1,
+            "specificity": 100,
+            "priority": 5,
+            "valid_from": _NOW.isoformat(),
+            "valid_to": None,
+            "updated_at": _NOW.isoformat(),
+        },
+    }
+    new = {
+        "org_id": ORG_ID,
+        "provider": "linear",
+        "team_id": "team-1",
+        "member_id": "linear:alice",
+        "raw_provider_user_id": "alice@example.com",
+        "raw_email": "alice@example.com",
+        "source": "native",
+        "is_primary": 1,
+        "specificity": 100,
+        "priority": 10,
+        "valid_from": _NOW.isoformat(),
+        "valid_to": None,
+        "updated_at": _NOW.isoformat(),
+    }
+    store.pending = [_identity_pending("chg-member", old=old, new=new)]
+
+    result = asyncio.run(
+        _service(store).approve(
+            team_id="team-1", change_ids=["chg-member"], decided_by="admin"
+        )
+    )
+
+    assert result == {"approved": 1, "change_ids": ["chg-member"]}
+    assert store.memberships[0]["team_id"] == "team-1"
+    assert store.memberships[0]["source"] == "native"
+    assert store.memberships[1]["team_id"] == "manual-team"
+    assert store.memberships[1]["source"] == "manual"
+    assert store.memberships[1]["valid_to"] is not None
+    assert set(store.teams["team-1"]["members"]) == {
+        "alice@example.com",
+        "linear:alice",
+    }
+    assert store.drift_inserts[0]["entity_type"] == "identity"
+    assert store.drift_inserts[0]["status"] == "approved"

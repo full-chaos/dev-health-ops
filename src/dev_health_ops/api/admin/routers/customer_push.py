@@ -45,9 +45,11 @@ from dev_health_ops.api.external_ingest.schemas import (
     BatchEnvelope,
 )
 from dev_health_ops.api.services.auth import AuthenticatedUser
+from dev_health_ops.api.services.licensing import feature_flag_state, resolve_org_tier
 from dev_health_ops.api.utils.audit import emit_audit_log
 from dev_health_ops.external_ingest.ownership import find_matching_managed_sources
 from dev_health_ops.external_ingest.validate import validate_records
+from dev_health_ops.licensing.types import TIER_ORDER, LicenseTier
 from dev_health_ops.models.audit import AuditAction, AuditResourceType
 from dev_health_ops.models.ingest_auth import (
     TOKEN_PREFIX_DISPLAY_LENGTH,
@@ -60,6 +62,7 @@ from dev_health_ops.models.ingest_auth import (
     hash_ingest_token,
 )
 from dev_health_ops.models.integrations import Integration
+from dev_health_ops.models.licensing import OrgLicense
 
 from .common import get_session
 
@@ -68,6 +71,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _VALID_SYSTEMS = {"github", "gitlab", "jira", "linear", "custom"}
+_CUSTOMER_PUSH_FEATURE = "customer_push_ingest"
+_CUSTOMER_PUSH_REQUIRED_TIER = LicenseTier.TEAM
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +205,58 @@ async def _get_org_token(
     if token is None:
         raise HTTPException(status_code=404, detail="Token not found")
     return token
+
+
+async def _require_customer_push_access(session: AsyncSession, org_id: str) -> None:
+    try:
+        org_uuid = uuid.UUID(org_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Organization not found") from exc
+
+    def _state(sync_session: Any) -> tuple[str, LicenseTier]:
+        org_license = (
+            sync_session.query(OrgLicense).filter(OrgLicense.org_id == org_uuid).first()
+        )
+        tier = resolve_org_tier(sync_session, org_uuid, org_license)
+        state = feature_flag_state(
+            sync_session,
+            org_uuid,
+            _CUSTOMER_PUSH_FEATURE,
+            min_tier=_CUSTOMER_PUSH_REQUIRED_TIER,
+        )
+        return state, tier
+
+    state, tier = await session.run_sync(_state)
+    if state == "enabled":
+        return
+    if TIER_ORDER.index(tier) < TIER_ORDER.index(_CUSTOMER_PUSH_REQUIRED_TIER):
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "feature_not_licensed",
+                "feature": _CUSTOMER_PUSH_FEATURE,
+                "required_tier": _CUSTOMER_PUSH_REQUIRED_TIER.value,
+                "current_tier": tier.value,
+            },
+        )
+    if state == "unregistered":
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "feature_not_licensed",
+                "feature": _CUSTOMER_PUSH_FEATURE,
+                "required_tier": _CUSTOMER_PUSH_REQUIRED_TIER.value,
+                "current_tier": "unknown",
+            },
+        )
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": "feature_not_enabled",
+            "feature": _CUSTOMER_PUSH_FEATURE,
+            "message": "Customer push ingest is not enabled for this organization",
+        },
+    )
 
 
 async def _resolve_ownership(
@@ -344,6 +401,7 @@ async def create_source(
     current_user: AuthenticatedUser = Depends(get_admin_user),
 ) -> IngestSourceResponse:
     org_id = current_user.org_id
+    await _require_customer_push_access(session, org_id)
     system = _validate_system(payload.system)
     mode = _validate_mode(payload.mode)
     _reject_fullchaos_hosted_webhook_mode(payload.webhook_mode)
@@ -434,6 +492,7 @@ async def list_sources(
     session: AsyncSession = Depends(get_session),
     current_user: AuthenticatedUser = Depends(get_admin_user),
 ) -> list[IngestSourceResponse]:
+    await _require_customer_push_access(session, current_user.org_id)
     result = await session.execute(
         select(IngestSource)
         .where(IngestSource.org_id == current_user.org_id)
@@ -448,6 +507,7 @@ async def get_source(
     session: AsyncSession = Depends(get_session),
     current_user: AuthenticatedUser = Depends(get_admin_user),
 ) -> IngestSourceResponse:
+    await _require_customer_push_access(session, current_user.org_id)
     source = await _get_org_source(session, current_user.org_id, source_id)
     return _source_to_response(source)
 
@@ -461,6 +521,7 @@ async def patch_source(
     current_user: AuthenticatedUser = Depends(get_admin_user),
 ) -> IngestSourceResponse:
     org_id = current_user.org_id
+    await _require_customer_push_access(session, org_id)
     source = await _get_org_source(session, org_id, source_id)
 
     changes: dict[str, Any] = {}
@@ -530,6 +591,7 @@ async def list_source_tokens(
     current_user: AuthenticatedUser = Depends(get_admin_user),
 ) -> list[IngestTokenResponse]:
     org_id = current_user.org_id
+    await _require_customer_push_access(session, org_id)
     source = await _get_org_source(session, org_id, source_id)
     result = await session.execute(
         select(IngestToken)
@@ -552,6 +614,7 @@ async def create_source_token(
     current_user: AuthenticatedUser = Depends(get_admin_user),
 ) -> IngestTokenCreateResponse:
     org_id = current_user.org_id
+    await _require_customer_push_access(session, org_id)
     source = await _get_org_source(session, org_id, source_id)
     return await _create_token(
         session, request, current_user, org_id, source.id, payload
@@ -563,6 +626,7 @@ async def list_org_tokens(
     session: AsyncSession = Depends(get_session),
     current_user: AuthenticatedUser = Depends(get_admin_user),
 ) -> list[IngestTokenResponse]:
+    await _require_customer_push_access(session, current_user.org_id)
     result = await session.execute(
         select(IngestToken)
         .where(IngestToken.org_id == current_user.org_id)
@@ -585,6 +649,7 @@ async def create_org_token(
     """Create an org-wide (unbound) token -- never eligible for ingest:write
     (Design Decision 7: NULL source_id is only legal for schema:read/
     ingest:status)."""
+    await _require_customer_push_access(session, current_user.org_id)
     if IngestTokenScope.INGEST_WRITE.value in payload.scopes:
         raise HTTPException(
             status_code=400,
@@ -610,6 +675,7 @@ async def rotate_token(
 ) -> IngestTokenCreateResponse:
     """Hard, immediate cutover (Design Decision 16) -- no grace window."""
     org_id = current_user.org_id
+    await _require_customer_push_access(session, org_id)
     old_token = await _get_org_token(session, org_id, token_id, for_update=True)
     if old_token.revoked_at is not None:
         raise HTTPException(status_code=400, detail="Token already revoked")
@@ -676,6 +742,7 @@ async def revoke_token(
     current_user: AuthenticatedUser = Depends(get_admin_user),
 ) -> IngestTokenResponse:
     org_id = current_user.org_id
+    await _require_customer_push_access(session, org_id)
     token = await _get_org_token(session, org_id, token_id, for_update=True)
     if token.revoked_at is None:
         token.revoked_at = datetime.now(timezone.utc)
@@ -788,6 +855,7 @@ async def list_source_batches(
     offset: int = Query(default=0, ge=0),
 ) -> AdminBatchListResponse:
     org_id = current_user.org_id
+    await _require_customer_push_access(session, org_id)
     source = await _get_org_source(session, org_id, source_id)
     rows, total = await ingest_status.list_batches(
         session,
@@ -818,6 +886,7 @@ async def get_batch_detail(
     rejected_records_offset: int = Query(default=0, ge=0),
 ) -> AdminBatchResponse:
     org_id = current_user.org_id
+    await _require_customer_push_access(session, org_id)
     try:
         parsed_id = uuid.UUID(ingestion_id)
     except ValueError:
@@ -891,6 +960,7 @@ async def validate_source_payload(
     session-authed console request). The ``source_id`` path segment is a
     tenant/scope check only.
     """
+    await _require_customer_push_access(session, current_user.org_id)
     await _get_org_source(session, current_user.org_id, source_id)
 
     try:
@@ -984,8 +1054,10 @@ def _external_ingest_limits() -> dict[str, int]:
 
 @router.get("/customer-push/schemas")
 async def admin_list_schemas(
+    session: AsyncSession = Depends(get_session),
     current_user: AuthenticatedUser = Depends(get_admin_user),
 ) -> dict[str, Any]:
+    await _require_customer_push_access(session, current_user.org_id)
     return {
         "schemaVersions": [SCHEMA_VERSION],
         "recordKinds": sorted(RECORD_KIND_MODELS),
@@ -996,8 +1068,10 @@ async def admin_list_schemas(
 @router.get("/customer-push/schemas/{schema_version}")
 async def admin_get_schema(
     schema_version: str,
+    session: AsyncSession = Depends(get_session),
     current_user: AuthenticatedUser = Depends(get_admin_user),
 ) -> dict[str, Any]:
+    await _require_customer_push_access(session, current_user.org_id)
     if schema_version != SCHEMA_VERSION:
         raise HTTPException(
             status_code=404, detail=f"Unknown schema version: {schema_version!r}"

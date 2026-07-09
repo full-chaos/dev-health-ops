@@ -27,6 +27,7 @@ from dev_health_ops.models.external_ingest import (
 )
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.ingest_auth import IngestSource
+from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride, OrgLicense
 from dev_health_ops.models.users import Organization, User
 from tests._helpers import tables_of
 
@@ -37,9 +38,14 @@ _TABLES = tables_of(
     User,
     Organization,
     IngestSource,
+    FeatureFlag,
+    OrgFeatureOverride,
+    OrgLicense,
     ExternalIngestBatch,
     ExternalIngestRejection,
 )
+
+_CUSTOMER_PUSH_FEATURE = "customer_push_ingest"
 
 
 @pytest_asyncio.fixture
@@ -63,8 +69,14 @@ async def session_maker(tmp_path: Path):
 async def seeded_state(session_maker):
     org_id = uuid.uuid4()
     user_id = uuid.uuid4()
-    org = Organization(id=org_id, slug="test-org", name="Test Org", tier="pro")
+    org = Organization(id=org_id, slug="test-org", name="Test Org", tier="team")
     user = User(id=user_id, email="admin@example.com", is_active=True)
+    feature = FeatureFlag(
+        key=_CUSTOMER_PUSH_FEATURE,
+        name="Customer Push Ingest",
+        category="integrations",
+        min_tier="team",
+    )
     source = IngestSource(
         id=uuid.uuid4(),
         org_id=str(org_id),
@@ -75,7 +87,7 @@ async def seeded_state(session_maker):
     )
 
     async with session_maker() as session:
-        session.add_all([org, user, source])
+        session.add_all([org, user, feature, source])
         await session.commit()
 
     return {"org_id": str(org_id), "user_id": str(user_id), "source_id": str(source.id)}

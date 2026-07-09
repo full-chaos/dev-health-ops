@@ -25,6 +25,7 @@ from dev_health_ops.models.audit import AuditLog
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.ingest_auth import IngestSource, IngestToken
 from dev_health_ops.models.integrations import Integration, IntegrationSource
+from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride, OrgLicense
 from dev_health_ops.models.users import Organization, User
 from tests._helpers import tables_of
 
@@ -38,8 +39,13 @@ _TABLES = tables_of(
     IntegrationSource,
     IngestSource,
     IngestToken,
+    FeatureFlag,
+    OrgFeatureOverride,
+    OrgLicense,
     AuditLog,
 )
+
+_CUSTOMER_PUSH_FEATURE = "customer_push_ingest"
 
 
 # ---------------------------------------------------------------------------
@@ -68,11 +74,17 @@ async def session_maker(tmp_path: Path):
 async def seeded_state(session_maker):
     org_id = uuid.uuid4()
     user_id = uuid.uuid4()
-    org = Organization(id=org_id, slug="test-org", name="Test Org", tier="pro")
+    org = Organization(id=org_id, slug="test-org", name="Test Org", tier="team")
     user = User(id=user_id, email="admin@example.com", is_active=True)
+    feature = FeatureFlag(
+        key=_CUSTOMER_PUSH_FEATURE,
+        name="Customer Push Ingest",
+        category="integrations",
+        min_tier="team",
+    )
 
     async with session_maker() as session:
-        session.add_all([org, user])
+        session.add_all([org, user, feature])
         await session.commit()
 
     return {"org_id": str(org_id), "user_id": str(user_id)}
@@ -172,6 +184,24 @@ async def _create_source(
     return await ac.post("/api/v1/admin/customer-push/sources", json=payload)
 
 
+async def _set_customer_push_feature_enabled(session_maker, *, enabled: bool) -> None:
+    async with session_maker() as session:
+        result = await session.execute(
+            select(FeatureFlag).where(FeatureFlag.key == _CUSTOMER_PUSH_FEATURE)
+        )
+        feature = result.scalar_one()
+        feature.is_enabled = enabled
+        await session.commit()
+
+
+async def _set_org_tier(session_maker, org_id: str, *, tier: str) -> None:
+    async with session_maker() as session:
+        org = await session.get(Organization, uuid.UUID(org_id))
+        assert org is not None
+        org.tier = tier
+        await session.commit()
+
+
 async def _audit_actions(session_maker, org_id: str) -> list[str]:
     async with session_maker() as session:
         result = await session.execute(
@@ -196,6 +226,34 @@ async def test_create_source_defaults_to_customer_push_enabled(client):
     assert body["webhook_mode"] == "disabled"
     assert body["matched_integration_source_id"] is None
     assert body["warnings"] == []
+
+
+@pytest.mark.asyncio
+async def test_create_source_denies_org_below_customer_push_tier(session_maker, client):
+    ac, state = client
+    await _set_org_tier(session_maker, state["org_id"], tier="community")
+
+    resp = await _create_source(ac, system="github", instance="acme/api")
+
+    assert resp.status_code == 402
+    body = resp.json()["detail"]
+    assert body["error"] == "feature_not_licensed"
+    assert body["feature"] == _CUSTOMER_PUSH_FEATURE
+
+
+@pytest.mark.asyncio
+async def test_create_source_denies_when_customer_push_flag_disabled(
+    session_maker, client
+):
+    ac, _ = client
+    await _set_customer_push_feature_enabled(session_maker, enabled=False)
+
+    resp = await _create_source(ac, system="github", instance="acme/api")
+
+    assert resp.status_code == 403
+    body = resp.json()["detail"]
+    assert body["error"] == "feature_not_enabled"
+    assert body["feature"] == _CUSTOMER_PUSH_FEATURE
 
 
 @pytest.mark.asyncio

@@ -29,6 +29,7 @@ from fastapi import Depends, Request
 from limits import parse as parse_rate_limit
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from dev_health_ops.api.dependencies import get_postgres_session_dep
 from dev_health_ops.api.middleware.rate_limit import (
@@ -38,8 +39,10 @@ from dev_health_ops.api.middleware.rate_limit import (
     limiter,
 )
 from dev_health_ops.api.services.auth import _current_org_id, set_current_org_id
+from dev_health_ops.api.services.licensing import feature_flag_state
 from dev_health_ops.api.utils.audit import emit_audit_log
 from dev_health_ops.db import get_postgres_session
+from dev_health_ops.licensing.types import LicenseTier
 from dev_health_ops.models.audit import AuditAction, AuditResourceType
 from dev_health_ops.models.ingest_auth import (
     TOKEN_PREFIX,
@@ -54,6 +57,8 @@ logger = logging.getLogger(__name__)
 
 _AUTH_ATTEMPT_LIMIT_ITEM = parse_rate_limit(INGEST_AUTH_ATTEMPT_IP_LIMIT)
 _AUTH_FAILURE_LIMIT_ITEM = parse_rate_limit(INGEST_AUTH_FAILURE_IP_LIMIT)
+_CUSTOMER_PUSH_FEATURE = "customer_push_ingest"
+_CUSTOMER_PUSH_REQUIRED_TIER = LicenseTier.TEAM
 
 
 @dataclass(frozen=True)
@@ -214,6 +219,20 @@ async def _bump_last_used(token_id: uuid.UUID, ip: str | None) -> None:
         logger.exception("Failed to record ingest token last_used_at (non-fatal)")
 
 
+async def _customer_push_feature_state(db: AsyncSession, org_id: str) -> str:
+    org_uuid = uuid.UUID(org_id)
+
+    def _state(sync_session: Session) -> str:
+        return feature_flag_state(
+            sync_session,
+            org_uuid,
+            _CUSTOMER_PUSH_FEATURE,
+            min_tier=_CUSTOMER_PUSH_REQUIRED_TIER,
+        )
+
+    return await db.run_sync(_state)
+
+
 def require_ingest_scope(scope: str):
     """Single dependency factory for CHAOS-2690's data-plane scope checks.
 
@@ -297,6 +316,22 @@ def require_ingest_scope(scope: str):
                 403,
                 "insufficient_scope",
                 f"Token is missing required scope: {scope}",
+            )
+
+        feature_state = await _customer_push_feature_state(db, token.org_id)
+        if feature_state != "enabled":
+            _record_auth_failure_hit(request)
+            await _emit_failure_audit(
+                db,
+                request,
+                org_id=token.org_id,
+                token_id=str(token.id),
+                reason=f"feature_not_enabled:{_CUSTOMER_PUSH_FEATURE}",
+            )
+            raise ExternalIngestError(
+                403,
+                "feature_not_enabled",
+                "Customer push ingest is not enabled for this organization",
             )
 
         ctx = IngestAuthContext(

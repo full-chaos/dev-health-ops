@@ -1,8 +1,8 @@
-"""Migration 0034 (external_ingest_batches recompute columns +
+"""Migration 0035 (external_ingest_batches recompute columns +
 external_ingest_recompute_jobs) tests.
 
 Follows the idempotent-upgrade/downgrade harness established for migration
-0031 (``tests/test_rate_limit_observations.py``) and migration 0033
+0031 (``tests/test_rate_limit_observations.py``) and migration 0034
 (``tests/test_external_ingest_status_migration.py``).
 """
 
@@ -16,16 +16,16 @@ from alembic.operations import Operations
 from sqlalchemy import create_engine
 
 
-def _load_migration_0034():
+def _load_migration_0035():
     return importlib.import_module(
-        "dev_health_ops.alembic.versions.0034_add_external_ingest_recompute"
+        "dev_health_ops.alembic.versions.0035_add_external_ingest_recompute"
     )
 
 
-def test_migration_0034_idempotent_upgrade_downgrade():
-    migration = _load_migration_0034()
-    assert migration.revision == "0034"
-    assert migration.down_revision == "0033"
+def test_migration_0035_idempotent_upgrade_downgrade():
+    migration = _load_migration_0035()
+    assert migration.revision == "0035"
+    assert migration.down_revision == "0034"
 
     engine = create_engine("sqlite:///:memory:")
     try:

@@ -133,6 +133,13 @@ STANDARD_FEATURES: list[STANDARD_FEATURE_ROW] = [
         "Webhook ingestion",
     ),
     (
+        "customer_push_ingest",
+        "Customer Push Ingest",
+        FeatureCategory.INTEGRATIONS,
+        LicenseTier.TEAM,
+        "Customer-owned external ingestion runners",
+    ),
+    (
         "scheduled_jobs",
         "Scheduled Jobs",
         FeatureCategory.CORE,

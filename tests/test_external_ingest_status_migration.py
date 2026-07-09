@@ -1,8 +1,8 @@
-"""Migration 0033 (external_ingest_batches/rejections/batch_payloads) tests.
+"""Migration 0034 (external_ingest_batches/rejections/batch_payloads) tests.
 
 Follows the idempotent-upgrade/downgrade harness established for migration
 0031 (tests/test_rate_limit_observations.py::test_migration_0031_idempotent_upgrade)
-and migration 0032 (tests/test_migration_0032_customer_push_ingest_auth.py).
+and migration 0033 (tests/test_migration_0032_customer_push_ingest_auth.py).
 """
 
 from __future__ import annotations
@@ -15,16 +15,16 @@ from alembic.operations import Operations
 from sqlalchemy import create_engine
 
 
-def _load_migration_0033():
+def _load_migration_0034():
     return importlib.import_module(
-        "dev_health_ops.alembic.versions.0033_add_external_ingest_status_store"
+        "dev_health_ops.alembic.versions.0034_add_external_ingest_status_store"
     )
 
 
-def test_migration_0033_idempotent_upgrade_downgrade():
-    migration = _load_migration_0033()
-    assert migration.revision == "0033"
-    assert migration.down_revision == "0032"
+def test_migration_0034_idempotent_upgrade_downgrade():
+    migration = _load_migration_0034()
+    assert migration.revision == "0034"
+    assert migration.down_revision == "0033"
 
     engine = create_engine("sqlite:///:memory:")
     try:

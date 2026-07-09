@@ -53,6 +53,7 @@ from dev_health_ops.models.ingest_auth import (
     generate_ingest_token,
     hash_ingest_token,
 )
+from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride, OrgLicense
 from dev_health_ops.models.users import Organization, User
 from tests._helpers import tables_of
 
@@ -63,7 +64,17 @@ router_module = sys.modules["dev_health_ops.api.external_ingest.router"]
 
 BASE = "/api/v1/external-ingest"
 
-_TABLES = tables_of(Organization, User, IngestSource, IngestToken, AuditLog)
+_TABLES = tables_of(
+    Organization,
+    User,
+    IngestSource,
+    IngestToken,
+    AuditLog,
+    FeatureFlag,
+    OrgFeatureOverride,
+    OrgLicense,
+)
+_CUSTOMER_PUSH_FEATURE = "customer_push_ingest"
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +97,7 @@ async def session_maker(tmp_path: Path):
         await engine.dispose()
 
 
-@pytest_asyncio.fixture(autouse=True)
+@pytest.fixture(autouse=True)
 def _patch_isolated_session(monkeypatch, session_maker):
     """Point auth.py's isolated-session writes (the last_used bump, called
     via ``get_postgres_session()`` rather than FastAPI's ``Depends()``) at
@@ -118,11 +129,29 @@ def _reset_ingest_auth_failure_limiter():
     yield
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def _seed_customer_push_feature(session_maker):
+    async with session_maker() as session:
+        result = await session.execute(
+            select(FeatureFlag).where(FeatureFlag.key == _CUSTOMER_PUSH_FEATURE)
+        )
+        if result.scalar_one_or_none() is None:
+            session.add(
+                FeatureFlag(
+                    key=_CUSTOMER_PUSH_FEATURE,
+                    name="Customer Push Ingest",
+                    category="integrations",
+                    min_tier="team",
+                )
+            )
+            await session.commit()
+
+
 @pytest_asyncio.fixture
 async def org_id(session_maker) -> str:
     oid = uuid.uuid4()
     async with session_maker() as session:
-        session.add(Organization(id=oid, slug="test-org", name="Test Org", tier="pro"))
+        session.add(Organization(id=oid, slug="test-org", name="Test Org", tier="team"))
         await session.commit()
     return str(oid)
 
@@ -382,6 +411,59 @@ async def test_valid_token_yields_ctx_and_resets_org_contextvar(session_maker, o
 
 
 @pytest.mark.asyncio
+async def test_valid_token_rejected_when_customer_push_feature_disabled(
+    session_maker, org_id
+):
+    async with session_maker() as session:
+        result = await session.execute(
+            select(FeatureFlag).where(FeatureFlag.key == _CUSTOMER_PUSH_FEATURE)
+        )
+        feature = result.scalar_one()
+        feature.is_enabled = False
+        await session.commit()
+
+    plaintext, token = await _create_token(
+        session_maker, org_id, scopes=["schema:read"]
+    )
+    dep = auth_module.require_ingest_scope("schema:read")
+    request = _make_request(authorization=f"Bearer {plaintext}")
+    async with session_maker() as db:
+        agen = dep(request=request, db=db)
+        with pytest.raises(ExternalIngestError) as exc_info:
+            await agen.__anext__()
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.code == "feature_not_enabled"
+
+    rows = await _audit_rows(session_maker, org_id)
+    assert len(rows) == 1
+    assert rows[0].resource_id == str(token.id)
+
+
+@pytest.mark.asyncio
+async def test_valid_token_rejected_when_org_below_customer_push_tier(
+    session_maker, org_id
+):
+    async with session_maker() as session:
+        org = await session.get(Organization, uuid.UUID(org_id))
+        org.tier = "community"
+        await session.commit()
+
+    plaintext, _token = await _create_token(
+        session_maker, org_id, scopes=["schema:read"]
+    )
+    dep = auth_module.require_ingest_scope("schema:read")
+    request = _make_request(authorization=f"Bearer {plaintext}")
+    async with session_maker() as db:
+        agen = dep(request=request, db=db)
+        with pytest.raises(ExternalIngestError) as exc_info:
+            await agen.__anext__()
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.code == "feature_not_enabled"
+
+
+@pytest.mark.asyncio
 async def test_valid_token_with_bound_source_resolves_ctx_source(session_maker, org_id):
     source_id = uuid.uuid4()
     async with session_maker() as session:
@@ -419,10 +501,10 @@ async def test_two_tokens_resolve_to_their_own_distinct_orgs(session_maker):
         session.add_all(
             [
                 Organization(
-                    id=uuid.UUID(org_a), slug="org-a", name="Org A", tier="pro"
+                    id=uuid.UUID(org_a), slug="org-a", name="Org A", tier="team"
                 ),
                 Organization(
-                    id=uuid.UUID(org_b), slug="org-b", name="Org B", tier="pro"
+                    id=uuid.UUID(org_b), slug="org-b", name="Org B", tier="team"
                 ),
             ]
         )

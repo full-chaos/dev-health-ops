@@ -12,6 +12,7 @@ from dev_health_ops.db import get_postgres_session
 from dev_health_ops.licensing.types import LicenseTier
 
 router = APIRouter(prefix="/api/v1/licensing", tags=["licensing"])
+_CUSTOMER_PUSH_FEATURE = "customer_push_ingest"
 
 
 def _coerce_license_tier(value: object) -> LicenseTier:
@@ -93,9 +94,7 @@ async def get_entitlements(
         )
         org_license = license_result.scalar_one_or_none()
 
-        flags_result = await session.execute(
-            select(FeatureFlag).where(FeatureFlag.is_enabled == True)  # noqa: E712
-        )
+        flags_result = await session.execute(select(FeatureFlag))
         all_flags = flags_result.scalars().all()
 
         overrides_result = await session.execute(
@@ -103,19 +102,32 @@ async def get_entitlements(
         )
         org_overrides = {str(o.feature_id): o for o in overrides_result.scalars().all()}
 
-    tier = str(org.tier)
+    tier = str(org_license.tier) if org_license is not None else str(org.tier)
     tier_enum = _coerce_license_tier(tier)
 
     org_rank = TIER_RANK.get(tier_enum, 0)
 
     features: dict[str, bool] = {}
+    flags_by_key = {str(flag.key): flag for flag in all_flags}
     for flag in all_flags:
         min_tier = _coerce_license_tier(flag.min_tier)
-        features[str(flag.key)] = org_rank >= TIER_RANK.get(min_tier, 0)
+        features[str(flag.key)] = bool(flag.is_enabled) and org_rank >= TIER_RANK.get(
+            min_tier, 0
+        )
 
     if org_license and org_license.features_override:
         for key, enabled in _coerce_bool_map(org_license.features_override).items():
-            features[key] = enabled
+            override_flag = flags_by_key.get(key)
+            if override_flag is None:
+                features[key] = (
+                    False if key == _CUSTOMER_PUSH_FEATURE else bool(enabled)
+                )
+                continue
+            min_tier = _coerce_license_tier(override_flag.min_tier)
+            tier_allowed = org_rank >= TIER_RANK.get(min_tier, 0)
+            features[key] = (
+                bool(enabled) and bool(override_flag.is_enabled) and tier_allowed
+            )
 
     for override in org_overrides.values():
         for flag in all_flags:
@@ -123,7 +135,11 @@ async def get_entitlements(
                 now = datetime.now().astimezone()
                 if override.expires_at and override.expires_at < now:
                     continue
-                features[str(flag.key)] = bool(override.is_enabled)
+                min_tier = _coerce_license_tier(flag.min_tier)
+                tier_allowed = org_rank >= TIER_RANK.get(min_tier, 0)
+                features[str(flag.key)] = (
+                    bool(override.is_enabled) and bool(flag.is_enabled) and tier_allowed
+                )
                 break
 
     limits = _coerce_limits_map(

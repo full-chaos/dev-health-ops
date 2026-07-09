@@ -5,8 +5,7 @@ from dev_health_ops.llm.explainers.investment_mix_explainer import (
 )
 
 
-def test_parse_and_validate_response_handles_dict_summary():
-    """Test that it handles summary as a dictionary containing 'statement'."""
+def test_parse_and_validate_response_rejects_dict_summary():
     raw_response = {
         "summary": {"statement": "This is a dictionary-based summary."},
         "top_findings": [
@@ -29,16 +28,27 @@ def test_parse_and_validate_response_handles_dict_summary():
     text = json.dumps(raw_response)
     result = parse_and_validate_response(text)
 
-    assert result is not None
-    assert result["summary"] == "This is a dictionary-based summary."
+    assert result is None
 
 
 def test_parse_and_validate_response_handles_string_summary():
     """Test that it still handles summary as a simple string."""
     raw_response = {
-        "summary": "This is a string-based summary.",
+        "summary": "This summary appears string based.",
         "top_findings": [],
-        "confidence": {"level": "low", "band_mix": {}, "drivers": []},
+        "confidence": {
+            "level": "low",
+            "quality_mean": None,
+            "quality_stddev": None,
+            "band_mix": {
+                "high": 0,
+                "moderate": 0,
+                "low": 0,
+                "very_low": 0,
+                "unknown": 0,
+            },
+            "drivers": [],
+        },
         "what_to_check_next": [],
         "anti_claims": [],
     }
@@ -47,4 +57,4 @@ def test_parse_and_validate_response_handles_string_summary():
     result = parse_and_validate_response(text)
 
     assert result is not None
-    assert result["summary"] == "This is a string-based summary."
+    assert result["summary"] == "This summary appears string based."

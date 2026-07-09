@@ -47,6 +47,10 @@ from .batch import (
 
 logger = logging.getLogger(__name__)
 
+CATEGORIZATION_RESPONSE_FORMAT = "investment_categorization"
+INVESTMENT_MIX_RESPONSE_FORMAT = "investment_mix_explanation"
+RESPONSE_FORMAT_MARKER = "DEV_HEALTH_RESPONSE_FORMAT="
+
 
 # -----------------------------------------------------------------------------
 # Shared helpers
@@ -54,14 +58,20 @@ logger = logging.getLogger(__name__)
 
 
 def is_json_schema_prompt(prompt: str) -> bool:
-    """Heuristic: categorization prompts include the fixed schema keys."""
-    text = prompt or ""
-    return (
-        "Output schema" in text
-        and '"subcategories"' in text
-        and '"evidence_quotes"' in text
-        and '"uncertainty"' in text
-    )
+    """Return whether the prompt explicitly requests categorization output."""
+    return _response_format_kind(prompt) == CATEGORIZATION_RESPONSE_FORMAT
+
+
+def is_investment_mix_explanation_prompt(prompt: str) -> bool:
+    """Return whether the prompt explicitly requests investment-mix output."""
+    return _response_format_kind(prompt) == INVESTMENT_MIX_RESPONSE_FORMAT
+
+
+def _response_format_kind(prompt: str) -> str | None:
+    first_line = prompt.splitlines()[0].strip() if prompt else ""
+    if not first_line.startswith(RESPONSE_FORMAT_MARKER):
+        return None
+    return first_line.removeprefix(RESPONSE_FORMAT_MARKER)
 
 
 def system_message(prompt: str) -> str:
@@ -254,9 +264,7 @@ def categorization_json_schema() -> dict[str, Any]:
                 "type": "object",
                 "additionalProperties": False,
                 "required": keys,
-                "properties": {
-                    k: {"type": "number", "minimum": 0, "maximum": 1} for k in keys
-                },
+                "properties": {k: {"type": "number", "minimum": 0} for k in keys},
             },
             "evidence_quotes": {
                 "type": "array",
@@ -274,6 +282,136 @@ def categorization_json_schema() -> dict[str, Any]:
                 },
             },
             "uncertainty": {"type": "string", "minLength": 1, "maxLength": 280},
+        },
+    }
+
+
+def investment_mix_explanation_json_schema() -> dict[str, Any]:
+    """Strict schema for investment mix explanation outputs."""
+    band_keys = ["high", "moderate", "low", "very_low", "unknown"]
+
+    finding_evidence_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "theme",
+            "subcategory",
+            "share_pct",
+            "delta_pct_points",
+            "evidence_quality_mean",
+            "evidence_quality_band",
+        ],
+        "properties": {
+            "theme": {"type": "string", "minLength": 1},
+            "subcategory": {"type": ["string", "null"]},
+            "share_pct": {"type": "number", "minimum": 0, "maximum": 100},
+            "delta_pct_points": {
+                "type": ["number", "null"],
+                "minimum": -100,
+                "maximum": 100,
+            },
+            "evidence_quality_mean": {
+                "type": ["number", "null"],
+                "minimum": 0,
+                "maximum": 1,
+            },
+            "evidence_quality_band": {
+                "type": ["string", "null"],
+                "enum": [*band_keys, None],
+            },
+        },
+    }
+
+    finding_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["finding", "evidence"],
+        "properties": {
+            "finding": {"type": "string", "minLength": 1, "maxLength": 500},
+            "evidence": finding_evidence_schema,
+        },
+    }
+
+    band_mix_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": band_keys,
+        "properties": {k: {"type": "integer", "minimum": 0} for k in band_keys},
+    }
+
+    confidence_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "level",
+            "quality_mean",
+            "quality_stddev",
+            "band_mix",
+            "drivers",
+        ],
+        "properties": {
+            "level": {
+                "type": "string",
+                "enum": ["high", "moderate", "low", "unknown"],
+            },
+            "quality_mean": {
+                "type": ["number", "null"],
+                "minimum": 0,
+                "maximum": 1,
+            },
+            "quality_stddev": {
+                "type": ["number", "null"],
+                "minimum": 0,
+                "maximum": 1,
+            },
+            "band_mix": band_mix_schema,
+            "drivers": {
+                "type": "array",
+                "maxItems": 10,
+                "items": {"type": "string", "minLength": 1, "maxLength": 120},
+            },
+        },
+    }
+
+    action_item_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["action", "why", "where"],
+        "properties": {
+            "action": {"type": "string", "minLength": 1, "maxLength": 200},
+            "why": {"type": "string", "minLength": 1, "maxLength": 300},
+            "where": {"type": "string", "minLength": 1, "maxLength": 200},
+        },
+    }
+
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "summary",
+            "top_findings",
+            "confidence",
+            "what_to_check_next",
+            "anti_claims",
+        ],
+        "properties": {
+            "summary": {"type": "string", "minLength": 1, "maxLength": 1000},
+            "top_findings": {
+                "type": "array",
+                "maxItems": 10,
+                "items": finding_schema,
+            },
+            "confidence": confidence_schema,
+            "what_to_check_next": {
+                "type": "array",
+                "maxItems": 10,
+                "items": action_item_schema,
+            },
+            "anti_claims": {
+                "type": "array",
+                "maxItems": 10,
+                "items": {"type": "string", "minLength": 1, "maxLength": 300},
+            },
         },
     }
 
@@ -437,11 +575,15 @@ class _OpenAIProviderBase(LLMProviderBase):
             else "/v1/chat/completions"
         )
 
-    def _batch_body(self, prompt: str) -> dict[str, Any]:
+    def _batch_body(
+        self, prompt: str, response_format: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         sys_msg = system_message(prompt)
         if _is_gpt5_family(self.cfg.model):
             text_format: dict[str, Any]
-            if is_json_schema_prompt(prompt):
+            if response_format is not None:
+                text_format = {"format": response_format}
+            elif is_json_schema_prompt(prompt):
                 text_format = {
                     "format": {
                         "type": "json_schema",
@@ -450,8 +592,18 @@ class _OpenAIProviderBase(LLMProviderBase):
                         "schema": categorization_json_schema(),
                     }
                 }
+            elif is_investment_mix_explanation_prompt(prompt):
+                text_format = {
+                    "format": {
+                        "type": "json_schema",
+                        "name": "investment_mix_explanation",
+                        "strict": True,
+                        "schema": investment_mix_explanation_json_schema(),
+                    }
+                }
             else:
                 text_format = {"format": {"type": "json_object"}}
+            text_format["verbosity"] = "low"
             body: dict[str, Any] = {
                 "model": self.cfg.model,
                 "instructions": sys_msg,
@@ -469,7 +621,7 @@ class _OpenAIProviderBase(LLMProviderBase):
                 {"role": "system", "content": sys_msg},
                 {"role": "user", "content": prompt},
             ],
-            "response_format": {"type": "json_object"},
+            "response_format": response_format or {"type": "json_object"},
             "max_completion_tokens": max(self.cfg.max_output_tokens, 2048),
         }
         if self._supports_temperature():
@@ -482,7 +634,7 @@ class _OpenAIProviderBase(LLMProviderBase):
                 "custom_id": item.custom_id,
                 "method": "POST",
                 "url": self._batch_endpoint(),
-                "body": self._batch_body(item.prompt),
+                "body": self._batch_body(item.prompt, item.response_format),
             },
             separators=(",", ":"),
         )
@@ -626,9 +778,19 @@ class OpenAIGPT5Provider(_OpenAIProviderBase):
                             "schema": categorization_json_schema(),
                         }
                     }
+                elif is_investment_mix_explanation_prompt(prompt):
+                    text_format = {
+                        "format": {
+                            "type": "json_schema",
+                            "name": "investment_mix_explanation",
+                            "strict": True,
+                            "schema": investment_mix_explanation_json_schema(),
+                        }
+                    }
                 else:
-                    # For explanation, enforce valid JSON but not a strict schema.
+                    # For unstructured explanation-style prompts, enforce valid JSON but not a strict schema.
                     text_format = {"format": {"type": "json_object"}}
+                text_format["verbosity"] = "low"
 
                 kwargs: dict[str, Any] = {
                     "model": self.cfg.model,

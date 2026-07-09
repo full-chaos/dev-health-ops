@@ -43,6 +43,7 @@ Work item metrics assume provider data has been synced via `dev-hops sync work-i
 | Investment Allocation |  [x]   | **Legacy daily rollup** classified via `InvestmentClassifier` in `analytics/investment.py`. Rules in `config/investment_areas.yaml`; not the canonical WorkUnit Investment View. |
 | Project Stream Churn  |  [x]   | LOC churn aggregated by project stream and investment area.                                                  |
 | Strategic vs KTLO %   |  [x]   | Derived from Investment Allocation daily rollups.                                                            |
+| Investment LLM reliability | [x] | Prometheus request, validation, error-family, terminal outcome, token, latency, output-size, and explanation-parse metrics in `work_graph/investment/llm_telemetry*.py`; queries in [Investment LLM Telemetry](llm/investment-llm-telemetry.md). |
 
 ## 4. IC Metrics & Landscape (New)
 

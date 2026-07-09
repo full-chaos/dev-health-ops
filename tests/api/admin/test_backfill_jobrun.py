@@ -38,7 +38,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.admin.routers.integrations import _unit_to_response
-from dev_health_ops.api.admin.routers.sync import _job_run_response
+from dev_health_ops.api.admin.routers.sync import _job_run_response, _SyncRunUnitRollup
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.backfill import BackfillJob
 from dev_health_ops.models.git import Base
@@ -51,6 +51,7 @@ from dev_health_ops.models.integrations import (
     SyncRunReferenceDiscovery,
     SyncRunStatus,
     SyncRunUnit,
+    SyncRunUnitStatus,
 )
 from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.settings import (
@@ -741,7 +742,7 @@ async def _backfill_response_for_unit_activity(
                     dataset_key="commits",
                     cost_class="rest",
                     mode="backfill",
-                    status="running",
+                    status=SyncRunUnitStatus.SUCCESS.value,
                     updated_at=times.unit_updated_at,
                     last_heartbeat_at=times.unit_heartbeat_at,
                 ),
@@ -796,6 +797,18 @@ def _fake_unit(**overrides):
     )
     base.update(overrides)
     return types.SimpleNamespace(**base)
+
+
+def _unit_rollup(units) -> _SyncRunUnitRollup:
+    status_counts: dict[str, int] = {}
+    for unit in units:
+        status = str(unit.status)
+        status_counts[status] = status_counts.get(status, 0) + 1
+    return _SyncRunUnitRollup(
+        status_counts=status_counts,
+        requested_range=None,
+        covered_range=None,
+    )
 
 
 def test_unit_to_response_projects_all_retry_result_keys():
@@ -890,6 +903,102 @@ async def test_backfill_job_response_remains_stale_when_linked_units_are_stale(
     assert response.completed_chunks == 1
 
 
+@pytest.mark.asyncio
+async def test_backfill_job_response_counts_actual_linked_unit_statuses(
+    session_maker, seeded_state
+):
+    config_id = uuid.uuid4()
+    integration_id = uuid.uuid4()
+    source_id = uuid.uuid4()
+    sync_run_id = uuid.uuid4()
+
+    async with session_maker() as session:
+        config = SyncConfiguration(
+            name="bf-live-unit-statuses",
+            provider="github",
+            org_id=seeded_state["org_id"],
+            integration_id=integration_id,
+        )
+        config.id = config_id
+        session.add_all(
+            [
+                config,
+                Integration(
+                    id=integration_id,
+                    org_id=seeded_state["org_id"],
+                    provider="github",
+                    name="github-integration",
+                    config={},
+                ),
+                IntegrationSource(
+                    id=source_id,
+                    org_id=seeded_state["org_id"],
+                    integration_id=integration_id,
+                    provider="github",
+                    source_type="repository",
+                    external_id="full-chaos/dev-health",
+                    name="dev-health",
+                    full_name="full-chaos/dev-health",
+                    is_enabled=True,
+                ),
+                SyncRun(
+                    id=sync_run_id,
+                    org_id=seeded_state["org_id"],
+                    integration_id=integration_id,
+                    triggered_by="backfill",
+                    mode="backfill",
+                    status=SyncRunStatus.DISPATCHING.value,
+                    total_units=3,
+                    completed_units=0,
+                    failed_units=0,
+                ),
+                BackfillJob(
+                    id=uuid.uuid4(),
+                    org_id=seeded_state["org_id"],
+                    sync_config_id=config_id,
+                    celery_task_id=f"sync_run:{sync_run_id}",
+                    status="dispatching",
+                    since_date=datetime(2025, 12, 1, tzinfo=timezone.utc).date(),
+                    before_date=datetime(2025, 12, 8, tzinfo=timezone.utc).date(),
+                    total_chunks=3,
+                    completed_chunks=0,
+                    failed_chunks=0,
+                    started_at=_T0,
+                    created_at=_T0,
+                    updated_at=_T0,
+                ),
+            ]
+        )
+        session.add_all(
+            SyncRunUnit(
+                org_id=seeded_state["org_id"],
+                sync_run_id=sync_run_id,
+                integration_id=integration_id,
+                source_id=source_id,
+                provider="github",
+                dataset_key=f"dataset-{status.value}",
+                cost_class="rest",
+                mode="backfill",
+                status=status.value,
+                updated_at=_T0,
+            )
+            for status in (
+                SyncRunUnitStatus.SUCCESS,
+                SyncRunUnitStatus.FAILED,
+            )
+        )
+        await session.commit()
+
+        job = (await session.execute(select(BackfillJob))).scalar_one()
+        run_counts = await sync_router_module._backfill_job_run_counts(session, job)
+        response = sync_router_module._backfill_job_response(job, run_counts)
+
+    assert response.status == SyncRunStatus.RUNNING.value
+    assert response.completed_chunks == 1
+    assert response.failed_chunks == 1
+    assert response.progress_pct == pytest.approx(1 / 3 * 100)
+
+
 def test_unit_to_response_next_retry_at_derived_from_available_at_when_absent():
     """With no result next_retry_at, a retrying unit derives it from available_at."""
     avail = datetime(2026, 1, 1, 0, 10, tzinfo=timezone.utc)
@@ -966,13 +1075,20 @@ def test_job_run_response_distinguishes_partial_failed_and_forwards_retry_aggreg
         status=SyncRunStatus.PARTIAL_FAILED.value,
         result={"retry_exhausted_units": 1, "retrying_units": 0},
         total_units=3,
-        completed_units=2,
-        failed_units=1,
+        completed_units=0,
+        failed_units=0,
         started_at=_T0,
         completed_at=datetime(2026, 1, 1, 0, 30, tzinfo=timezone.utc),
         error=None,
     )
-    resp = _job_run_response(run, cast(SyncRun, planner))
+    units = [
+        _fake_unit(status=SyncRunUnitStatus.SUCCESS.value),
+        _fake_unit(status=SyncRunUnitStatus.SUCCESS.value),
+        _fake_unit(status=SyncRunUnitStatus.FAILED.value),
+    ]
+
+    resp = _job_run_response(run, cast(SyncRun, planner), _unit_rollup(units))
+
     # JobRunStatus enum/labels are unchanged: PARTIAL_FAILED collapses to the
     # 'failed' label, but the literal run state stays distinguishable in result.
     assert resp.status == "failed"
@@ -981,3 +1097,93 @@ def test_job_run_response_distinguishes_partial_failed_and_forwards_retry_aggreg
     assert resp.result["retry_exhausted_units"] == 1
     assert resp.result["retrying_units"] == 0
     assert resp.result["failed_units"] == 1
+    assert resp.result["completed_units"] == 2
+    assert resp.items_synced == 2
+
+
+def test_job_run_response_uses_unit_statuses_when_sync_run_counters_are_stale():
+    run = types.SimpleNamespace(
+        id=uuid.uuid4(),
+        job_id=uuid.uuid4(),
+        status=JobRunStatus.RUNNING.value,
+        started_at=None,
+        completed_at=None,
+        duration_seconds=None,
+        error=None,
+        result={"sync_run_id": str(uuid.uuid4()), "planner_managed": True},
+        triggered_by="sync",
+        created_at=_T0,
+    )
+    planner = types.SimpleNamespace(
+        id=uuid.uuid4(),
+        status=SyncRunStatus.RUNNING.value,
+        result={},
+        mode="incremental",
+        triggered_by="sync",
+        total_units=4,
+        completed_units=0,
+        failed_units=0,
+        started_at=_T0,
+        completed_at=None,
+        error=None,
+    )
+    units = [
+        _fake_unit(status=SyncRunUnitStatus.SUCCESS.value),
+        _fake_unit(status=SyncRunUnitStatus.SUCCESS.value),
+        _fake_unit(status=SyncRunUnitStatus.SUCCESS.value),
+        _fake_unit(status=SyncRunUnitStatus.FAILED.value),
+    ]
+
+    resp = _job_run_response(run, cast(SyncRun, planner), _unit_rollup(units))
+
+    assert resp.status == "failed"
+    assert resp.items_synced == 3
+    assert resp.result is not None
+    assert resp.result["sync_run_status"] == SyncRunStatus.PARTIAL_FAILED.value
+    assert resp.result["completed_units"] == 3
+    assert resp.result["failed_units"] == 1
+    assert resp.sync_run is not None
+    assert resp.sync_run.completed_units == 3
+    assert resp.sync_run.failed_units == 1
+
+
+def test_job_run_response_uses_unit_statuses_when_run_status_is_stale_terminal():
+    run = types.SimpleNamespace(
+        id=uuid.uuid4(),
+        job_id=uuid.uuid4(),
+        status=JobRunStatus.SUCCESS.value,
+        started_at=None,
+        completed_at=None,
+        duration_seconds=None,
+        error=None,
+        result={"sync_run_id": str(uuid.uuid4()), "planner_managed": True},
+        triggered_by="sync",
+        created_at=_T0,
+    )
+    planner = types.SimpleNamespace(
+        id=uuid.uuid4(),
+        status=SyncRunStatus.SUCCESS.value,
+        result={},
+        mode="incremental",
+        triggered_by="sync",
+        total_units=4,
+        completed_units=4,
+        failed_units=0,
+        started_at=_T0,
+        completed_at=None,
+        error=None,
+    )
+    units = [
+        _fake_unit(status=SyncRunUnitStatus.SUCCESS.value),
+        _fake_unit(status=SyncRunUnitStatus.RUNNING.value),
+        _fake_unit(status=SyncRunUnitStatus.RUNNING.value),
+        _fake_unit(status=SyncRunUnitStatus.RUNNING.value),
+    ]
+
+    resp = _job_run_response(run, cast(SyncRun, planner), _unit_rollup(units))
+
+    assert resp.status == "running"
+    assert resp.items_synced == 1
+    assert resp.result is not None
+    assert resp.result["sync_run_status"] == SyncRunStatus.RUNNING.value
+    assert resp.result["completed_units"] == 1

@@ -3,10 +3,14 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from dev_health_ops.api.services.sync_coverage import (
     CoverageInterval,
     EffectiveScope,
     UnitWindow,
+    _effective_dataset_keys_for_unit,
+    _query_dataset_keys_for_scope,
     build_coverage_summary_payload,
     classify_staleness,
     ensure_utc,
@@ -14,7 +18,7 @@ from dev_health_ops.api.services.sync_coverage import (
     merge_intervals,
     subtract_intervals,
 )
-from dev_health_ops.models.integrations import IntegrationSource
+from dev_health_ops.models.integrations import IntegrationSource, SyncRunUnit
 from dev_health_ops.models.settings import ScheduledJob, SyncConfiguration
 
 
@@ -105,6 +109,55 @@ def _summary(
     )
 
 
+_WORK_ITEM_FAMILY_PROVIDERS = ("jira", "gitlab", "github", "linear")
+
+
+def _composite_unit(
+    *,
+    provider: str = "github",
+    dataset_key: str = "work-items",
+    processor_flags: dict[str, bool] | None = None,
+    source_id: uuid.UUID | None = None,
+    status: str = "success",
+) -> SyncRunUnit:
+    return SyncRunUnit(
+        org_id="org-1",
+        sync_run_id=uuid.uuid4(),
+        integration_id=uuid.uuid4(),
+        source_id=source_id or uuid.uuid4(),
+        provider=provider,
+        dataset_key=dataset_key,
+        cost_class="standard",
+        mode="incremental",
+        status=status,
+        attempts=1,
+        processor_flags=processor_flags,
+    )
+
+
+def _expand_unit_to_windows(
+    unit: SyncRunUnit,
+    *,
+    since: datetime,
+    before: datetime,
+    run_time: datetime,
+) -> list[UnitWindow]:
+    """Mirror the terminal-window expansion: one ``UnitWindow`` per effective
+    dataset key decoded from the unit's work-item-family flags (CHAOS-2721)."""
+    return [
+        UnitWindow(
+            since=since,
+            before=before,
+            source_id=str(unit.source_id),
+            dataset_key=effective_key,
+            run_id=str(unit.sync_run_id),
+            status=str(unit.status),
+            run_time=run_time,
+        )
+        for effective_key in _effective_dataset_keys_for_unit(unit)
+    ]
+
+
 def test_merge_intervals_collapses_overlap_and_adjacency():
     merged = merge_intervals(
         [
@@ -149,6 +202,41 @@ def test_complete_summary_is_healthy():
     assert summary["overall"]["health"] == "healthy"
     assert summary["datasets"][0]["status"] == "healthy"
     assert summary["datasets"][0]["gaps"] == []
+
+
+def test_summary_caps_covered_through_at_generation_time():
+    source_id = uuid.uuid4()
+    now = datetime(2026, 7, 8, 19, 2, tzinfo=timezone.utc)
+    summary = _summary(
+        [
+            _window(
+                datetime(2026, 7, 8, tzinfo=timezone.utc),
+                datetime(2026, 7, 9, 6, 59, 59, tzinfo=timezone.utc),
+                source_id=source_id,
+            )
+        ],
+        now=now,
+    )
+
+    assert summary["overall"]["latest_covered_through"] == now
+    assert summary["datasets"][0]["covered_through"] == now
+    assert summary["sources"][0]["covered_through"] == now
+
+
+def test_future_only_success_does_not_mask_stale_coverage():
+    source_id = uuid.uuid4()
+    summary = _summary(
+        [
+            _window(_dt(1), _dt(2), source_id=source_id),
+            _window(_dt(5), _dt(6), source_id=source_id),
+        ],
+        now=_dt(4),
+    )
+
+    assert summary["overall"]["latest_covered_through"] == _dt(2)
+    assert summary["overall"]["health"] == "stale"
+    assert summary["datasets"][0]["covered_through"] == _dt(2)
+    assert summary["datasets"][0]["status"] == "stale"
 
 
 def test_failed_window_without_later_success_marks_failed():
@@ -351,3 +439,179 @@ def test_backfill_interval_without_pair_scope_applies_to_all_scope_pairs():
     sources = {source["source_id"]: source for source in summary["sources"]}
     assert sources[str(source_a)]["gap_count"] == 1
     assert sources[str(source_b)]["gap_count"] == 1
+
+
+@pytest.mark.parametrize("provider", _WORK_ITEM_FAMILY_PROVIDERS)
+def test_effective_dataset_keys_expands_true_family_flags_in_canonical_order(
+    provider,
+):
+    # CHAOS-2721/coverage-fix: a collapsed composite unit's true family flags
+    # decode to only the enabled child keys, in canonical order -- never every
+    # work-item-family key regardless of which flags are set.
+    unit = _composite_unit(
+        provider=provider,
+        processor_flags={
+            "family_dataset_work_item_comments": True,
+            "family_dataset_work_item_labels": True,
+        },
+    )
+
+    assert list(_effective_dataset_keys_for_unit(unit)) == [
+        "work-item-labels",
+        "work-item-comments",
+    ]
+
+
+@pytest.mark.parametrize("provider", _WORK_ITEM_FAMILY_PROVIDERS)
+def test_effective_dataset_keys_falls_back_to_raw_key_when_no_family_flag_true(
+    provider,
+):
+    unit = _composite_unit(
+        provider=provider,
+        processor_flags={"family_dataset_work_item_comments": False},
+    )
+
+    assert list(_effective_dataset_keys_for_unit(unit)) == ["work-items"]
+
+
+def test_effective_dataset_keys_missing_flags_falls_back_to_raw_key():
+    unit = _composite_unit(processor_flags=None)
+
+    assert list(_effective_dataset_keys_for_unit(unit)) == ["work-items"]
+
+
+def test_effective_dataset_keys_ignores_unknown_flags():
+    # An unrecognized family_dataset_* flag must never advance coverage for a
+    # dataset key that isn't in the canonical work-item-family set.
+    unit = _composite_unit(processor_flags={"family_dataset_bogus": True})
+
+    assert list(_effective_dataset_keys_for_unit(unit)) == ["work-items"]
+
+
+def test_effective_dataset_keys_non_family_dataset_ignores_flags():
+    # A raw, non-composite dataset_key must never be expanded even if stray
+    # family_dataset_* flags are present on its processor_flags.
+    unit = _composite_unit(
+        dataset_key="commits",
+        processor_flags={"family_dataset_work_item_comments": True},
+    )
+
+    assert list(_effective_dataset_keys_for_unit(unit)) == ["commits"]
+
+
+def test_query_dataset_keys_for_scope_includes_canonical_work_items_for_family_child():
+    keys = _query_dataset_keys_for_scope(("work-item-comments",))
+
+    assert "work-items" in keys
+    assert "work-item-comments" in keys
+
+
+def test_query_dataset_keys_for_scope_unchanged_for_non_family_scope():
+    keys = _query_dataset_keys_for_scope(("commits", "prs"))
+
+    assert set(keys) == {"commits", "prs"}
+
+
+@pytest.mark.parametrize("provider", _WORK_ITEM_FAMILY_PROVIDERS)
+def test_composite_success_supersedes_old_failed_child_only_when_flag_true(
+    provider,
+):
+    # CHAOS-2721/coverage-fix core repro: a later successful composite
+    # work-items unit must supersede an old failed child dataset ONLY for the
+    # child whose family_dataset_* flag was true on that composite run. A
+    # disabled child dataset must remain failed/gapped.
+    source_id = uuid.uuid4()
+    config = _config()
+    scope = EffectiveScope(
+        integration_id=config.integration_id,
+        sources=(_source(source_id),),
+        dataset_keys=("work-item-comments", "work-item-labels"),
+    )
+
+    old_failed_comments = _window(
+        _dt(1),
+        _dt(2),
+        source_id=source_id,
+        dataset_key="work-item-comments",
+        status="failed",
+        run_time=_dt(2),
+    )
+    old_failed_labels = _window(
+        _dt(1),
+        _dt(2),
+        source_id=source_id,
+        dataset_key="work-item-labels",
+        status="failed",
+        run_time=_dt(2),
+    )
+    composite = _composite_unit(
+        provider=provider,
+        source_id=source_id,
+        processor_flags={"family_dataset_work_item_comments": True},
+        status="success",
+    )
+    later_success_windows = _expand_unit_to_windows(
+        composite, since=_dt(1), before=_dt(2), run_time=_dt(3)
+    )
+
+    summary = _summary(
+        [old_failed_comments, old_failed_labels, *later_success_windows],
+        config=config,
+        scope=scope,
+    )
+
+    datasets = {dataset["dataset_key"]: dataset for dataset in summary["datasets"]}
+    assert datasets["work-item-comments"]["failed_ranges"] == []
+    assert datasets["work-item-comments"]["status"] == "healthy"
+    assert datasets["work-item-labels"]["failed_ranges"] != []
+    assert datasets["work-item-labels"]["status"] == "failed"
+
+
+@pytest.mark.parametrize("provider", _WORK_ITEM_FAMILY_PROVIDERS)
+def test_active_composite_run_marks_only_flagged_child_pair_running(provider):
+    # An in-flight composite work-items unit must mark ONLY the flagged
+    # child dataset pair as running; an unflagged child pair falls back to
+    # the ordinary stale/gap/insufficient_data rollup rules.
+    source_id = uuid.uuid4()
+    config = _config()
+    scope = EffectiveScope(
+        integration_id=config.integration_id,
+        sources=(_source(source_id),),
+        dataset_keys=("work-item-comments", "work-item-labels"),
+    )
+    comments_window = _window(
+        _dt(1),
+        _dt(2),
+        source_id=source_id,
+        dataset_key="work-item-comments",
+        status="success",
+    )
+    labels_window = _window(
+        _dt(1),
+        _dt(2),
+        source_id=source_id,
+        dataset_key="work-item-labels",
+        status="success",
+    )
+    running_composite = _composite_unit(
+        provider=provider,
+        source_id=source_id,
+        processor_flags={"family_dataset_work_item_comments": True},
+        status="running",
+    )
+    active_pairs = {
+        (str(source_id), key)
+        for key in _effective_dataset_keys_for_unit(running_composite)
+    }
+
+    summary = _summary(
+        [comments_window, labels_window],
+        active_pairs=active_pairs,
+        now=_dt(5),
+        config=config,
+        scope=scope,
+    )
+
+    datasets = {dataset["dataset_key"]: dataset for dataset in summary["datasets"]}
+    assert datasets["work-item-comments"]["status"] == "running"
+    assert datasets["work-item-labels"]["status"] != "running"

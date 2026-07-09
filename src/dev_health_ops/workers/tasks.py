@@ -16,6 +16,7 @@ from dev_health_ops.workers.metrics_tasks import (
     run_release_impact_job,
 )
 from dev_health_ops.workers.product_tasks import (
+    dispatch_capacity_forecast,
     run_capacity_forecast_job,
 )
 from dev_health_ops.workers.queue_monitor import monitor_queue_depths
@@ -71,6 +72,7 @@ __all__ = [
     "dispatch_daily_metrics_partitioned",
     "dispatch_investment_materialize_partitioned",
     "dispatch_release_impact",
+    "dispatch_capacity_forecast",
     "dispatch_scheduled_metrics",
     "dispatch_scheduled_reports",
     "dispatch_scheduled_syncs",

@@ -38,6 +38,7 @@ late_ack_excluded_tasks = (
     "dev_health_ops.workers.tasks.dispatch_scheduled_metrics",
     "dev_health_ops.workers.tasks.dispatch_daily_metrics_partitioned",
     "dev_health_ops.workers.tasks.dispatch_daily_metrics_for_all_orgs",
+    "dev_health_ops.workers.tasks.dispatch_capacity_forecast",
     "dev_health_ops.workers.tasks.dispatch_complexity_job",
     "dev_health_ops.workers.tasks.dispatch_investment_materialize_partitioned",
     "dev_health_ops.workers.tasks.dispatch_release_impact",
@@ -200,10 +201,9 @@ beat_schedule = {
         "options": {"queue": "sync"},
     },
     "run-capacity-forecast": {
-        "task": "dev_health_ops.workers.tasks.run_capacity_forecast_job",
+        "task": "dev_health_ops.workers.tasks.dispatch_capacity_forecast",
         "schedule": crontab(hour=4, minute=0, day_of_week="monday"),
-        "kwargs": {"all_teams": True},
-        "options": {"queue": "metrics"},
+        "options": {"queue": "default"},
     },
     "process-ingest-streams": {
         "task": "dev_health_ops.workers.tasks.run_ingest_consumer",

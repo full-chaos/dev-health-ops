@@ -293,6 +293,8 @@ Backfill depth is gated by organization billing tier:
 
 > Unit decomposition and reference-data cardinality: see [Sync Unit Model](sync-unit-model.md). The work-item-family collapse writes per-dataset watermarks only for incremental/full-resync units, preserving the invariant below.
 
+Coverage summaries are a separate consumer path from ClickHouse reader collapse. They must expand any composite work-item-family `SyncRunUnit` using its `family_dataset_*` flags before summarizing comments, history, projects, or labels coverage. That rule applies to admin coverage and observability views, not to the retry-idempotency matrix.
+
 Backfill **never seeds the watermark** (CHAOS-2514), so the first incremental
 sync after a backfill cold-starts. Continuity across the seam is provided by the
 incremental **cold-start depth** (CHAOS-2569): with no watermark, the planner

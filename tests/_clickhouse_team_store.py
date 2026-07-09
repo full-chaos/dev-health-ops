@@ -37,6 +37,7 @@ from dev_health_ops.api.services.configuration.clickhouse_team_drift import (
 # Column aliases produced by ClickHouseTeamDriftService._pending_rows SELECT.
 _PENDING_ALIASES = (
     "change_id",
+    "entity_type",
     "team_id",
     "team_name",
     "provider",
@@ -99,8 +100,6 @@ class _FakeClient:
                     continue
                 if row.get("status") != "pending":
                     continue
-                if str(row.get("entity_type") or "team") != "team":
-                    continue
                 entity_id = str(row.get("entity_id") or "")
                 if team_id is not None and entity_id != team_id:
                     continue
@@ -109,6 +108,7 @@ class _FakeClient:
                 drift_rows.append(
                     (
                         row.get("change_id"),
+                        row.get("entity_type") or "team",
                         entity_id,
                         team_name,
                         row.get("provider"),
@@ -299,8 +299,6 @@ class FakeClickHouseTeamStore:
             changes: list[dict[str, Any]] = []
             for (row_org, _change_id), row in self.drift_changes.items():
                 if row_org != org_id:
-                    continue
-                if str(row.get("entity_type") or "team") != "team":
                     continue
                 if team_id is not None and str(row.get("entity_id")) != str(team_id):
                     continue

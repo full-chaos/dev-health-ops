@@ -3,7 +3,9 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol, cast
 
@@ -243,6 +245,13 @@ class _MutableSyncConfiguration(Protocol):
     is_active: bool
 
 
+@dataclass(frozen=True, slots=True)
+class _SyncRunUnitRollup:
+    status_counts: Mapping[str, int]
+    requested_range: SyncCoverageRange | None
+    covered_range: SyncCoverageRange | None
+
+
 async def _integration_credential_id_for_config(
     session: AsyncSession, config: object, org_id: str
 ) -> uuid.UUID | None:
@@ -338,6 +347,32 @@ def _latest_datetime(*values: datetime | None) -> datetime | None:
     return max(aware_values) if aware_values else None
 
 
+def _effective_backfill_run_status(
+    run_status: str, status_counts: Mapping[str, int], total_units: int
+) -> str:
+    success_count = status_counts.get(SyncRunUnitStatus.SUCCESS.value, 0)
+    failed_count = status_counts.get(SyncRunUnitStatus.FAILED.value, 0)
+    settled_count = success_count + failed_count
+    if total_units > 0 and settled_count >= total_units:
+        if failed_count == 0:
+            return SyncRunStatus.SUCCESS.value
+        if success_count == 0:
+            return SyncRunStatus.FAILED.value
+        return SyncRunStatus.PARTIAL_FAILED.value
+
+    if (
+        settled_count > 0
+        or status_counts.get(SyncRunUnitStatus.RUNNING.value, 0) > 0
+        or status_counts.get(SyncRunUnitStatus.RETRYING.value, 0) > 0
+    ):
+        return SyncRunStatus.RUNNING.value
+    if status_counts.get(SyncRunUnitStatus.DISPATCHING.value, 0) > 0:
+        return SyncRunStatus.DISPATCHING.value
+    if status_counts.get(SyncRunUnitStatus.PLANNED.value, 0) > 0:
+        return SyncRunStatus.PLANNED.value
+    return run_status
+
+
 def _elapsed_seconds(
     started_at: datetime | None, completed_at: datetime | None
 ) -> int | None:
@@ -410,9 +445,9 @@ async def _planner_sync_runs_for_job_runs(
     return {str(sync_run.id): sync_run for sync_run in result.scalars().all()}
 
 
-async def _planner_sync_run_units_for_job_runs(
+async def _planner_sync_run_unit_rollups_for_job_runs(
     session: AsyncSession, runs: Sequence[object], org_id: str
-) -> dict[str, list[SyncRunUnit]]:
+) -> dict[str, _SyncRunUnitRollup]:
     sync_run_ids = {
         sync_run_id
         for run in runs
@@ -420,16 +455,87 @@ async def _planner_sync_run_units_for_job_runs(
     }
     if not sync_run_ids:
         return {}
-    result = await session.execute(
-        select(SyncRunUnit).where(
+
+    status_result = await session.execute(
+        select(
+            SyncRunUnit.sync_run_id,
+            SyncRunUnit.status,
+            func.count(SyncRunUnit.id),
+        )
+        .where(
             SyncRunUnit.sync_run_id.in_(sync_run_ids),
             SyncRunUnit.org_id == org_id,
         )
+        .group_by(SyncRunUnit.sync_run_id, SyncRunUnit.status)
     )
-    units_by_run: dict[str, list[SyncRunUnit]] = {}
-    for unit in result.scalars().all():
-        units_by_run.setdefault(str(unit.sync_run_id), []).append(unit)
-    return units_by_run
+    status_counts_by_run: dict[str, dict[str, int]] = {}
+    for sync_run_id, status, count in status_result.all():
+        status_counts_by_run.setdefault(str(sync_run_id), {})[str(status)] = int(count)
+
+    requested_ranges = await _planner_sync_run_unit_ranges(
+        session, sync_run_ids, org_id, success_only=False
+    )
+    covered_ranges = await _planner_sync_run_unit_ranges(
+        session, sync_run_ids, org_id, success_only=True
+    )
+    return {
+        str(sync_run_id): _SyncRunUnitRollup(
+            status_counts=status_counts_by_run.get(str(sync_run_id), {}),
+            requested_range=requested_ranges.get(str(sync_run_id)),
+            covered_range=covered_ranges.get(str(sync_run_id)),
+        )
+        for sync_run_id in sync_run_ids
+    }
+
+
+async def _planner_sync_run_unit_ranges(
+    session: AsyncSession,
+    sync_run_ids: set[uuid.UUID],
+    org_id: str,
+    *,
+    success_only: bool,
+) -> dict[str, SyncCoverageRange]:
+    range_stmt = (
+        select(
+            SyncRunUnit.sync_run_id,
+            SyncRunUnit.source_id,
+            func.min(SyncRunUnit.since_at),
+            func.max(SyncRunUnit.before_at),
+        )
+        .where(
+            SyncRunUnit.sync_run_id.in_(sync_run_ids),
+            SyncRunUnit.org_id == org_id,
+            SyncRunUnit.since_at.is_not(None),
+            SyncRunUnit.before_at.is_not(None),
+        )
+        .group_by(SyncRunUnit.sync_run_id, SyncRunUnit.source_id)
+    )
+    if success_only:
+        range_stmt = range_stmt.where(
+            SyncRunUnit.status == SyncRunUnitStatus.SUCCESS.value
+        )
+
+    range_result = await session.execute(range_stmt)
+    since_by_run: dict[str, datetime] = {}
+    before_by_run: dict[str, datetime] = {}
+    source_ids_by_run: dict[str, set[str]] = {}
+    for sync_run_id, source_id, since_at, before_at in range_result.all():
+        run_id = str(sync_run_id)
+        since = ensure_utc(since_at)
+        before = ensure_utc(before_at)
+        since_by_run[run_id] = min(since_by_run.get(run_id, since), since)
+        before_by_run[run_id] = max(before_by_run.get(run_id, before), before)
+        source_ids_by_run.setdefault(run_id, set()).add(str(source_id))
+
+    return {
+        run_id: SyncCoverageRange(
+            since=since,
+            before=before_by_run[run_id],
+            source_ids=sorted(source_ids_by_run.get(run_id, set())),
+            run_ids=[run_id],
+        )
+        for run_id, since in since_by_run.items()
+    }
 
 
 def _sync_run_unit_range(
@@ -460,8 +566,20 @@ def _sync_run_unit_range(
     )
 
 
+def _sync_run_unit_rollup(
+    sync_run: SyncRun, status_counts: Mapping[str, int]
+) -> tuple[int, int, int, str]:
+    total_units = max(sum(status_counts.values()), int(sync_run.total_units))
+    completed_units = status_counts.get(SyncRunUnitStatus.SUCCESS.value, 0)
+    failed_units = status_counts.get(SyncRunUnitStatus.FAILED.value, 0)
+    effective_status = _effective_backfill_run_status(
+        str(sync_run.status), status_counts, total_units
+    )
+    return total_units, completed_units, failed_units, effective_status
+
+
 def _sync_run_job_enrichment(
-    sync_run: SyncRun | None, units: Sequence[SyncRunUnit]
+    sync_run: SyncRun | None, unit_rollup: _SyncRunUnitRollup | None
 ) -> SyncRunJobEnrichment | None:
     if sync_run is None:
         return None
@@ -470,14 +588,18 @@ def _sync_run_job_enrichment(
     triggered_by = getattr(sync_run, "triggered_by", None)
     if sync_run_id is None or mode is None or triggered_by is None:
         return None
+    status_counts = unit_rollup.status_counts if unit_rollup is not None else {}
+    total_units, completed_units, failed_units, _ = _sync_run_unit_rollup(
+        sync_run, status_counts
+    )
     return SyncRunJobEnrichment(
         mode=str(mode),
         triggered_by=str(triggered_by),
-        requested_range=_sync_run_unit_range(units),
-        covered_range=_sync_run_unit_range(units, success_only=True),
-        total_units=int(sync_run.total_units),
-        completed_units=int(sync_run.completed_units),
-        failed_units=int(sync_run.failed_units),
+        requested_range=unit_rollup.requested_range if unit_rollup else None,
+        covered_range=unit_rollup.covered_range if unit_rollup else None,
+        total_units=total_units,
+        completed_units=completed_units,
+        failed_units=failed_units,
         sync_run_id=str(sync_run_id),
     )
 
@@ -485,7 +607,7 @@ def _sync_run_job_enrichment(
 def _job_run_response(
     run: object,
     planner_sync_run: SyncRun | None = None,
-    planner_sync_run_units: Sequence[SyncRunUnit] = (),
+    planner_sync_run_unit_rollup: _SyncRunUnitRollup | None = None,
 ) -> JobRunResponse:
     status_value = int(getattr(run, "status"))
     started_at = getattr(run, "started_at")
@@ -501,20 +623,28 @@ def _job_run_response(
         # Planner-managed JobRun rows are visibility anchors for Job History.
         # The linked SyncRun owns execution lifecycle and runtime stats.
         sync_result = getattr(planner_sync_run, "result")
+        total_units, completed_units, failed_units, effective_status = (
+            _sync_run_unit_rollup(
+                planner_sync_run,
+                planner_sync_run_unit_rollup.status_counts
+                if planner_sync_run_unit_rollup
+                else {},
+            )
+        )
         result = {
             **(result if isinstance(result, dict) else {}),
             **(sync_result if isinstance(sync_result, dict) else {}),
-            "sync_run_status": str(getattr(planner_sync_run, "status")),
-            "total_units": int(getattr(planner_sync_run, "total_units")),
-            "completed_units": int(getattr(planner_sync_run, "completed_units")),
-            "failed_units": int(getattr(planner_sync_run, "failed_units")),
+            "sync_run_status": effective_status,
+            "total_units": total_units,
+            "completed_units": completed_units,
+            "failed_units": failed_units,
         }
-        status_value = _planner_job_run_status(str(getattr(planner_sync_run, "status")))
+        status_value = _planner_job_run_status(effective_status)
         started_at = getattr(planner_sync_run, "started_at")
         completed_at = getattr(planner_sync_run, "completed_at")
         duration_seconds = _elapsed_seconds(started_at, completed_at)
         error = getattr(planner_sync_run, "error") or error
-        items_synced = int(getattr(planner_sync_run, "completed_units"))
+        items_synced = completed_units
 
     return JobRunResponse.model_validate(
         {
@@ -529,14 +659,18 @@ def _job_run_response(
             "error": error,
             "triggered_by": getattr(run, "triggered_by"),
             "sync_run": _sync_run_job_enrichment(
-                planner_sync_run, planner_sync_run_units
+                planner_sync_run, planner_sync_run_unit_rollup
             ),
             "created_at": getattr(run, "created_at"),
         }
     )
 
 
-def _backfill_job_response(job: object, run_counts: dict[str, Any] | None = None):
+def _backfill_job_response(
+    job: object,
+    run_counts: dict[str, Any] | None = None,
+    metrics_diagnostics: Any | None = None,
+):
     from dev_health_ops.api.schemas.backfill import BackfillJobResponse
 
     run_counts = run_counts or {}
@@ -544,6 +678,7 @@ def _backfill_job_response(job: object, run_counts: dict[str, Any] | None = None
     completed_chunks = int(
         run_counts.get("completed_chunks", getattr(job, "completed_chunks"))
     )
+    failed_chunks = int(run_counts.get("failed_chunks", getattr(job, "failed_chunks")))
     progress_pct = (completed_chunks / total_chunks * 100) if total_chunks > 0 else 0.0
     job_updated_at = getattr(job, "updated_at")
     effective_updated_at = _latest_datetime(
@@ -558,9 +693,7 @@ def _backfill_job_response(job: object, run_counts: dict[str, Any] | None = None
         before_date=getattr(job, "before_date"),
         total_chunks=total_chunks,
         completed_chunks=completed_chunks,
-        failed_chunks=int(
-            run_counts.get("failed_chunks", getattr(job, "failed_chunks"))
-        ),
+        failed_chunks=failed_chunks,
         progress_pct=progress_pct,
         error_message=run_counts.get("error_message", getattr(job, "error_message")),
         started_at=getattr(job, "started_at"),
@@ -569,6 +702,7 @@ def _backfill_job_response(job: object, run_counts: dict[str, Any] | None = None
         # Response-level updated_at is effective liveness: the raw BackfillJob
         # row-write timestamp OR the latest linked fanout unit activity.
         updated_at=effective_updated_at or job_updated_at,
+        metrics_diagnostics=metrics_diagnostics,
     )
 
 
@@ -607,11 +741,27 @@ async def _backfill_job_run_counts(
     )
     activity_result = await session.execute(activity_stmt)
     latest_unit_updated_at, latest_unit_heartbeat_at = activity_result.one()
+    status_counts_result = await session.execute(
+        select(SyncRunUnit.status, func.count())
+        .where(
+            SyncRunUnit.sync_run_id == run_uuid,
+            SyncRunUnit.org_id == str(getattr(job, "org_id")),
+        )
+        .group_by(SyncRunUnit.status)
+    )
+    status_counts = {
+        str(status): int(count) for status, count in status_counts_result.all()
+    }
+    total_chunks = max(sum(status_counts.values()), int(getattr(run, "total_units")))
+    completed_chunks = status_counts.get(SyncRunUnitStatus.SUCCESS.value, 0)
+    failed_chunks = status_counts.get(SyncRunUnitStatus.FAILED.value, 0)
     return {
-        "status": getattr(run, "status"),
-        "total_chunks": int(getattr(run, "total_units")),
-        "completed_chunks": int(getattr(run, "completed_units")),
-        "failed_chunks": int(getattr(run, "failed_units")),
+        "status": _effective_backfill_run_status(
+            str(getattr(run, "status")), status_counts, total_chunks
+        ),
+        "total_chunks": total_chunks,
+        "completed_chunks": completed_chunks,
+        "failed_chunks": failed_chunks,
         "completed_at": getattr(run, "completed_at"),
         "error_message": getattr(run, "error"),
         "updated_at": _latest_datetime(
@@ -619,6 +769,44 @@ async def _backfill_job_run_counts(
             latest_unit_heartbeat_at,
         ),
     }
+
+
+async def _open_backfill_metrics_sink() -> AsyncIterator[Any | None]:
+    """Open a ClickHouse metrics sink for backfill diagnostics reads.
+
+    ``GET /backfill-jobs/{job_id}`` populates ``metrics_diagnostics`` from
+    ClickHouse analytics tables only -- no Postgres shortcuts (CHAOS-2888).
+    Yields ``None`` when ClickHouse is not configured so the detail
+    endpoint can omit diagnostics instead of failing.
+    """
+    from dev_health_ops.db import get_clickhouse_uri
+    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+
+    uri = get_clickhouse_uri()
+    if not uri:
+        yield None
+        return
+    sink = ClickHouseMetricsSink(dsn=uri)
+    try:
+        yield sink
+    finally:
+        sink.close()
+
+
+def get_backfill_metrics_sink() -> Callable[
+    [], AbstractAsyncContextManager[Any | None]
+]:
+    """Return a lazy factory for the backfill-diagnostics ClickHouse sink.
+
+    Returns the factory itself -- not an opened sink -- so resolving this
+    FastAPI dependency performs no I/O. ``GET /backfill-jobs/{job_id}``
+    only calls the factory (opening ClickHouse) after confirming the job
+    exists; a 404 for a missing job never opens a ClickHouse client
+    (CHAOS-2888 Workstream C review fix). Tests override this dependency
+    with a factory returning their fake sink -- the same structural
+    contract ``metrics/compounding_risk.py`` already uses.
+    """
+    return asynccontextmanager(_open_backfill_metrics_sink)
 
 
 # Canonical mapping of provider → supported sync targets.
@@ -2153,7 +2341,7 @@ async def list_sync_config_jobs(
     runs_result = await session.execute(runs_stmt)
     runs = list(runs_result.scalars().all())
     planner_sync_runs = await _planner_sync_runs_for_job_runs(session, runs, org_id)
-    planner_sync_run_units = await _planner_sync_run_units_for_job_runs(
+    planner_sync_run_unit_rollups = await _planner_sync_run_unit_rollups_for_job_runs(
         session, runs, org_id
     )
 
@@ -2161,7 +2349,9 @@ async def list_sync_config_jobs(
         _job_run_response(
             run,
             planner_sync_runs.get(str(sync_run_id)) if sync_run_id else None,
-            planner_sync_run_units.get(str(sync_run_id), ()) if sync_run_id else (),
+            planner_sync_run_unit_rollups.get(str(sync_run_id))
+            if sync_run_id
+            else None,
         )
         for run in runs
         for sync_run_id in [_planner_job_run_sync_run_id(run)]
@@ -2197,6 +2387,9 @@ async def get_backfill_job(
     job_id: str,
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
+    metrics_sink_factory: Callable[
+        [], AbstractAsyncContextManager[Any | None]
+    ] = Depends(get_backfill_metrics_sink),
 ):
     from dev_health_ops.api.services.backfill import BackfillJobService
 
@@ -2205,4 +2398,22 @@ async def get_backfill_job(
     if job is None:
         raise HTTPException(status_code=404, detail="Backfill job not found")
     run_counts = await _backfill_job_run_counts(session, job)
-    return _backfill_job_response(job, run_counts)
+    metrics_diagnostics = None
+    # The sink is opened lazily, only now that the job is confirmed to
+    # exist -- a 404 above never triggers a ClickHouse connection
+    # (CHAOS-2888 Workstream C review fix).
+    async with metrics_sink_factory() as metrics_sink:
+        if metrics_sink is not None:
+            from dev_health_ops.api.services.backfill_diagnostics import (
+                build_backfill_metrics_diagnostics,
+            )
+
+            metrics_diagnostics = build_backfill_metrics_diagnostics(
+                metrics_sink,
+                org_id=org_id,
+                range_start=getattr(job, "since_date"),
+                range_end=getattr(job, "before_date"),
+            )
+    return _backfill_job_response(
+        job, run_counts, metrics_diagnostics=metrics_diagnostics
+    )

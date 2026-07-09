@@ -5,6 +5,10 @@ import json
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from dev_health_ops.api.services.configuration.clickhouse_identity_drift import (
+    ENTITY_TYPE_IDENTITY,
+    apply_identity_membership_change,
+)
 from dev_health_ops.api.services.configuration.clickhouse_team_admin import (
     ClickHouseTeamAdminService,
 )
@@ -122,7 +126,7 @@ class ClickHouseTeamDriftService:
         assert client is not None
         conditions = [
             "c.org_id = {org_id:String}",
-            "c.entity_type = 'team'",
+            "c.entity_type IN ('team', 'identity')",
             "c.status = 'pending'",
         ]
         params: dict[str, Any] = {"org_id": self.org_id}
@@ -133,6 +137,7 @@ class ClickHouseTeamDriftService:
         query = f"""
             SELECT
                 c.change_id,
+                c.entity_type,
                 c.entity_id AS team_id,
                 coalesce(t.name, c.entity_id) AS team_name,
                 c.provider,
@@ -169,6 +174,13 @@ class ClickHouseTeamDriftService:
         return [row for row in rows if str(row["change_id"]) in requested]
 
     async def _apply_change(self, row: dict[str, Any]) -> None:
+        if row.get("entity_type") == ENTITY_TYPE_IDENTITY:
+            await apply_identity_membership_change(
+                store=self.store,
+                org_id=self.org_id,
+                row=row,
+            )
+            return
         field = row.get("field")
         if not field:
             return
@@ -275,7 +287,7 @@ class ClickHouseTeamDriftService:
             {
                 "org_id": self.org_id,
                 "change_id": row["change_id"],
-                "entity_type": "team",
+                "entity_type": row.get("entity_type") or "team",
                 "entity_id": row["team_id"],
                 "provider": row.get("provider") or "",
                 "native_team_key": row.get("native_team_key"),

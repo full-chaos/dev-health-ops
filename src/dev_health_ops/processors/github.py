@@ -31,9 +31,11 @@ from dev_health_ops.processors.base_git import (
     build_deployment,
     build_git_pull_request,
     check_backfill_needs,
+    historical_backfill_day,
     resolve_commit_stats_limit,
     resolve_incident_labels,
     select_unblamed_paths,
+    write_historical_complexity,
 )
 from dev_health_ops.processors.fetch_utils import (
     AsyncBatchCollector,
@@ -1116,6 +1118,15 @@ class _BoundedBlameFailureLogger:
 
 
 class _GitHubFileContentClient(Protocol):
+    async def get_latest_commit_sha(
+        self,
+        owner: str,
+        repo: str,
+        *,
+        ref: str,
+        until: datetime,
+    ) -> str | None: ...
+
     async def get_file_contents(
         self,
         owner: str,
@@ -1191,6 +1202,7 @@ async def _backfill_github_missing_data(
     since: datetime | None = None,
     until: datetime | None = None,
     usage_sink: list[dict[str, Any]] | None = None,
+    metrics_sink: Any | None = None,
 ) -> None:
     # Logic matches the CLI sync orchestration.
     logging.info(
@@ -1208,7 +1220,11 @@ async def _backfill_github_missing_data(
     # (contents NULL), which has_any_git_files treats as "done". Upgrade
     # them by re-running the files backfill when no contents exist yet;
     # ReplacingMergeTree(last_synced) supersedes the stale rows.
-    needs_files = needs.files if include_files else False
+    historical_day = historical_backfill_day(until)
+    needs_historical_complexity = include_files and historical_day is not None
+    needs_files = (
+        needs.files if include_files else False
+    ) or needs_historical_complexity
     if (
         include_files
         and not needs_files
@@ -1243,39 +1259,68 @@ async def _backfill_github_missing_data(
     code_client: GitHubCodeClient | None = None
     if needs_files or needs_blame:
         code_client = _github_code_client_from_connector(connector)
+    tree_ref = default_branch
     try:
         if needs_files or needs_blame:
             try:
-                branch = gh_repo.get_branch(default_branch)
-                tree = gh_repo.get_git_tree(branch.commit.sha, recursive=True)
-                blob_sizes: dict[str, int | None] = {}
-                for entry in getattr(tree, "tree", []) or []:
-                    if getattr(entry, "type", None) != "blob":
-                        continue
-                    path = getattr(entry, "path", None)
-                    if not path:
-                        continue
-                    file_paths.append(path)
-                    blob_sizes[path] = getattr(entry, "size", None)
+                assert code_client is not None
+                tree_ref = default_branch
+                if until is not None:
+                    resolved_ref = await code_client.get_latest_commit_sha(
+                        owner, repo_name, ref=default_branch, until=until
+                    )
+                    if resolved_ref is None:
+                        logging.warning(
+                            "No GitHub commit found for %s at or before %s; "
+                            "skipping file backfill",
+                            repo_full_name,
+                            until.isoformat(),
+                        )
+                        needs_files = False
+                        needs_blame = False
+                    else:
+                        tree_ref = resolved_ref
+                else:
+                    branch = gh_repo.get_branch(default_branch)
+                    tree_ref = branch.commit.sha
+                if needs_files or needs_blame:
+                    tree = gh_repo.get_git_tree(tree_ref, recursive=True)
+                    blob_sizes: dict[str, int | None] = {}
+                    for entry in getattr(tree, "tree", []) or []:
+                        if getattr(entry, "type", None) != "blob":
+                            continue
+                        path = getattr(entry, "path", None)
+                        if not path:
+                            continue
+                        file_paths.append(path)
+                        blob_sizes[path] = getattr(entry, "size", None)
 
-                if needs_files and file_paths:
-                    assert code_client is not None
-                    contents_by_path = await _fetch_scannable_contents(
-                        code_client,
-                        owner,
-                        repo_name,
-                        default_branch,
-                        file_paths,
-                        blob_sizes,
-                        repo_full_name,
-                    )
-                    await backfill_file_records(
-                        ingestion_sink,
-                        db_repo.id,
-                        file_paths,
-                        repo_full_name,
-                        contents_by_path=contents_by_path,
-                    )
+                    if needs_files and file_paths:
+                        contents_by_path = await _fetch_scannable_contents(
+                            code_client,
+                            owner,
+                            repo_name,
+                            tree_ref,
+                            file_paths,
+                            blob_sizes,
+                            repo_full_name,
+                        )
+                        if historical_day is None:
+                            await backfill_file_records(
+                                ingestion_sink,
+                                db_repo.id,
+                                file_paths,
+                                repo_full_name,
+                                contents_by_path=contents_by_path,
+                            )
+                        write_historical_complexity(
+                            store=store,
+                            metrics_sink=metrics_sink,
+                            repo_id=db_repo.id,
+                            day=historical_day,
+                            ref_value=tree_ref,
+                            contents_by_path=contents_by_path,
+                        )
             except (RateLimitException, RateLimitExceededException):
                 raise
             except Exception as e:
@@ -1357,7 +1402,7 @@ async def _backfill_github_missing_data(
                                 owner=owner,
                                 repo=repo_name,
                                 path=path,
-                                ref=default_branch,
+                                ref=tree_ref,
                             )
                             processed_files += 1
                         except (RateLimitException, RateLimitExceededException):

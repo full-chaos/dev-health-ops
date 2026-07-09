@@ -9,12 +9,19 @@ import pytest
 from dev_health_ops.metrics.compounding_risk import (
     DEFAULT_THRESHOLDS,
     DEFAULT_WEIGHTS,
+    REASON_MISSING_COMPLEXITY_DELTA,
+    REASON_MISSING_OWNERSHIP_SIGNAL,
+    REASON_MISSING_REVIEW_LATENCY,
+    REASON_MISSING_REWORK_CHURN,
     REFERENCE_VALUES,
     CompoundingInputs,
+    CompoundingRiskDiagnostics,
     CompoundingThresholds,
     CompoundingWeights,
     compute_compounding_risk,
+    missing_input_reasons,
     severity_for,
+    summarize_compounding_risk_diagnostics,
 )
 
 NOW = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)
@@ -571,3 +578,119 @@ def test_orchestrator_team_rows_inherit_weights_and_thresholds() -> None:
     team_row = next(r for r in out if r.scope == "team")
     assert team_row.w_churn == DEFAULT_WEIGHTS.churn
     assert team_row.threshold_elevated == DEFAULT_THRESHOLDS.elevated
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics contract (CHAOS-2888)
+# ---------------------------------------------------------------------------
+
+
+def test_missing_input_reasons_empty_when_all_required_inputs_present() -> None:
+    assert missing_input_reasons(_inputs()) == []
+
+
+def test_missing_input_reasons_names_each_missing_signal() -> None:
+    inputs = CompoundingInputs(
+        rework_churn=None,
+        complexity_delta=None,
+        review_latency_p90h=None,
+        single_owner_ratio=None,
+        ownership_gini=None,
+    )
+    assert missing_input_reasons(inputs) == [
+        REASON_MISSING_REWORK_CHURN,
+        REASON_MISSING_COMPLEXITY_DELTA,
+        REASON_MISSING_REVIEW_LATENCY,
+        REASON_MISSING_OWNERSHIP_SIGNAL,
+    ]
+
+
+def test_missing_input_reasons_ownership_needs_both_signals_absent() -> None:
+    present = _inputs(single_owner_ratio=0.4, ownership_gini=None)
+    assert missing_input_reasons(present) == []
+    absent = _inputs(single_owner_ratio=None, ownership_gini=None)
+    assert missing_input_reasons(absent) == [REASON_MISSING_OWNERSHIP_SIGNAL]
+
+
+def test_summarize_diagnostics_full_input_row_is_non_null_and_reason_free() -> None:
+    row = _compute(_inputs())
+    diagnostics = summarize_compounding_risk_diagnostics([row])
+    assert diagnostics == CompoundingRiskDiagnostics(
+        total_rows=1,
+        non_null_rows=1,
+        unknown_rows=0,
+        reason_counts={
+            REASON_MISSING_REWORK_CHURN: 0,
+            REASON_MISSING_COMPLEXITY_DELTA: 0,
+            REASON_MISSING_REVIEW_LATENCY: 0,
+            REASON_MISSING_OWNERSHIP_SIGNAL: 0,
+        },
+    )
+
+
+def test_summarize_diagnostics_counts_missing_complexity_delta() -> None:
+    row = _compute(_inputs(complexity_delta=None))
+    diagnostics = summarize_compounding_risk_diagnostics([row])
+    assert diagnostics.non_null_rows == 0
+    assert diagnostics.unknown_rows == 1
+    assert diagnostics.reason_counts[REASON_MISSING_COMPLEXITY_DELTA] == 1
+
+
+def test_summarize_diagnostics_aggregates_across_multiple_rows() -> None:
+    full_row = _compute(_inputs())
+    missing_review_row = _compute(_inputs(review_latency_p90h=None))
+    diagnostics = summarize_compounding_risk_diagnostics([full_row, missing_review_row])
+    assert diagnostics.total_rows == 2
+    assert diagnostics.non_null_rows == 1
+    assert diagnostics.unknown_rows == 1
+    assert diagnostics.reason_counts[REASON_MISSING_REVIEW_LATENCY] == 1
+    assert diagnostics.reason_counts[REASON_MISSING_COMPLEXITY_DELTA] == 0
+
+
+def test_summarize_diagnostics_empty_rows_seeds_all_reasons_at_zero() -> None:
+    diagnostics = summarize_compounding_risk_diagnostics([])
+    assert diagnostics == CompoundingRiskDiagnostics(
+        total_rows=0,
+        non_null_rows=0,
+        unknown_rows=0,
+        reason_counts={
+            REASON_MISSING_REWORK_CHURN: 0,
+            REASON_MISSING_COMPLEXITY_DELTA: 0,
+            REASON_MISSING_REVIEW_LATENCY: 0,
+            REASON_MISSING_OWNERSHIP_SIGNAL: 0,
+        },
+    )
+
+
+def test_summarize_diagnostics_counts_missing_ownership_signal() -> None:
+    row = _compute(_inputs(single_owner_ratio=None, ownership_gini=None))
+    diagnostics = summarize_compounding_risk_diagnostics([row])
+    assert diagnostics.non_null_rows == 0
+    assert diagnostics.unknown_rows == 1
+    assert diagnostics.reason_counts[REASON_MISSING_OWNERSHIP_SIGNAL] == 1
+
+
+def test_orchestrator_rows_summarize_missing_complexity_delta_when_history_absent() -> (
+    None
+):
+    repo = uuid.uuid4()
+    sink = _FakeSink({})  # no persisted repo_complexity_daily history
+    repo_rows = [
+        _FakeRepoMetrics(
+            repo_id=repo,
+            rework_churn_ratio_30d=0.1,
+            single_owner_file_ratio_30d=0.5,
+            code_ownership_gini=0.5,
+            pr_first_review_p90_hours=24.0,
+        ),
+    ]
+    out = build_compounding_risk_rows_for_day(
+        sink=sink,
+        day=DAY,
+        org_id="acme",
+        repo_metrics_rows=repo_rows,
+        computed_at=NOW,
+    )
+    diagnostics = summarize_compounding_risk_diagnostics(out)
+    assert diagnostics.reason_counts[REASON_MISSING_COMPLEXITY_DELTA] == 1
+    assert diagnostics.unknown_rows == 1

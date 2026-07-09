@@ -881,6 +881,41 @@ class GitHubCodeClient:
         ]
         return commits, window_truncated
 
+    async def get_latest_commit_sha(
+        self,
+        owner: str,
+        repo: str,
+        *,
+        ref: str,
+        until: datetime,
+    ) -> str | None:
+        params: dict[str, Any] = {
+            "per_page": 1,
+            "sha": ref,
+            "until": until.isoformat(),
+        }
+        operation = f"{GIT_ROUTE_FAMILY}:GET /repos/{owner}/{repo}/commits latest"
+        encoded_owner = urllib.parse.quote(str(owner), safe="")
+        encoded_repo = urllib.parse.quote(str(repo), safe="")
+        response = await self._core.request(
+            "GET",
+            f"/repos/{encoded_owner}/{encoded_repo}/commits",
+            operation=operation,
+            params=params,
+        )
+        payload = response.json()
+        if not isinstance(payload, list):
+            raise APIException(
+                f"Unexpected latest commit response for {operation}: {type(payload)!r}"
+            )
+        if not payload:
+            return None
+        first = payload[0]
+        if not isinstance(first, Mapping):
+            return None
+        sha = first.get("sha")
+        return sha if isinstance(sha, str) and sha else None
+
     async def iter_pulls(
         self,
         owner: str,

@@ -111,13 +111,13 @@ class LLMTokenUsageMixin(_ClickHouseSinkBase):
                 sum(calls) AS calls,
                 sum(input_tokens) AS input_tokens,
                 sum(output_tokens) AS output_tokens,
-                max(computed_at) AS computed_at
+                max(computed_at) AS last_computed_at
             FROM llm_token_usage
             WHERE org_id = {org_id:String}
               AND run_id IN {run_ids:Array(String)}
               AND computed_at >= {since:DateTime}
             GROUP BY run_id, provider, model
-            ORDER BY computed_at DESC, run_id DESC, model ASC
+            ORDER BY last_computed_at DESC, run_id DESC, model ASC
             """,
                 parameters={"org_id": org_id, "since": since, "run_ids": list(run_ids)},
             ).result_rows
@@ -154,13 +154,13 @@ class LLMTokenUsageMixin(_ClickHouseSinkBase):
                 sum(calls) AS calls,
                 sum(input_tokens) AS input_tokens,
                 sum(output_tokens) AS output_tokens,
-                max(computed_at) AS computed_at
+                max(computed_at) AS last_computed_at
             FROM llm_token_usage
             WHERE org_id = {org_id:String}
               AND run_id = ''
               AND computed_at >= {since:DateTime}
             GROUP BY provider, model
-            ORDER BY computed_at DESC, model ASC
+            ORDER BY last_computed_at DESC, model ASC
             """,
                 parameters={"org_id": org_id, "since": since},
             ).result_rows

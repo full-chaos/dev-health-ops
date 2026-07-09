@@ -1,6 +1,6 @@
 # Sync Unit Model
 
-> **What this documents:** how a sync run is decomposed into executable units, and why **reference data** (teams, orgs, members, projects, boards/cycles/sprints) belongs on a different axis than **work items** (issues, PRs/MRs). This conceptual page was missing, which is why a structural request-amplification went unnoticed (CHAOS-2719). Target-state behavior is labeled where it is not yet shipped.
+> **What this documents:** how a sync run is decomposed into executable units, and why **reference data** (teams, orgs, members, projects, boards/cycles/sprints) belongs on a different axis than **work items** (issues, PRs/MRs). This conceptual page was missing, which is why a structural request-amplification went unnoticed (CHAOS-2719). Shipped behavior is described here, and any remaining gaps are called out explicitly.
 
 ## Overview
 
@@ -10,17 +10,17 @@ A sync run is decomposed by the planner (`sync/planner.py` `_build_planned_units
 source × dataset × date-window
 ```
 
-Each `PlannedUnit` becomes one `SyncRunUnit` row and one `run_sync_unit` Celery task (see [Durable Dispatch Outbox](dispatch-outbox.md) for the task hierarchy). This axis is **correct for work items**, which are per-source and time-sliced: a 90-day backfill of issues legitimately splits into windows, and each window legitimately scopes to one source.
+Each `PlannedUnit` becomes one `SyncRunUnit` row and one `run_sync_unit` Celery task (see [Durable Dispatch Outbox](dispatch-outbox.md) for the task hierarchy). This axis is **correct for work items**, which are per-source and time-sliced: a 90-day backfill of issues legitimately splits into windows, and each window legitimately scopes to one source. The work-item-family datasets are the shipped exception: enabled family keys collapse into one composite `work-items` unit per `(source, window)` and are carried as `family_dataset_*` flags.
 
 The axis is **wrong for reference entities**. Teams, orgs, members, projects, and boards/cycles/sprints are **source-independent and time-independent** — their true cardinality is *once per integration per run*. When a provider fetches reference data *inside* a work-item unit, it pays for that data `windows × datasets × sources` times.
 
 ```mermaid
 graph TD
     Run[SyncRun] --> Plan[plan_sync_run: _build_planned_units]
-    Plan -->|source × dataset × window| U1[unit: src A · work-items · win1]
-    Plan --> U2[unit: src A · work-items · win2]
-    Plan --> U3[unit: src A · work-item-labels · win1]
-    Plan --> U4[unit: src B · work-items · win1]
+    Plan -->|source × dataset/window| U1[unit: src A · work-items composite · win1<br/>flags: work-items, labels, projects, history, comments]
+    Plan --> U2[unit: src A · work-items composite · win2]
+    Plan --> U3[unit: src B · work-items composite · win1]
+    Plan --> U4[unit: src B · commits · win1]
 
     subgraph WT [Work-item tier — correct on this axis]
         U1
@@ -45,7 +45,7 @@ graph TD
     style RT fill:#bbf,stroke:#333
 ```
 
-For a 90-day Linear backfill: `ceil(90/14)=7 windows × 5 work-item-family datasets = 35 units`, each running the **complete** Linear ingest, each calling `iter_teams()` (all teams) plus `iter_cycles()` per team. The teams/cycles cardinality should be *one fetch per run*; instead it is `35× (× team count)`. This is the unmeasured amplifier behind Linear backfill request saturation, and it is **not Linear-specific**.
+For a 90-day backfill, `ceil(90/14)=7` windows. When the work-item family is enabled, each `(source, window)` now becomes **one** composite `SyncRunUnit`, not 5 separate dataset units, so the family executes once per source/window and carries `family_dataset_*` flags for the enabled child datasets. The same collapse applies to GitHub, GitLab, Jira, and Linear. This is the shipped fix for the work-item-family amplifier, and it is **not Linear-specific**.
 
 ## The two tiers
 
@@ -72,7 +72,7 @@ The ⚠️ cells are the work this epic removes. GitHub/GitLab already solved th
 ## The three amplifiers and their fixes
 
 1. **Per-unit reference re-fetch** (Linear teams+cycles; Jira sprints). The dominant fixed overhead. **Fix (P2):** read teams/cycles/sprints from the persisted store via a once-per-run resolver; add a `get_all_sprints` loader and a cycle/sprint producer; bounded source-scoped API fallback on a store miss.
-2. **Work-item-family redundancy.** The 5 family datasets (`work-items`, `work-item-labels`, `work-item-projects`, `work-item-history`, `work-item-comments`) each re-run the *full* ingest, so enabling the family multiplies cost ×5 per source/window. **Fix (P3, target-state):** plan-time collapse to **one** composite ingest per `(source, window)`, writing per-dataset watermarks for each enabled family key.
+2. **Work-item-family redundancy.** The 5 family datasets (`work-items`, `work-item-labels`, `work-item-projects`, `work-item-history`, `work-item-comments`) used to re-run the *full* ingest, so enabling the family multiplied cost ×5 per source/window. **Shipped:** plan-time collapse now produces **one** composite ingest per `(source, window)`, with raw `dataset_key='work-items'` plus boolean `family_dataset_*` flags for each enabled child dataset.
 3. **Source fan-out.** Work-item units that ignore their own source — Linear `IngestionContext(repo=None)` → all teams; GitHub `discover_repos` without a repo filter → all org repos; GitLab likewise (its `repo_name` is a numeric project id, not the `path_with_namespace` on `repos.repo`, so a naive filter can't reuse the GitHub match). **Fix (P1, shipped on the source-scoping branch):** thread the unit's `source_external_id` so a unit syncs only its one source; preserve the no-source CLI/org-wide path. GitHub shipped first (CHAOS-2720); GitLab shipped via a separate match branch keyed on the discovered repo's `settings.project_id` (CHAOS-2763), since the id spaces don't overlap.
 
 **Target acceptance:** total provider API requests for a backfill scale `O(issues + teams + cycles/projects)`, not `O(windows × datasets × sources)`, across all four providers.
@@ -149,6 +149,7 @@ PR #1143. GitHub-path behavior is unaffected.
 ## Invariants this model must preserve
 
 - **Backfill never writes watermarks.** Backfill units (`mode="backfill"`) must never update `sync_watermarks`; see [Data Pipeline](data-pipeline.md) and the planner module contract (CHAOS-2514). The work-item-family collapse writes per-dataset watermarks only for incremental/full-resync units.
+- **Coverage and observability consumers must expand family flags.** Any consumer that reads `SyncRunUnit` rows for coverage or observability must expand `family_dataset_*` flags before interpreting a composite work-item-family unit. Raw `dataset_key='work-items'` alone does **not** prove coverage for comments, history, projects, or labels.
 - **Provider coverage matrix.** Behavior stays green across `{jira, gitlab, github, linear} × {teams, projects, members, issues}` — see [Team Attribution](team-attribution.md). Never make a fix Linear-only.
 - **ClickHouse idempotency.** Reference reads and collapsed/scoped writes stay idempotent (`teams FINAL`, `sprints FINAL`).
 - **No Postgres team/identity attribution.** Reference data is read from ClickHouse, never a Postgres attribution bridge.

@@ -171,6 +171,31 @@ def _sync_status_from_job_run(run: JobRun) -> SyncStatus:
     return sync_status
 
 
+async def _has_completed_parent_sync(
+    session: AsyncSession, org_id: str, configs: list[SyncConfiguration]
+) -> bool:
+    parent_config_ids = [
+        getattr(config, "id")
+        for config in configs
+        if getattr(config, "parent_id") is None
+    ]
+    if not parent_config_ids:
+        return False
+
+    stmt = (
+        select(JobRun)
+        .join(ScheduledJob, JobRun.job_id == ScheduledJob.id)
+        .where(
+            ScheduledJob.org_id == org_id,
+            ScheduledJob.sync_config_id.in_(parent_config_ids),
+            JobRun.status == JobRunStatus.SUCCESS.value,
+        )
+        .order_by(JobRun.created_at.desc())
+    )
+    result = await session.execute(stmt)
+    return any(_sync_status_from_job_run(run) == "complete" for run in result.scalars())
+
+
 @router.get("/setup/status", response_model=SetupStatusResponse)
 async def get_setup_status(
     session: AsyncSession = Depends(get_session),
@@ -189,6 +214,15 @@ async def get_setup_status(
     sync_config_id: str | None = None
     sync_status: SyncStatus = "none"
     first_sync_started = False
+    first_sync_completed = any(
+        getattr(config, "parent_id") is None
+        and getattr(config, "last_sync_success") is True
+        for config in configs
+    )
+    if not first_sync_completed:
+        first_sync_completed = await _has_completed_parent_sync(
+            session, org_id, configs
+        )
     selected_repositories_count = 0
     last_sync_error: str | None = None
     can_start_sync = False
@@ -218,6 +252,8 @@ async def get_setup_status(
         if latest is not None:
             first_sync_started = True
             sync_status = _sync_status_from_job_run(latest)
+            if sync_status == "complete":
+                first_sync_completed = True
             if sync_status == "failed":
                 last_sync_error = getattr(latest, "error") or getattr(
                     latest_config, "last_sync_error"
@@ -228,6 +264,7 @@ async def get_setup_status(
             if getattr(primary, "last_sync_success") is True:
                 sync_status = "complete"
                 first_sync_started = True
+                first_sync_completed = True
             elif (
                 getattr(primary, "last_sync_error")
                 or getattr(primary, "last_sync_success") is False
@@ -272,6 +309,7 @@ async def get_setup_status(
         has_sync_config=has_sync_config,
         sync_config_id=sync_config_id,
         first_sync_started=first_sync_started,
+        first_sync_completed=first_sync_completed,
         sync_status=sync_status,
         selected_repositories_count=selected_repositories_count,
         last_sync_error=last_sync_error,

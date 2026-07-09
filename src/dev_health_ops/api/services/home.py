@@ -29,7 +29,11 @@ from ..models.schemas import (
 )
 from ..queries.client import clickhouse_client, query_dicts
 from ..queries.explain import fetch_metric_driver_delta
-from ..queries.freshness import fetch_coverage, fetch_last_ingested_at
+from ..queries.freshness import (
+    fetch_coverage,
+    fetch_last_ingested_at,
+    fetch_source_statuses,
+)
 from ..queries.metrics import (
     fetch_blocked_hours,
     fetch_metric_series,
@@ -987,6 +991,7 @@ async def build_home_response(
         (
             last_ingested,
             coverage,
+            sources,
             deltas,
             rework_theme_allocation_rows,
         ) = await asyncio.gather(
@@ -995,6 +1000,11 @@ async def build_home_response(
                 sink,
                 start_day=start_day,
                 end_day=end_day,
+                org_id=org_id,
+            ),
+            fetch_source_statuses(
+                sink,
+                start_day=start_day,
                 org_id=org_id,
             ),
             _metric_deltas(
@@ -1031,12 +1041,6 @@ async def build_home_response(
             for row in rework_theme_allocation_rows
         ]
 
-        sources = {
-            "github": "ok" if last_ingested else "down",
-            "gitlab": "ok" if last_ingested else "down",
-            "jira": "ok" if last_ingested else "down",
-            "ci": "ok" if last_ingested else "down",
-        }
         data_confidence = build_data_confidence(coverage=coverage, sources=sources)
         metric_signals = build_metric_signals(deltas, filters, data_confidence)
         recommendation_signals, risk_signals = await asyncio.gather(

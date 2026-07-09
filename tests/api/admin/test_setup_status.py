@@ -17,6 +17,7 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.services.auth import AuthenticatedUser
@@ -198,16 +199,24 @@ async def _add_job_run(
     error: str | None = None,
 ) -> None:
     async with session_maker() as session:
-        job = ScheduledJob(
-            name=f"sync-config-{config_id}",
-            job_type="sync",
-            schedule_cron="0 * * * *",
-            org_id=org_id,
-            provider="github",
-            sync_config_id=uuid.UUID(config_id),
+        job = await session.scalar(
+            select(ScheduledJob).where(
+                ScheduledJob.org_id == org_id,
+                ScheduledJob.sync_config_id == uuid.UUID(config_id),
+                ScheduledJob.job_type == "sync",
+            )
         )
-        session.add(job)
-        await session.flush()
+        if job is None:
+            job = ScheduledJob(
+                name=f"sync-config-{config_id}",
+                job_type="sync",
+                schedule_cron="0 * * * *",
+                org_id=org_id,
+                provider="github",
+                sync_config_id=uuid.UUID(config_id),
+            )
+            session.add(job)
+            await session.flush()
         run = JobRun(job_id=job.id, triggered_by="manual", status=status)
         run.error = error
         run.created_at = datetime.now(timezone.utc)
@@ -282,6 +291,7 @@ async def test_setup_status_config_ready_to_start(client, session_maker):
     assert data["sync_config_id"] == config_id
     assert data["selected_repositories_count"] == 1
     assert data["first_sync_started"] is False
+    assert data["first_sync_completed"] is False
     assert data["sync_status"] == "none"
     assert data["can_start_sync"] is True
     assert data["next_action"] == "start_sync"
@@ -366,6 +376,7 @@ async def test_setup_status_sync_running(client, session_maker, status, expected
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert data["first_sync_started"] is True
+    assert data["first_sync_completed"] is False
     assert data["sync_status"] == expected
     assert data["can_start_sync"] is False
     assert data["next_action"] == "complete"
@@ -397,6 +408,7 @@ async def test_setup_status_sync_running_on_non_primary_config_blocks_start(
     data = resp.json()
     assert data["sync_config_id"] == newer_config_id
     assert data["first_sync_started"] is True
+    assert data["first_sync_completed"] is False
     assert data["sync_status"] == "running"
     assert data["can_start_sync"] is False
     assert data["next_action"] == "complete"
@@ -420,7 +432,75 @@ async def test_setup_status_sync_complete(client, session_maker):
     data = resp.json()
     assert data["sync_status"] == "complete"
     assert data["first_sync_started"] is True
+    assert data["first_sync_completed"] is True
     assert data["next_action"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_setup_status_marks_setup_complete_during_later_sync(
+    client, session_maker
+):
+    ac, seeded_state = client
+    await _add_credential(session_maker, seeded_state["org_id"])
+    config_id = await _add_config(
+        session_maker,
+        seeded_state["org_id"],
+        last_sync_success=True,
+    )
+    await _add_job_run(
+        session_maker,
+        seeded_state["org_id"],
+        config_id,
+        status=JobRunStatus.RUNNING.value,
+    )
+
+    resp = await ac.get("/api/v1/admin/setup/status")
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["first_sync_started"] is True
+    assert data["first_sync_completed"] is True
+    assert data["sync_status"] == "running"
+    assert data["next_action"] == "complete"
+    assert data["blocker"] is None
+
+
+@pytest.mark.asyncio
+async def test_setup_status_keeps_setup_complete_after_later_failed_sync(
+    client, session_maker
+):
+    ac, seeded_state = client
+    await _add_credential(session_maker, seeded_state["org_id"])
+    config_id = await _add_config(
+        session_maker,
+        seeded_state["org_id"],
+        last_sync_success=False,
+        last_sync_error="later failure",
+    )
+    await _add_job_run(
+        session_maker,
+        seeded_state["org_id"],
+        config_id,
+        status=JobRunStatus.SUCCESS.value,
+    )
+    await _add_job_run(
+        session_maker,
+        seeded_state["org_id"],
+        config_id,
+        status=JobRunStatus.FAILED.value,
+        error="later failure",
+    )
+
+    resp = await ac.get("/api/v1/admin/setup/status")
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["first_sync_started"] is True
+    assert data["first_sync_completed"] is True
+    assert data["sync_status"] == "failed"
+    assert data["last_sync_error"] == "later failure"
+    assert data["next_action"] == "start_sync"
+    assert data["blocker"] == "later failure"
 
 
 @pytest.mark.asyncio

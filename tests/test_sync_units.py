@@ -341,6 +341,8 @@ def test_run_sync_unit_success_persists_status_and_incremental_watermark(
     from dev_health_ops.workers.sync_units import run_sync_unit
 
     run, unit = _seed_run(db_session)
+    planned_before = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+    unit.before_at = planned_before
     _mark_dispatching(db_session, unit)
     _patch_db_session(monkeypatch, db_session)
     _patch_runtime(monkeypatch)
@@ -396,6 +398,7 @@ def test_run_sync_unit_success_persists_status_and_incremental_watermark(
     assert watermark.org_id == run.org_id
     assert watermark.source_id == "full-chaos/dev-health"
     assert watermark.dataset_key == "commits"
+    assert _aware(watermark.last_synced_at) == planned_before
     finalize_outbox = (
         db_session.query(SyncDispatchOutbox)
         .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_FINALIZE)

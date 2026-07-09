@@ -177,6 +177,25 @@ def test_llm_spend_reader_aggregates_runs_failures_and_caps_limit():
     assert summary.legacy == []
 
 
+def test_llm_spend_reader_does_not_alias_aggregate_as_filtered_column():
+    computed_at = datetime(2026, 1, 2, 3, tzinfo=timezone.utc)
+    client = FakeSpendClient(
+        latest_runs=[("run-new", computed_at)],
+        run_rows=[("run-new", "openai", "gpt-5-mini", 3, 30, 15, computed_at)],
+        legacy_rows=[("openai", "gpt-legacy", 2, 20, 8, computed_at)],
+    )
+    sink = ClickHouseMetricsSink("clickhouse://localhost:9000/default", client=client)
+
+    sink.read_llm_token_spend(org_id="org-a")
+
+    colliding_queries = [
+        query
+        for query, _parameters in client.calls
+        if "max(computed_at) AS computed_at" in query and "AND computed_at >=" in query
+    ]
+    assert colliding_queries == []
+
+
 def test_llm_spend_reader_returns_empty_summary_without_rows():
     client = FakeSpendClient()
     sink = ClickHouseMetricsSink("clickhouse://localhost:9000/default", client=client)

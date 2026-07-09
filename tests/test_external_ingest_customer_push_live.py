@@ -266,13 +266,46 @@ async def asgi_client():
         yield c
 
 
-@pytest.fixture
-def org_id() -> str:
-    # Fresh org_id per test: avoids idempotency-key/source-instance
-    # collisions between tests and lets each test register its own
-    # IngestSource/IngestToken without colliding on the
-    # (org_id, system, instance) unique constraint.
-    return f"chaos2702-e2e-{uuid.uuid4()}"
+@pytest_asyncio.fixture(loop_scope="module")
+async def org_id() -> str:
+    # Fresh UUID-backed organization per test: avoids idempotency-key/source-
+    # instance collisions while satisfying the production feature gate, which
+    # resolves the token's org_id through the UUID-keyed organizations table.
+    from sqlalchemy import select
+
+    from dev_health_ops.db import get_postgres_session
+    from dev_health_ops.models.licensing import FeatureFlag
+    from dev_health_ops.models.users import Organization
+
+    oid = uuid.uuid4()
+    async with get_postgres_session() as session:
+        session.add(
+            Organization(
+                id=oid,
+                slug=f"chaos2702-e2e-{oid}",
+                name="CHAOS-2702 live E2E",
+                tier="team",
+            )
+        )
+
+        result = await session.execute(
+            select(FeatureFlag).where(FeatureFlag.key == "customer_push_ingest")
+        )
+        feature = result.scalar_one_or_none()
+        if feature is None:
+            session.add(
+                FeatureFlag(
+                    key="customer_push_ingest",
+                    name="Customer Push Ingest",
+                    category="integrations",
+                    min_tier="team",
+                )
+            )
+        else:
+            feature.is_enabled = True
+            feature.min_tier = "team"
+
+    return str(oid)
 
 
 @pytest_asyncio.fixture(loop_scope="module")

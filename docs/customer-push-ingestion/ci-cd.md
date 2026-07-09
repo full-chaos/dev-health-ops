@@ -15,7 +15,7 @@ non-zero unless the batch completed without rejections.
 
 Each example is available in two flavours: the `dev-hops push` CLI (less code)
 and raw `curl` + `jq` (no dev-hops dependency). The full runnable files live in
-[`examples/customer-push/`](https://github.com/full-chaos/dev-health-ops/tree/main/examples/customer-push).
+[`docs/examples/customer-push/`](https://github.com/full-chaos/dev-health-ops/tree/main/docs/examples/customer-push).
 
 ## Security requirements
 

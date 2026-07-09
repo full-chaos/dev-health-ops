@@ -161,5 +161,5 @@ markdown_extensions:
   - pymdownx.snippets:
       base_path:
         - src/dev_health_ops/api/external_ingest/examples
-        - examples/customer-push
+        - docs/examples/customer-push
       check_paths: true

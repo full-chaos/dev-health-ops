@@ -26,7 +26,7 @@ _EXAMPLES_DIR = (
 # ``--8<--`` from. Keep in sync with mkdocs.yml's snippets base_path list.
 _SNIPPET_BASE_DIRS = (
     _EXAMPLES_DIR,
-    _REPO_ROOT / "examples" / "customer-push",
+    _REPO_ROOT / "docs" / "examples" / "customer-push",
 )
 
 # ``--8<-- "pull_request.v1.json"`` (double or single quotes, arbitrary leading whitespace).
@@ -60,7 +60,7 @@ def test_every_docs_snippet_reference_resolves() -> None:
     """No customer-push doc may reference a snippet file that doesn't exist.
 
     A snippet resolves if it exists under ANY configured base_path dir (the
-    package examples dir or ``examples/customer-push``).
+    package examples dir or ``docs/examples/customer-push``).
     """
     dangling = [
         f"{md.relative_to(_REPO_ROOT)} -> {target}"

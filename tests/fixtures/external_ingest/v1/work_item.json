@@ -1,0 +1,38 @@
+{
+  "kind": "work_item.v1",
+  "valid": {
+    "kind": "work_item.v1",
+    "externalId": "ABC-123",
+    "payload": {
+      "externalKey": "ABC-123",
+      "provider": "jira",
+      "title": "Fix login redirect loop",
+      "type": "bug",
+      "status": "in_progress",
+      "statusRaw": "In Progress",
+      "description": "Users are redirected in a loop after SSO login.",
+      "projectKey": "ABC",
+      "projectName": "Acme Platform",
+      "assignees": ["alice@acme.example"],
+      "reporter": "bob@acme.example",
+      "createdAt": "2026-06-20T14:00:00Z",
+      "updatedAt": "2026-06-25T09:30:00Z",
+      "startedAt": "2026-06-21T09:00:00Z",
+      "labels": ["bug", "auth"],
+      "storyPoints": 3,
+      "priorityRaw": "High",
+      "url": "https://acme.atlassian.net/browse/ABC-123"
+    }
+  },
+  "invalid": {
+    "kind": "work_item.v1",
+    "externalId": "ABC-123-invalid",
+    "payload": {
+      "externalKey": "ABC-123",
+      "provider": "jira",
+      "title": "Fix login redirect loop",
+      "createdAt": "2026-06-20T14:00:00Z"
+    },
+    "expectedError": {"code": "missing_required_field", "field": "status"}
+  }
+}

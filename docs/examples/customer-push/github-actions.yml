@@ -1,0 +1,44 @@
+# FullChaos customer-push via GitHub Actions (dev-hops CLI).
+#
+# Copy into YOUR repository as `.github/workflows/fullchaos-push.yml`.
+# Store the ingest token as a repository/organization secret named
+# FULLCHAOS_INGEST_TOKEN (Settings -> Secrets and variables -> Actions).
+# The token needs the `schema:read` + `ingest:write` + `ingest:status` scopes
+# (validate / push / poll) -- never a
+# provider PAT, and never your FullChaos login.
+name: fullchaos-push
+on:
+  schedule:
+    - cron: "0 * * * *"   # hourly; adjust to your push cadence
+  workflow_dispatch: {}
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    env:
+      FULLCHAOS_API_URL: https://app.fullchaos.example
+      FULLCHAOS_INGEST_TOKEN: ${{ secrets.FULLCHAOS_INGEST_TOKEN }}
+      FULLCHAOS_ORG_ID: ${{ vars.FULLCHAOS_ORG_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dev-hops
+        # PIN to the version you validated -- this job holds the ingest token,
+        # so never install an unpinned package (a bad release could exfiltrate
+        # it). Prefer a trusted prebuilt image or hash-verified install in CI.
+        run: pipx install "dev-health-ops==1.0.0"
+
+      # Build your batch envelope however you like -- here we just emit a
+      # canonical sample. Replace this step with your own extractor that
+      # writes a batch envelope JSON to batch.json.
+      - name: Build batch
+        run: dev-hops push sample --all > batch.json
+
+      # Validate first (no network call) so a malformed batch fails the job
+      # before it ever reaches the ingest API.
+      - name: Validate
+        run: dev-hops push validate batch.json
+
+      # Submit and block until a terminal status; a non-zero exit fails the job.
+      - name: Push and poll
+        run: dev-hops push batch --poll batch.json

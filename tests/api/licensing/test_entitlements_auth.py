@@ -20,8 +20,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.services.auth import AuthenticatedUser
+from dev_health_ops.licensing.gating import get_org_entitlements_from_db
+from dev_health_ops.models.billing import BillingPlan, BillingPrice
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride, OrgLicense
+from dev_health_ops.models.subscriptions import Subscription
 from dev_health_ops.models.users import Organization
 from tests._helpers import tables_of
 
@@ -32,7 +35,15 @@ _licensing_router_module = importlib.import_module(
 licensing_router = _licensing_router_module.router
 
 
-_TABLES = tables_of(Organization, OrgLicense, FeatureFlag, OrgFeatureOverride)
+_TABLES = tables_of(
+    Organization,
+    OrgLicense,
+    FeatureFlag,
+    OrgFeatureOverride,
+    BillingPlan,
+    BillingPrice,
+    Subscription,
+)
 
 
 @pytest_asyncio.fixture
@@ -158,3 +169,189 @@ async def test_entitlements_org_member_returns_200(
     data = response.json()
     assert data["org_id"] == seeded_org
     assert data["tier"] == "team"
+
+
+@pytest.mark.asyncio
+async def test_entitlements_return_effective_false_when_feature_globally_disabled(
+    session_maker, seeded_org, monkeypatch
+):
+    async with session_maker() as session:
+        session.add(
+            FeatureFlag(
+                key="customer_push_ingest",
+                name="Customer Push Ingest",
+                category="integrations",
+                min_tier="team",
+                is_enabled=False,
+            )
+        )
+        await session.commit()
+
+    user = AuthenticatedUser(
+        user_id=str(uuid.uuid4()),
+        email="member@example.com",
+        org_id=seeded_org,
+        role="member",
+        is_superuser=False,
+    )
+
+    app = FastAPI()
+    app.include_router(licensing_router)
+    app.dependency_overrides[get_current_user] = lambda: user
+
+    monkeypatch.setattr(
+        _licensing_router_module,
+        "get_postgres_session",
+        _make_postgres_patcher(session_maker),
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(f"/api/v1/licensing/entitlements/{seeded_org}")
+
+    assert response.status_code == 200
+    assert response.json()["features"]["customer_push_ingest"] is False
+
+
+@pytest.mark.asyncio
+async def test_entitlements_keep_customer_push_false_below_tier_with_positive_license_override(
+    session_maker, seeded_org, monkeypatch
+):
+    async with session_maker() as session:
+        org = await session.get(Organization, uuid.UUID(seeded_org))
+        org.tier = "community"
+        session.add_all(
+            [
+                FeatureFlag(
+                    key="customer_push_ingest",
+                    name="Customer Push Ingest",
+                    category="integrations",
+                    min_tier="team",
+                ),
+                OrgLicense(
+                    org_id=uuid.UUID(seeded_org),
+                    tier="community",
+                    features_override={"customer_push_ingest": True},
+                ),
+            ]
+        )
+        await session.commit()
+
+    user = AuthenticatedUser(
+        user_id=str(uuid.uuid4()),
+        email="member@example.com",
+        org_id=seeded_org,
+        role="member",
+        is_superuser=False,
+    )
+
+    app = FastAPI()
+    app.include_router(licensing_router)
+    app.dependency_overrides[get_current_user] = lambda: user
+
+    monkeypatch.setattr(
+        _licensing_router_module,
+        "get_postgres_session",
+        _make_postgres_patcher(session_maker),
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(f"/api/v1/licensing/entitlements/{seeded_org}")
+
+    assert response.status_code == 200
+    assert response.json()["features"]["customer_push_ingest"] is False
+
+
+@pytest.mark.asyncio
+async def test_entitlements_keep_customer_push_false_when_flag_row_missing(
+    session_maker, seeded_org, monkeypatch
+):
+    async with session_maker() as session:
+        session.add(
+            OrgLicense(
+                org_id=uuid.UUID(seeded_org),
+                tier="team",
+                features_override={"customer_push_ingest": True},
+            )
+        )
+        await session.commit()
+
+    user = AuthenticatedUser(
+        user_id=str(uuid.uuid4()),
+        email="member@example.com",
+        org_id=seeded_org,
+        role="member",
+        is_superuser=False,
+    )
+
+    app = FastAPI()
+    app.include_router(licensing_router)
+    app.dependency_overrides[get_current_user] = lambda: user
+
+    monkeypatch.setattr(
+        _licensing_router_module,
+        "get_postgres_session",
+        _make_postgres_patcher(session_maker),
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(f"/api/v1/licensing/entitlements/{seeded_org}")
+
+    assert response.status_code == 200
+    assert response.json()["features"]["customer_push_ingest"] is False
+
+
+@pytest.mark.asyncio
+async def test_billing_entitlements_keep_customer_push_false_when_flag_row_missing(
+    session_maker, seeded_org
+):
+    async with session_maker() as session:
+        session.add(
+            OrgLicense(
+                org_id=uuid.UUID(seeded_org),
+                tier="team",
+                features_override={"customer_push_ingest": True},
+            )
+        )
+        await session.commit()
+
+    async with session_maker() as session:
+        entitlements = await get_org_entitlements_from_db(
+            uuid.UUID(seeded_org), session
+        )
+
+    assert entitlements["features"]["customer_push_ingest"] is False
+
+
+@pytest.mark.asyncio
+async def test_billing_entitlements_keep_customer_push_false_below_tier_with_positive_override(
+    session_maker, seeded_org
+):
+    async with session_maker() as session:
+        org = await session.get(Organization, uuid.UUID(seeded_org))
+        org.tier = "community"
+        session.add_all(
+            [
+                FeatureFlag(
+                    key="customer_push_ingest",
+                    name="Customer Push Ingest",
+                    category="integrations",
+                    min_tier="team",
+                ),
+                OrgLicense(
+                    org_id=uuid.UUID(seeded_org),
+                    tier="community",
+                    features_override={"customer_push_ingest": True},
+                ),
+            ]
+        )
+        await session.commit()
+
+    async with session_maker() as session:
+        entitlements = await get_org_entitlements_from_db(
+            uuid.UUID(seeded_org), session
+        )
+
+    assert entitlements["features"]["customer_push_ingest"] is False

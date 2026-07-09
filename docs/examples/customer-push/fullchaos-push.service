@@ -1,0 +1,20 @@
+# FullChaos customer-push -- systemd service (paired with the .timer below).
+#
+# Install (as root) to /etc/systemd/system/fullchaos-push.service, put the
+# token in /etc/fullchaos/push.env (chmod 600, owned by the service user), then:
+#   systemctl enable --now fullchaos-push.timer
+#
+# /etc/fullchaos/push.env contains (0600, never world-readable):
+#   FULLCHAOS_API_URL=https://app.fullchaos.example
+#   FULLCHAOS_INGEST_TOKEN=fcpush_...    # schema:read + ingest:write + ingest:status
+[Unit]
+Description=Push a customer batch to FullChaos
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=fullchaos
+EnvironmentFile=/etc/fullchaos/push.env
+# Your extractor writes /var/lib/fullchaos/batch.json before this runs.
+ExecStart=/opt/fullchaos/generic-runner.sh /var/lib/fullchaos/batch.json

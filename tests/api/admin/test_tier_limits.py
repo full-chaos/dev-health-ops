@@ -32,7 +32,7 @@ from dev_health_ops.models.integrations import (
     IntegrationDataset,
     IntegrationSource,
 )
-from dev_health_ops.models.licensing import OrgLicense, TierLimit
+from dev_health_ops.models.licensing import FeatureFlag, OrgLicense, TierLimit
 from dev_health_ops.models.settings import (
     IntegrationCredential,
     JobRun,
@@ -50,6 +50,7 @@ _TABLES = tables_of(
     User,
     Organization,
     OrgLicense,
+    FeatureFlag,
     TierLimit,
     IntegrationCredential,
     SyncConfiguration,

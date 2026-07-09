@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import importlib
 import sys
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
+from starlette.requests import Request
 
 
 def _reload_rate_limit(
@@ -140,3 +142,28 @@ def test_noop_limiter_allowed_in_development(monkeypatch):
     """slowapi absent in dev is acceptable — NoOp limiter is used."""
     module = _reload_rate_limit_noop(monkeypatch, environment="development")
     assert module.LIMITER_BACKEND == "noop"
+
+
+def test_admin_user_key_hashes_authenticated_user_id(monkeypatch):
+    module, _ = _reload_rate_limit(monkeypatch, redis_url=None, environment="test")
+
+    class _AuthService:
+        def get_authenticated_user(self, token: str) -> SimpleNamespace:
+            assert token == "session-token"
+            return SimpleNamespace(user_id="user-123")
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/admin/users",
+            "headers": [(b"authorization", b"Bearer session-token")],
+            "client": ("203.0.113.9", 1234),
+        }
+    )
+    monkeypatch.setattr(module, "get_auth_service", _AuthService)
+
+    digest = hashlib.sha256(b"user-123").hexdigest()[:16]
+    actual = module.get_admin_user_key(request)
+    assert actual == f"admin-user:{digest}"
+    assert "user-123" not in actual

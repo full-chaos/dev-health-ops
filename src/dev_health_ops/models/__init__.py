@@ -19,8 +19,23 @@ from .checkpoints import (
     SyncComputeCheckpointStatus,
     SyncComputeType,
 )
+from .external_ingest import (
+    MAX_STORED_REJECTIONS_PER_BATCH,
+    TERMINAL_STATUSES,
+    BatchStatus,
+    ExternalIngestBatch,
+    ExternalIngestBatchPayload,
+    ExternalIngestRejection,
+)
 from .git import Base, GitBlame, GitBlameMixin, GitCommit, GitCommitStat, GitFile, Repo
 from .impersonation import ImpersonationSession
+from .ingest_auth import (
+    IngestSource,
+    IngestSourceMode,
+    IngestToken,
+    IngestTokenScope,
+    IngestWebhookMode,
+)
 from .integrations import (
     Integration,
     IntegrationDataset,
@@ -109,7 +124,11 @@ __all__ = [
     "BillingInterval",
     "BillingPlan",
     "BillingPrice",
+    "BatchStatus",
     "CheckpointStatus",
+    "ExternalIngestBatch",
+    "ExternalIngestBatchPayload",
+    "ExternalIngestRejection",
     "FeatureCategory",
     "FeatureBundle",
     "PlanFeatureBundle",
@@ -122,6 +141,11 @@ __all__ = [
     "GitCommitStat",
     "GitFile",
     "GithubAppInstallation",
+    "IngestSource",
+    "IngestSourceMode",
+    "IngestToken",
+    "IngestTokenScope",
+    "IngestWebhookMode",
     "Integration",
     "IntegrationCredential",
     "IntegrationDataset",
@@ -137,6 +161,7 @@ __all__ = [
     "JobRunStatus",
     "JobStatus",
     "LoginAttempt",
+    "MAX_STORED_REJECTIONS_PER_BATCH",
     "MemberRole",
     "Membership",
     "MetricCheckpoint",
@@ -178,6 +203,7 @@ __all__ = [
     "SyncRunUnit",
     "SyncRunUnitStatus",
     "SyncWatermark",
+    "TERMINAL_STATUSES",
     "TIER_LIMITS",
     "User",
     "JiraProjectOpsTeamLink",

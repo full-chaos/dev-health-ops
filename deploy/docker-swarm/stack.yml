@@ -244,6 +244,41 @@ services:
       - ingest
       - --concurrency=1
 
+  # CHAOS-2693 D8/master-spec CC11: dedicated queue/container. DEPLOYMENT
+  # INVARIANT: exactly ONE replica at --concurrency=1 -- the reclaim/
+  # redelivery design assumes a single logical consumer identity draining
+  # the PEL, so `deploy.replicas` is pinned to 1 here explicitly (not
+  # inherited from worker-base's replicas:2) rather than left implicit.
+  worker-external-ingest:
+    <<: *worker-base
+    command:
+      - -A
+      - dev_health_ops.workers.celery_app
+      - worker
+      - --loglevel=info
+      - --disable-prefetch
+      - -Q
+      - external-ingest
+      - --concurrency=1
+    deploy:
+      mode: replicated
+      replicas: 1
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1"
+        reservations:
+          memory: 256M
+          cpus: "0.1"
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+
   worker-heavy:
     <<: *worker-base
     command:

@@ -13,6 +13,7 @@ Covers the two defects this module was created to fix:
 
 from __future__ import annotations
 
+import time
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -239,3 +240,109 @@ def test_no_streams_returns_zero(monkeypatch):
 
     assert WildcardEmpty().consume(max_iterations=1) == 0
     assert redis.xreadgroup_calls == 0
+
+
+# ---------------------------------------------------------------------------
+# Reclaim/redelivery extension (CHAOS-2693 D5) -- additive, default-off.
+# These assert the DEFAULTS leave existing consumers byte-for-byte
+# unaffected, and that reclaim_stale() itself behaves correctly when opted
+# in via a real fakeredis-backed consumer group (see
+# tests/api/test_external_ingest_consumer.py for the full retry/DLQ/give-up
+# behavioral suite against the real ExternalIngestStreamConsumer).
+# ---------------------------------------------------------------------------
+
+
+def test_reclaim_disabled_by_default_on_base_class():
+    assert StreamConsumer.enable_reclaim is False
+    assert StreamConsumer.reclaim_idle_ms == 900_000
+    assert StreamConsumer.max_deliveries == 5
+
+
+def test_reclaim_stale_is_a_noop_without_touching_redis_when_disabled():
+    """The whole point of default-off: no extra round-trip, ever, unless a
+    subclass opts in."""
+
+    class RaisesIfCalled:
+        def xpending_range(self, *args, **kwargs):
+            raise AssertionError("xpending_range must not be called when disabled")
+
+    consumer = _Consumer()
+    assert consumer.enable_reclaim is False
+    assert consumer.reclaim_stale(RaisesIfCalled(), "test:org:events") == []
+
+
+def test_consume_does_not_call_reclaim_stale_when_disabled(monkeypatch):
+    """Regression test for the ingest/product-telemetry consumers: consume()
+    must not even attempt reclaim_stale() when enable_reclaim is False."""
+    redis = FakeRedis([("1-0", {"ok": "1"})])
+    monkeypatch.setattr(base, "get_consumer_redis_client", lambda: redis)
+    calls: list[int] = []
+
+    def _spy_reclaim_stale(self, rc, stream_key):
+        calls.append(1)
+        return []
+
+    monkeypatch.setattr(_Consumer, "reclaim_stale", _spy_reclaim_stale)
+
+    _Consumer().consume(max_iterations=1)
+
+    assert calls == []
+
+
+class _ReclaimingConsumer(_Consumer):
+    consumer_group = "reclaim-consumers"
+    dlq_stream = "reclaim:dlq"
+    enable_reclaim = True
+    reclaim_idle_ms = 0
+    max_deliveries = 2
+
+
+def test_reclaim_stale_reclaims_entries_under_max_deliveries():
+    import fakeredis
+
+    # Explicit Any: fakeredis's stubs declare xpending_range/xclaim with a
+    # sync/async-overloaded signature; without this, mypy resolves the
+    # local `rc`'s method calls to `Awaitable[Any] | Any` and rejects
+    # indexing the (very much synchronous, at runtime) result below.
+    rc: Any = fakeredis.FakeValkey(decode_responses=True)
+    rc.xadd("s", {"a": "1"})
+    rc.xgroup_create("s", "reclaim-consumers", id="0")
+    rc.xreadgroup("reclaim-consumers", "c1", streams={"s": ">"}, count=10)
+    # fakeredis's XPENDING IDLE filter compares against elapsed wall-clock
+    # ms, not a >=0 always-true predicate -- a genuinely 0ms-old delivery
+    # (the common case at this granularity in a fast test) doesn't match
+    # `idle=0`. reclaim_idle_ms=900_000 in production makes this a non-issue
+    # (entries are always well past it by the time they're stale); here a
+    # tiny sleep makes "reclaim_idle_ms=0" reliably mean "everything is
+    # eligible", matching this test's intent.
+    time.sleep(0.01)
+
+    consumer = _ReclaimingConsumer(consumer_name="c2")
+    reclaimed = consumer.reclaim_stale(rc, "s")
+
+    assert len(reclaimed) == 1
+    pending = rc.xpending_range("s", "reclaim-consumers", min="-", max="+", count=10)
+    assert pending[0]["consumer"] == "c2"  # ownership transferred
+    assert pending[0]["times_delivered"] == 2
+
+
+def test_reclaim_stale_gives_up_at_max_deliveries():
+    import fakeredis
+
+    rc: Any = fakeredis.FakeValkey(decode_responses=True)
+    rc.xadd("s", {"a": "1"})
+    rc.xgroup_create("s", "reclaim-consumers", id="0")
+    # Deliver max_deliveries times via repeated reclaim (each reclaim bumps
+    # times_delivered by one, mirroring repeated XCLAIMs of the same entry).
+    rc.xreadgroup("reclaim-consumers", "c1", streams={"s": ">"}, count=10)
+
+    consumer = _ReclaimingConsumer(consumer_name="c2")
+    time.sleep(0.01)
+    consumer.reclaim_stale(rc, "s")  # times_delivered: 1 -> 2
+
+    time.sleep(0.01)
+    reclaimed = consumer.reclaim_stale(rc, "s")
+
+    assert reclaimed == []
+    pending = rc.xpending_range("s", "reclaim-consumers", min="-", max="+", count=10)
+    assert pending == []  # given up: DLQ'd + ACKed, no longer pending

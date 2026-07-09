@@ -1,0 +1,24 @@
+{
+  "kind": "identity.v1",
+  "valid": {
+    "kind": "identity.v1",
+    "externalId": "acme-user-42",
+    "payload": {
+      "canonicalId": "acme-user-42",
+      "displayName": "Alice Doe",
+      "email": "alice@acme.example",
+      "providerIdentities": {"github": ["alicedoe"], "jira": ["alice.doe"]},
+      "teamIds": ["team-platform"],
+      "isActive": true,
+      "updatedAt": "2026-06-25T00:00:00Z"
+    }
+  },
+  "invalid": {
+    "kind": "identity.v1",
+    "externalId": "acme-user-42-invalid",
+    "payload": {
+      "canonicalId": "acme-user-42"
+    },
+    "expectedError": {"code": "missing_required_field", "field": "updatedAt"}
+  }
+}

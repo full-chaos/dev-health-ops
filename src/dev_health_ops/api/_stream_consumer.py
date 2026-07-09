@@ -105,6 +105,24 @@ class StreamConsumer:
     #: Exceptions treated as "reject to DLQ" (logged at warning, not error).
     reject_exceptions: tuple[type[BaseException], ...] = ()
 
+    #: Opt-in, default-off reclaim/redelivery (CHAOS-2693 D5). The base
+    #: ``handle_entries()`` above has no true retry path -- every failure is
+    #: DLQ'd and ACKed in the same pass, which is fine for existing
+    #: best-effort internal consumers (ingest, product-telemetry) but not
+    #: for a consumer with a stricter durability bar. Leaving this ``False``
+    #: keeps every existing subclass byte-for-byte unaffected: ``reclaim_stale``
+    #: below short-circuits before touching Redis when disabled.
+    enable_reclaim: bool = False
+    #: Idle time (ms) before a pending entry is eligible for reclaim. 15
+    #: minutes, not the naive 60s: a consumer's own in-process retry ladder
+    #: can sleep ~14s by itself, and a large batch can take well over 60s to
+    #: process -- a short reclaim window risks two workers concurrently
+    #: processing the same entry.
+    reclaim_idle_ms: int = 900_000
+    #: Delivery attempts (first read + reclaims) before an entry is treated
+    #: as poison: DLQ + ACK instead of being reclaimed again.
+    max_deliveries: int = 5
+
     def __init__(
         self,
         *,
@@ -174,10 +192,25 @@ class StreamConsumer:
             )
             raise
 
-    def move_to_dlq(self, rc: Any, stream_key: str, entry_id: str, reason: str) -> None:
-        """Best-effort route of a poison entry to the configured DLQ stream."""
+    def move_to_dlq(
+        self, rc: Any, stream_key: str, entry_id: str, reason: str
+    ) -> bool | None:
+        """Best-effort route of a poison entry to the configured DLQ stream.
+
+        Return value is an ack-gating contract for :meth:`reclaim_stale`'s
+        give-up path (added for CHAOS-2693's stricter-durability subclass;
+        additive, does not change this default's own behavior): ``False``
+        means the DLQ write itself failed and the caller should NOT ack the
+        source entry (leave it pending for a later retry rather than losing
+        it with no DLQ record). This base implementation still returns
+        ``None`` (not ``False``) on failure -- existing subclasses
+        (ingest, product-telemetry) keep their original best-effort/
+        always-ack semantics unless they override this method to return
+        ``False`` explicitly on failure, as :class:`ExternalIngestStreamConsumer`
+        does.
+        """
         if not self.dlq_stream:
-            return
+            return None
         try:
             rc.xadd(
                 self.dlq_stream,
@@ -190,6 +223,80 @@ class StreamConsumer:
             )
         except Exception:
             logger.exception("Failed to move entry %s to DLQ", entry_id)
+        return None
+
+    def reclaim_stale(
+        self, rc: Any, stream_key: str
+    ) -> list[tuple[str, dict[str, str]]]:
+        """Reclaim entries idle longer than :attr:`reclaim_idle_ms`.
+
+        No-op (returns ``[]`` without touching Redis) unless
+        :attr:`enable_reclaim` is set -- existing subclasses pay no extra
+        round-trip. Entries that have already reached :attr:`max_deliveries`
+        are treated as poison: routed to the DLQ and ACKed (given up on, not
+        reclaimed) via the same :meth:`move_to_dlq` hook the default
+        :meth:`handle_entries` uses, so DLQ semantics are identical
+        regardless of which path gave up on the entry.
+        """
+        if not self.enable_reclaim:
+            return []
+        try:
+            pending = rc.xpending_range(
+                stream_key,
+                self.consumer_group,
+                min="-",
+                max="+",
+                count=self.batch_size,
+                idle=self.reclaim_idle_ms,
+            )
+        except Exception:
+            logger.exception("xpending_range failed for %s", stream_key)
+            return []
+
+        claim_ids: list[str] = []
+        for entry in pending:
+            message_id = entry.get("message_id")
+            if message_id is None:
+                continue
+            times_delivered = int(entry.get("times_delivered", 0) or 0)
+            if times_delivered >= self.max_deliveries:
+                moved = self.move_to_dlq(
+                    rc, stream_key, message_id, "max_deliveries_exceeded"
+                )
+                if moved is False:
+                    # DLQ write itself failed: do NOT ack -- leave the entry
+                    # pending so the next reclaim_stale() poll retries the
+                    # DLQ write instead of silently losing the entry with no
+                    # DLQ record (adversarial-review finding).
+                    logger.warning(
+                        "DLQ write failed for given-up entry %s; leaving "
+                        "pending for retry instead of ACKing",
+                        message_id,
+                    )
+                    continue
+                try:
+                    rc.xack(stream_key, self.consumer_group, message_id)
+                except Exception:
+                    logger.exception(
+                        "Failed to ACK reclaimed-and-given-up entry %s", message_id
+                    )
+            else:
+                claim_ids.append(message_id)
+
+        if not claim_ids:
+            return []
+        try:
+            claimed = rc.xclaim(
+                stream_key,
+                self.consumer_group,
+                self.consumer_name,
+                min_idle_time=self.reclaim_idle_ms,
+                message_ids=claim_ids,
+            )
+        except Exception:
+            logger.exception("xclaim failed for %s", stream_key)
+            return []
+        return list(claimed)
 
     def handle_entries(
         self,
@@ -248,6 +355,15 @@ class StreamConsumer:
         backoff_s = 1.0
         while max_iterations is None or iterations < max_iterations:
             iterations += 1
+
+            if self.enable_reclaim:
+                for stream_key in streams:
+                    reclaimed = self.reclaim_stale(rc, stream_key)
+                    if reclaimed:
+                        total_processed += self.handle_entries(
+                            rc, stream_key, reclaimed
+                        )
+
             try:
                 results = rc.xreadgroup(
                     self.consumer_group,

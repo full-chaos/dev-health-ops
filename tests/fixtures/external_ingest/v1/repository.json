@@ -1,0 +1,22 @@
+{
+  "kind": "repository.v1",
+  "valid": {
+    "kind": "repository.v1",
+    "externalId": "acme/api",
+    "payload": {
+      "externalId": "acme/api",
+      "sourceSystem": "github",
+      "defaultRef": "main",
+      "tags": ["backend", "core"],
+      "settings": {"visibility": "private"}
+    }
+  },
+  "invalid": {
+    "kind": "repository.v1",
+    "externalId": "acme/api-invalid",
+    "payload": {
+      "externalId": "acme/api"
+    },
+    "expectedError": {"code": "missing_required_field", "field": "sourceSystem"}
+  }
+}

@@ -38,6 +38,33 @@ def run_product_telemetry_consumer(self, max_iterations: int = 100):
     return {"processed": processed}
 
 
+@celery_app.task(
+    bind=True,
+    queue="external-ingest",
+    name="dev_health_ops.workers.tasks.run_external_ingest_consumer",
+)
+def run_external_ingest_consumer(self, max_iterations: int = 100):
+    """Process buffered external-ingest stream entries (CHAOS-2693)."""
+    from dev_health_ops.api.external_ingest.consumer import (
+        consume_external_ingest_streams,
+    )
+
+    processed = consume_external_ingest_streams(max_iterations=max_iterations)
+    return {"processed": processed}
+
+
+@celery_app.task(
+    bind=True,
+    queue="monitoring",
+    name="dev_health_ops.workers.tasks.external_ingest_stream_health",
+)
+def external_ingest_stream_health(self) -> dict:
+    """Log external-ingest stream depth/lag telemetry (CHAOS-2693 D9)."""
+    from dev_health_ops.api.external_ingest.stream_health import report_stream_health
+
+    return report_stream_health()
+
+
 @celery_app.task(bind=True, name="dev_health_ops.workers.tasks.health_check")
 def health_check(self) -> dict:
     """Simple health check task to verify worker is running."""

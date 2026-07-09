@@ -1,0 +1,26 @@
+{
+  "kind": "review.v1",
+  "valid": {
+    "kind": "review.v1",
+    "externalId": "rev-9001",
+    "payload": {
+      "repositoryExternalId": "acme/api",
+      "pullRequestNumber": 482,
+      "reviewId": "rev-9001",
+      "reviewer": "bob@acme.example",
+      "state": "APPROVED",
+      "submittedAt": "2026-06-22T14:00:00Z"
+    }
+  },
+  "invalid": {
+    "kind": "review.v1",
+    "externalId": "rev-9001-invalid",
+    "payload": {
+      "repositoryExternalId": "acme/api",
+      "pullRequestNumber": 482,
+      "reviewId": "rev-9001",
+      "reviewer": "bob@acme.example"
+    },
+    "expectedError": {"code": "missing_required_field", "field": "state"}
+  }
+}

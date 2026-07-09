@@ -6,6 +6,7 @@ from dev_health_ops.api.admin.middleware import require_admin
 
 from .routers import (
     credentials_router,
+    customer_push_router,
     features_router,
     get_clickhouse_store,
     get_session,
@@ -39,6 +40,7 @@ router = APIRouter(
 router.include_router(settings_router)
 router.include_router(setup_router)
 router.include_router(credentials_router)
+router.include_router(customer_push_router)
 router.include_router(sync_router)
 router.include_router(identities_router)
 router.include_router(teams_router)

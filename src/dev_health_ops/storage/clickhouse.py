@@ -86,6 +86,15 @@ class ClickHouseStore:
         return uuid.UUID(str(value))
 
     @staticmethod
+    def _normalize_uuid_or_none(value: Any) -> uuid.UUID | None:
+        """Nullable-UUID variant of ``_normalize_uuid`` (CHAOS-2698 source_id)."""
+        if value is None:
+            return None
+        if isinstance(value, uuid.UUID):
+            return value
+        return uuid.UUID(str(value))
+
+    @staticmethod
     def _normalize_datetime(value: Any) -> Any:
         if value is None:
             return None
@@ -283,6 +292,9 @@ class ClickHouseStore:
             "tags": self._json_or_none(getattr(repo, "tags", None)),
             "provider": getattr(repo, "provider", None) or "unknown",
             "last_synced": synced_at,
+            # Nullable(UUID) — NULL for native sync, stamped by external-ingest
+            # sink writes (CHAOS-2698 D1).
+            "source_id": self._normalize_uuid_or_none(getattr(repo, "source_id", None)),
         }
         await self._insert_rows(
             "repos",
@@ -295,6 +307,7 @@ class ClickHouseStore:
                 "tags",
                 "provider",
                 "last_synced",
+                "source_id",
             ],
             [row],
         )
@@ -682,6 +695,9 @@ class ClickHouseStore:
                         "last_synced": self._normalize_datetime(
                             item.get("last_synced") or synced_at_default
                         ),
+                        "source_id": self._normalize_uuid_or_none(
+                            item.get("source_id")
+                        ),
                     }
                 )
             else:
@@ -700,6 +716,9 @@ class ClickHouseStore:
                         "last_synced": self._normalize_datetime(
                             getattr(item, "last_synced", None) or synced_at_default
                         ),
+                        "source_id": self._normalize_uuid_or_none(
+                            getattr(item, "source_id", None)
+                        ),
                     }
                 )
 
@@ -717,6 +736,7 @@ class ClickHouseStore:
                 "committer_when",
                 "parents",
                 "last_synced",
+                "source_id",
             ],
             rows,
         )
@@ -872,6 +892,9 @@ class ClickHouseStore:
                         "last_synced": self._normalize_datetime(
                             item.get("last_synced") or synced_at_default
                         ),
+                        "source_id": self._normalize_uuid_or_none(
+                            item.get("source_id")
+                        ),
                     }
                 )
             else:
@@ -906,6 +929,9 @@ class ClickHouseStore:
                         "last_synced": self._normalize_datetime(
                             getattr(item, "last_synced", None) or synced_at_default
                         ),
+                        "source_id": self._normalize_uuid_or_none(
+                            getattr(item, "source_id", None)
+                        ),
                     }
                 )
 
@@ -933,6 +959,7 @@ class ClickHouseStore:
                 "reviews_count",
                 "comments_count",
                 "last_synced",
+                "source_id",
             ],
             rows,
         )
@@ -959,6 +986,9 @@ class ClickHouseStore:
                         "last_synced": self._normalize_datetime(
                             item.get("last_synced") or synced_at_default
                         ),
+                        "source_id": self._normalize_uuid_or_none(
+                            item.get("source_id")
+                        ),
                     }
                 )
             else:
@@ -973,6 +1003,9 @@ class ClickHouseStore:
                         "last_synced": self._normalize_datetime(
                             getattr(item, "last_synced", None) or synced_at_default
                         ),
+                        "source_id": self._normalize_uuid_or_none(
+                            getattr(item, "source_id", None)
+                        ),
                     }
                 )
 
@@ -986,6 +1019,7 @@ class ClickHouseStore:
                 "state",
                 "submitted_at",
                 "last_synced",
+                "source_id",
             ],
             rows,
         )
@@ -1586,6 +1620,9 @@ class ClickHouseStore:
                         "provider": str(item.get("provider") or ""),
                         "native_team_key": item.get("native_team_key"),
                         "parent_team_id": item.get("parent_team_id"),
+                        "source_id": self._normalize_uuid_or_none(
+                            item.get("source_id")
+                        ),
                     }
                 )
             else:
@@ -1605,6 +1642,9 @@ class ClickHouseStore:
                         "provider": str(getattr(item, "provider", "") or ""),
                         "native_team_key": getattr(item, "native_team_key", None),
                         "parent_team_id": getattr(item, "parent_team_id", None),
+                        "source_id": self._normalize_uuid_or_none(
+                            getattr(item, "source_id", None)
+                        ),
                     }
                 )
 
@@ -1625,6 +1665,7 @@ class ClickHouseStore:
                 "provider",
                 "native_team_key",
                 "parent_team_id",
+                "source_id",
             ],
             rows,
         )
@@ -1664,6 +1705,7 @@ class ClickHouseStore:
                     "is_active": int(get("is_active", 1) or 0),
                     "updated_at": self._normalize_datetime(get("updated_at"))
                     or synced_at,
+                    "source_id": self._normalize_uuid_or_none(get("source_id")),
                 }
             )
         await self._insert_rows(
@@ -1678,6 +1720,7 @@ class ClickHouseStore:
                 "team_ids",
                 "is_active",
                 "updated_at",
+                "source_id",
             ],
             rows,
         )

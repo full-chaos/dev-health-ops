@@ -23,7 +23,7 @@ export GITLAB_TOKEN=glpat_your_token
 export GITLAB_PRIVATE_PROJECT=your-group/your-private-project
 
 # Run the test
-python examples/private_repo_example.py
+python docs/examples/private_repo_example.py
 ```
 
 ## Detailed Testing
@@ -55,7 +55,7 @@ export GITHUB_PRIVATE_REPO=myusername/my-private-repo
 **Option A: Run the example script**
 
 ```bash
-python examples/private_repo_example.py
+python docs/examples/private_repo_example.py
 ```
 
 **Option B: Run integration tests**
@@ -116,7 +116,7 @@ export GITLAB_URL=https://gitlab.example.com
 **Option A: Run the example script**
 
 ```bash
-python examples/private_repo_example.py
+python docs/examples/private_repo_example.py
 ```
 
 **Option B: Run integration tests**
@@ -293,5 +293,5 @@ If you encounter issues:
 1. Check this documentation for troubleshooting steps
 2. Verify your token scopes and permissions
 3. Review the connector documentation in `src/dev_health_ops/connectors/README.md`
-4. Check example scripts in `examples/` directory
+4. Check example scripts in `docs/examples/` directory
 5. Review test files for usage patterns

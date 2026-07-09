@@ -2,3 +2,29 @@ f3b6feebaea7953d563207a73c76217f8ec5ccea:tests/test_ingest_api.py:generic-api-ke
 # CHAOS-1772: false-positive on slowapi rate-limit literal "20/15minutes"
 81d688d029526d14179b71df6db78921b9f09a46:tests/api/auth/test_login_rate_limit.py:generic-api-key:29
 69bb1e2f75882961d9f8d47f99b984b411026865:tests/api/admin/test_credential_repos.py:private-key:193
+# CHAOS-2690: dummy example values in the planning briefs — brief-2691's
+# curl examples use the literal placeholder "Bearer dev-token" (the deleted
+# interim-auth stub) and brief-2695's §11 live-verification snippet uses
+# idempotency_key="k1"/payload_hash="h1" fixtures. They live in an
+# already-merged squash commit, so file edits cannot clear the range scan.
+# Both full-SHA and short-id fingerprint forms are listed: the CI job log
+# emits full SHAs while gitleaks >=8.3x matches ignore entries against the
+# short commit id (adversarial-review finding).
+a2c0fc1ce5d7ee581f6afa7dd3a34a646065570b:docs/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2695-idempotency.md:generic-api-key:1018
+a2c0fc1ce5d7ee581f6afa7dd3a34a646065570b:docs/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2695-idempotency.md:generic-api-key:1025
+a2c0fc1ce5d7ee581f6afa7dd3a34a646065570b:docs/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2695-idempotency.md:generic-api-key:1032
+a2c0fc1ce5d7ee581f6afa7dd3a34a646065570b:docs/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2691-contract.md:curl-auth-header:978
+a2c0fc1ce5d7ee581f6afa7dd3a34a646065570b:docs/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2691-contract.md:curl-auth-header:1004
+a2c0fc1ce5d7ee581f6afa7dd3a34a646065570b:docs/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2691-contract.md:curl-auth-header:1013
+a2c0fc1ce:docs/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2695-idempotency.md:generic-api-key:1018
+a2c0fc1ce:docs/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2695-idempotency.md:generic-api-key:1025
+a2c0fc1ce:docs/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2695-idempotency.md:generic-api-key:1032
+a2c0fc1ce:docs/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2691-contract.md:curl-auth-header:978
+a2c0fc1ce:docs/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2691-contract.md:curl-auth-header:1004
+a2c0fc1ce:docs/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2691-contract.md:curl-auth-header:1013
+# Short-id twins of the three pre-existing entries above (same matcher-format
+# drift): gitleaks >=8.3x matches ignore fingerprints against the short
+# commit id, so the original full-SHA rows no longer suppress on their own.
+f3b6feeba:tests/test_ingest_api.py:generic-api-key:71
+81d688d02:tests/api/auth/test_login_rate_limit.py:generic-api-key:29
+69bb1e2f7:tests/api/admin/test_credential_repos.py:private-key:193

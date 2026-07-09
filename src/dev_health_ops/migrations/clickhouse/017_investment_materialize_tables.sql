@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS work_unit_investments (
     structural_evidence_json String, -- Serialized JSON of structural signals
     evidence_quality Float64, -- 0.0 - 1.0
     evidence_quality_band String, -- 'high', 'medium', 'low'
-    categorization_status String, -- 'success', 'error', 'partial'
+    categorization_status String, -- 'ok', 'repaired', 'invalid_llm_output', or fallback reason
     categorization_errors_json String,
     categorization_model_version String,
     categorization_input_hash String,

@@ -4,7 +4,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from dev_health_ops.llm.providers.openai import OpenAIProvider
+from dev_health_ops.llm.providers.openai import (
+    CATEGORIZATION_RESPONSE_FORMAT,
+    RESPONSE_FORMAT_MARKER,
+    OpenAIProvider,
+)
 
 
 class _StubResponse:
@@ -105,7 +109,10 @@ async def test_openai_provider_uses_json_mode_and_instructions():
     provider._impl._client = _StubClient(captured, content='{"test": "result"}')
 
     # Use a prompt that triggers the "schema" system message to verify all instructions
-    prompt = 'Output schema: "subcategories", "evidence_quotes", "uncertainty"'
+    prompt = (
+        f"{RESPONSE_FORMAT_MARKER}{CATEGORIZATION_RESPONSE_FORMAT}\n"
+        'Output schema: "subcategories", "evidence_quotes", "uncertainty"'
+    )
     await provider.complete(prompt)
 
     # Verify the system message contains JSON instructions

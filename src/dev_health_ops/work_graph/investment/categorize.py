@@ -4,90 +4,42 @@ from __future__ import annotations
 
 import json
 import logging
-from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
-from typing import Any
 
 from dev_health_ops.llm import CompletionResult, LLMProvider, get_provider
+from dev_health_ops.work_graph.investment.categorization_prompts import (
+    PROMPT_VERSION as PROMPT_VERSION,
+)
+from dev_health_ops.work_graph.investment.categorization_prompts import (
+    TAXONOMY_VERSION as TAXONOMY_VERSION,
+)
+from dev_health_ops.work_graph.investment.categorization_prompts import (
+    build_categorization_prompt as build_categorization_prompt,
+)
+from dev_health_ops.work_graph.investment.categorization_prompts import (
+    build_prompt as _build_prompt,
+)
+from dev_health_ops.work_graph.investment.categorization_prompts import (
+    build_repair_prompt as _build_repair_prompt,
+)
 from dev_health_ops.work_graph.investment.llm_schema import (
     EvidenceQuote,
     LLMValidationResult,
     parse_llm_json,
     validate_llm_payload,
 )
-from dev_health_ops.work_graph.investment.taxonomy import SUBCATEGORIES
+from dev_health_ops.work_graph.investment.llm_telemetry import (
+    PROMPT_KIND_CATEGORIZE,
+    STAGE_INITIAL,
+    STAGE_REPAIR,
+    llm_call_metrics,
+    record_categorization_outcome,
+    record_validation,
+)
 from dev_health_ops.work_graph.investment.types import TextBundle
 from dev_health_ops.work_graph.investment.utils import ensure_full_subcategory_vector
 
 logger = logging.getLogger(__name__)
-
-TAXONOMY_VERSION = "investment-taxonomy-v1"
-PROMPT_VERSION = "investment-categorization-v1"
-
-CANONICAL_PROMPT = """You are categorizing work unit evidence into canonical investment subcategories.
-
-Rules:
-- Output JSON only. No markdown, no explanations.
-- Use ALL 15 canonical subcategories as keys, exactly once each, and use ONLY these keys: {subcategories}
-- Provide a probability distribution across all 15 subcategories.
-- Every subcategory value must be a number from 0 to 1.
-- At least one subcategory value MUST be non-zero.
-- Irrelevant subcategories MUST be 0.
-- The 15 probability values MUST sum to exactly 1.
-- Provide evidence_quotes as 1-10 items with exact substrings copied from the source text.
-- evidence_quotes items must have: quote, source (issue|pr|commit), id.
-- evidence_quotes id MUST be the bracketed handle shown before an evidence block (for example "E1"), copied exactly.
-- evidence_quotes quote MUST be non-empty and <= 280 characters.
-- evidence_quotes quote MUST be an exact source substring, not a paraphrase, not a summary, and not normalized text.
-- Do NOT use ellipses unless the literal ellipsis characters appear in the source substring.
-- Provide uncertainty as a short string (1-280 chars).
-- No extra keys.
-
-Output schema:
-{{
-  "subcategories": {{
-    "feature_delivery.customer": 0.0,
-    "feature_delivery.roadmap": 0.0,
-    "feature_delivery.enablement": 0.0,
-    "operational.incident_response": 0.0,
-    "operational.on_call": 0.0,
-    "operational.support": 0.0,
-    "maintenance.refactor": 0.0,
-    "maintenance.upgrade": 0.0,
-    "maintenance.debt": 0.0,
-    "quality.testing": 0.0,
-    "quality.bugfix": 0.0,
-    "quality.reliability": 0.0,
-    "risk.security": 0.0,
-    "risk.compliance": 0.0,
-    "risk.vulnerability": 0.0
-  }},
-  "evidence_quotes": [
-    {{ "quote": "...", "source": "issue", "id": "E1" }}
-  ],
-  "uncertainty": "..."
-}}
-"""
-
-REPAIR_PROMPT = """Your previous response failed validation.
-
-Errors:
-{errors}
-
-Repair requirements:
-- Return JSON only matching the schema and rules.
-- Keep all 15 canonical subcategory keys.
-- Ensure at least one subcategory value is non-zero.
-- Ensure the full probability distribution sums to exactly 1.
-- Set irrelevant subcategories to 0.
-- Every evidence quote must be a non-empty exact source substring with length <= 280.
-- Copy evidence id handles exactly from the source blocks.
-- Do not paraphrase, summarize, or invent evidence.
-
-Targeted fixes:
-{guidance}
-
-"""
 
 FALLBACK_PRIOR = {
     "feature_delivery.roadmap": 0.2,
@@ -116,23 +68,16 @@ def _token_count(value: int | None) -> int:
     return int(value or 0)
 
 
-def _llm_call_span(
-    *, provider_name: str, model: str | None
-) -> AbstractContextManager[Any]:
-    try:
-        from opentelemetry import trace
-    except ImportError:
-        return nullcontext(None)
-    tracer = trace.get_tracer(__name__)
-    span = tracer.start_as_current_span("llm.complete")
-    return span
-
-
 def _fallback_distribution() -> dict[str, float]:
     return ensure_full_subcategory_vector(FALLBACK_PRIOR)
 
 
-def fallback_outcome(reason: str) -> CategorizationOutcome:
+def fallback_outcome(
+    reason: str, *, provider: str = "unknown", model: str | None = None
+) -> CategorizationOutcome:
+    record_categorization_outcome(
+        provider=provider, model=model, prompt_version=PROMPT_VERSION, status=reason
+    )
     return CategorizationOutcome(
         subcategories=_fallback_distribution(),
         evidence_quotes=[],
@@ -147,76 +92,24 @@ async def _complete(
     provider_name: str,
     model: str | None = None,
     provider: LLMProvider | None = None,
+    stage: str = STAGE_INITIAL,
 ) -> CompletionResult:
-    with _llm_call_span(provider_name=provider_name, model=model) as span:
-        try:
-            if provider:
-                result = await provider.complete(prompt)
-            else:
-                provider_instance = get_provider(provider_name, model=model)
-                result = await provider_instance.complete(prompt)
-        except Exception as exc:
-            if span is not None:
-                span.set_attribute("llm.provider", provider_name)
-                if model:
-                    span.set_attribute("llm.model", model)
-                span.set_attribute("llm.status", "error")
-                span.record_exception(exc)
-                try:
-                    from opentelemetry.trace import Status, StatusCode
-
-                    span.set_status(Status(StatusCode.ERROR, str(exc)[:200]))
-                except ImportError:
-                    # OpenTelemetry status API is optional; skip enrichment.
-                    pass
-            raise
-
-        if span is not None:
-            span.set_attribute("llm.provider", provider_name)
-            span.set_attribute("llm.model", result.model or model or "")
-            span.set_attribute("llm.input_tokens", _token_count(result.input_tokens))
-            span.set_attribute("llm.output_tokens", _token_count(result.output_tokens))
-            span.set_attribute("llm.status", "ok")
+    with llm_call_metrics(
+        provider=provider_name,
+        model=model,
+        stage=stage,
+        prompt_kind=PROMPT_KIND_CATEGORIZE,
+        prompt_version=PROMPT_VERSION,
+    ) as call:
+        provider_instance = provider or get_provider(provider_name, model=model)
+        result = await provider_instance.complete(prompt)
+        call.set_result(
+            model=result.model,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            text=result.text,
+        )
         return result
-
-
-def _build_prompt(source_block: str) -> str:
-    categories = ", ".join(sorted(SUBCATEGORIES))
-    prompt = CANONICAL_PROMPT.format(subcategories=categories)
-    if source_block:
-        return f"{prompt}\n\nSource text (quotes must be exact substrings):\n{source_block}"
-    return f"{prompt}\n\nSource text (quotes must be exact substrings):\n(EMPTY)"
-
-
-def build_categorization_prompt(bundle: TextBundle) -> str:
-    return _build_prompt(bundle.source_block)
-
-
-def _repair_guidance(errors: list[str]) -> str:
-    guidance: list[str] = []
-    if any(err.startswith("evidence_quote_too_long") for err in errors):
-        guidance.append(
-            "- For evidence_quote_too_long: replace the quote with a shorter exact substring from the same source text, 1-280 characters only."
-        )
-    if any(err.startswith("probability_sum_out_of_range:0.0000") for err in errors):
-        guidance.append(
-            "- For probability_sum_out_of_range:0.0000: all probabilities were zero. Assign non-zero probability to the relevant canonical subcategories so the total becomes exactly 1."
-        )
-    elif any(err.startswith("probability_sum_out_of_range") for err in errors):
-        guidance.append(
-            "- For probability_sum_out_of_range: adjust the subcategory values so their total is exactly 1 while keeping all 15 canonical keys present."
-        )
-    if not guidance:
-        guidance.append(
-            "- Fix every listed validation error and return one fully valid JSON object."
-        )
-    return "\n".join(guidance)
-
-
-def _build_repair_prompt(errors: list[str], source_block: str) -> str:
-    errors_text = "\n".join(f"- {err}" for err in errors)
-    repair = REPAIR_PROMPT.format(errors=errors_text, guidance=_repair_guidance(errors))
-    return f"{repair}\n\n{_build_prompt(source_block)}"
 
 
 async def categorize_text_bundle(
@@ -273,8 +166,21 @@ async def categorize_text_bundle_completion(
         validation = validate_llm_payload(
             payload or {}, bundle.source_texts, bundle.handle_map
         )
+    record_validation(
+        provider=llm_provider,
+        model=resolved_model or llm_model,
+        stage=STAGE_INITIAL,
+        prompt_version=PROMPT_VERSION,
+        errors=validation.errors,
+    )
 
     if validation.ok:
+        record_categorization_outcome(
+            provider=llm_provider,
+            model=resolved_model or llm_model,
+            prompt_version=PROMPT_VERSION,
+            status="ok",
+        )
         return CategorizationOutcome(
             subcategories=validation.subcategories,
             evidence_quotes=validation.evidence_quotes,
@@ -288,9 +194,15 @@ async def categorize_text_bundle_completion(
             llm_model=resolved_model,
         )
 
-    repair_prompt = _build_repair_prompt(validation.errors, bundle.source_block)
+    repair_prompt = _build_repair_prompt(
+        validation.errors, bundle.source_block, completion_text
+    )
     repaired_completion = await _complete(
-        repair_prompt, llm_provider, model=llm_model, provider=provider
+        repair_prompt,
+        llm_provider,
+        model=llm_model,
+        provider=provider,
+        stage=STAGE_REPAIR,
     )
     input_tokens += _token_count(repaired_completion.input_tokens)
     output_tokens += _token_count(repaired_completion.output_tokens)
@@ -309,8 +221,21 @@ async def categorize_text_bundle_completion(
         validation = validate_llm_payload(
             payload or {}, bundle.source_texts, bundle.handle_map
         )
+    record_validation(
+        provider=llm_provider,
+        model=resolved_model or llm_model,
+        stage=STAGE_REPAIR,
+        prompt_version=PROMPT_VERSION,
+        errors=validation.errors,
+    )
 
     if validation.ok:
+        record_categorization_outcome(
+            provider=llm_provider,
+            model=resolved_model or llm_model,
+            prompt_version=PROMPT_VERSION,
+            status="repaired",
+        )
         return CategorizationOutcome(
             subcategories=validation.subcategories,
             evidence_quotes=validation.evidence_quotes,
@@ -327,6 +252,12 @@ async def categorize_text_bundle_completion(
     logger.warning(
         "Investment categorization failed after repair: %s",
         json.dumps(validation.errors),
+    )
+    record_categorization_outcome(
+        provider=llm_provider,
+        model=resolved_model or llm_model,
+        prompt_version=PROMPT_VERSION,
+        status="invalid_llm_output",
     )
 
     return CategorizationOutcome(

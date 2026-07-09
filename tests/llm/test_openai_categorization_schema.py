@@ -29,3 +29,16 @@ def test_categorization_schema_matches_canonical_subcategories():
 
     assert set(subcategory_schema["required"]) == set(SUBCATEGORIES)
     assert set(subcategory_schema["properties"]) == set(SUBCATEGORIES)
+
+
+def test_categorization_schema_subcategory_values_allow_arbitrary_positive_weights():
+    # Subcategory values are pre-normalization relative weights, not bounded
+    # probabilities: no per-key "maximum" so a single subcategory can carry
+    # weight > 1 before the caller normalizes the vector. Still non-negative.
+    schema = categorization_json_schema()
+    subcategory_schema = schema["properties"]["subcategories"]
+
+    for value_schema in subcategory_schema["properties"].values():
+        assert value_schema["type"] == "number"
+        assert value_schema["minimum"] == 0
+        assert "maximum" not in value_schema

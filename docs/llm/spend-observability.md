@@ -2,6 +2,10 @@
 
 This page describes how the Dev Health platform tracks LLM token usage, costs, and execution traces.
 
+Investment categorization and mix-explanation reliability metrics, bounded label contracts,
+and before/after PromQL are documented in
+[Investment LLM Telemetry](investment-llm-telemetry.md).
+
 ## Observability Flow
 
 The system tracks token usage and execution details at both the individual call level and the aggregate run level.
@@ -44,11 +48,11 @@ Each provider implementation (e.g., OpenAI, Anthropic, Gemini) extracts these va
 
 Tracing is initialized during the Celery worker bootstrap process. The `init_tracing` function configures the OpenTelemetry SDK with an OTLP gRPC exporter. The `instrument_celery` function then instruments all Celery tasks.
 
-Each LLM call is wrapped in an OpenTelemetry span. The span includes attributes for:
+Each instrumented investment LLM call is wrapped in an `llm.complete` span. The span includes attributes for:
 - `llm.provider`: The provider name (e.g., `openai`).
-- `llm.model`: The model name (e.g., `gpt-5-mini`).
-- `llm.usage.input_tokens`: The prompt token count.
-- `llm.usage.output_tokens`: The completion token count.
+- `llm.model`: A bounded model family (for example `gpt-5-nano`).
+- `llm.prompt_kind`, `llm.prompt_version`, and `llm.stage`.
+- `llm.input_tokens`, `llm.output_tokens`, and `llm.output_chars`.
 
 ## Run-Summary Aggregation
 

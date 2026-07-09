@@ -86,12 +86,12 @@ Before any LLM call, `materialize_investments` decides per component:
 
 This keeps cost down and avoids asking the model to categorize empty clusters.
 
-## Step 4 — LLM assigns subcategory probabilities
+## Step 4 — LLM assigns subcategory relative weights
 
 `categorize_text_bundle` (in `categorize.py`) sends the canonical prompt and expects a
-**probability distribution across all 15 subcategories** (summing to 1), plus 1–10
-**extractive evidence quotes** and a short `uncertainty` string. The 15 subcategories
-are the fixed registry in `investment_taxonomy.py`
+**relative weight across all 15 subcategories** (any consistent positive scale — no
+required sum), plus 1–10 **extractive evidence quotes** and a short `uncertainty`
+string. The 15 subcategories are the fixed registry in `investment_taxonomy.py`
 (see [Investment Taxonomy](../product/investment-taxonomy.md)).
 
 **This is the step that makes the determination.** Everything downstream is
@@ -103,14 +103,15 @@ deterministic.
 
 - top-level keys are exactly `subcategories`, `evidence_quotes`, `uncertainty`;
 - the prompt and schema require all 15 canonical subcategory keys, with `0` for irrelevant categories; runtime validation defensively fills any missing canonical keys after sum validation and before normalization;
-- every subcategory key is in the canonical set; each probability in `[0, 1]`;
-- the distribution sums within `[0.9, 1.1]`, a clean `[0.98, 1.02]` sum is accepted as-is, a near-miss is renormalized and flagged `probability_sum_renormalized` in the audit, and `≤ 0` or outside `[0.9, 1.1]` is rejected;
+- every subcategory key is in the canonical set; each value is a finite, non-negative relative weight (negative, non-finite, or non-numeric values are rejected);
+- the full weight vector is deterministically normalized to sum to 1 — any positive sum is accepted, flagged `weights_normalized` in the audit when the sum was not already `~1`; a sum of exactly `0` (`all_weights_zero`) or a non-finite sum (`weight_sum_not_finite`) is rejected;
 - each evidence quote is a **literal substring** of the provided source text
   (anti-hallucination), 1-10 quotes, `source ∈ {issue, pr, commit}`, and each quote is `≤ 280` chars;
 - `uncertainty` is non-empty and ≤ 280 chars.
 
-On failure, exactly **one repair re-prompt** is attempted (the validation errors are
-fed back). If it still fails, a deterministic fallback distribution is applied with
+On failure, exactly **one repair re-prompt** is attempted, feeding back the model's
+prior invalid response encoded as an inert JSON string plus the specific validation errors. If it still fails,
+a deterministic fallback distribution is applied with
 status `invalid_llm_output`.
 
 > **The fallback is a neutral prior, not "unknown."** `FALLBACK_PRIOR` spreads weight

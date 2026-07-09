@@ -9,15 +9,29 @@ from typing import Any, Literal
 
 from dev_health_ops.api.utils.logging import sanitize_for_log
 from dev_health_ops.investment_taxonomy import SUBCATEGORIES, THEMES, theme_of
-from dev_health_ops.llm import get_provider, is_llm_available, resolve_provider_name
+from dev_health_ops.llm import (
+    get_provider,
+    is_llm_available,
+    resolve_model_name,
+    resolve_provider_name,
+)
+from dev_health_ops.llm.explainers.investment_mix_explainer import (
+    PROMPT_VERSION as EXPLANATION_PROMPT_VERSION,
+)
 from dev_health_ops.llm.explainers.investment_mix_explainer import (
     build_prompt,
     load_prompt,
-    parse_and_validate_response,
+    parse_investment_mix_response,
 )
 from dev_health_ops.metrics.llm_token_usage import write_llm_token_usage
 from dev_health_ops.metrics.schemas import InvestmentExplanationRecord
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+from dev_health_ops.work_graph.investment.llm_telemetry import (
+    PROMPT_KIND_MIX_EXPLAIN,
+    STAGE_REQUEST,
+    llm_call_metrics,
+    record_explanation_parse,
+)
 
 from ..models.schemas import (
     InvestmentActionItem,
@@ -362,8 +376,30 @@ async def explain_investment_mix(
     full_prompt = build_prompt(base_prompt=prompt_text, payload=payload)
 
     resolved_llm_provider = resolve_provider_name(llm_provider, org_id=org_id)
+    resolved_llm_model = (
+        resolve_model_name(
+            resolved_llm_provider,
+            llm_model,
+            org_id=org_id or None,
+        )
+        or llm_model
+        or resolved_llm_provider
+    )
     provider = get_provider(llm_provider, model=llm_model, org_id=org_id or None)
-    completion = await provider.complete(full_prompt)
+    with llm_call_metrics(
+        provider=resolved_llm_provider,
+        model=resolved_llm_model,
+        stage=STAGE_REQUEST,
+        prompt_kind=PROMPT_KIND_MIX_EXPLAIN,
+        prompt_version=EXPLANATION_PROMPT_VERSION,
+    ) as call:
+        completion = await provider.complete(full_prompt)
+        call.set_result(
+            model=completion.model,
+            input_tokens=completion.input_tokens,
+            output_tokens=completion.output_tokens,
+            text=completion.text,
+        )
     raw = completion.text
     if llm_provider != "mock":
         await _persist_investment_mix_token_usage(
@@ -388,18 +424,36 @@ async def explain_investment_mix(
             if len(safe_preview) > max_preview_len:
                 safe_preview = safe_preview[:max_preview_len] + "...[truncated]"
         logger.debug("Raw LLM response (%d chars, preview=%r)", raw_len, safe_preview)
-    parsed = parse_and_validate_response(
+    confidence_level = _determine_confidence_level(quality_mean, quality_stddev)
+    theme_shares_pct = {
+        key: (value / total_effort * 100) if total_effort else 0.0
+        for key, value in theme_distribution.items()
+    }
+    subcategory_shares_pct = {
+        key: (value / total_effort * 100) if total_effort else 0.0
+        for key, value in subcategory_distribution.items()
+    }
+    parse_result = parse_investment_mix_response(
         raw,
+        theme_shares_pct=theme_shares_pct,
+        subcategory_shares_pct=subcategory_shares_pct,
+        fallback_level=confidence_level,
+        fallback_quality_band=None,
         fallback_band_mix=band_counts,
         fallback_drivers=quality_drivers,
         fallback_mean=quality_mean,
         fallback_stddev=quality_stddev,
     )
+    record_explanation_parse(
+        provider=resolved_llm_provider,
+        model=completion.model or llm_model,
+        prompt_version=EXPLANATION_PROMPT_VERSION,
+        status=parse_result.status,
+    )
+    parsed = parse_result.output
 
     if not parsed:
         logger.warning("Investment mix explanation parse/validation failed")
-        # Build deterministic fallback
-        confidence_level = _determine_confidence_level(quality_mean, quality_stddev)
         fallback_findings: list[InvestmentFinding] = []
         for key, value in top_themes[:2]:
             pct = (value / total_effort * 100) if total_effort else 0.0
@@ -412,9 +466,7 @@ async def explain_investment_mix(
                         share_pct=pct,
                         delta_pct_points=None,
                         evidence_quality_mean=quality_mean,
-                        evidence_quality_band=confidence_level
-                        if confidence_level != "unknown"
-                        else None,
+                        evidence_quality_band=None,
                     ),
                 )
             )

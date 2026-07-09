@@ -14,10 +14,13 @@ ALLOWED_TOP_LEVEL_KEYS = {"subcategories", "evidence_quotes", "uncertainty"}
 ALLOWED_QUOTE_KEYS = {"quote", "source", "id"}
 ALLOWED_SOURCES = {"issue", "pr", "commit"}
 
-MIN_STRICT_SUM = 0.98
-MAX_STRICT_SUM = 1.02
-MIN_ACCEPTABLE_SUM = 0.9
-MAX_ACCEPTABLE_SUM = 1.1
+# Subcategory values are relative weights, not fixed-sum probabilities: any
+# finite, non-negative number on any consistent scale is accepted. The full
+# vector is deterministically normalized to sum to 1 (see
+# ensure_full_subcategory_vector). WEIGHT_NORMALIZATION_TOLERANCE only
+# controls whether a `weights_normalized` audit warning is emitted; it never
+# causes rejection.
+WEIGHT_NORMALIZATION_TOLERANCE = 1e-6
 MAX_UNCERTAINTY_LEN = 280
 MAX_QUOTE_LEN = 280
 MIN_QUOTES = 1
@@ -89,23 +92,29 @@ def validate_llm_payload(
         if key not in SUBCATEGORIES:
             errors.append(f"unknown_subcategory:{key}")
             continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            errors.append(f"invalid_weight:{key}")
+            continue
         try:
             numeric = float(value)
-        except (TypeError, ValueError):
-            errors.append(f"invalid_probability:{key}")
+        except OverflowError:
+            errors.append(f"weight_overflow:{key}")
             continue
-        if not math.isfinite(numeric) or numeric < 0.0 or numeric > 1.0:
-            errors.append(f"probability_out_of_range:{key}")
+        if not math.isfinite(numeric):
+            errors.append(f"non_finite_weight:{key}")
+            continue
+        if numeric < 0.0:
+            errors.append(f"negative_weight:{key}")
             continue
         cleaned[key] = numeric
 
     total = sum(cleaned.values())
-    if total <= 0.0 or total < MIN_ACCEPTABLE_SUM or total > MAX_ACCEPTABLE_SUM:
-        errors.append(f"probability_sum_out_of_range:{total:.4f}")
-    else:
-        if total < MIN_STRICT_SUM or total > MAX_STRICT_SUM:
-            warnings.append(f"probability_sum_renormalized:{total:.4f}")
-        cleaned = {key: value / total for key, value in cleaned.items()}
+    if not math.isfinite(total):
+        errors.append("weight_sum_not_finite")
+    elif total <= 0.0:
+        errors.append("all_weights_zero")
+    elif abs(total - 1.0) > WEIGHT_NORMALIZATION_TOLERANCE:
+        warnings.append(f"weights_normalized:{total:.4f}")
 
     evidence_quotes_raw = payload.get("evidence_quotes")
     evidence_quotes: list[EvidenceQuote] = []
@@ -134,9 +143,19 @@ def validate_llm_payload(
                 if extra:
                     errors.append(f"evidence_quote_extra_keys:{idx}:{sorted(extra)}")
                 continue
-            quote = str(entry.get("quote") or "").strip()
-            source_type = str(entry.get("source") or "").strip()
-            source_id = str(entry.get("id") or "").strip()
+            raw_quote = entry.get("quote")
+            raw_source_type = entry.get("source")
+            raw_source_id = entry.get("id")
+            if (
+                not isinstance(raw_quote, str)
+                or not isinstance(raw_source_type, str)
+                or not isinstance(raw_source_id, str)
+            ):
+                errors.append(f"evidence_quote_invalid_type:{idx}")
+                continue
+            quote = raw_quote.strip()
+            source_type = raw_source_type.strip()
+            source_id = raw_source_id.strip()
             if not quote:
                 errors.append(f"evidence_quote_empty:{idx}")
                 continue
@@ -172,8 +191,10 @@ def validate_llm_payload(
             )
 
     uncertainty_raw = payload.get("uncertainty")
-    uncertainty = str(uncertainty_raw or "").strip()
-    if not uncertainty:
+    uncertainty = uncertainty_raw.strip() if isinstance(uncertainty_raw, str) else ""
+    if not isinstance(uncertainty_raw, str):
+        errors.append("uncertainty_invalid_type")
+    elif not uncertainty:
         errors.append("uncertainty_missing")
     elif len(uncertainty) > MAX_UNCERTAINTY_LEN:
         errors.append("uncertainty_too_long")

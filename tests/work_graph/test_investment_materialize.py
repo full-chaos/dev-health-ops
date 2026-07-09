@@ -32,6 +32,7 @@ from dev_health_ops.work_graph.investment.categorize import CategorizationOutcom
 from dev_health_ops.work_graph.investment.llm_schema import EvidenceQuote
 from dev_health_ops.work_graph.investment.materialize import (
     MaterializeConfig,
+    _effective_model_version,
     materialize_investments,
 )
 from dev_health_ops.work_graph.investment.utils import ensure_full_subcategory_vector
@@ -190,6 +191,40 @@ class PartialBatchProvider(FakeBatchProvider):
                     )
                 )
         return results
+
+
+class RaisingBatchProvider(FakeBatchProvider):
+    def __init__(self, failure_stage: str) -> None:
+        super().__init__()
+        self.failure_stage = failure_stage
+
+    async def submit_batch(self, items):
+        self.requests = list(items)
+        if self.failure_stage == "submit":
+            raise RuntimeError("submit failed")
+        return await super().submit_batch(items)
+
+    async def poll_batch(self, provider_job_id):
+        if self.failure_stage == "poll":
+            raise RuntimeError("poll failed")
+        return await super().poll_batch(provider_job_id)
+
+
+def test_effective_model_version_uses_org_scoped_resolution(monkeypatch):
+    calls: list[tuple[str, str | None, str | None]] = []
+
+    def resolve(provider: str, model: str | None, *, org_id: str | None = None):
+        calls.append((provider, model, org_id))
+        return "org-byo-model"
+
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.resolve_model_name", resolve
+    )
+
+    version = _effective_model_version("openai", None, org_id="org-a")
+
+    assert calls == [("openai", None, "org-a")]
+    assert "model=org-byo-model" in version
 
 
 def test_materialize_config_defaults_to_sync_batch_mode():
@@ -446,12 +481,17 @@ async def test_materialize_provider_batch_writes_investment_records(monkeypatch)
     _repo_ids, edges, work_items, commits = _multi_component_data(1)
     sink = FakeSink()
     batch_provider = FakeBatchProvider()
+    telemetry_calls: list[dict[str, object]] = []
     monkeypatch.setattr(
         "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
     )
     monkeypatch.setattr(
         "dev_health_ops.work_graph.investment.materialize.get_provider",
         lambda *args, **kwargs: batch_provider,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.record_batch_completion",
+        lambda **kwargs: telemetry_calls.append(kwargs),
     )
     _patch_queries(monkeypatch, edges, work_items, commits)
     monkeypatch.setattr(
@@ -496,6 +536,25 @@ async def test_materialize_provider_batch_writes_investment_records(monkeypatch)
     assert sink.quote_rows[0].quote == "Ship workflow improvement 1"
     assert sink.llm_token_rows[0].input_tokens == 11
     assert sink.llm_token_rows[0].output_tokens == 7
+    assert sink.llm_token_rows[0].model == "gpt-test"
+    assert telemetry_calls == [
+        {
+            "provider": "openai",
+            "model": "gpt-test",
+            "prompt_version": "investment-categorization-v2",
+            "duration_seconds": telemetry_calls[0]["duration_seconds"],
+            "input_tokens": 11,
+            "output_tokens": 7,
+            "output_chars": telemetry_calls[0]["output_chars"],
+            "succeeded": True,
+        }
+    ]
+    duration_seconds = telemetry_calls[0]["duration_seconds"]
+    output_chars = telemetry_calls[0]["output_chars"]
+    assert isinstance(duration_seconds, (int, float))
+    assert isinstance(output_chars, int)
+    assert duration_seconds >= 0
+    assert output_chars > 0
 
 
 @pytest.mark.asyncio
@@ -555,6 +614,7 @@ async def test_materialize_provider_batch_uses_chunk_scoped_correlation(monkeypa
 
     assert stats["records"] == 1
     assert created_jobs[0]["run_id"] == "shared-run"
+    assert created_jobs[0]["model"] == "gpt-test"
     assert created_jobs[0]["local_correlation_id"] == "shared-run:chunk:1"
     assert created_jobs[0]["specs"][0].custom_id == "shared-run:chunk:1-0"
     assert batch_provider.requests[0].custom_id == "shared-run:chunk:1-0"
@@ -617,6 +677,73 @@ async def test_materialize_provider_batch_failed_job_falls_back_without_fetch(
         and transition["audit"] == {"reason": "provider_batch_failed"}
         for transition in item_transitions
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_stage", ["submit", "poll"])
+async def test_materialize_provider_batch_exceptions_terminalize_items(
+    monkeypatch, failure_stage: str
+):
+    _repo_ids, edges, work_items, commits = _multi_component_data(1)
+    sink = FakeSink()
+    batch_provider = RaisingBatchProvider(failure_stage)
+    item_transitions: list[dict] = []
+    telemetry_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.get_provider",
+        lambda *args, **kwargs: batch_provider,
+    )
+    _patch_queries(monkeypatch, edges, work_items, commits)
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._create_batch_job",
+        lambda **kwargs: "batch-job-1",
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._transition_batch_job",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._transition_batch_item",
+        lambda **kwargs: item_transitions.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize._update_batch_counts",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.record_batch_completion",
+        lambda **kwargs: telemetry_calls.append(kwargs),
+    )
+
+    now = datetime.now(timezone.utc)
+    stats = await materialize_investments(
+        MaterializeConfig(
+            dsn="clickhouse://localhost:8123/default",
+            from_ts=now - timedelta(days=5),
+            to_ts=now,
+            repo_ids=None,
+            llm_provider="openai",
+            persist_evidence_snippets=False,
+            llm_model="gpt-test",
+            org_id="org-a",
+            llm_batch_mode="provider_batch",
+            llm_batch_poll_interval_seconds=0.01,
+        )
+    )
+
+    assert stats["records"] == 1
+    assert sink.investment_rows[0].categorization_status == "llm_task_failed"
+    assert any(
+        transition["status"] == BatchItemStatus.FALLBACK.value
+        and transition["audit"] == {"reason": f"provider_batch_{failure_stage}_failed"}
+        for transition in item_transitions
+    )
+    assert telemetry_calls[0]["model"] == "gpt-test"
+    assert telemetry_calls[0]["succeeded"] is False
+    assert batch_provider.cancel_calls == (1 if failure_stage == "poll" else 0)
 
 
 @pytest.mark.asyncio
@@ -831,15 +958,17 @@ async def test_materialize_invokes_sink(monkeypatch):
     repo_id, edges, work_items, commits = _sample_data()
     work_items[0]["description"] = "Resolve authentication failures. " * 20
     sink = FakeSink()
+    llm_models: list[str | None] = []
 
     async def _fake_categorize(bundle, llm_provider, llm_model=None, provider=None):
+        llm_models.append(llm_model)
         return CategorizationOutcome(
             subcategories={"feature_delivery.roadmap": 1.0},
             evidence_quotes=[],
             uncertainty="Limited evidence.",
             status="ok",
             errors=[],
-            warnings=["probability_sum_renormalized:0.9500"],
+            warnings=["weights_normalized:0.9500"],
             llm_calls=1,
             input_tokens=123,
             output_tokens=45,
@@ -854,6 +983,10 @@ async def test_materialize_invokes_sink(monkeypatch):
         "dev_health_ops.work_graph.investment.materialize.categorize_text_bundle",
         _fake_categorize,
     )
+    monkeypatch.setattr(
+        "dev_health_ops.work_graph.investment.materialize.resolve_model_name",
+        lambda provider, model, org_id=None: "org-byo-model",
+    )
 
     now = datetime.now(timezone.utc)
     config = MaterializeConfig(
@@ -863,7 +996,7 @@ async def test_materialize_invokes_sink(monkeypatch):
         repo_ids=[repo_id],
         llm_provider="mock",
         persist_evidence_snippets=False,
-        llm_model="test-model",
+        llm_model=None,
     )
 
     stats = await materialize_investments(config)
@@ -871,13 +1004,15 @@ async def test_materialize_invokes_sink(monkeypatch):
     assert stats["llm_calls"] == 1
     assert stats["llm_input_tokens"] == 123
     assert stats["llm_output_tokens"] == 45
+    assert llm_models == ["org-byo-model"]
+    assert sink.llm_token_rows[0].model == "org-byo-model"
     assert stats["llm_failure_counts"] == {}
     assert len(sink.investment_rows) == 1
     record = sink.investment_rows[0]
     assert record.work_unit_type == "incident"
     assert record.work_unit_name == "Fix login outage"
     assert json.loads(record.categorization_errors_json) == [
-        "probability_sum_renormalized:0.9500"
+        "weights_normalized:0.9500"
     ]
 
 

@@ -72,6 +72,7 @@ from dev_health_ops.work_graph.investment.evidence import (
     compute_evidence_quality,
     compute_time_bounds,
 )
+from dev_health_ops.work_graph.investment.llm_telemetry import record_batch_completion
 from dev_health_ops.work_graph.investment.queries import (
     fetch_commit_churn,
     fetch_commits,
@@ -150,8 +151,12 @@ def _format_llm_summary(ok: int, failure_counts: Counter[str]) -> str:
     return "llm: " + ", ".join(parts)
 
 
-def _effective_model_version(provider: str, model: str | None) -> str:
-    resolved_model = resolve_model_name(provider, model) or model or provider
+def _effective_model_version(
+    provider: str, model: str | None, *, org_id: str | None = None
+) -> str:
+    resolved_model = (
+        resolve_model_name(provider, model, org_id=org_id) or model or provider
+    )
     return (
         f"provider={provider};model={resolved_model};"
         f"taxonomy={TAXONOMY_VERSION};prompt={PROMPT_VERSION}"
@@ -290,11 +295,26 @@ async def _fallback_unresolved_batch_items(
     run_id: str,
     batch_correlation_id: str,
     audit_reason: str,
+    provider: str,
+    model: str | None,
+    duration_seconds: float,
     provider_error: dict[str, Any] | None = None,
 ) -> dict[int, Any]:
     outcomes: dict[int, Any] = {}
     for idx, _bundle in pending_llm:
-        outcomes[idx] = fallback_outcome("llm_task_failed")
+        record_batch_completion(
+            provider=provider,
+            model=model,
+            prompt_version=PROMPT_VERSION,
+            duration_seconds=duration_seconds,
+            input_tokens=0,
+            output_tokens=0,
+            output_chars=0,
+            succeeded=False,
+        )
+        outcomes[idx] = fallback_outcome(
+            "llm_task_failed", provider=provider, model=model
+        )
         await asyncio.to_thread(
             _transition_batch_item,
             org_id=org_id,
@@ -313,7 +333,6 @@ async def _categorize_with_provider_batch(
     config: MaterializeConfig,
     provider_instance: Any,
     resolved_llm_provider: str,
-    model_version: str,
     run_id: str,
     pending_llm: list[tuple[int, Any]],
     preprocessed: dict[int, PreprocessedComponent],
@@ -321,6 +340,15 @@ async def _categorize_with_provider_batch(
     if not pending_llm:
         return {}
     capability = batch_capability_for(provider_instance, config.llm_model)
+    actual_model = (
+        capability.model
+        or resolve_model_name(
+            resolved_llm_provider,
+            config.llm_model,
+            org_id=config.org_id or None,
+        )
+        or resolved_llm_provider
+    )
     if not capability.supported:
         if config.llm_batch_mode == "provider_batch":
             raise ValueError(
@@ -358,7 +386,7 @@ async def _categorize_with_provider_batch(
         _create_batch_job,
         org_id=org_id,
         provider=resolved_llm_provider,
-        model=model_version,
+        model=actual_model,
         run_id=run_id,
         local_correlation_id=batch_correlation_id,
         specs=specs,
@@ -383,6 +411,7 @@ async def _categorize_with_provider_batch(
         )
         for idx, bundle in pending_llm
     ]
+    started = monotonic()
     try:
         submission = await provider_instance.submit_batch(requests)
     except Exception as exc:
@@ -393,7 +422,18 @@ async def _categorize_with_provider_batch(
             status=BatchJobStatus.FAILED.value,
             error=_batch_error_label(exc),
         )
-        raise
+        return await _fallback_unresolved_batch_items(
+            org_id=org_id,
+            job_id=job_id,
+            pending_llm=pending_llm,
+            run_id=run_id,
+            batch_correlation_id=batch_correlation_id,
+            audit_reason="provider_batch_submit_failed",
+            provider=resolved_llm_provider,
+            model=actual_model,
+            duration_seconds=monotonic() - started,
+            provider_error={"error_type": _batch_error_label(exc)},
+        )
 
     await asyncio.to_thread(
         _transition_batch_job,
@@ -412,10 +452,43 @@ async def _categorize_with_provider_batch(
             status=BatchItemStatus.SUBMITTED.value,
         )
 
-    started = monotonic()
     final_state = None
     while monotonic() - started < config.llm_batch_timeout_seconds:
-        final_state = await provider_instance.poll_batch(submission.provider_job_id)
+        try:
+            final_state = await provider_instance.poll_batch(submission.provider_job_id)
+        except Exception as exc:
+            cancel_batch = getattr(provider_instance, "cancel_batch", None)
+            if callable(cancel_batch):
+                try:
+                    maybe_cancelled = cancel_batch(submission.provider_job_id)
+                    if inspect.isawaitable(maybe_cancelled):
+                        await maybe_cancelled
+                except Exception as cancel_exc:
+                    logger.warning(
+                        "Provider batch cancellation after poll failure failed: provider=%s job_id=%s error_type=%s",
+                        resolved_llm_provider,
+                        submission.provider_job_id,
+                        _batch_error_label(cancel_exc),
+                    )
+            await asyncio.to_thread(
+                _transition_batch_job,
+                org_id=org_id,
+                job_id=job_id,
+                status=BatchJobStatus.FAILED.value,
+                error=_batch_error_label(exc),
+            )
+            return await _fallback_unresolved_batch_items(
+                org_id=org_id,
+                job_id=job_id,
+                pending_llm=pending_llm,
+                run_id=run_id,
+                batch_correlation_id=batch_correlation_id,
+                audit_reason="provider_batch_poll_failed",
+                provider=resolved_llm_provider,
+                model=actual_model,
+                duration_seconds=monotonic() - started,
+                provider_error={"error_type": _batch_error_label(exc)},
+            )
         await asyncio.to_thread(
             _transition_batch_job,
             org_id=org_id,
@@ -465,6 +538,9 @@ async def _categorize_with_provider_batch(
             run_id=run_id,
             batch_correlation_id=batch_correlation_id,
             audit_reason="provider_batch_timeout",
+            provider=resolved_llm_provider,
+            model=actual_model,
+            duration_seconds=monotonic() - started,
         )
 
     if final_state.status != BatchJobStatus.SUCCEEDED:
@@ -475,6 +551,9 @@ async def _categorize_with_provider_batch(
             run_id=run_id,
             batch_correlation_id=batch_correlation_id,
             audit_reason=f"provider_batch_{final_state.status.value}",
+            provider=resolved_llm_provider,
+            model=actual_model,
+            duration_seconds=monotonic() - started,
             provider_error={"status": final_state.status.value},
         )
 
@@ -497,6 +576,9 @@ async def _categorize_with_provider_batch(
             run_id=run_id,
             batch_correlation_id=batch_correlation_id,
             audit_reason="provider_batch_fetch_failed",
+            provider=resolved_llm_provider,
+            model=actual_model,
+            duration_seconds=monotonic() - started,
             provider_error={"error_type": _batch_error_label(exc)},
         )
     results_by_custom_id: dict[str, BatchItemResult] = {
@@ -506,8 +588,28 @@ async def _categorize_with_provider_batch(
     for idx, bundle in pending_llm:
         custom_id = _batch_custom_id(batch_correlation_id, idx)
         item_result = results_by_custom_id.get(custom_id)
+        item_succeeded = bool(
+            item_result is not None
+            and item_result.succeeded
+            and item_result.raw_response is not None
+        )
+        item_metadata = item_result.provider_metadata if item_result is not None else {}
+        record_batch_completion(
+            provider=resolved_llm_provider,
+            model=actual_model,
+            prompt_version=PROMPT_VERSION,
+            duration_seconds=monotonic() - started,
+            input_tokens=int(item_metadata.get("input_tokens") or 0),
+            output_tokens=int(item_metadata.get("output_tokens") or 0),
+            output_chars=len(item_result.raw_response or "") if item_result else 0,
+            succeeded=item_succeeded,
+        )
         if item_result is None:
-            outcome = fallback_outcome("llm_task_failed")
+            outcome = fallback_outcome(
+                "llm_task_failed",
+                provider=resolved_llm_provider,
+                model=actual_model,
+            )
             await asyncio.to_thread(
                 _transition_batch_item,
                 org_id=org_id,
@@ -522,7 +624,7 @@ async def _categorize_with_provider_batch(
                     bundle,
                     item_result.raw_response,
                     llm_provider=resolved_llm_provider,
-                    llm_model=config.llm_model,
+                    llm_model=actual_model,
                     provider=provider_instance,
                     input_tokens=int(
                         item_result.provider_metadata.get("input_tokens") or 0
@@ -531,10 +633,14 @@ async def _categorize_with_provider_batch(
                         item_result.provider_metadata.get("output_tokens") or 0
                     ),
                     llm_calls=1,
-                    resolved_model=model_version,
+                    resolved_model=actual_model,
                 )
             except Exception as exc:
-                outcome = fallback_outcome("llm_task_failed")
+                outcome = fallback_outcome(
+                    "llm_task_failed",
+                    provider=resolved_llm_provider,
+                    model=actual_model,
+                )
                 await asyncio.to_thread(
                     _transition_batch_item,
                     org_id=org_id,
@@ -563,7 +669,11 @@ async def _categorize_with_provider_batch(
                 audit={"status": outcome.status, "errors": outcome.errors},
             )
         else:
-            outcome = fallback_outcome("llm_task_failed")
+            outcome = fallback_outcome(
+                "llm_task_failed",
+                provider=resolved_llm_provider,
+                model=actual_model,
+            )
             await asyncio.to_thread(
                 _transition_batch_item,
                 org_id=org_id,
@@ -1182,7 +1292,18 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
         run_id = config.run_id or uuid.uuid4().hex
         computed_at = config.computed_at or datetime.now(timezone.utc)
         model_version = _effective_model_version(
-            resolved_llm_provider, config.llm_model
+            resolved_llm_provider,
+            config.llm_model,
+            org_id=config.org_id or None,
+        )
+        configured_model = (
+            resolve_model_name(
+                resolved_llm_provider,
+                config.llm_model,
+                org_id=config.org_id or None,
+            )
+            or config.llm_model
+            or resolved_llm_provider
         )
 
         logger.info(
@@ -1241,10 +1362,26 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
 
             if bundle.text_char_count < MIN_EVIDENCE_CHARS:
                 fallback_results.append(
-                    (idx, fallback_outcome("insufficient_evidence"))
+                    (
+                        idx,
+                        fallback_outcome(
+                            "insufficient_evidence",
+                            provider=resolved_llm_provider,
+                            model=configured_model,
+                        ),
+                    )
                 )
             elif bundle.text_source_count == 0:
-                fallback_results.append((idx, fallback_outcome("no_text_sources")))
+                fallback_results.append(
+                    (
+                        idx,
+                        fallback_outcome(
+                            "no_text_sources",
+                            provider=resolved_llm_provider,
+                            model=configured_model,
+                        ),
+                    )
+                )
             else:
                 pending_llm.append((idx, bundle))
 
@@ -1377,7 +1514,7 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
                     sink,
                     org_id=config.org_id or "",
                     provider=resolved_llm_provider,
-                    model=model_version,
+                    model=configured_model,
                     source="investment_materialize",
                     run_id=run_id,
                     input_tokens=llm_input_tokens,
@@ -1401,7 +1538,7 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
                 outcome = await categorize_text_bundle(
                     bundle,
                     llm_provider=resolved_llm_provider,
-                    llm_model=config.llm_model,
+                    llm_model=configured_model,
                     provider=provider_instance,
                 )
                 return (idx, outcome)
@@ -1414,7 +1551,6 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
                 config=config,
                 provider_instance=provider_instance,
                 resolved_llm_provider=resolved_llm_provider,
-                model_version=model_version,
                 run_id=run_id,
                 pending_llm=pending_llm,
                 preprocessed=preprocessed,
@@ -1537,7 +1673,11 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, Any]:
                 continue
             outcome = llm_results.get(idx)
             if outcome is None:
-                outcome = fallback_outcome("llm_task_failed")
+                outcome = fallback_outcome(
+                    "llm_task_failed",
+                    provider=resolved_llm_provider,
+                    model=configured_model,
+                )
 
             unit_id = data.unit_id
             unit_nodes = data.unit_nodes

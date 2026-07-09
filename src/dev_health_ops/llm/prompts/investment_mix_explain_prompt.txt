@@ -8,50 +8,30 @@ You are not allowed to:
 - Be conversational
 - Use absolutely forbidden words: "definitely", "certainly", "undoubtedly", "without question"
 
-You must produce STRICT JSON ONLY (no markdown, no code fences) with exactly this structure:
+Produce a structured explanation with exactly these fields:
+- summary: One concise paragraph describing the overall investment pattern.
+- top_findings: Specific observations grounded in the referenced theme/subcategory. Put numeric support only in the structured evidence fields.
+- confidence: An overall confidence assessment (level, quality mean/stddev, evidence-quality band mix, and the drivers behind that assessment).
+- what_to_check_next: Neutral inspection points naming what to examine, why it matters, and where to look; do not recommend a course of action.
+- anti_claims: Statements describing what the data does NOT indicate, to guard against misinterpretation.
+
+For providers without native structured outputs, use this exact nested shape and no extra keys:
 {
-  "summary": "One concise paragraph describing the overall investment pattern.",
-  "top_findings": [
-    {
-      "finding": "A specific observation about the data.",
-      "evidence": {
-        "theme": "theme_name",
-        "subcategory": "theme.subcategory or null",
-        "share_pct": 25.5,
-        "delta_pct_points": null,
-        "evidence_quality_mean": 0.75,
-        "evidence_quality_band": "high"
-      }
-    }
-  ],
-  "confidence": {
-    "level": "high|moderate|low|unknown",
-    "quality_mean": 0.75,
-    "quality_stddev": 0.12,
-    "band_mix": {"high": 5, "moderate": 3, "low": 2},
-    "drivers": ["low_text_signal", "weak_cross_links"]
-  },
-  "what_to_check_next": [
-    {
-      "action": "What to examine",
-      "why": "Why this matters",
-      "where": "Where to look (e.g., subcategory or theme)"
-    }
-  ],
-  "anti_claims": [
-    "This does NOT indicate X.",
-    "This does NOT measure Y."
-  ]
+  "summary": "...",
+  "top_findings": [{"finding": "...", "evidence": {"theme": "...", "subcategory": null, "share_pct": 0.0, "delta_pct_points": null, "evidence_quality_mean": null, "evidence_quality_band": null}}],
+  "confidence": {"level": "unknown", "quality_mean": null, "quality_stddev": null, "band_mix": {"high": 0, "moderate": 0, "low": 0, "very_low": 0, "unknown": 0}, "drivers": []},
+  "what_to_check_next": [{"action": "...", "why": "...", "where": "..."}],
+  "anti_claims": ["..."]
 }
+
+Confidence level: "high" if quality_mean >= 0.7 and stddev < 0.15; "moderate" if >= 0.5; "low" otherwise; "unknown" if insufficient data.
 
 Rules:
 - Use probabilistic language (appears, leans, suggests).
-- Avoid definitive language ("is", "was", "determined", "detected").
-- Hedge words MUST include quantification (e.g., "appears in ~27% of effort" not just "appears").
+- Avoid definitive language: "is", "was", "determined", and "detected".
+- Do not put numbers in summary, finding, action, why, where, or anti_claims text. Structured evidence fields carry authoritative numeric values.
 - Do not contradict the provided distributions.
 - Do not invent categories that are not present in the provided theme/subcategory lists.
 - The "anti_claims" array should state what the data does NOT say (guard against misinterpretation).
-- Confidence level: "high" if quality_mean >= 0.7 and stddev < 0.15; "moderate" if >= 0.5; "low" otherwise; "unknown" if insufficient data.
 
 Input data is provided below. Explain what the mix indicates based only on that data.
-

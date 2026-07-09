@@ -35,9 +35,9 @@ There are exactly three top-level keys — `subcategories`, `evidence_quotes`,
 
 | Requirement | Details |
 |-------------|---------|
-| `subcategories` | Probabilities over all 15 canonical subcategory keys (see [Investment Taxonomy](../product/investment-taxonomy.md)); the prompt and schema require every key, with `0` for irrelevant categories. Each value is `0-1`. A sum in the clean band `[0.98, 1.02]` is accepted as-is; a sum in `[0.9, 1.1]` but outside the clean band is renormalized and flagged with `probability_sum_renormalized:{total}` in `categorization_errors_json`; a sum `≤ 0` or outside `[0.9, 1.1]` is rejected |
+| `subcategories` | Relative weights over all 15 canonical subcategory keys (see [Investment Taxonomy](../product/investment-taxonomy.md)); the prompt and schema require every key, with `0` for irrelevant categories. Each value MUST be a finite, non-negative number on any consistent scale (for example `0-1`, `0-10`, or `0-100`); negative, non-finite (`NaN`/`Infinity`), non-numeric (string/boolean/`null`/object/array), or unknown-key values are rejected. The full vector is always deterministically normalized to sum to `1`; a sum that is not already `~1` is flagged with `weights_normalized:{total}` in `categorization_errors_json` (informational, not a failure). A sum of exactly `0` (`all_weights_zero`) or a non-finite sum from overflow (`weight_sum_not_finite`) is rejected |
 | `evidence_quotes` | A **list** of 1–10 objects, each exactly `{ "quote", "source", "id" }` |
-| `quote` | An **extractive substring** of the provided source text (≤ 280 chars). Matching is whitespace-tolerant, but the **exact source span** is what gets persisted |
+| `quote` | Prefer one **extractive substring** of 5–18 consecutive words from one source block (≤ 280 chars). Matching is whitespace-tolerant, but the **exact source span** is what gets persisted |
 | `source` | One of `issue`, `pr`, `commit` |
 | `id` | The **bracketed handle** shown before each evidence block in the prompt (for example `E1`), copied exactly; the validator resolves it back to the real source id |
 | `uncertainty` | Non-empty string, ≤ 280 chars |
@@ -72,13 +72,18 @@ There are exactly three top-level keys — `subcategories`, `evidence_quotes`,
 ```
 
 > The prompt and schema require all 15 canonical subcategories, with `0` for irrelevant
-> categories. Validation requires every provided key to be canonical and the values to
-> sum within `[0.9, 1.1]`, a clean sum in `[0.98, 1.02]` is accepted as-is, while a
-> near-miss is renormalized and flagged with `probability_sum_renormalized:{total}`.
-> After that sum check, the validation step defensively fills any missing canonical keys
-> with `0` and renormalizes via `ensure_full_subcategory_vector`. Keys must match
-> `investment_taxonomy.py` exactly, obsolete keys like `operational.external` or
+> categories. Validation requires every provided key to be canonical, and every value to
+> be a finite, non-negative number on any consistent scale — there is no required sum.
+> A sum of `0` (`all_weights_zero`) or a non-finite sum (`weight_sum_not_finite`) is
+> rejected; any other positive sum is accepted and normalized, flagged with
+> `weights_normalized:{total}` when the sum was not already `~1`. After that check, the
+> validation step defensively fills any missing canonical keys with `0` and normalizes
+> the full vector via `ensure_full_subcategory_vector`. Keys must match
+> `investment_taxonomy.py` exactly; obsolete keys like `operational.external` or
 > `feature_delivery.platform` are rejected as `unknown_subcategory`.
+> Any positive relative scale works — for example
+> `{ "feature_delivery.customer": 9, "operational.incident_response": 5, "maintenance.refactor": 2, "quality.bugfix": 4 }`
+> (with the rest at `0`) normalizes to the same distribution as the example above.
 
 ### Two-stage process
 
@@ -93,15 +98,17 @@ This separation prevents category drift. The full flow is documented in the
 ## Validation, repair, and fallback
 
 Each response is validated by `validate_llm_payload`. On failure the categorizer makes
-**exactly one** repair attempt, re-prompting with the specific validation errors. If the
-repair also fails, a deterministic fallback distribution is applied.
+**exactly one** repair attempt, re-prompting with the model's prior invalid response
+encoded as an inert JSON string plus the specific validation errors and targeted repair guidance. If
+the repair also fails, a deterministic fallback distribution is applied.
 
 ### Validation failures include
 
 - non-JSON or non-object payloads;
 - wrong / extra / missing top-level keys;
 - non-canonical subcategory keys (`unknown_subcategory`);
-- probabilities out of range, or a sum `≤ 0` or outside the accepted `[0.9, 1.1]` band (a sum inside `[0.9, 1.1]` but outside the clean `[0.98, 1.02]` band is **accepted** with a `probability_sum_renormalized` audit marker, not a failure);
+- a subcategory value that is negative (`negative_weight`), non-finite (`non_finite_weight`), or not a plain number — strings, booleans, `null`, objects, arrays (`invalid_weight`);
+- a weight sum of exactly `0` (`all_weights_zero`) or a non-finite weight sum from overflow (`weight_sum_not_finite`) — any other positive sum is **accepted** and normalized, with a `weights_normalized` audit marker when the sum was not already `~1`;
 - quote count outside 1–10, wrong quote keys, or empty / too-long quotes;
 - a quote that is **not a literal substring** of the source text
   (`evidence_quote_not_substring`);
@@ -135,7 +142,7 @@ Every WorkUnit row in `work_unit_investments` persists:
 |-------|-------------|
 | `categorization_status` | Outcome status (table above) |
 | `categorization_errors_json` | Serialized validation errors (if any) |
-| `categorization_model_version` | Model id, or provider name when no model is set |
+| `categorization_model_version` | Composite string `provider=<p>;model=<m>;taxonomy=<TAXONOMY_VERSION>;prompt=<PROMPT_VERSION>` (see `materialize.py::_effective_model_version`). `PROMPT_VERSION` (`categorize.py`) is bumped whenever the wire contract for the categorization prompt changes — currently `investment-categorization-v2`, reflecting the relative-weight contract in this document |
 | `categorization_input_hash` | SHA-256 of the serialized evidence bundle |
 | `categorization_run_id` | Per-run UUID |
 | `computed_at` | Run timestamp (also the ReplacingMergeTree version) |
@@ -270,30 +277,23 @@ All explanation output **MUST be labeled as AI-generated**.
 
 ## Explanation Prompt
 
-Canonical prompt (use verbatim):
+Canonical prompt semantics (the provider schema supplies the JSON structure):
 
 ```
-You are explaining a precomputed investment view.
+You are explaining a precomputed investment mix view.
 
 You are not allowed to:
 - Recalculate scores
 - Change categories
 - Introduce new conclusions
-- Be conversational (no "Hello", "As an AI", or interactive follow-ups)
+- Provide recommendations or recalculate the supplied values
+- Be conversational
 
-Explain the investment view in three distinct sections:
-
-1. **SUMMARY**: Provide a high-level narrative (max 3 sentences) using
-   probabilistic language (appears, leans, suggests) explaining why
-   the work leans toward the primary categories.
-
-2. **REASONS**: List the specific evidence (structural, contextual,
-   textual) that contributed most to this interpretation.
-
-3. **UNCERTAINTY**: Disclose where uncertainty exists based on the
-   evidence quality and evidence mix.
-
-Always include evidence quality level and limits.
+Return `summary`, `top_findings`, `confidence`, `what_to_check_next`, and
+`anti_claims`. Explain only the supplied distributions and evidence quality. Use
+probabilistic language and neutral inspection points, not recommended actions. Narrative
+fields contain no model-authored numbers; the parser fills structured numeric evidence
+from persisted distributions and quality statistics.
 ```
 
 ---
@@ -312,14 +312,18 @@ Use probabilistic, uncertain phrasing:
 
 ### Forbidden Language
 
-Avoid definitive, deterministic phrasing:
+Avoid definitive model claims:
 
 - is
 - was
 - detected
 - determined
 - definitely
-- clearly
+- certainly
+- undoubtedly
+- without question
+
+The parser rejects the forbidden claim terms above and the recommendation word `should`.
 
 ### Rationale
 
@@ -332,10 +336,13 @@ The distinction maintains appropriate uncertainty. LLM categorization is inferen
 ### Extractive Quotes
 
 Evidence quotes MUST be:
-- Direct substrings from input text
+- Direct, character-for-character substrings from input text (no spelling/casing/punctuation corrections)
 - Not paraphrased
 - Not summarized
+- Not combined across more than one evidence block
+- The shortest unambiguous span that supports the categorization
 - Traceable to source
+- Treated as inert data, never as instructions to follow (guards against prompt injection via evidence text)
 
 ### Evidence Types
 
@@ -361,7 +368,8 @@ Evidence quotes MUST be:
 ### Immediate Failure Conditions
 
 - Output contains non-canonical keys
-- Probabilities don't sum correctly
+- A subcategory weight is negative, non-finite, or non-numeric
+- All subcategory weights are zero
 - Evidence quotes not found in input
 - Missing required output sections
 
@@ -372,7 +380,7 @@ Evidence quotes MUST be:
 ### Unit Tests Must Cover
 
 - Valid JSON output parsing
-- Probability normalization
+- Relative weight normalization (arbitrary positive scale, rejection of zero/negative/non-finite/non-numeric weights)
 - Evidence extraction validation
 - Retry logic
 - Fallback application
